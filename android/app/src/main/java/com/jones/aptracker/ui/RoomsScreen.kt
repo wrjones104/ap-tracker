@@ -1,0 +1,214 @@
+package com.jones.aptracker.ui
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color // **THE FIX**: Add this import
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jones.aptracker.network.Room
+
+@Composable
+fun RoomsScreen(
+    roomsViewModel: RoomsViewModel = viewModel(),
+    onRoomClick: (Int, String) -> Unit
+) {
+    val rooms by roomsViewModel.rooms
+    val isLoading by roomsViewModel.isLoading
+
+    var showAddDialog by remember { mutableStateOf(false) }
+    var roomToDelete by remember { mutableStateOf<Room?>(null) }
+    var roomToEdit by remember { mutableStateOf<Room?>(null) }
+
+    Scaffold(
+        floatingActionButton = {
+            FloatingActionButton(onClick = { showAddDialog = true }) {
+                Icon(Icons.Default.Add, contentDescription = "Add Room")
+            }
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier.fillMaxSize().padding(innerPadding),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator()
+            } else if (rooms.isEmpty()) {
+                Text(text = "No rooms found. Tap the '+' to add a room.")
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(8.dp)
+                ) {
+                    items(rooms) { room ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .clickable { onRoomClick(room.id, room.alias) },
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(vertical = 12.dp)
+                                ) {
+                                    Text(
+                                        text = room.alias,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = room.host,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray
+                                    )
+                                    Text(
+                                        text = "${room.tracked_slots_count} / ${room.total_slots_count} slots tracked",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray
+                                    )
+                                }
+                                IconButton(onClick = { roomToEdit = room }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Edit Room Alias")
+                                }
+                                IconButton(onClick = { roomToDelete = room }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete Room")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showAddDialog) {
+            AddRoomDialog(
+                onDismiss = { showAddDialog = false },
+                onAdd = { roomId, alias ->
+                    roomsViewModel.addRoom(roomId, alias)
+                    showAddDialog = false
+                }
+            )
+        }
+
+        roomToEdit?.let { room ->
+            EditRoomDialog(
+                room = room,
+                onDismiss = { roomToEdit = null },
+                onConfirm = { newAlias ->
+                    roomsViewModel.updateRoom(room.id, newAlias)
+                    roomToEdit = null
+                }
+            )
+        }
+
+        roomToDelete?.let { room ->
+            AlertDialog(
+                onDismissRequest = { roomToDelete = null },
+                title = { Text("Delete Room") },
+                text = { Text("Are you sure you want to stop tracking '${room.alias}'?") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        roomsViewModel.deleteRoom(room.id)
+                        roomToDelete = null
+                    }) {
+                        Text("Delete")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { roomToDelete = null }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+    }
+}
+
+// ... (AddRoomDialog and EditRoomDialog are the same)
+@Composable
+fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
+    var roomId by remember { mutableStateOf("") }
+    var alias by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add New Room") },
+        text = {
+            Column {
+                TextField(
+                    value = roomId,
+                    onValueChange = { roomId = it },
+                    label = { Text("Room ID") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                TextField(
+                    value = alias,
+                    onValueChange = { alias = it },
+                    label = { Text("Alias") },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onAdd(roomId, alias) },
+                enabled = roomId.isNotBlank() && alias.isNotBlank()
+            ) {
+                Text("Add")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var alias by remember { mutableStateOf(room.alias) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Room Alias") },
+        text = {
+            TextField(
+                value = alias,
+                onValueChange = { alias = it },
+                label = { Text("New Alias") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(alias) },
+                enabled = alias.isNotBlank()
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
