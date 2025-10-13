@@ -8,6 +8,7 @@ import asyncio
 import websockets
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, Boolean, DateTime, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import relationship, sessionmaker, declarative_base
 from flask import Flask, request, jsonify
 from threading import Thread
@@ -112,6 +113,35 @@ class DeviceToken(Base):
 app = Flask(__name__)
 ARCHIPELAGO_HOST = "archipelago.gg"
 
+def _ensure_datapackage_cached(session, room_db_id):
+    room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+    if not room:
+        return
+
+    try:
+        # The room info endpoint contains the checksums we need
+        url = f"https://{ARCHIPELAGO_HOST}/api/room/{room.room_id}"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        room_info = response.json()
+        checksums = room_info.get('datapackage_checksums', {})
+
+        for game, checksum in checksums.items():
+            if game not in datapackage_cache:
+                print(f"Datapackage for '{game}' not in cache. Fetching...", file=sys.stderr)
+                url = f"https://{ARCHIPELAGO_HOST}/api/datapackage/{checksum}"
+                dp_response = requests.get(url, timeout=10)
+                dp_response.raise_for_status()
+                game_data = dp_response.json()
+                # Pre-calculate the reverse mapping for IDs to names
+                if 'item_name_to_id' in game_data:
+                    game_data['item_id_to_name'] = {str(v): k for k, v in game_data['item_name_to_id'].items()}
+                if 'location_name_to_id' in game_data:
+                    game_data['location_id_to_name'] = {str(v): k for k, v in game_data['location_name_to_id'].items()}
+                datapackage_cache[game] = game_data
+    except requests.RequestException as e:
+        print(f"Could not fetch datapackage for room {room.room_id}: {e}", file=sys.stderr)
+
 @app.before_request
 def before_request():
     init_db()
@@ -189,11 +219,23 @@ def add_room():
 
     session = Session()
     try:
+        # Check if the room already exists
         if session.query(TrackedRoom).filter_by(room_id=data['room_id']).first():
             return jsonify({'error': 'Room already exists'}), 409
+
+        # If not, add it
         new_room = TrackedRoom(room_id=data['room_id'], alias=data['alias'])
         session.add(new_room)
-        session.commit()
+
+        try:
+            session.commit()
+        except IntegrityError:
+            # This happens if another request added the room right after our check.
+            # We can safely ignore it, because the room now exists, which was the goal.
+            session.rollback()
+            print(f"Race condition handled: Room {data['room_id']} was added by another process.", file=sys.stderr)
+            return jsonify({'error': 'Room already exists'}), 409
+
         return jsonify({'success': f"Room '{data['alias']}' added."}), 201
     finally:
         session.close()
@@ -254,14 +296,15 @@ def get_room_players(room_db_id):
 def get_item_history(room_db_id):
     session = Session()
     try:
-        # Get the slots the user is tracking for this room
+        # Ensure the cache is populated for this room's games
+        _ensure_datapackage_cached(session, room_db_id)
+
         tracked_slots = session.query(TrackedSlot).filter_by(room_id=room_db_id).all()
         if not tracked_slots:
             return jsonify([])
 
-        # Create maps from the tracked slot data
         tracked_slot_ids = {slot.slot_id for slot in tracked_slots}
-        name_map = {slot.slot_id: slot.slot_name for slot in tracked_slots}
+        # Use the game_name stored in our database
         game_map = {slot.slot_id: slot.game_name for slot in tracked_slots}
 
         items = session.query(NotifiedItem).filter(
@@ -271,6 +314,10 @@ def get_item_history(room_db_id):
 
         history = []
         for item in items:
+            # We need a full name map for all players in the room, not just tracked ones
+            all_slots_in_room = session.query(TrackedSlot).filter(TrackedSlot.room_id == room_db_id).all()
+            name_map = {s.slot_id: s.slot_name for s in all_slots_in_room}
+
             receiver_name = name_map.get(item.receiving_slot_id, f"Player {item.receiving_slot_id}")
             item_name = get_name_from_datapackage(item.item_id, item.receiving_slot_id, game_map, 'item_id_to_name')
             history.append({
@@ -285,15 +332,13 @@ def get_item_history(room_db_id):
 def get_hint_history(room_db_id):
     session = Session()
     try:
-        # Get the slots the user is tracking for this room
+        # Ensure the cache is populated for this room's games
+        _ensure_datapackage_cached(session, room_db_id)
+
         tracked_slots = session.query(TrackedSlot).filter_by(room_id=room_db_id).all()
         if not tracked_slots:
             return jsonify([])
-
-        # Create maps from the tracked slot data
         tracked_slot_ids = {slot.slot_id for slot in tracked_slots}
-        name_map = {slot.slot_id: slot.slot_name for slot in tracked_slots}
-        game_map = {slot.slot_id: slot.game_name for slot in tracked_slots}
 
         hints = session.query(RevealedHint).filter(
             RevealedHint.room_id == room_db_id,
@@ -303,18 +348,18 @@ def get_hint_history(room_db_id):
             )
         ).order_by(RevealedHint.id.desc()).all()
 
+        # For hints, we need name/game info for all players involved, not just tracked ones.
+        # It's better to get all player info for the room from our DB.
+        all_slots_in_room = session.query(TrackedSlot).filter_by(room_id=room_db_id).all()
+        name_map = {slot.slot_id: slot.slot_name for slot in all_slots_in_room}
+        game_map = {slot.slot_id: slot.game_name for slot in all_slots_in_room}
+
         history = []
         for hint in hints:
-            # For hints, we might not have the name if the other player isn't tracked.
-            # We need a more comprehensive name map for this.
-            all_slots_in_room = session.query(TrackedSlot).filter_by(room_id=room_db_id).all() # This is inefficient, but will work for now.
-            full_name_map = {slot.slot_id: slot.slot_name for slot in all_slots_in_room}
-            full_game_map = {slot.slot_id: slot.game_name for slot in all_slots_in_room}
-
-            item_owner_name = full_name_map.get(hint.item_owner_id, f"Player {hint.item_owner_id}")
-            location_owner_name = full_name_map.get(hint.location_owner_id, f"Player {hint.location_owner_id}")
-            item_name = get_name_from_datapackage(hint.item_id, hint.item_owner_id, full_game_map, 'item_id_to_name')
-            location_name = get_name_from_datapackage(hint.location_id, hint.location_owner_id, full_game_map, 'location_id_to_name')
+            item_owner_name = name_map.get(hint.item_owner_id, f"Player {hint.item_owner_id}")
+            location_owner_name = name_map.get(hint.location_owner_id, f"Player {hint.location_owner_id}")
+            item_name = get_name_from_datapackage(hint.item_id, hint.item_owner_id, game_map, 'item_id_to_name')
+            location_name = get_name_from_datapackage(hint.location_id, hint.location_owner_id, game_map, 'location_id_to_name')
 
             history.append({
                 "message": f"Hint for {item_owner_name}: '{item_name}' is at '{location_name}' in {location_owner_name}'s world.",
