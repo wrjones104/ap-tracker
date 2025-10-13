@@ -1,4 +1,6 @@
-.venv
-service-account-key.json
-backend/.env
+.venv/
+.env
+__pycache__/
+*.pyc
 ap_tracker.db
+service-account-key.json

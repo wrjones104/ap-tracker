@@ -1,9 +1,11 @@
+from dotenv import load_dotenv
+import os
+import sys
 import requests
 import json
 import time
 import asyncio
 import websockets
-import os
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, Boolean, DateTime, or_
 from sqlalchemy.orm import relationship, sessionmaker, declarative_base
@@ -11,26 +13,53 @@ from flask import Flask, request, jsonify
 from threading import Thread
 import firebase_admin
 from firebase_admin import credentials, messaging
-from dotenv import load_dotenv
-load_dotenv()
+basedir = os.path.abspath(os.path.dirname(__file__))
+load_dotenv(os.path.join(basedir, '.env'))
 
-DB_PATH = os.environ.get('AP_DB_PATH', 'ap_tracker.db')
-CRED_PATH = os.environ.get('AP_CRED_PATH', 'service-account-key.json')
-
-# --- Firebase Initialization ---
-try:
-    cred = credentials.Certificate(CRED_PATH)
-    firebase_admin.initialize_app(cred)
-    print("Firebase initialized successfully.")
-except Exception as e:
-    print(f"!!! FIREBASE ERROR: Could not initialize Firebase. Push notifications will NOT work. Error: {e}")
-
-# --- Database and Model Setup ---
-DATABASE_FILE = DB_PATH
-engine = create_engine(f"sqlite:///{DATABASE_FILE}", connect_args={"check_same_thread": False})
+# --- NEW: Lazy Initialization Setup ---
+# We declare the engine and Session variables here, but we don't create them yet.
+engine = None
+Session = None
 Base = declarative_base()
-Session = sessionmaker(bind=engine)
 
+def init_db():
+    """
+    This function will be called to create the database engine and session.
+    It will only run once per process.
+    """
+    global engine, Session
+
+    # Check if the engine has already been initialized in this process
+    if engine is not None:
+        return
+
+    print("--- INITIALIZING DATABASE AND FIREBASE CONNECTION ---", file=sys.stderr)
+
+    DB_PATH = os.environ.get('AP_DB_PATH', 'ap_tracker.db')
+    CRED_PATH = os.environ.get('AP_CRED_PATH', 'service-account-key.json')
+
+    # Now, create the engine and session
+    DATABASE_FILE = DB_PATH
+    print(f"--- DB_PATH from env: {DB_PATH}")
+    print(f"--- DATABASE_FILE: {DATABASE_FILE}")
+    print(f"--- Absolute path: {os.path.abspath(DATABASE_FILE)}")
+
+    engine = create_engine(f"sqlite:///{os.path.abspath(DATABASE_FILE)}", connect_args={"check_same_thread": False})
+    print(f"--- Engine URL: {engine.url}")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+
+    # Initialize Firebase
+    try:
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(CRED_PATH)
+            firebase_admin.initialize_app(cred)
+            print("Firebase initialized successfully.", file=sys.stderr)
+    except Exception as e:
+        print(f"!!! FIREBASE ERROR: Could not initialize Firebase. Push notifications will NOT work. Error: {e}", file=sys.stderr)
+
+
+# --- Database Models (Unchanged) ---
 class TrackedRoom(Base):
     __tablename__ = 'tracked_rooms'
     id = Column(Integer, primary_key=True)
@@ -78,10 +107,16 @@ class DeviceToken(Base):
     token = Column(String, nullable=False, unique=True)
 
 
-# --- API Setup ---
+# --- Flask App Setup ---
 app = Flask(__name__)
 ARCHIPELAGO_HOST = "archipelago.gg"
 
+@app.before_request
+def before_request():
+    init_db()
+
+
+# --- API Endpoints ---
 @app.route('/import/cheesetracker', methods=['POST'])
 def import_from_cheesetracker():
     data = request.json
@@ -150,7 +185,7 @@ def add_room():
     data = request.json
     if not data or 'room_id' not in data or 'alias' not in data:
         return jsonify({'error': 'Missing room_id or alias'}), 400
-    
+
     session = Session()
     try:
         if session.query(TrackedRoom).filter_by(room_id=data['room_id']).first():
@@ -204,7 +239,6 @@ def get_room_players(room_db_id):
         session.close()
 
     try:
-        # **THE FIX**: Revert to only using the simple and reliable room_status endpoint.
         url = f"https://{ARCHIPELAGO_HOST}/api/room_status/{room.room_id}"
         response = requests.get(url, timeout=30); response.raise_for_status()
         live_players = response.json().get('players', [])
@@ -219,13 +253,11 @@ def get_room_players(room_db_id):
 def get_item_history(room_db_id):
     session = Session()
     try:
-        # First, get a list of all slot IDs being tracked for this room
         tracked_slots_query = session.query(TrackedSlot.slot_id).filter_by(room_id=room_db_id).all()
         if not tracked_slots_query:
-            return jsonify([]) # Return empty if no slots are tracked
+            return jsonify([])
         tracked_slot_ids = {slot_id for (slot_id,) in tracked_slots_query}
 
-        # Now, query for items where the receiver is in our tracked list
         items = session.query(NotifiedItem).filter(
             NotifiedItem.room_id == room_db_id,
             NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
@@ -248,7 +280,7 @@ def get_item_history(room_db_id):
             item_name = get_name_from_datapackage(item.item_id, item.receiving_slot_id, game_map, 'item_id_to_name')
             history.append({
                 "message": f"{receiver_name} received: {item_name}",
-                "timestamp": item.timestamp.isoformat() + "Z" # We will fix this in the next step
+                "timestamp": item.timestamp.isoformat() + "Z"
             })
         return jsonify(history)
     finally:
@@ -258,13 +290,11 @@ def get_item_history(room_db_id):
 def get_hint_history(room_db_id):
     session = Session()
     try:
-        # First, get a list of all slot IDs being tracked for this room
         tracked_slots_query = session.query(TrackedSlot.slot_id).filter_by(room_id=room_db_id).all()
         if not tracked_slots_query:
-            return jsonify([]) # Return empty if no slots are tracked
+            return jsonify([])
         tracked_slot_ids = {slot_id for (slot_id,) in tracked_slots_query}
 
-        # Now, query for hints relevant to our tracked players
         hints = session.query(RevealedHint).filter(
             RevealedHint.room_id == room_db_id,
             or_(
@@ -293,7 +323,7 @@ def get_hint_history(room_db_id):
 
             history.append({
                 "message": f"Hint for {item_owner_name}: '{item_name}' is at '{location_name}' in {location_owner_name}'s world.",
-                "timestamp": hint.timestamp.isoformat() + "Z" # We will fix this in the next step
+                "timestamp": hint.timestamp.isoformat() + "Z"
             })
         return jsonify(history)
     finally:
@@ -356,9 +386,8 @@ def unregister_device():
     finally:
         session.close()
 
-def run_api():
-    app.run(host='0.0.0.0', port=5000, debug=False)
 
+# --- Polling Service Logic ---
 def send_push_notification(title, body, room_alias):
     session = Session()
     try:
@@ -375,7 +404,7 @@ def send_push_notification(title, body, room_alias):
         print(f"Error sending push notification: {e}")
     finally:
         session.close()
-        
+
 def get_name_from_datapackage(entity_id, player_id, game_map, map_key):
     game = game_map.get(player_id)
     if player_id == 0: game = "Archipelago"
@@ -394,7 +423,7 @@ async def initial_room_setup(room: TrackedRoom, session: Session):
         if not all((port, tracker_id)):
             print(f"[{room.alias}] Error: Could not find port or tracker ID.")
             return None, None
-        
+
         is_first_time_setup = room.tracker_id != tracker_id
         room.tracker_id = tracker_id
         session.merge(room); session.commit()
@@ -403,7 +432,11 @@ async def initial_room_setup(room: TrackedRoom, session: Session):
         player_game_map = {i + 1: p[1] for i, p in enumerate(room_info.get('players', []))}
 
         uri = f"wss://{ARCHIPELAGO_HOST}:{port}"
-        async with websockets.connect(uri, open_timeout=10, ping_interval=20) as websocket:
+        async with websockets.connect(
+            uri,
+            open_timeout=10,
+            ping_interval=20
+        ) as websocket:
             message = await asyncio.wait_for(websocket.recv(), timeout=10)
             checksums = json.loads(message)[0].get('datapackage_checksums', {})
         for game, checksum in checksums.items():
@@ -414,7 +447,7 @@ async def initial_room_setup(room: TrackedRoom, session: Session):
                 if 'item_name_to_id' in game_data: game_data['item_id_to_name'] = {str(v): k for k, v in game_data['item_name_to_id'].items()}
                 if 'location_name_to_id' in game_data: game_data['location_id_to_name'] = {str(v): k for k, v in game_data['location_name_to_id'].items()}
                 datapackage_cache[game] = game_data
-        
+
         if is_first_time_setup:
             print(f"[{room.alias}] First-time setup. Establishing notification baseline...")
             tracker_url = f"https://{ARCHIPELAGO_HOST}/api/tracker/{tracker_id}"
@@ -422,7 +455,7 @@ async def initial_room_setup(room: TrackedRoom, session: Session):
             tracker_data = tracker_response.json()
             process_tracker_data(room, tracker_data, set(player_name_map.keys()), player_name_map, player_game_map, suppress_notifications=True)
             print(f"[{room.alias}] Baseline established.")
-        
+
         print(f"[{room.alias}] Setup complete.")
         return player_name_map, player_game_map
     except Exception as e:
@@ -447,9 +480,9 @@ def process_tracker_data(room: TrackedRoom, data: dict, tracked_slot_ids: set, n
                     slot_id, status_code, *_ = status_info
                 if slot_id != -1 and int(slot_id) in tracked_slot_ids and status_code == 30:
                     finished_player_ids.add(int(slot_id))
-        
+
         for slot_id in finished_player_ids:
-            if not suppress_notifications: send_push_notification(f"🏁 {name_map.get(slot_id)} Finished!", "Player has finished the game.", room.alias)
+            if not suppress_notifications: send_push_notification(f"Player Finished!", f"{name_map.get(slot_id)} has finished the game.", room.alias)
             slot_to_remove = session.query(TrackedSlot).filter_by(room_id=room.id, slot_id=slot_id).first()
             if slot_to_remove: session.delete(slot_to_remove)
         active_tracked_slots = tracked_slot_ids - finished_player_ids
@@ -460,11 +493,11 @@ def process_tracker_data(room: TrackedRoom, data: dict, tracked_slot_ids: set, n
                     item_name = get_name_from_datapackage(item_id, receiver_id, game_map, 'item_id_to_name')
                     hint = session.query(RevealedHint).filter_by(room_id=room.id, item_id=item_id, location_id=location_id).first()
                     if hint and not hint.found:
-                        if not suppress_notifications: send_push_notification(f"🔔 Hinted Item Found!", f"{name_map.get(receiver_id)} found: {item_name}", room.alias)
+                        if not suppress_notifications: send_push_notification(f"Hinted Item Found!", f"{name_map.get(receiver_id)} found: {item_name}", room.alias)
                         hint.found = True
                         continue
                     if bool(flags & 1) and not session.query(NotifiedItem).filter_by(room_id=room.id, receiving_slot_id=receiver_id, item_id=item_id, location_id=location_id).first():
-                        if not suppress_notifications: send_push_notification(f"✨ Progression Item!", f"{name_map.get(receiver_id)} received: {item_name}", room.alias)
+                        if not suppress_notifications: send_push_notification(f"Progression Item!", f"{name_map.get(receiver_id)} received: {item_name}", room.alias)
                         session.add(NotifiedItem(room_id=room.id, receiving_slot_id=receiver_id, item_id=item_id, location_id=location_id))
         for player_hints in data.get('hints', []):
             for hint_data in player_hints.get('hints', []):
@@ -475,28 +508,28 @@ def process_tracker_data(room: TrackedRoom, data: dict, tracked_slot_ids: set, n
                         item_name, loc_name = get_name_from_datapackage(item_id, item_owner_id, game_map, 'item_id_to_name'), get_name_from_datapackage(location_id, location_owner_id, game_map, 'location_id_to_name')
                         item_owner_name, loc_owner_name = name_map.get(item_owner_id), name_map.get(location_owner_id)
                         if is_item_owner_tracked:
-                            send_push_notification(f"🔔 New Hint for {item_owner_name}!", f"Your '{item_name}' is in {loc_owner_name}'s world at '{loc_name}'.", room.alias)
+                            send_push_notification(f"New Hint for {item_owner_name}!", f"Your '{item_name}' is in {loc_owner_name}'s world at '{loc_name}'.", room.alias)
                         elif is_loc_owner_tracked:
-                            send_push_notification(f"🔎 Item Hinted in {loc_owner_name}'s World!", f"'{item_name}' for {item_owner_name} is at your location: '{loc_name}'.", room.alias)
+                            send_push_notification(f"Item Hinted in {loc_owner_name}'s World!", f"'{item_name}' for {item_owner_name} is at your location: '{loc_name}'.", room.alias)
                     session.add(RevealedHint(room_id=room.id, item_id=item_id, location_id=location_id, item_owner_id=item_owner_id, location_owner_id=location_owner_id))
         session.commit()
     finally:
         session.close()
 
 async def poll_room(room: TrackedRoom):
-    while True: 
+    while True:
         session = Session()
         try:
             name_map, game_map = await initial_room_setup(room, session)
             if all((name_map, game_map)):
                 print(f"[{room.alias}] Setup successful, starting main polling loop.")
-                break 
+                break
             else:
                 print(f"[{room.alias}] Setup failed. Will retry in {POLLING_INTERVAL_SECONDS * 3} seconds.")
                 await asyncio.sleep(POLLING_INTERVAL_SECONDS * 3)
         finally:
             session.close()
-            
+
     while True:
         try:
             session = Session()
@@ -518,8 +551,8 @@ async def poll_room(room: TrackedRoom):
 
 async def main():
     print("AP Tracking Service starting...")
-    Base.metadata.create_all(engine)
-    print("Database initialized.")
+    init_db() # Initialize the database for the poller process
+    
     running_tasks = {}
     while True:
         session = Session()
@@ -540,10 +573,9 @@ async def main():
             session.close()
         await asyncio.sleep(30)
 
-if __name__ == "__main__":
-    import sys
 
-    # Check if the --run-poller argument was passed
+# --- Main Execution Block ---
+if __name__ == "__main__":
     if '--run-poller' in sys.argv:
         datapackage_cache = {}
         POLLING_INTERVAL_SECONDS = 60
@@ -553,7 +585,7 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             print("\nPolling service stopped by user.")
     else:
-        # This part runs the API server for local development if you don't pass the flag
         from waitress import serve
+        init_db() # Initialize for local dev server
         print("Starting API server for local development on http://0.0.0.0:5000")
         serve(app, host='0.0.0.0', port=5000)
