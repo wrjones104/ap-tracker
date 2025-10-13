@@ -254,26 +254,20 @@ def get_room_players(room_db_id):
 def get_item_history(room_db_id):
     session = Session()
     try:
-        tracked_slots_query = session.query(TrackedSlot.slot_id).filter_by(room_id=room_db_id).all()
-        if not tracked_slots_query:
+        # Get the slots the user is tracking for this room
+        tracked_slots = session.query(TrackedSlot).filter_by(room_id=room_db_id).all()
+        if not tracked_slots:
             return jsonify([])
-        tracked_slot_ids = {slot_id for (slot_id,) in tracked_slots_query}
+
+        # Create maps from the tracked slot data
+        tracked_slot_ids = {slot.slot_id for slot in tracked_slots}
+        name_map = {slot.slot_id: slot.slot_name for slot in tracked_slots}
+        game_map = {slot.slot_id: slot.game_name for slot in tracked_slots}
 
         items = session.query(NotifiedItem).filter(
             NotifiedItem.room_id == room_db_id,
             NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
         ).order_by(NotifiedItem.id.desc()).all()
-
-        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
-        if not room: return jsonify([])
-
-        player_list_response = get_room_players(room_db_id)
-        if player_list_response.status_code != 200:
-            name_map, game_map = {}, {}
-        else:
-            player_list = player_list_response.get_json()
-            name_map = {p['slot_id']: p['name'] for p in player_list}
-            game_map = {p['slot_id']: p['game'] for p in player_list}
 
         history = []
         for item in items:
@@ -282,6 +276,49 @@ def get_item_history(room_db_id):
             history.append({
                 "message": f"{receiver_name} received: {item_name}",
                 "timestamp": item.timestamp.isoformat() + "Z"
+            })
+        return jsonify(history)
+    finally:
+        session.close()
+
+@app.route('/room/<int:room_db_id>/history/hint', methods=['GET'])
+def get_hint_history(room_db_id):
+    session = Session()
+    try:
+        # Get the slots the user is tracking for this room
+        tracked_slots = session.query(TrackedSlot).filter_by(room_id=room_db_id).all()
+        if not tracked_slots:
+            return jsonify([])
+
+        # Create maps from the tracked slot data
+        tracked_slot_ids = {slot.slot_id for slot in tracked_slots}
+        name_map = {slot.slot_id: slot.slot_name for slot in tracked_slots}
+        game_map = {slot.slot_id: slot.game_name for slot in tracked_slots}
+
+        hints = session.query(RevealedHint).filter(
+            RevealedHint.room_id == room_db_id,
+            or_(
+                RevealedHint.item_owner_id.in_(tracked_slot_ids),
+                RevealedHint.location_owner_id.in_(tracked_slot_ids)
+            )
+        ).order_by(RevealedHint.id.desc()).all()
+
+        history = []
+        for hint in hints:
+            # For hints, we might not have the name if the other player isn't tracked.
+            # We need a more comprehensive name map for this.
+            all_slots_in_room = session.query(TrackedSlot).filter_by(room_id=room_db_id).all() # This is inefficient, but will work for now.
+            full_name_map = {slot.slot_id: slot.slot_name for slot in all_slots_in_room}
+            full_game_map = {slot.slot_id: slot.game_name for slot in all_slots_in_room}
+
+            item_owner_name = full_name_map.get(hint.item_owner_id, f"Player {hint.item_owner_id}")
+            location_owner_name = full_name_map.get(hint.location_owner_id, f"Player {hint.location_owner_id}")
+            item_name = get_name_from_datapackage(hint.item_id, hint.item_owner_id, full_game_map, 'item_id_to_name')
+            location_name = get_name_from_datapackage(hint.location_id, hint.location_owner_id, full_game_map, 'location_id_to_name')
+
+            history.append({
+                "message": f"Hint for {item_owner_name}: '{item_name}' is at '{location_name}' in {location_owner_name}'s world.",
+                "timestamp": hint.timestamp.isoformat() + "Z"
             })
         return jsonify(history)
     finally:
