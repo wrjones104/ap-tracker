@@ -1,5 +1,5 @@
 anyio
-blinker9.0
+blinker
 CacheControl
 cachetools
 certifi
