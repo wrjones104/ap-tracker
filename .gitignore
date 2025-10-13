@@ -2,5 +2,5 @@
 .env
 __pycache__/
 *.pyc
-ap_tracker.db
+backend/ap_tracker.db
 service-account-key.json
