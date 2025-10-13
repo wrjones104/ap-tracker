@@ -119,25 +119,35 @@ def _ensure_datapackage_cached(session, room_db_id):
         return
 
     try:
-        # The room info endpoint contains the checksums we need
-        url = f"https://{ARCHIPELAGO_HOST}/api/room/{room.room_id}"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        room_info = response.json()
-        checksums = room_info.get('datapackage_checksums', {})
+        # Step 1: Get the room status to find the tracker ID
+        status_url = f"https://{ARCHIPELAGO_HOST}/api/room_status/{room.room_id}"
+        status_response = requests.get(status_url, timeout=10)
+        status_response.raise_for_status()
+        tracker_id = status_response.json().get('tracker')
+
+        if not tracker_id:
+            print(f"Could not find tracker ID for room {room.room_id}", file=sys.stderr)
+            return
+
+        # Step 2: Get the tracker data to find the datapackage checksums
+        tracker_url = f"https://{ARCHIPELAGO_HOST}/api/tracker/{tracker_id}"
+        tracker_response = requests.get(tracker_url, timeout=10)
+        tracker_response.raise_for_status()
+        checksums = tracker_response.json().get('datapackage_checksums', {})
 
         for game, checksum in checksums.items():
             if game not in datapackage_cache:
                 print(f"Datapackage for '{game}' not in cache. Fetching...", file=sys.stderr)
-                url = f"https://{ARCHIPELAGO_HOST}/api/datapackage/{checksum}"
-                dp_response = requests.get(url, timeout=10)
+                dp_url = f"https://{ARCHIPELAGO_HOST}/api/datapackage/{checksum}"
+                dp_response = requests.get(dp_url, timeout=10)
                 dp_response.raise_for_status()
                 game_data = dp_response.json()
-                # Pre-calculate the reverse mapping for IDs to names
+
                 if 'item_name_to_id' in game_data:
                     game_data['item_id_to_name'] = {str(v): k for k, v in game_data['item_name_to_id'].items()}
                 if 'location_name_to_id' in game_data:
                     game_data['location_id_to_name'] = {str(v): k for k, v in game_data['location_name_to_id'].items()}
+
                 datapackage_cache[game] = game_data
     except requests.RequestException as e:
         print(f"Could not fetch datapackage for room {room.room_id}: {e}", file=sys.stderr)
