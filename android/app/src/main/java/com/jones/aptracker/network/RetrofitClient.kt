@@ -7,7 +7,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 
 object RetrofitClient {
     // private const val BASE_URL = "http://192.168.1.173:5000/" // Dev
-    private const val BASE_URL = "https://seedbot.net:5000/" // Prod
+    private const val BASE_URL = "https://ap-tracker.seedbot.net:5000/" // Prod
 
     val instance: ApiService by lazy {
         // Create a logging interceptor

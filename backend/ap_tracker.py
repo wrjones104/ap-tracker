@@ -536,19 +536,19 @@ async def main():
         await asyncio.sleep(30)
 
 if __name__ == "__main__":
-    datapackage_cache = {}
-    POLLING_INTERVAL_SECONDS = 60
+    import sys
 
-    # api_thread = Thread(target=run_api)
-    # api_thread.daemon = True
-    # api_thread.start()
-    # print("API server started in a background thread.")
-    from waitress import serve
-    api_thread = Thread(target=lambda: serve(app, host='0.0.0.0', port=5000))
-    api_thread.daemon = True
-    api_thread.start()
-    print("API server started in a background thread using Waitress.")
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nService stopped by user. Shutting down.")
+    # Check if the --run-poller argument was passed
+    if '--run-poller' in sys.argv:
+        datapackage_cache = {}
+        POLLING_INTERVAL_SECONDS = 60
+        print("Starting AP Tracker Polling Service...")
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            print("\nPolling service stopped by user.")
+    else:
+        # This part runs the API server for local development if you don't pass the flag
+        from waitress import serve
+        print("Starting API server for local development on http://0.0.0.0:5000")
+        serve(app, host='0.0.0.0', port=5000)
