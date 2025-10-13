@@ -11,17 +11,22 @@ from flask import Flask, request, jsonify
 from threading import Thread
 import firebase_admin
 from firebase_admin import credentials, messaging
+from dotenv import load_dotenv
+load_dotenv()
+
+DB_PATH = os.environ.get('AP_DB_PATH', 'ap_tracker.db')
+CRED_PATH = os.environ.get('AP_CRED_PATH', 'service-account-key.json')
 
 # --- Firebase Initialization ---
 try:
-    cred = credentials.Certificate("service-account-key.json")
+    cred = credentials.Certificate(CRED_PATH)
     firebase_admin.initialize_app(cred)
     print("Firebase initialized successfully.")
 except Exception as e:
     print(f"!!! FIREBASE ERROR: Could not initialize Firebase. Push notifications will NOT work. Error: {e}")
 
 # --- Database and Model Setup ---
-DATABASE_FILE = "ap_tracker.db"
+DATABASE_FILE = DB_PATH
 engine = create_engine(f"sqlite:///{DATABASE_FILE}", connect_args={"check_same_thread": False})
 Base = declarative_base()
 Session = sessionmaker(bind=engine)

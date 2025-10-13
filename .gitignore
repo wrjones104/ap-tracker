@@ -1,2 +1,4 @@
 .venv
 service-account-key.json
+backend/.env
+ap_tracker.db
