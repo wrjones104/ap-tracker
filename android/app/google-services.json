@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "710843234589",
+    "project_id": "ap-tracker-4e97d",
+    "storage_bucket": "ap-tracker-4e97d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:710843234589:android:0a4f6265f59d905c2589f4",
+        "android_client_info": {
+          "package_name": "com.jones.aptracker"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDP7lkfoEqcAwCi7JD5qqL6hP7xcyazUEU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
