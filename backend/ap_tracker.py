@@ -18,6 +18,7 @@ load_dotenv(os.path.join(basedir, '.env'))
 
 # --- NEW: Lazy Initialization Setup ---
 # We declare the engine and Session variables here, but we don't create them yet.
+datapackage_cache = {}
 engine = None
 Session = None
 Base = declarative_base()
@@ -577,7 +578,6 @@ async def main():
 # --- Main Execution Block ---
 if __name__ == "__main__":
     if '--run-poller' in sys.argv:
-        datapackage_cache = {}
         POLLING_INTERVAL_SECONDS = 60
         print("Starting AP Tracker Polling Service...")
         try:
