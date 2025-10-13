@@ -3,6 +3,7 @@ import os
 
 # Add the project directory to the Python path
 sys.path.insert(0, '/var/www/ap-tracker/backend')
+os.environ['TMPDIR'] = '/var/tmp'
 
 # Activate the virtual environment (optional but good practice)
 # activate_this = '/var/www/ap-tracker/backend/venv/bin/activate_this.py'
