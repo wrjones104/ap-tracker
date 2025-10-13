@@ -398,7 +398,7 @@ async def initial_room_setup(room: TrackedRoom, session: Session):
         player_game_map = {i + 1: p[1] for i, p in enumerate(room_info.get('players', []))}
 
         uri = f"wss://{ARCHIPELAGO_HOST}:{port}"
-        async with websockets.connect(uri, open_timeout=10) as websocket:
+        async with websockets.connect(uri, open_timeout=10, ping_interval=20) as websocket:
             message = await asyncio.wait_for(websocket.recv(), timeout=10)
             checksums = json.loads(message)[0].get('datapackage_checksums', {})
         for game, checksum in checksums.items():
