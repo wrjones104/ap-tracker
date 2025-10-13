@@ -324,48 +324,6 @@ def get_hint_history(room_db_id):
     finally:
         session.close()
 
-@app.route('/room/<int:room_db_id>/history/hint', methods=['GET'])
-def get_hint_history(room_db_id):
-    session = Session()
-    try:
-        tracked_slots_query = session.query(TrackedSlot.slot_id).filter_by(room_id=room_db_id).all()
-        if not tracked_slots_query:
-            return jsonify([])
-        tracked_slot_ids = {slot_id for (slot_id,) in tracked_slots_query}
-
-        hints = session.query(RevealedHint).filter(
-            RevealedHint.room_id == room_db_id,
-            or_(
-                RevealedHint.item_owner_id.in_(tracked_slot_ids),
-                RevealedHint.location_owner_id.in_(tracked_slot_ids)
-            )
-        ).order_by(RevealedHint.id.desc()).all()
-
-        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
-        if not room: return jsonify([])
-
-        player_list_response = get_room_players(room_db_id)
-        if player_list_response.status_code != 200:
-            name_map, game_map = {}, {}
-        else:
-            player_list = player_list_response.get_json()
-            name_map = {p['slot_id']: p['name'] for p in player_list}
-            game_map = {p['slot_id']: p['game'] for p in player_list}
-
-        history = []
-        for hint in hints:
-            item_owner_name = name_map.get(hint.item_owner_id, f"Player {hint.item_owner_id}")
-            location_owner_name = name_map.get(hint.location_owner_id, f"Player {hint.location_owner_id}")
-            item_name = get_name_from_datapackage(hint.item_id, hint.item_owner_id, game_map, 'item_id_to_name')
-            location_name = get_name_from_datapackage(hint.location_id, hint.location_owner_id, game_map, 'location_id_to_name')
-
-            history.append({
-                "message": f"Hint for {item_owner_name}: '{item_name}' is at '{location_name}' in {location_owner_name}'s world.",
-                "timestamp": hint.timestamp.isoformat() + "Z"
-            })
-        return jsonify(history)
-    finally:
-        session.close()
 
 @app.route('/room/<int:room_db_id>/slots', methods=['PUT'])
 def update_tracked_slots(room_db_id):
