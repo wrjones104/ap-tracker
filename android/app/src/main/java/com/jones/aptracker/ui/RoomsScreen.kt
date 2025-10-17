@@ -1,17 +1,25 @@
 package com.jones.aptracker.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -19,19 +27,31 @@ import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.network.Room
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomsScreen(
     roomsViewModel: RoomsViewModel = viewModel(),
-    onRoomClick: (Int, String) -> Unit
+    onRoomClick: (Int, String) -> Unit,
+    onHistoryClick: () -> Unit
 ) {
-    val rooms by roomsViewModel.rooms
-    val isLoading by roomsViewModel.isLoading
+    val rooms by roomsViewModel.rooms.collectAsState()
+    val isLoading by roomsViewModel.isLoading.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
     var roomToDelete by remember { mutableStateOf<Room?>(null) }
     var roomToEdit by remember { mutableStateOf<Room?>(null) }
 
     Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Tracked Rooms") },
+                actions = {
+                    IconButton(onClick = onHistoryClick) {
+                        Icon(Icons.Default.History, contentDescription = "View Global History")
+                    }
+                }
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
                 Icon(Icons.Default.Add, contentDescription = "Add Room")
@@ -47,12 +67,14 @@ fun RoomsScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                // Handle initial loading state separately from refresh
                 if (isLoading && rooms.isEmpty()) {
                     CircularProgressIndicator()
                 } else if (rooms.isEmpty()) {
-                    // The Box and fillMaxSize ensure you can pull-to-refresh even when the list is empty
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                    ) {
                         Text(
                             text = "No rooms found. Tap the '+' to add a room.",
                             modifier = Modifier.align(Alignment.Center)
@@ -77,6 +99,14 @@ fun RoomsScreen(
                                         .padding(start = 16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    // --- ADDED ICON DISPLAY ---
+                                    Icon(
+                                        imageVector = getIconByName(room.icon_name),
+                                        contentDescription = "Room Icon",
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(Modifier.width(16.dp))
+                                    // --- END OF ICON DISPLAY ---
                                     Column(
                                         modifier = Modifier
                                             .weight(1f)
@@ -115,8 +145,9 @@ fun RoomsScreen(
         if (showAddDialog) {
             AddRoomDialog(
                 onDismiss = { showAddDialog = false },
-                onAdd = { roomId, alias ->
-                    roomsViewModel.addRoom(roomId, alias)
+                onAdd = { roomId, alias, iconName ->
+                    // --- THE FIX IS HERE ---
+                    roomsViewModel.addRoom(roomId, alias, iconName)
                     showAddDialog = false
                 }
             )
@@ -126,8 +157,9 @@ fun RoomsScreen(
             EditRoomDialog(
                 room = room,
                 onDismiss = { roomToEdit = null },
-                onConfirm = { newAlias ->
-                    roomsViewModel.updateRoom(room.id, newAlias)
+                onConfirm = { newAlias, newIconName ->
+                    // --- THE FIX IS HERE ---
+                    roomsViewModel.updateRoom(room.id, newAlias, newIconName)
                     roomToEdit = null
                 }
             )
@@ -156,11 +188,13 @@ fun RoomsScreen(
     }
 }
 
-// ... (AddRoomDialog and EditRoomDialog are the same)
+
+// --- UPDATED ADD ROOM DIALOG ---
 @Composable
-fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
+fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit) {
     var roomId by remember { mutableStateOf("") }
     var alias by remember { mutableStateOf("") }
+    var selectedIconName by remember { mutableStateOf("default_icon") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -173,17 +207,40 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                     label = { Text("Room ID") },
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(8.dp))
                 TextField(
                     value = alias,
                     onValueChange = { alias = it },
                     label = { Text("Alias") },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(16.dp))
+                Text("Select Icon", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(8.dp))
+                // Icon Picker Row
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(AppIcons.allIcons.toList()) { (name, icon) ->
+                        val isSelected = name == selectedIconName
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                                .border(1.dp, if(isSelected) MaterialTheme.colorScheme.primary else Color.Gray, CircleShape)
+                                .clickable { selectedIconName = name },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(imageVector = icon, contentDescription = name)
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onAdd(roomId, alias) },
+                onClick = { onAdd(roomId, alias, selectedIconName) },
                 enabled = roomId.isNotBlank() && alias.isNotBlank()
             ) {
                 Text("Add")
@@ -197,24 +254,50 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
     )
 }
 
+// --- UPDATED EDIT ROOM DIALOG ---
 @Composable
-fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
     var alias by remember { mutableStateOf(room.alias) }
+    var selectedIconName by remember { mutableStateOf(room.icon_name) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit Room Alias") },
+        title = { Text("Edit Room") },
         text = {
-            TextField(
-                value = alias,
-                onValueChange = { alias = it },
-                label = { Text("New Alias") },
-                modifier = Modifier.fillMaxWidth()
-            )
+            Column {
+                TextField(
+                    value = alias,
+                    onValueChange = { alias = it },
+                    label = { Text("New Alias") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(16.dp))
+                Text("Select Icon", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(8.dp))
+                // Icon Picker Row
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(AppIcons.allIcons.toList()) { (name, icon) ->
+                        val isSelected = name == selectedIconName
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                                .border(1.dp, if(isSelected) MaterialTheme.colorScheme.primary else Color.Gray, CircleShape)
+                                .clickable { selectedIconName = name },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(imageVector = icon, contentDescription = name)
+                        }
+                    }
+                }
+            }
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(alias) },
+                onClick = { onConfirm(alias, selectedIconName) },
                 enabled = alias.isNotBlank()
             ) {
                 Text("Save")
@@ -227,4 +310,3 @@ fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String) -> Uni
         }
     )
 }
-
