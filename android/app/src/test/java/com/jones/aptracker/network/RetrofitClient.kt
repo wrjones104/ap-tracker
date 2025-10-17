@@ -8,7 +8,7 @@ object RetrofitClient {
 
     // IMPORTANT: Replace with the IP address of the computer running your Python script.
     // Use your computer's local network IP (e.g., 192.168.1.100), not "localhost" or "127.0.0.1".
-    private const val BASE_URL = "http://192.168.1.172:5000/"
+    private const val BASE_URL = "http://192.168.1.206:5000/"
 
     val instance: ApiService by lazy {
         val retrofit = Retrofit.Builder()

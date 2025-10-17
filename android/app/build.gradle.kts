@@ -67,4 +67,5 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.7.1")
     implementation("androidx.compose.material:material-icons-extended-android:1.6.6")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("com.google.accompanist:accompanist-swiperefresh:0.28.0")
 }
