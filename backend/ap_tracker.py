@@ -16,7 +16,7 @@ from functools import wraps
 # --- Core Dependencies ---
 from flask import Flask, request, jsonify
 from waitress import serve
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, UniqueConstraint, event
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, UniqueConstraint, event, or_
 from sqlalchemy.orm import relationship, sessionmaker, declarative_base, scoped_session
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
@@ -97,6 +97,7 @@ class TrackedRoom(Base):
     room_id = Column(String, nullable=False, unique=True)
     alias = Column(String, nullable=False)
     tracker_id = Column(String)
+    icon_name = Column(String, default="default_icon")
     game_checksums_json = Column(String, default='{}') # Stores a JSON map of game->checksum for this room
     slots = relationship("TrackedSlot", back_populates="room", cascade="all, delete-orphan")
 
@@ -144,6 +145,17 @@ class NotifiedHint(Base):
 
 app = Flask(__name__)
 
+# --- Logging Middleware ---
+@app.before_request
+def log_request_info():
+    """Logs incoming request details, including the payload."""
+    payload = request.get_json(silent=True) # Safely get JSON payload if it exists
+    log_line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] API Call: {request.method} {request.path}"
+    if payload:
+        log_line += f" | Payload: {json.dumps(payload)}"
+    print(log_line)
+
+# --- Error Handling ---
 def handle_db_errors(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -174,16 +186,29 @@ def get_tracked_rooms():
     session = Session()
     rooms_data = []
     for room in session.query(TrackedRoom).all():
-        total_slots, host = 0, "archipelago.gg"
+        total_slots = 0
+        host = "archipelago.gg" # Default host
+
         try:
             url = f"https://{ARCHIPELAGO_HOST}/api/room_status/{room.room_id}"
             response = requests.get(url, timeout=5)
             if response.ok:
                 data = response.json()
                 total_slots = len(data.get('players', []))
-                if port := data.get('last_port'): host = f"archipelago.gg:{port}"
-        except requests.RequestException: pass
-        rooms_data.append({'id': room.id, 'room_id': room.room_id, 'alias': room.alias, 'tracked_slots_count': len(room.slots), 'host': host, 'total_slots_count': total_slots})
+                if port := data.get('last_port'): 
+                    host = f"archipelago.gg:{port}"
+        except requests.RequestException as e:
+            print(f"[ERROR] Could not fetch status for room '{room.alias}' ({room.room_id}). Error: {e}")
+
+        rooms_data.append({
+            'id': room.id,
+            'room_id': room.room_id,
+            'alias': room.alias,
+            'tracked_slots_count': len(room.slots),
+            'host': host,
+            'total_slots_count': total_slots,
+            'icon_name': room.icon_name
+        })
     return jsonify(rooms_data)
 
 @app.route('/rooms', methods=['POST'])
@@ -199,7 +224,11 @@ def add_tracked_room():
     except requests.RequestException as e: return jsonify({'error': f'Could not validate room: {e}'}), 502
     session = Session()
     if session.query(TrackedRoom).filter_by(room_id=room_id).first(): return jsonify({'error': 'Room already tracked'}), 409
-    new_room = TrackedRoom(room_id=room_id, alias=data['alias'])
+    new_room = TrackedRoom(
+        room_id=room_id, 
+        alias=data['alias'],
+        icon_name=data.get('icon_name', 'default_icon') # Get icon, or use default
+    )
     session.add(new_room)
     session.commit()
     return jsonify({'message': f"Room '{new_room.alias}' added.", 'id': new_room.id}), 201
@@ -213,6 +242,7 @@ def update_tracked_room(room_db_id):
     room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
     if not room: return jsonify({'error': 'Room not found'}), 404
     room.alias = data['alias']
+    room.icon_name = data['icon_name']
     session.commit()
     return jsonify({'message': 'Alias updated.'})
 
@@ -262,10 +292,30 @@ def get_item_history(room_db_id):
     session = Session()
     room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
     if not room: return jsonify({'error': 'Room not found'}), 404
+    
     game_checksums = json.loads(room.game_checksums_json)
     tracked_slot_ids = {slot.slot_id for slot in room.slots}
     if not tracked_slot_ids: return jsonify([])
-    items = session.query(NotifiedItem).filter(NotifiedItem.room_id == room.room_id, NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)).order_by(NotifiedItem.id.desc()).limit(100).all()
+    
+    # --- THIS IS THE UPDATED QUERY LOGIC ---
+    query = session.query(NotifiedItem).filter(
+        NotifiedItem.room_id == room.room_id, 
+        NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
+    )
+    
+    # Check for the 'since' parameter
+    since_timestamp = request.args.get('since')
+    if since_timestamp:
+        try:
+            # Parse the ISO 8601 timestamp from the app
+            since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
+            query = query.filter(NotifiedItem.timestamp > since_dt)
+        except (ValueError, TypeError):
+            pass # Ignore invalid timestamps
+
+    items = query.order_by(NotifiedItem.id.desc()).limit(100).all()
+    # --- END OF QUERY LOGIC UPDATE ---
+
     try:
         url = f"https://{ARCHIPELAGO_HOST}/api/room_status/{room.room_id}"
         response = requests.get(url, timeout=10)
@@ -274,13 +324,108 @@ def get_item_history(room_db_id):
         name_map = {i + 1: p[0] for i, p in enumerate(players)}
         game_map = {i + 1: p[1] for i, p in enumerate(players)}
     except requests.RequestException: name_map, game_map = {}, {}
+    
     history = []
     for item in items:
         receiver_name = name_map.get(item.receiving_slot_id, f"P{item.receiving_slot_id}")
         receiver_game = game_map.get(item.receiving_slot_id, "Unknown")
         game_checksum = game_checksums.get(receiver_game)
+        
         item_name = session.query(DatapackageCache.entity_name).filter_by(game=receiver_game, checksum=game_checksum, entity_type='item', entity_id=item.item_id).scalar() or f"ID {item.item_id}"
-        history.append({"message": f"{receiver_name} received: {item_name}", "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat()})
+        
+        history.append({
+            "message": f"{receiver_name} received: {item_name}",
+            "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+            "tracker_id": room.tracker_id,
+            "slot_id": item.receiving_slot_id,
+            "icon_name": room.icon_name
+        })
+        
+    return jsonify(history)
+
+
+@app.route('/history/items', methods=['GET'])
+@handle_db_errors
+def get_global_item_history():
+    session = Session()
+    all_rooms = session.query(TrackedRoom).all()
+    if not all_rooms: return jsonify([])
+
+    filters = []
+    room_data_map = {}
+    for room in all_rooms:
+        tracked_slot_ids = {slot.slot_id for slot in room.slots}
+        if tracked_slot_ids:
+            filters.append(
+                (NotifiedItem.room_id == room.room_id) &
+                (NotifiedItem.receiving_slot_id.in_(tracked_slot_ids))
+            )
+            room_data_map[room.room_id] = {
+                'game_checksums': json.loads(room.game_checksums_json),
+                'tracker_id': room.tracker_id,
+                'icon_name': room.icon_name
+            }
+
+    if not filters: return jsonify([])
+
+    query = session.query(NotifiedItem).filter(or_(*filters))
+    
+    # Check for the 'since' parameter
+    since_timestamp = request.args.get('since')
+    if since_timestamp:
+        try:
+            since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
+            query = query.filter(NotifiedItem.timestamp > since_dt)
+        except (ValueError, TypeError):
+            pass # Ignore invalid timestamps
+
+    items = query.order_by(NotifiedItem.id.desc()).limit(200).all()
+
+    if not items: return jsonify([])
+
+    room_ids_in_history = {item.room_id for item in items}
+    for room_id in room_ids_in_history:
+        try:
+            url = f"https://{ARCHIPELAGO_HOST}/api/room_status/{room_id}"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            players = response.json().get('players', [])
+            room_data_map[room_id]['name_map'] = {i + 1: p[0] for i, p in enumerate(players)}
+            room_data_map[room_id]['game_map'] = {i + 1: p[1] for i, p in enumerate(players)}
+        except requests.RequestException:
+            room_data_map[room_id]['name_map'] = {}
+            room_data_map[room_id]['game_map'] = {}
+
+    history = []
+    for item in items:
+        room_data = room_data_map.get(item.room_id)
+        if not room_data: continue
+
+        name_map = room_data.get('name_map', {})
+        game_map = room_data.get('game_map', {})
+        game_checksums = room_data.get('game_checksums', {})
+        tracker_id = room_data.get('tracker_id')
+        icon_name = room_data.get('icon_name')
+
+        receiver_name = name_map.get(item.receiving_slot_id, f"P{item.receiving_slot_id}")
+        receiver_game = game_map.get(item.receiving_slot_id, "Unknown")
+        game_checksum = game_checksums.get(receiver_game)
+
+        item_name = session.query(DatapackageCache.entity_name).filter_by(
+            game=receiver_game,
+            checksum=game_checksum,
+            entity_type='item',
+            entity_id=item.item_id
+        ).scalar() or f"ID {item.item_id}"
+
+        history.append({
+            "message": f"{receiver_name} received: {item_name}",
+            "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+            "tracker_id": tracker_id,
+            "slot_id": item.receiving_slot_id,
+            "icon_name": icon_name
+        })
+
     return jsonify(history)
 
 @app.teardown_appcontext
@@ -331,7 +476,7 @@ async def fetch_json(url):
 async def poll_room_instance(room_info):
     room_id, tracker_id, room_alias = room_info['room_id'], room_info['tracker_id'], room_info['alias']
     timestamp = datetime.now().strftime('%H:%M:%S')
-    print(f"[{timestamp}][{room_alias}] Polling tracker...")
+    # print(f"[{timestamp}][{room_alias}] Polling tracker...")
     session = Session()
     db_room = session.query(TrackedRoom).filter(TrackedRoom.room_id == room_id).first()
     if not db_room: return
@@ -425,7 +570,8 @@ async def poll_room_instance(room_info):
         for n in notifications_to_send: print(f"  - {n['title']} {n['body']}")
         await send_push_notifications(notifications_to_send, device_tokens)
     elif not finished_player_ids: 
-        print(f"[{timestamp}][{room_alias}] No new events found.")
+        # print(f"[{timestamp}][{room_alias}] No new events found.")
+        pass
 
 async def setup_and_cache_datapackage(room_id, session):
     try:
