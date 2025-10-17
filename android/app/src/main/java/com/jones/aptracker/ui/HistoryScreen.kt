@@ -23,31 +23,19 @@ import java.time.format.DateTimeFormatter
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(roomId: Int, roomAlias: String, historyViewModel: HistoryViewModel = viewModel()) {
-    var selectedTabIndex by remember { mutableStateOf(0) }
-    val tabs = listOf("Received Items", "Hints")
-
     // Get the state from the ViewModel
     val isLoading by historyViewModel.isLoading
     val errorMessage = historyViewModel.errorMessage.value
+    val itemsToShow = historyViewModel.itemHistory.value
 
     LaunchedEffect(key1 = roomId) {
         historyViewModel.fetchHistory(roomId)
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("$roomAlias - History") }) }
+        topBar = { TopAppBar(title = { Text("$roomAlias - Item History") }) }
     ) { innerPadding ->
         Column(modifier = Modifier.padding(innerPadding)) {
-            TabRow(selectedTabIndex = selectedTabIndex) {
-                tabs.forEachIndexed { index, title ->
-                    Tab(
-                        selected = selectedTabIndex == index,
-                        onClick = { selectedTabIndex = index },
-                        text = { Text(title) }
-                    )
-                }
-            }
-
             // Box to manage the content state (loading, error, empty, or list)
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -62,12 +50,6 @@ fun HistoryScreen(roomId: Int, roomAlias: String, historyViewModel: HistoryViewM
                         color = Color.Red
                     )
                 } else {
-                    val itemsToShow = when (selectedTabIndex) {
-                        0 -> historyViewModel.itemHistory.value
-                        1 -> historyViewModel.hintHistory.value
-                        else -> emptyList() // <-- THE FIX: Add this exhaustive else case
-                    }
-
                     if (itemsToShow.isEmpty()) {
                         Text("No history found for your tracked slots.")
                     } else {

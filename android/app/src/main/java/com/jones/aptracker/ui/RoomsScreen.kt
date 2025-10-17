@@ -12,9 +12,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color // **THE FIX**: Add this import
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.google.accompanist.swiperefresh.SwipeRefresh
+import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.network.Room
 
 @Composable
@@ -36,59 +38,72 @@ fun RoomsScreen(
             }
         }
     ) { innerPadding ->
-        Box(
-            modifier = Modifier.fillMaxSize().padding(innerPadding),
-            contentAlignment = Alignment.Center
+        SwipeRefresh(
+            state = rememberSwipeRefreshState(isRefreshing = isLoading),
+            onRefresh = { roomsViewModel.fetchRooms() },
+            modifier = Modifier.padding(innerPadding)
         ) {
-            if (isLoading) {
-                CircularProgressIndicator()
-            } else if (rooms.isEmpty()) {
-                Text(text = "No rooms found. Tap the '+' to add a room.")
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(8.dp)
-                ) {
-                    items(rooms) { room ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clickable { onRoomClick(room.id, room.alias) },
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                        ) {
-                            Row(
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                // Handle initial loading state separately from refresh
+                if (isLoading && rooms.isEmpty()) {
+                    CircularProgressIndicator()
+                } else if (rooms.isEmpty()) {
+                    // The Box and fillMaxSize ensure you can pull-to-refresh even when the list is empty
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Text(
+                            text = "No rooms found. Tap the '+' to add a room.",
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(8.dp)
+                    ) {
+                        items(rooms) { room ->
+                            Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(start = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(vertical = 4.dp)
+                                    .clickable { onRoomClick(room.id, room.alias) },
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                             ) {
-                                Column(
+                                Row(
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .padding(vertical = 12.dp)
+                                        .fillMaxWidth()
+                                        .padding(start = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = room.alias,
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = room.host,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray
-                                    )
-                                    Text(
-                                        text = "${room.tracked_slots_count} / ${room.total_slots_count} slots tracked",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray
-                                    )
-                                }
-                                IconButton(onClick = { roomToEdit = room }) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Edit Room Alias")
-                                }
-                                IconButton(onClick = { roomToDelete = room }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete Room")
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(vertical = 12.dp)
+                                    ) {
+                                        Text(
+                                            text = room.alias,
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = room.host ?: "Connecting...",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.Gray
+                                        )
+                                        Text(
+                                            text = "${room.tracked_slots_count} / ${room.total_slots_count} slots tracked",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                    IconButton(onClick = { roomToEdit = room }) {
+                                        Icon(Icons.Default.Edit, contentDescription = "Edit Room Alias")
+                                    }
+                                    IconButton(onClick = { roomToDelete = room }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete Room")
+                                    }
                                 }
                             }
                         }
@@ -212,3 +227,4 @@ fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String) -> Uni
         }
     )
 }
+

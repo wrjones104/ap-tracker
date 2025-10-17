@@ -2,6 +2,8 @@
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">192.168.1.173</domain>
+        <domain includeSubdomains="true">Will-Office</domain>
+        <domain includeSubdomains="true">Will-Linux</domain>
+        <domain includeSubdomains="true">192.168.1.206</domain>
     </domain-config>
 </network-security-config>
