@@ -7,6 +7,7 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 interface ApiService {
     @GET("rooms")
@@ -28,11 +29,10 @@ interface ApiService {
     suspend fun updateTrackedSlots(@Path("id") roomId: Int, @Body request: UpdateSlotsRequest): Response<Unit>
 
     @GET("rooms/{id}/history/items")
-    suspend fun getItemHistory(@Path("id") roomId: Int): List<HistoryItem>
+    suspend fun getItemHistory(@Path("id") roomId: Int, @Query("since") since: String?): List<HistoryItem>
 
-    // This endpoint was removed from the backend, so we remove it from the app
-    // @GET("rooms/{id}/history/hint")
-    // suspend fun getHintHistory(@Path("id") roomId: Int): List<HistoryItem>
+    @GET("history/items")
+    suspend fun getGlobalItemHistory(@Query("since") since: String?): List<HistoryItem>
 
     @POST("devices")
     suspend fun registerDevice(@Body request: RegisterDeviceRequest): Response<Unit>
@@ -42,19 +42,21 @@ data class Room(
     val id: Int,
     val room_id: String,
     val alias: String,
-    // Making host nullable makes the app more resilient to API errors
     val host: String?,
     val tracked_slots_count: Int,
-    val total_slots_count: Int
+    val total_slots_count: Int,
+    val icon_name: String
 )
 
 data class AddRoomRequest(
     val room_id: String,
-    val alias: String
+    val alias: String,
+    val icon_name: String // <-- THE FIX IS HERE
 )
 
 data class UpdateRoomRequest(
-    val alias: String
+    val alias: String,
+    val icon_name: String // <-- AND THE FIX IS HERE
 )
 
 data class Player(
@@ -68,10 +70,12 @@ data class UpdateSlotsRequest(
     val tracked_slot_ids: List<Int>
 )
 
-// The backend now provides a timestamp again
 data class HistoryItem(
     val message: String,
-    val timestamp: String
+    val timestamp: String,
+    val tracker_id: String?,
+    val slot_id: Int?,
+    val icon_name: String?
 )
 
 data class RegisterDeviceRequest(
