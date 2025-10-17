@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,6 +21,7 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import androidx.compose.material3.TextFieldDefaults
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -28,8 +31,19 @@ fun HistoryScreen(
     historyViewModel: HistoryViewModel = viewModel()
 ) {
     val isLoading by historyViewModel.isLoading.collectAsState()
-    val errorMessage by historyViewModel.errorMessage.collectAsState()
-    val itemsToShow by historyViewModel.itemHistory.collectAsState()
+    val errorMessage by historyViewModel.errorMessage
+    val fullHistory by historyViewModel.itemHistory.collectAsState()
+    val searchQuery by historyViewModel.searchQuery
+
+    val itemsToShow = remember(fullHistory, searchQuery) {
+        if (searchQuery.isBlank()) {
+            fullHistory
+        } else {
+            fullHistory.filter {
+                it.message.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
 
     LaunchedEffect(key1 = roomId) {
         historyViewModel.loadHistoryFor(roomId)
@@ -42,11 +56,28 @@ fun HistoryScreen(
         }
     ) { innerPadding ->
         Column(modifier = Modifier.padding(innerPadding)) {
+            TextField(
+                value = searchQuery,
+                onValueChange = { historyViewModel.onSearchQueryChanged(it) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                label = { Text("Search History") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                singleLine = true,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent
+                )
+            )
+
             Box(
                 modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
+                // --- THE FIX IS HERE: Changed from Center to TopCenter ---
+                contentAlignment = Alignment.TopCenter
             ) {
-                if (isLoading && itemsToShow.isEmpty()) {
+                if (isLoading && fullHistory.isEmpty()) {
                     CircularProgressIndicator()
                 } else if (errorMessage != null) {
                     Text(
@@ -56,7 +87,12 @@ fun HistoryScreen(
                     )
                 } else {
                     if (itemsToShow.isEmpty()) {
-                        Text("No history found for your tracked slots.")
+                        val emptyText = if (searchQuery.isNotBlank()) {
+                            "No results found."
+                        } else {
+                            "No history found for your tracked slots."
+                        }
+                        Text(emptyText, modifier = Modifier.padding(top = 24.dp)) // Add some padding
                     } else {
                         HistoryList(items = itemsToShow)
                     }
@@ -90,7 +126,6 @@ fun HistoryList(items: List<HistoryItem>) {
                     modifier = Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // --- THE FIX IS HERE ---
                     Icon(
                         imageVector = getIconByName(item.icon_name),
                         contentDescription = "Item received",
