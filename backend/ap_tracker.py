@@ -237,14 +237,18 @@ def add_tracked_room():
 @handle_db_errors
 def update_tracked_room(room_db_id):
     data = request.json
-    if not data or 'alias' not in data: return jsonify({'error': 'Missing alias'}), 400
+    if not data or 'alias' not in data or 'icon_name' not in data:
+        return jsonify({'error': 'Missing alias or icon_name'}), 400
+    
     session = Session()
     room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
-    if not room: return jsonify({'error': 'Room not found'}), 404
+    if not room:
+        return jsonify({'error': 'Room not found'}), 404
+        
     room.alias = data['alias']
     room.icon_name = data['icon_name']
     session.commit()
-    return jsonify({'message': 'Alias updated.'})
+    return jsonify({'message': 'Room updated.'})
 
 @app.route('/rooms/<int:room_db_id>', methods=['DELETE'])
 @handle_db_errors
@@ -354,32 +358,36 @@ def get_global_item_history():
     filters = []
     room_data_map = {}
     for room in all_rooms:
-        tracked_slot_ids = {slot.slot_id for slot in room.slots}
-        if tracked_slot_ids:
-            filters.append(
-                (NotifiedItem.room_id == room.room_id) &
-                (NotifiedItem.receiving_slot_id.in_(tracked_slot_ids))
-            )
-            room_data_map[room.room_id] = {
-                'game_checksums': json.loads(room.game_checksums_json),
-                'tracker_id': room.tracker_id,
-                'icon_name': room.icon_name
-            }
+        try:
+            tracked_slot_ids = {slot.slot_id for slot in room.slots}
+            if tracked_slot_ids:
+                filters.append(
+                    (NotifiedItem.room_id == room.room_id) &
+                    (NotifiedItem.receiving_slot_id.in_(tracked_slot_ids))
+                )
+                room_data_map[room.room_id] = {
+                    'db_id': room.id,
+                    'game_checksums': json.loads(room.game_checksums_json),
+                    'tracker_id': room.tracker_id,
+                    'icon_name': room.icon_name
+                }
+        except Exception as e:
+            print(f"[ERROR] Skipping room '{room.alias}' ({room.room_id}) due to a data error: {e}")
+            continue
 
     if not filters: return jsonify([])
 
     query = session.query(NotifiedItem).filter(or_(*filters))
     
-    # Check for the 'since' parameter
     since_timestamp = request.args.get('since')
     if since_timestamp:
         try:
             since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
             query = query.filter(NotifiedItem.timestamp > since_dt)
-        except (ValueError, TypeError):
-            pass # Ignore invalid timestamps
+        except (ValueError, TypeError): pass
 
-    items = query.order_by(NotifiedItem.id.desc()).limit(200).all()
+    # --- THE FIX: Remove the .limit(200) from this line ---
+    items = query.order_by(NotifiedItem.id.desc()).all()
 
     if not items: return jsonify([])
 
@@ -390,11 +398,13 @@ def get_global_item_history():
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             players = response.json().get('players', [])
-            room_data_map[room_id]['name_map'] = {i + 1: p[0] for i, p in enumerate(players)}
-            room_data_map[room_id]['game_map'] = {i + 1: p[1] for i, p in enumerate(players)}
+            if room_id in room_data_map:
+                room_data_map[room_id]['name_map'] = {i + 1: p[0] for i, p in enumerate(players)}
+                room_data_map[room_id]['game_map'] = {i + 1: p[1] for i, p in enumerate(players)}
         except requests.RequestException:
-            room_data_map[room_id]['name_map'] = {}
-            room_data_map[room_id]['game_map'] = {}
+            if room_id in room_data_map:
+                room_data_map[room_id]['name_map'] = {}
+                room_data_map[room_id]['game_map'] = {}
 
     history = []
     for item in items:
@@ -406,6 +416,7 @@ def get_global_item_history():
         game_checksums = room_data.get('game_checksums', {})
         tracker_id = room_data.get('tracker_id')
         icon_name = room_data.get('icon_name')
+        db_id = room_data.get('db_id')
 
         receiver_name = name_map.get(item.receiving_slot_id, f"P{item.receiving_slot_id}")
         receiver_game = game_map.get(item.receiving_slot_id, "Unknown")
@@ -423,7 +434,8 @@ def get_global_item_history():
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": tracker_id,
             "slot_id": item.receiving_slot_id,
-            "icon_name": icon_name
+            "icon_name": icon_name,
+            'db_id': db_id
         })
 
     return jsonify(history)
@@ -451,19 +463,40 @@ async def send_push_notifications(notifications, device_tokens):
         return
 
     loop = asyncio.get_running_loop()
+    # Process messages in chunks of 10
     for i in range(0, len(messages), 10):
         chunk = messages[i:i + 10]
         try:
+            print(f"[FCM] Sending a chunk of {len(chunk)} messages...")
             response = await loop.run_in_executor(None, lambda: messaging.send_each(chunk))
-            if response.failure_count > 0:
-                failed = [chunk[i].token for i, r in enumerate(response.responses) if not r.success and hasattr(r.exception, 'code') and r.exception.code == 'UNREGISTERED']
-                if failed:
-                    session = Session()
-                    session.query(Device).filter(Device.fcm_token.in_(failed)).delete(synchronize_session=False)
-                    session.commit()
-            await asyncio.sleep(0.1)
+            
+            unregistered_tokens = []
+            for idx, res in enumerate(response.responses):
+                message_title = chunk[idx].notification.title
+                if res.success:
+                    print(f"  - SUCCESS: '{message_title}'")
+                else:
+                    error_code = res.exception.code if hasattr(res.exception, 'code') else "UNKNOWN"
+                    error_message = str(res.exception)
+                    print(f"  - FAILED: '{message_title}'. Code: {error_code}, Error: {error_message}")
+                    
+                    # --- THE FIX: Check for both UNREGISTERED and NOT_FOUND ---
+                    if error_code in ['UNREGISTERED', 'NOT_FOUND']:
+                        unregistered_tokens.append(chunk[idx].token)
+
+            if unregistered_tokens:
+                print(f"[FCM] Found {len(unregistered_tokens)} invalid devices. Removing from DB.")
+                session = Session()
+                session.query(Device).filter(Device.fcm_token.in_(unregistered_tokens)).delete(synchronize_session=False)
+                session.commit()
+                Session.remove()
+
         except Exception as e:
-            print(f"[FCM] Error sending chunk: {e}")
+            print(f"[FCM] A critical error occurred while sending a chunk: {e}")
+        
+        if i + 10 < len(messages):
+            print("[FCM] Waiting 1 second before next chunk...")
+            await asyncio.sleep(1)
 
 async def fetch_json(url):
     session = get_aiohttp_session()
