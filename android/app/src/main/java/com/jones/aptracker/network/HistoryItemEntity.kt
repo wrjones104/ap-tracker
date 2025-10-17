@@ -1,15 +1,19 @@
 package com.jones.aptracker.network
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "history_items")
+@Entity(
+    tableName = "history_items",
+    indices = [Index(value = ["message", "timestamp", "slot_id"], unique = true)]
+)
 data class HistoryItemEntity(
     @PrimaryKey(autoGenerate = true)
-    val id: Long = 0, // Auto-generated unique ID for each row
-    val roomId: Int?,      // Null for global, non-null for room-specific items
+    val id: Long = 0,
+    val roomId: Int?,
     val message: String,
-    val timestamp: String, // ISO 8601 format
+    val timestamp: String,
     val tracker_id: String?,
     val slot_id: Int?,
     val icon_name: String?

@@ -1,6 +1,7 @@
 package com.jones.aptracker.ui
 
 import android.app.Application
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.database.AppDatabase
@@ -16,12 +17,11 @@ import kotlinx.coroutines.launch
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: HistoryRepository
-
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
     val itemHistory: StateFlow<List<HistoryItem>> = _itemHistory
-
+    val searchQuery = mutableStateOf("")
     val isLoading = MutableStateFlow(true)
-    val errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage = mutableStateOf<String?>(null)
 
     init {
         val historyDao = AppDatabase.getInstance(application).historyDao()
@@ -41,14 +41,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
             historyFlow
                 .map { entities ->
-                    // Convert DB entities to UI models
                     entities.map { entity ->
                         HistoryItem(
                             message = entity.message,
                             timestamp = entity.timestamp,
                             tracker_id = entity.tracker_id,
                             slot_id = entity.slot_id,
-                            icon_name = entity.icon_name // <-- THE FIX IS HERE
+                            icon_name = entity.icon_name,
+                            db_id = entity.roomId // Pass it along for the UI if needed
                         )
                     }
                 }
@@ -58,29 +58,26 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 .collect { historyList ->
                     _itemHistory.value = historyList
-                    if (historyList.isNotEmpty()) {
-                        isLoading.value = false
-                    }
+                    isLoading.value = false
                 }
         }
 
-        refreshHistory(roomId)
+        // Always trigger a single, unified refresh in the background.
+        refreshHistory()
     }
 
-    private fun refreshHistory(roomId: Int?) {
+    private fun refreshHistory() {
         viewModelScope.launch {
             try {
-                if (roomId != null) {
-                    repository.refreshRoomHistory(roomId)
-                } else {
-                    repository.refreshGlobalHistory()
-                }
+                repository.refreshHistory()
             } catch (e: Exception) {
                 errorMessage.value = "Refresh failed: ${e.message}"
                 e.printStackTrace()
-            } finally {
-                isLoading.value = false
             }
         }
+    }
+
+    fun onSearchQueryChanged(query: String) {
+        searchQuery.value = query
     }
 }

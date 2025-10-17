@@ -51,12 +51,12 @@ data class Room(
 data class AddRoomRequest(
     val room_id: String,
     val alias: String,
-    val icon_name: String // <-- THE FIX IS HERE
+    val icon_name: String
 )
 
 data class UpdateRoomRequest(
     val alias: String,
-    val icon_name: String // <-- AND THE FIX IS HERE
+    val icon_name: String
 )
 
 data class Player(
@@ -75,7 +75,8 @@ data class HistoryItem(
     val timestamp: String,
     val tracker_id: String?,
     val slot_id: Int?,
-    val icon_name: String?
+    val icon_name: String?,
+    val db_id: Int?
 )
 
 data class RegisterDeviceRequest(
