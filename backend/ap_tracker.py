@@ -12,6 +12,7 @@ import websockets
 from threading import Thread, local
 from datetime import datetime, timezone
 from functools import wraps
+import psutil
 
 # --- Core Dependencies ---
 from flask import Flask, request, jsonify
@@ -30,6 +31,8 @@ from firebase_admin import credentials, messaging
 # ==============================================================================
 # 1. CONFIGURATION & INITIALIZATION
 # ==============================================================================
+process = psutil.Process(os.getpid())
+process.cpu_percent(interval=None)
 
 # --- Constants ---
 DATABASE_FILE = "ap_tracker.db"
@@ -81,6 +84,19 @@ def get_aiohttp_session():
     if not hasattr(thread_local_data, "aiohttp_session"):
         thread_local_data.aiohttp_session = aiohttp.ClientSession()
     return thread_local_data.aiohttp_session
+
+def log_resource_usage():
+    """Logs the current CPU and Memory usage of this script."""
+    # The global 'process' variable is already initialized.
+    
+    # Get CPU usage since the LAST time this function was called (non-blocking)
+    cpu_usage = process.cpu_percent(interval=None)
+    
+    # Get memory usage and convert it to megabytes (MB)
+    memory_info = process.memory_info()
+    memory_mb = memory_info.rss / (1024 * 1024)
+    
+    print(f"[RESOURCES] CPU: {cpu_usage:.2f}% | Memory: {memory_mb:.2f} MB")
 
 # ==============================================================================
 # 2. DATABASE MODELS
@@ -454,9 +470,10 @@ async def send_push_notifications(notifications, device_tokens):
     messages = []
     for content in notifications:
         for token in device_tokens:
+            android_config = messaging.AndroidConfig(priority='high')
             messages.append(messaging.Message(
                 notification=messaging.Notification(title=content['title'], body=content['body']),
-                token=token
+                token=token, android=android_config
             ))
     
     if not messages:
@@ -507,104 +524,113 @@ async def fetch_json(url):
     except Exception as e: return None
 
 async def poll_room_instance(room_info):
-    room_id, tracker_id, room_alias = room_info['room_id'], room_info['tracker_id'], room_info['alias']
-    timestamp = datetime.now().strftime('%H:%M:%S')
-    # print(f"[{timestamp}][{room_alias}] Polling tracker...")
     session = Session()
-    db_room = session.query(TrackedRoom).filter(TrackedRoom.room_id == room_id).first()
-    if not db_room: return
-    game_checksums = json.loads(db_room.game_checksums_json)
-    all_tracked_slots = {slot.slot_id for slot in db_room.slots}
-    if not all_tracked_slots: return
-    tracker_data = await fetch_json(f"https://{ARCHIPELAGO_HOST}/api/tracker/{tracker_id}")
-    if not tracker_data: return
-    room_status_data = await fetch_json(f"https://{ARCHIPELAGO_HOST}/api/room_status/{room_id}")
-    players = room_status_data.get('players', []) if room_status_data else []
-    name_map = {i + 1: p[0] for i, p in enumerate(players)}
-    game_map = {i + 1: p[1] for i, p in enumerate(players)}
-    device_tokens = [d.fcm_token for d in session.query(Device.fcm_token).all()]
-    if not device_tokens: return
-    
-    unique_notification_contents = set()
-    
-    finished_player_ids = set()
-    player_statuses_raw = tracker_data.get('player_status', {})
-    if isinstance(player_statuses_raw, dict):
-        for slot_id_str, status_code in player_statuses_raw.items():
-            slot_id = int(slot_id_str)
-            if slot_id in all_tracked_slots and status_code == 30:
-                finished_player_ids.add(slot_id)
-    elif isinstance(player_statuses_raw, list):
-        for status_info in player_statuses_raw:
-            slot_id, status_code = -1, -1
-            if isinstance(status_info, dict) and 'player' in status_info and 'status' in status_info:
-                slot_id, status_code = status_info['player'], status_info['status']
-            elif isinstance(status_info, (list, tuple)) and len(status_info) >= 2:
-                slot_id, status_code, *_ = status_info
-            
-            if slot_id != -1 and int(slot_id) in all_tracked_slots and status_code == 30:
-                finished_player_ids.add(int(slot_id))
+    try:
+        room_id, tracker_id, room_alias = room_info['room_id'], room_info['tracker_id'], room_info['alias']
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        db_room = session.query(TrackedRoom).filter(TrackedRoom.room_id == room_id).first()
+        if not db_room: return
 
-    if finished_player_ids:
-        for slot_id in finished_player_ids:
-            name = name_map.get(slot_id, f"P{slot_id}")
-            unique_notification_contents.add((f"[{room_alias}] 🏁 Player Finished!", f"{name} has finished."))
-            if slot := session.query(TrackedSlot).filter_by(room_id=db_room.id, slot_id=slot_id).first(): session.delete(slot)
-        session.commit()
-    
-    active_tracked_slots = all_tracked_slots - finished_player_ids
-    if not active_tracked_slots:
+        game_checksums = json.loads(db_room.game_checksums_json)
+        all_tracked_slots = {slot.slot_id for slot in db_room.slots}
+        if not all_tracked_slots: return
+
+        tracker_data = await fetch_json(f"https://{ARCHIPELAGO_HOST}/api/tracker/{tracker_id}")
+        if not tracker_data: return
+
+        room_status_data = await fetch_json(f"https://{ARCHIPELAGO_HOST}/api/room_status/{room_id}")
+        players = room_status_data.get('players', []) if room_status_data else []
+        name_map = {i + 1: p[0] for i, p in enumerate(players)}
+        game_map = {i + 1: p[1] for i, p in enumerate(players)}
+        device_tokens = [d.fcm_token for d in session.query(Device.fcm_token).all()]
+        if not device_tokens: return
+        
+        unique_notification_contents = set()
+        
+        finished_player_ids = set()
+        player_statuses_raw = tracker_data.get('player_status', {})
+        if isinstance(player_statuses_raw, dict):
+            for slot_id_str, status_code in player_statuses_raw.items():
+                slot_id = int(slot_id_str)
+                if slot_id in all_tracked_slots and status_code == 30:
+                    finished_player_ids.add(slot_id)
+        elif isinstance(player_statuses_raw, list):
+            for status_info in player_statuses_raw:
+                slot_id, status_code = -1, -1
+                if isinstance(status_info, dict) and 'player' in status_info and 'status' in status_info:
+                    slot_id, status_code = status_info['player'], status_info['status']
+                elif isinstance(status_info, (list, tuple)) and len(status_info) >= 2:
+                    slot_id, status_code, *_ = status_info
+                
+                if slot_id != -1 and int(slot_id) in all_tracked_slots and status_code == 30:
+                    finished_player_ids.add(int(slot_id))
+
+        if finished_player_ids:
+            for slot_id in finished_player_ids:
+                name = name_map.get(slot_id, f"P{slot_id}")
+                title = f"{name} Finished!"
+                body = f"Player has finished in room '{room_alias}'"
+                unique_notification_contents.add((title, body))
+                if slot := session.query(TrackedSlot).filter_by(room_id=db_room.id, slot_id=slot_id).first(): session.delete(slot)
+            session.commit()
+        
+        active_tracked_slots = all_tracked_slots - finished_player_ids
+        if not active_tracked_slots:
+            if unique_notification_contents:
+                notifications_to_send = [{'title': t, 'body': b} for t, b in unique_notification_contents]
+                print(f"[{timestamp}][{room_alias}] Found {len(notifications_to_send)} unique events. Sending notifications to {len(device_tokens)} devices.")
+                for n in notifications_to_send: print(f"  - {n['title']}: {n['body']}")
+                await send_push_notifications(notifications_to_send, device_tokens)
+            return
+
+        existing_items = {(i.receiving_slot_id, i.item_id, i.location_id) for i in session.query(NotifiedItem).filter_by(room_id=room_id)}
+        existing_hints = {(h.item_owner_id, h.location_owner_id, h.item_id, h.location_id) for h in session.query(NotifiedHint).filter_by(room_id=room_id)}
+        newly_notified_items, newly_notified_hints = [], []
+        
+        for p_items in tracker_data.get('player_items_received', []):
+            rid = p_items.get('player')
+            if rid in active_tracked_slots:
+                for item_id, loc_id, _, flags in p_items.get('items', []):
+                    if bool(flags & 1) and (rid, item_id, loc_id) not in existing_items:
+                        r_game = game_map.get(rid, "Unknown")
+                        r_checksum = game_checksums.get(r_game)
+                        i_name = session.query(DatapackageCache.entity_name).filter_by(game=r_game, checksum=r_checksum, entity_type='item', entity_id=item_id).scalar() or f"ID {item_id}"
+                        title = f"✨ {i_name}"
+                        body = f"Received by {name_map.get(rid, f'P{rid}')} in '{room_alias}'"
+                        unique_notification_contents.add((title, body))
+                        newly_notified_items.append(NotifiedItem(room_id=room_id, receiving_slot_id=rid, item_id=item_id, location_id=loc_id))
+                        existing_items.add((rid, item_id, loc_id))
+        
+        for p_hints in tracker_data.get('hints', []):
+            for hint_data in p_hints.get('hints', []):
+                io_id, lo_id, loc_id, item_id, *_ = hint_data
+                if (io_id in active_tracked_slots or lo_id in active_tracked_slots) and (io_id, lo_id, item_id, loc_id) not in existing_hints:
+                    io_game, lo_game = game_map.get(io_id, "Unknown"), game_map.get(lo_id, "Unknown")
+                    io_checksum, lo_checksum = game_checksums.get(io_game), game_checksums.get(lo_game)
+                    i_name = session.query(DatapackageCache.entity_name).filter_by(game=io_game, checksum=io_checksum, entity_type='item', entity_id=item_id).scalar() or f"ID {item_id}"
+                    l_name = session.query(DatapackageCache.entity_name).filter_by(game=lo_game, checksum=lo_checksum, entity_type='location', entity_id=loc_id).scalar() or f"ID {loc_id}"
+                    
+                    if io_id in active_tracked_slots:
+                        unique_notification_contents.add((f"[{room_alias}]  Hint for {name_map.get(io_id)}!", f"Your '{i_name}' is in {name_map.get(lo_id)}'s world at '{l_name}'."))
+                    
+                    if lo_id in active_tracked_slots and io_id != lo_id:
+                        unique_notification_contents.add((f"[{room_alias}] Item in your World!", f"'{i_name}' for {name_map.get(io_id)} is at your location: '{l_name}'."))
+
+                    newly_notified_hints.append(NotifiedHint(room_id=room_id, item_owner_id=io_id, location_owner_id=lo_id, item_id=item_id, location_id=loc_id))
+                    existing_hints.add((io_id, lo_id, item_id, loc_id))
+                    
+        if newly_notified_items: session.bulk_save_objects(newly_notified_items)
+        if newly_notified_hints: session.bulk_save_objects(newly_notified_hints)
+        if newly_notified_items or newly_notified_hints: session.commit()
+
         if unique_notification_contents:
             notifications_to_send = [{'title': t, 'body': b} for t, b in unique_notification_contents]
             print(f"[{timestamp}][{room_alias}] Found {len(notifications_to_send)} unique events. Sending notifications to {len(device_tokens)} devices.")
-            for n in notifications_to_send: print(f"  - {n['title']} {n['body']}")
+            for n in notifications_to_send: print(f"  - {n['title']}: {n['body']}")
             await send_push_notifications(notifications_to_send, device_tokens)
-        return
-
-    existing_items = {(i.receiving_slot_id, i.item_id, i.location_id) for i in session.query(NotifiedItem).filter_by(room_id=room_id)}
-    existing_hints = {(h.item_owner_id, h.location_owner_id, h.item_id, h.location_id) for h in session.query(NotifiedHint).filter_by(room_id=room_id)}
-    newly_notified_items, newly_notified_hints = [], []
-    for p_items in tracker_data.get('player_items_received', []):
-        rid = p_items.get('player')
-        if rid in active_tracked_slots:
-            for item_id, loc_id, _, flags in p_items.get('items', []):
-                if bool(flags & 1) and (rid, item_id, loc_id) not in existing_items:
-                    r_game = game_map.get(rid, "Unknown")
-                    r_checksum = game_checksums.get(r_game)
-                    i_name = session.query(DatapackageCache.entity_name).filter_by(game=r_game, checksum=r_checksum, entity_type='item', entity_id=item_id).scalar() or f"ID {item_id}"
-                    unique_notification_contents.add((f"[{room_alias}] ✨ Progression Item!", f"{name_map.get(rid, f'P{rid}')} received: {i_name}"))
-                    newly_notified_items.append(NotifiedItem(room_id=room_id, receiving_slot_id=rid, item_id=item_id, location_id=loc_id))
-                    existing_items.add((rid, item_id, loc_id))
-    for p_hints in tracker_data.get('hints', []):
-        for hint_data in p_hints.get('hints', []):
-            io_id, lo_id, loc_id, item_id, *_ = hint_data
-            if (io_id in active_tracked_slots or lo_id in active_tracked_slots) and (io_id, lo_id, item_id, loc_id) not in existing_hints:
-                io_game, lo_game = game_map.get(io_id, "Unknown"), game_map.get(lo_id, "Unknown")
-                io_checksum, lo_checksum = game_checksums.get(io_game), game_checksums.get(lo_game)
-                i_name = session.query(DatapackageCache.entity_name).filter_by(game=io_game, checksum=io_checksum, entity_type='item', entity_id=item_id).scalar() or f"ID {item_id}"
-                l_name = session.query(DatapackageCache.entity_name).filter_by(game=lo_game, checksum=lo_checksum, entity_type='location', entity_id=loc_id).scalar() or f"ID {loc_id}"
-                
-                if io_id in active_tracked_slots:
-                    unique_notification_contents.add((f"[{room_alias}] 🔔 New Hint for {name_map.get(io_id)}!", f"Your '{i_name}' is in {name_map.get(lo_id)}'s world at '{l_name}'."))
-                
-                if lo_id in active_tracked_slots and io_id != lo_id:
-                    unique_notification_contents.add((f"[{room_alias}] 🔎 Item Hinted in your World!", f"'{i_name}' for {name_map.get(io_id)} is at your location: '{l_name}'."))
-
-                newly_notified_hints.append(NotifiedHint(room_id=room_id, item_owner_id=io_id, location_owner_id=lo_id, item_id=item_id, location_id=loc_id))
-                existing_hints.add((io_id, lo_id, item_id, loc_id))
-                
-    if newly_notified_items: session.bulk_save_objects(newly_notified_items)
-    if newly_notified_hints: session.bulk_save_objects(newly_notified_hints)
-    if newly_notified_items or newly_notified_hints: session.commit()
-
-    if unique_notification_contents:
-        notifications_to_send = [{'title': t, 'body': b} for t, b in unique_notification_contents]
-        print(f"[{timestamp}][{room_alias}] Found {len(notifications_to_send)} unique events. Sending notifications to {len(device_tokens)} devices.")
-        for n in notifications_to_send: print(f"  - {n['title']} {n['body']}")
-        await send_push_notifications(notifications_to_send, device_tokens)
-    elif not finished_player_ids: 
-        # print(f"[{timestamp}][{room_alias}] No new events found.")
-        pass
+        
+    finally:
+        Session.remove()
 
 async def setup_and_cache_datapackage(room_id, session):
     try:
@@ -654,6 +680,9 @@ async def poller_supervisor():
     while True:
         session = Session()
         try:
+            # --- ADDED: Log resource usage at the start of each cycle ---
+            log_resource_usage()
+
             rooms_in_db = session.query(TrackedRoom).all()
             current_rooms_data = {r.room_id: {'tracker_id': r.tracker_id, 'alias': r.alias, 'room_id': r.room_id} for r in rooms_in_db}
             
@@ -661,18 +690,15 @@ async def poller_supervisor():
             for room_id, new_data in current_rooms_data.items():
                 task_info = running_tasks.get(room_id)
 
-                # If task doesn't exist or data has changed, (re)start it
                 if not task_info or task_info['data'] != new_data:
-                    if task_info: # It's a change, not a new room
+                    if task_info:
                         print(f"[SUPERVISOR] Data for room '{task_info['data']['alias']}' has changed. Restarting poller.")
                         task_info['task'].cancel()
                     
-                    # Ensure tracker_id is set before starting
                     if not new_data['tracker_id']:
                         print(f"[SUPERVISOR] First time seeing room {room_id}. Performing setup...")
                         tracker_id = await setup_and_cache_datapackage(room_id, session)
                         if tracker_id:
-                            # We need to update the DB AND our in-memory data
                             session.query(TrackedRoom).filter_by(room_id=room_id).update({'tracker_id': tracker_id})
                             session.commit()
                             new_data['tracker_id'] = tracker_id
