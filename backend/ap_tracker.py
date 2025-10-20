@@ -22,6 +22,7 @@ from sqlalchemy.orm import relationship, sessionmaker, declarative_base, scoped_
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, IntegrityError
 from requests.adapters import HTTPAdapter
+from urllib.parse import urlparse
 from urllib3.util.retry import Retry
 
 # --- Firebase for Push Notifications ---
@@ -118,14 +119,15 @@ class TrackedRoom(Base):
     id = Column(Integer, primary_key=True)
     room_id = Column(String, nullable=False, unique=True)
     alias = Column(String, nullable=False)
+    hostname = Column(String, default="archipelago.gg")
     tracker_id = Column(String)
     icon_name = Column(String, default="default_icon")
-    game_checksums_json = Column(String, default='{}') # Stores a JSON map of game->checksum for this room
+    game_checksums_json = Column(String, default='{}')
     slots = relationship("TrackedSlot", back_populates="room", cascade="all, delete-orphan")
-    cached_host = Column(String, default="archipelago.gg")
+    cached_full_address = Column(String, default="archipelago.gg")
     cached_total_slots = Column(Integer, default=0)
     last_api_check = Column(DateTime)
-    cached_players_json = Column(String, default='[]') # Stores the player list
+    cached_players_json = Column(String, default='[]')
 
 class TrackedSlot(Base):
     __tablename__ = 'tracked_slots'
@@ -226,37 +228,31 @@ def get_tracked_rooms():
     session = Session()
     rooms = session.query(TrackedRoom).all()
     rooms_data = []
-    
-    # How old data can be before we try to refresh it.
-    # We can set this to an hour as you suggested.
     cache_expiry_duration = timedelta(hours=1)
 
     for room in rooms:
         now = datetime.now(timezone.utc)
         is_cache_stale = not room.last_api_check or (now - room.last_api_check.replace(tzinfo=timezone.utc) > cache_expiry_duration)
 
-        # If the cache is stale, try to refresh it.
         if is_cache_stale:
             try:
-                url = f"https://{ARCHIPELAGO_HOST}/api/room_status/{room.room_id}"
+                url = f"https://{room.hostname}/api/room_status/{room.room_id}"
                 response = requests.get(url, timeout=5)
                 if response.ok:
                     data = response.json()
                     room.cached_total_slots = len(data.get('players', []))
-                    room.cached_host = f"archipelago.gg:{data['last_port']}" if 'last_port' in data else "archipelago.gg"
+                    room.cached_full_address = f"{room.hostname}:{data['last_port']}" if 'last_port' in data else room.hostname
                     room.last_api_check = datetime.utcnow()
                     session.commit()
             except requests.RequestException as e:
-                # If the API fails, no problem. We just log it and use the old data.
                 print(f"[CACHE_ERROR] Could not refresh room '{room.alias}'. Using stale data. Error: {e}")
 
-        # Always build the response from our fast, local database.
         rooms_data.append({
             'id': room.id,
             'room_id': room.room_id,
             'alias': room.alias,
             'tracked_slots_count': len(room.slots),
-            'host': room.cached_host,
+            'host': room.cached_full_address,
             'total_slots_count': room.cached_total_slots,
             'icon_name': room.icon_name
         })
@@ -267,13 +263,21 @@ def get_tracked_rooms():
 @handle_db_errors
 def add_tracked_room():
     data = request.json
-    if not data or 'room_id' not in data or 'alias' not in data: 
-        return jsonify({'error': 'Missing room_id or alias'}), 400
-    
-    room_id = data['room_id']
+    if not data or 'room_url' not in data or 'alias' not in data: 
+        return jsonify({'error': 'Missing room_url or alias'}), 400
     
     try:
-        url = f"https://{ARCHIPELAGO_HOST}/api/room_status/{room_id}"
+        parsed_url = urlparse(data['room_url'])
+        hostname = parsed_url.netloc
+        room_id = os.path.basename(parsed_url.path)
+
+        if not hostname or not room_id:
+            return jsonify({'error': 'Invalid Room URL format.'}), 400
+    except Exception:
+        return jsonify({'error': 'Could not parse Room URL.'}), 400
+
+    try:
+        url = f"https://{hostname}/api/room_status/{room_id}"
         response = requests.get(url, timeout=10)
         if response.status_code >= 400: 
             return jsonify({'error': f'Invalid room (status {response.status_code}).'}), 400
@@ -281,17 +285,11 @@ def add_tracked_room():
         api_data = response.json()
         players_raw = api_data.get('players', [])
         
-        # --- EXTRACT AND CACHE PLAYER LIST ---
-        # Transform the raw player data into the structure we need
-        player_list = [
-            {'slot_id': i + 1, 'name': p[0], 'game': p[1]} 
-            for i, p in enumerate(players_raw)
-        ]
+        player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players_raw)]
         players_json = json.dumps(player_list)
         
-        # Extract the other data we need to cache
         total_slots = len(players_raw)
-        host = f"archipelago.gg:{api_data['last_port']}" if 'last_port' in api_data else "archipelago.gg"
+        full_address = f"{hostname}:{api_data['last_port']}" if 'last_port' in api_data else hostname
 
     except requests.RequestException as e: 
         return jsonify({'error': f'Could not validate room: {e}'}), 502
@@ -300,14 +298,14 @@ def add_tracked_room():
     if session.query(TrackedRoom).filter_by(room_id=room_id).first(): 
         return jsonify({'error': 'Room already tracked'}), 409
 
-    # --- SAVE TO DB WITH ALL CACHED VALUES ---
     new_room = TrackedRoom(
         room_id=room_id,
+        hostname=hostname,
         alias=data['alias'],
         icon_name=data.get('icon_name', 'default_icon'),
-        cached_host=host,
+        cached_full_address=full_address,
         cached_total_slots=total_slots,
-        cached_players_json=players_json, # Save the new player list
+        cached_players_json=players_json,
         last_api_check=datetime.utcnow()
     )
     session.add(new_room)
@@ -381,7 +379,7 @@ def update_tracked_slots(room_db_id):
         print(f"[API] Pre-filling history for {len(newly_added_slots)} new slot(s) in room '{room.alias}'.")
         try:
             # Fetch the complete tracker data once
-            url = f"https://{ARCHIPELAGO_HOST}/api/tracker/{room.tracker_id}"
+            url = f"https://{room.hostname}/api/tracker/{room.tracker_id}"            
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             tracker_data = response.json()
@@ -662,7 +660,7 @@ async def fetch_json(url):
 async def poll_room_instance(room_info):
     session = Session()
     try:
-        room_id, tracker_id, room_alias = room_info['room_id'], room_info['tracker_id'], room_info['alias']
+        room_id, tracker_id, room_alias, hostname = room_info['room_id'], room_info['tracker_id'], room_info['alias'], room_info['hostname']
         timestamp = datetime.now().strftime('%H:%M:%S')
         db_room = session.query(TrackedRoom).filter(TrackedRoom.room_id == room_id).first()
         if not db_room: return
@@ -671,10 +669,10 @@ async def poll_room_instance(room_info):
         all_tracked_slots = {slot.slot_id for slot in db_room.slots}
         if not all_tracked_slots: return
 
-        tracker_data = await fetch_json(f"https://{ARCHIPELAGO_HOST}/api/tracker/{tracker_id}")
+        tracker_data = await fetch_json(f"https://{hostname}/api/tracker/{tracker_id}")
         if not tracker_data: return
 
-        room_status_data = await fetch_json(f"https://{ARCHIPELAGO_HOST}/api/room_status/{room_id}")
+        room_status_data = await fetch_json(f"https://{hostname}/api/room_status/{room_id}")
         players = room_status_data.get('players', []) if room_status_data else []
         name_map = {i + 1: p[0] for i, p in enumerate(players)}
         game_map = {i + 1: p[1] for i, p in enumerate(players)}
@@ -802,13 +800,13 @@ async def poll_room_instance(room_info):
     finally:
         Session.remove()
 
-async def setup_and_cache_datapackage(room_id, session):
+async def setup_and_cache_datapackage(room_id, hostname, session):
     try:
-        room_info = await fetch_json(f"https://{ARCHIPELAGO_HOST}/api/room_status/{room_id}")
+        room_info = await fetch_json(f"https://{hostname}/api/room_status/{room_id}")        
         if not room_info: return None
         tracker_id, port = room_info.get('tracker'), room_info.get('last_port')
         if not tracker_id or not port: return None
-        uri = f"wss://{ARCHIPELAGO_HOST}:{port}"
+        uri = f"wss://{hostname}:{port}"
         checksums = {}
         try:
             async with websockets.connect(uri, open_timeout=10) as ws:
@@ -823,7 +821,7 @@ async def setup_and_cache_datapackage(room_id, session):
                 continue
 
             print(f"[SETUP][{room_id}] Caching new datapackage for {game} (checksum: {checksum[:8]}...)")
-            game_data = await fetch_json(f"https://{ARCHIPELAGO_HOST}/api/datapackage/{checksum}")
+            game_data = await fetch_json(f"https://{hostname}/api/datapackage/{checksum}")
             if not game_data: continue
             actual_data = game_data['games'][game] if 'games' in game_data and game in game_data['games'] else game_data
 
@@ -845,18 +843,19 @@ async def setup_and_cache_datapackage(room_id, session):
 
 async def poller_supervisor():
     print("[POLLER] Background polling service starting...")
-    running_tasks = {} # Will now store {'task': task_obj, 'data': room_dict}
+    running_tasks = {} 
 
     while True:
         session = Session()
         try:
-            # --- ADDED: Log resource usage at the start of each cycle ---
             log_resource_usage()
 
             rooms_in_db = session.query(TrackedRoom).all()
-            current_rooms_data = {r.room_id: {'tracker_id': r.tracker_id, 'alias': r.alias, 'room_id': r.room_id} for r in rooms_in_db}
+            current_rooms_data = {
+                r.room_id: {'tracker_id': r.tracker_id, 'alias': r.alias, 'room_id': r.room_id, 'hostname': r.hostname} 
+                for r in rooms_in_db
+            }
 
-            # --- Check for new or changed rooms ---
             for room_id, new_data in current_rooms_data.items():
                 task_info = running_tasks.get(room_id)
 
@@ -867,7 +866,7 @@ async def poller_supervisor():
                     
                     if not new_data['tracker_id']:
                         print(f"[SUPERVISOR] First time seeing room {room_id}. Performing setup...")
-                        tracker_id = await setup_and_cache_datapackage(room_id, session)
+                        tracker_id = await setup_and_cache_datapackage(room_id, new_data['hostname'], session)                        
                         if tracker_id:
                             session.query(TrackedRoom).filter_by(room_id=room_id).update({'tracker_id': tracker_id})
                             session.commit()
