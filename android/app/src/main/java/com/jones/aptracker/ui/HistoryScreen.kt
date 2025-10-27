@@ -90,7 +90,7 @@ fun HistoryScreen(
                         val emptyText = if (searchQuery.isNotBlank()) {
                             "No results found."
                         } else {
-                            "No history found for your tracked slots."
+                            "No history found for your tracked slots. If you recently added slots, you may need to wait a minute for data to load."
                         }
                         Text(emptyText, modifier = Modifier.padding(top = 24.dp)) // Add some padding
                     } else {

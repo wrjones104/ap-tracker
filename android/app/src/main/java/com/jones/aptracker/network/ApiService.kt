@@ -1,13 +1,7 @@
 package com.jones.aptracker.network
 
 import retrofit2.Response
-import retrofit2.http.Body
-import retrofit2.http.DELETE
-import retrofit2.http.GET
-import retrofit2.http.POST
-import retrofit2.http.PUT
-import retrofit2.http.Path
-import retrofit2.http.Query
+import retrofit2.http.*
 
 interface ApiService {
     @GET("rooms")
@@ -36,6 +30,12 @@ interface ApiService {
 
     @POST("devices")
     suspend fun registerDevice(@Body request: RegisterDeviceRequest): Response<Unit>
+
+    @POST("auth/callback")
+    suspend fun exchangeCodeForToken(@Body request: AuthRequest): AuthResponse
+
+    @GET("users/me")
+    suspend fun getUserProfile(): UserProfile
 }
 
 data class Room(
@@ -49,7 +49,7 @@ data class Room(
 )
 
 data class AddRoomRequest(
-    val room_id: String,
+    val room_url: String,
     val alias: String,
     val icon_name: String
 )
@@ -80,5 +80,18 @@ data class HistoryItem(
 )
 
 data class RegisterDeviceRequest(
-    val token: String
+    val fcm_token: String
+)
+
+data class AuthRequest(
+    val code: String,
+    val redirect_uri: String,
+    val code_verifier: String
+)
+
+data class AuthResponse(val token: String)
+
+data class UserProfile(
+    val discord_username: String,
+    val avatar_url: String?
 )
