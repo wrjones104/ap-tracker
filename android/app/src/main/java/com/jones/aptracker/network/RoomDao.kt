@@ -5,6 +5,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -18,6 +19,17 @@ interface RoomDao {
      */
     @Query("SELECT * FROM rooms ORDER BY alias ASC")
     fun getAllRooms(): Flow<List<RoomEntity>>
+
+    @Query("DELETE FROM rooms")
+    suspend fun clearAllRooms()
+
+    @Transaction
+    suspend fun syncRooms(rooms: List<RoomEntity>) {
+        // 1. Delete all rooms currently in the table
+        clearAllRooms()
+        // 2. Insert the fresh list from the network
+        insertOrUpdateRooms(rooms)
+    }
 
     /**
      * Inserts a list of rooms into the database.
