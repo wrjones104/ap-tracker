@@ -1,5 +1,6 @@
 package com.jones.aptracker.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -21,18 +23,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
+import com.jones.aptracker.R
 import com.jones.aptracker.network.Room
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.ui.draw.clip
+import coil.compose.AsyncImage
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomsScreen(
     roomsViewModel: RoomsViewModel = viewModel(),
+    userViewModel: UserViewModel = viewModel(),
     onRoomClick: (Int, String) -> Unit,
-    onHistoryClick: () -> Unit
+    onHistoryClick: () -> Unit,
+    onLogoutClick: () -> Unit,
+    onSettingsClick: () -> Unit
 ) {
     val rooms by roomsViewModel.rooms.collectAsState()
     val isLoading by roomsViewModel.isLoading.collectAsState()
@@ -46,9 +61,12 @@ fun RoomsScreen(
             TopAppBar(
                 title = { Text("Tracked Rooms") },
                 actions = {
-                    IconButton(onClick = onHistoryClick) {
-                        Icon(Icons.Default.History, contentDescription = "View Global History")
-                    }
+                    ProfileMenu(
+                        userViewModel = userViewModel,
+                        onHistoryClick = onHistoryClick,
+                        onLogoutClick = onLogoutClick,
+                        onSettingsClick = onSettingsClick
+                    )
                 }
             )
         },
@@ -83,8 +101,21 @@ fun RoomsScreen(
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(8.dp)
+                        contentPadding = PaddingValues(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        item {
+                            Image(
+                                painter = painterResource(id = R.drawable.archipelago_tracker_banner),
+                                contentDescription = "Archipelago Tracker Banner",
+                                modifier = Modifier
+                                    .fillMaxWidth(0.95f)
+                                    .padding(bottom = 8.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.FillWidth
+                            )
+                        }
+
                         items(rooms) { room ->
                             Card(
                                 modifier = Modifier
@@ -99,14 +130,12 @@ fun RoomsScreen(
                                         .padding(start = 16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    // --- ADDED ICON DISPLAY ---
                                     Icon(
                                         imageVector = getIconByName(room.icon_name),
                                         contentDescription = "Room Icon",
                                         modifier = Modifier.size(24.dp)
                                     )
                                     Spacer(Modifier.width(16.dp))
-                                    // --- END OF ICON DISPLAY ---
                                     Column(
                                         modifier = Modifier
                                             .weight(1f)
@@ -145,9 +174,8 @@ fun RoomsScreen(
         if (showAddDialog) {
             AddRoomDialog(
                 onDismiss = { showAddDialog = false },
-                onAdd = { roomId, alias, iconName ->
-                    // --- THE FIX IS HERE ---
-                    roomsViewModel.addRoom(roomId, alias, iconName)
+                onAdd = { roomUrl, alias, iconName ->
+                    roomsViewModel.addRoom(roomUrl, alias, iconName)
                     showAddDialog = false
                 }
             )
@@ -158,7 +186,6 @@ fun RoomsScreen(
                 room = room,
                 onDismiss = { roomToEdit = null },
                 onConfirm = { newAlias, newIconName ->
-                    // --- THE FIX IS HERE ---
                     roomsViewModel.updateRoom(room.id, newAlias, newIconName)
                     roomToEdit = null
                 }
@@ -189,10 +216,9 @@ fun RoomsScreen(
 }
 
 
-// --- UPDATED ADD ROOM DIALOG ---
 @Composable
 fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit) {
-    var roomId by remember { mutableStateOf("") }
+    var roomUrl by remember { mutableStateOf("") }
     var alias by remember { mutableStateOf("") }
     var selectedIconName by remember { mutableStateOf("default_icon") }
 
@@ -202,9 +228,9 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
         text = {
             Column {
                 TextField(
-                    value = roomId,
-                    onValueChange = { roomId = it },
-                    label = { Text("Room ID") },
+                    value = roomUrl,
+                    onValueChange = { roomUrl = it },
+                    label = { Text("Room URL") },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(8.dp))
@@ -217,7 +243,6 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
                 Spacer(Modifier.height(16.dp))
                 Text("Select Icon", style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.height(8.dp))
-                // Icon Picker Row
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -240,8 +265,8 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
         },
         confirmButton = {
             TextButton(
-                onClick = { onAdd(roomId, alias, selectedIconName) },
-                enabled = roomId.isNotBlank() && alias.isNotBlank()
+                onClick = { onAdd(roomUrl, alias, selectedIconName) },
+                enabled = roomUrl.isNotBlank() && alias.isNotBlank()
             ) {
                 Text("Add")
             }
@@ -254,7 +279,6 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
     )
 }
 
-// --- UPDATED EDIT ROOM DIALOG ---
 @Composable
 fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
     var alias by remember { mutableStateOf(room.alias) }
@@ -274,7 +298,6 @@ fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String, String
                 Spacer(Modifier.height(16.dp))
                 Text("Select Icon", style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.height(8.dp))
-                // Icon Picker Row
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -309,4 +332,65 @@ fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String, String
             }
         }
     )
+}
+
+@Composable
+fun ProfileMenu(
+    userViewModel: UserViewModel,
+    onHistoryClick: () -> Unit,
+    onLogoutClick: () -> Unit,
+    onSettingsClick: () -> Unit
+) {
+    val userProfile by userViewModel.userProfile.collectAsState()
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Box {
+        IconButton(onClick = { menuExpanded = true }) {
+            if (userProfile?.avatar_url != null) {
+                AsyncImage(
+                    model = userProfile?.avatar_url,
+                    contentDescription = "User Profile",
+                    modifier = Modifier.size(32.dp).clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                // Fallback icon if the image is loading or unavailable
+                Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+            }
+        }
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
+        ) {
+            userProfile?.discord_username?.let {
+                DropdownMenuItem(
+                    text = { Text("Logged in as $it", style = MaterialTheme.typography.labelMedium) },
+                    onClick = { },
+                    enabled = false // Not clickable
+                )
+                Divider()
+            }
+            DropdownMenuItem(
+                text = { Text("Item History") },
+                onClick = {
+                    onHistoryClick()
+                    menuExpanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Settings") },
+                onClick = {
+                    onSettingsClick() // We'll add this parameter to the function
+                    menuExpanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Log Out") },
+                onClick = {
+                    onLogoutClick()
+                    menuExpanded = false
+                }
+            )
+        }
+    }
 }

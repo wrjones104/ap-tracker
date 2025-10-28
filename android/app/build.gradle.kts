@@ -20,10 +20,15 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["appAuthRedirectScheme"] = "com.jones.aptracker"
     }
 
     buildTypes {
-        release {
+        getByName("debug") {
+            buildConfigField("String", "BASE_URL", "\"http://Will-Office:5000/\"")
+        }
+        getByName("release") {
+            buildConfigField("String", "BASE_URL", "\"http://Will-Linux:5000/\"")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -40,6 +45,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -52,6 +58,8 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.activity)
+    implementation(libs.androidx.constraintlayout)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -64,6 +72,7 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.fragment:fragment-ktx:1.7.1")
     implementation("androidx.compose.material:material-icons-extended-android:1.6.6")
@@ -73,4 +82,8 @@ dependencies {
     implementation("androidx.room:room-runtime:$room_version")
     kapt("androidx.room:room-compiler:$room_version")
     implementation("androidx.room:room-ktx:$room_version")
+    implementation("net.openid:appauth:0.11.1")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation(libs.androidx.compose.foundation)
 }

@@ -32,6 +32,5 @@ class RoomsRepository(
                 icon_name = networkRoom.icon_name // <-- ADD THIS
             )
         }
-        roomDao.insertOrUpdateRooms(roomEntities)
-    }
+        roomDao.syncRooms(roomEntities)    }
 }
