@@ -11,8 +11,8 @@ from urllib.parse import urlparse
 
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import OperationalError, IntegrityError
-from sqlalchemy.orm import selectinload
-from sqlalchemy import or_
+from sqlalchemy.orm import selectinload, aliased
+from sqlalchemy import or_, desc
 
 from . import Session
 from .models import (
@@ -771,5 +771,211 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
     except Exception as e:
         session.rollback()
         return jsonify({'error': f'Failed to update slot preferences: {e}'}), 500
+    finally:
+        Session.remove()
+
+# Helper function to process hints
+def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=None, include_found=False):
+    """Fetches and categorizes hints for a user, optionally filtered by room and timestamp."""
+
+    # Get all slots tracked by the user (optionally filtered by room)
+    tracked_slots_query = session.query(UserTrackedSlot.room_id, UserTrackedSlot.slot_id).filter_by(user_id=user_id)
+    if room_db_id:
+        tracked_slots_query = tracked_slots_query.filter_by(room_id=room_db_id)
+
+    # Create a set of (room_db_id, slot_id) tuples for efficient lookup
+    user_tracked_tuples = {(ts.room_id, ts.slot_id) for ts in tracked_slots_query.all()}
+    if not user_tracked_tuples:
+        return {"hints_for_you": [], "hints_by_you": []} # No slots tracked
+
+    # Map room_db_id back to room_uuid for querying NotifiedHint
+    room_map_query = session.query(TrackedRoom.id, TrackedRoom.room_id)
+    if room_db_id:
+         room_map_query = room_map_query.filter_by(id=room_db_id)
+    else:
+        # Filter rooms where the user is tracking at least one slot
+        room_db_ids_tracked = {room_id for room_id, slot_id in user_tracked_tuples}
+        room_map_query = room_map_query.filter(TrackedRoom.id.in_(room_db_ids_tracked))
+
+    room_id_to_uuid = {db_id: uuid for db_id, uuid in room_map_query.all()}
+    relevant_room_uuids = list(room_id_to_uuid.values())
+
+    if not relevant_room_uuids:
+         return {"hints_for_you": [], "hints_by_you": []}
+
+    # Base query for hints in relevant rooms
+    hints_query = session.query(NotifiedHint).filter(
+        NotifiedHint.room_id.in_(relevant_room_uuids)
+    )
+
+    # --- NEW: Filter by is_found status ---
+    if not include_found:
+        hints_query = hints_query.filter(NotifiedHint.is_found == False)
+    # --- END NEW ---
+
+    hints_query = hints_query.order_by(desc(NotifiedHint.id)) # Order by ID assuming it correlates with time
+
+
+    # Apply timestamp filter if provided
+    if since_timestamp:
+        try:
+            since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
+            # Assuming NotifiedHint has a timestamp field (add one if needed!)
+            # If not, we might need a different approach for 'since'
+            if hasattr(NotifiedHint, 'timestamp'):
+                 hints_query = hints_query.filter(NotifiedHint.timestamp > since_dt)
+            else:
+                 # If no timestamp, 'since' might be hard to implement reliably without storing it
+                 # For now, let's proceed assuming we might fetch more than needed without timestamp
+                 print(f"[HINT_API_WARN] 'since' parameter provided but NotifiedHint has no timestamp column.")
+
+        except ValueError:
+            print(f"[HINT_API_WARN] Invalid 'since' timestamp format: {since_timestamp}")
+
+
+    all_relevant_hints = hints_query.all()
+
+    hints_for_you = []
+    hints_by_you = []
+
+    # We need datapackage cache for names
+    # Create aliases for cleaner joins
+    ItemOwnerCache = aliased(DatapackageCache)
+    LocationOwnerCache = aliased(DatapackageCache)
+    ItemNameCache = aliased(DatapackageCache)
+    LocationNameCache = aliased(DatapackageCache)
+
+    # Get room/player/game info needed for names - optimize later if needed
+    all_room_db_ids = list(room_id_to_uuid.keys())
+    all_subs = session.query(UserRoomSubscription).filter(UserRoomSubscription.room_id.in_(all_room_db_ids)).all()
+    alias_map = {sub.room_id: sub.alias for sub in all_subs} # room_db_id -> alias
+
+    all_rooms_full = session.query(TrackedRoom).filter(TrackedRoom.id.in_(all_room_db_ids)).all()
+    player_map_by_room = {r.id: {p['slot_id']: p['name'] for p in json.loads(r.cached_players_json or '[]')} for r in all_rooms_full} # room_db_id -> {slot_id: name}
+    game_map_by_room = {r.id: {p['slot_id']: p['game'] for p in json.loads(r.cached_players_json or '[]')} for r in all_rooms_full} # room_db_id -> {slot_id: game}
+    checksum_map_by_room = {r.id: json.loads(r.game_checksums_json or '{}') for r in all_rooms_full} # room_db_id -> {game: checksum}
+    uuid_to_db_id = {v: k for k, v in room_id_to_uuid.items()}
+
+
+    for hint in all_relevant_hints:
+        room_db_id_for_hint = uuid_to_db_id.get(hint.room_id)
+        if not room_db_id_for_hint: continue # Should not happen
+
+        # Check if this hint involves a slot the user is tracking
+        is_item_owner_tracked = (room_db_id_for_hint, hint.item_owner_id) in user_tracked_tuples
+        is_location_owner_tracked = (room_db_id_for_hint, hint.location_owner_id) in user_tracked_tuples
+
+        if not (is_item_owner_tracked or is_location_owner_tracked):
+            continue # Skip hints not involving user's tracked slots
+
+        # Get names using cached data
+        player_map = player_map_by_room.get(room_db_id_for_hint, {})
+        game_map = game_map_by_room.get(room_db_id_for_hint, {})
+        checksum_map = checksum_map_by_room.get(room_db_id_for_hint, {})
+
+        item_owner_name = player_map.get(hint.item_owner_id, f"Player {hint.item_owner_id}")
+        location_owner_name = player_map.get(hint.location_owner_id, f"Player {hint.location_owner_id}")
+
+        item_owner_game = game_map.get(hint.item_owner_id)
+        location_owner_game = game_map.get(hint.location_owner_id)
+
+        item_checksum = checksum_map.get(item_owner_game) if item_owner_game else None
+        location_checksum = checksum_map.get(location_owner_game) if location_owner_game else None
+
+        item_name = session.query(DatapackageCache.entity_name).filter_by(
+            game=item_owner_game, checksum=item_checksum, entity_type='item', entity_id=hint.item_id
+        ).scalar() or f"Item ID {hint.item_id}"
+
+        location_name = session.query(DatapackageCache.entity_name).filter_by(
+            game=location_owner_game, checksum=location_checksum, entity_type='location', entity_id=hint.location_id
+        ).scalar() or f"Location ID {hint.location_id}"
+
+
+        hint_data = {
+            "id": hint.id, # Include DB ID for potential future use
+            "room_db_id": room_db_id_for_hint,
+            "room_alias": alias_map.get(room_db_id_for_hint, "Unknown Room"),
+            "item_owner_id": hint.item_owner_id,
+            "item_owner_name": item_owner_name,
+            "location_owner_id": hint.location_owner_id,
+            "location_owner_name": location_owner_name,
+            "item_name": item_name,
+            "location_name": location_name,
+            "is_found": getattr(hint, 'is_found', False), # Default to False if column doesn't exist yet
+            # Use hint.id as a proxy for timestamp if column doesn't exist
+            "timestamp": getattr(hint, 'timestamp', datetime.fromtimestamp(hint.id / 1000.0, tz=timezone.utc)).replace(tzinfo=timezone.utc).isoformat() if hasattr(hint, 'timestamp') else str(hint.id) # Fallback to ID if no timestamp
+        }
+
+        if is_item_owner_tracked:
+            hints_for_you.append(hint_data)
+        elif is_location_owner_tracked: # Only add to 'by_you' if not already 'for_you'
+            hints_by_you.append(hint_data)
+
+    # We might need to sort again if using hint.id as fallback timestamp wasn't reliable
+    # Or if the original query order wasn't perfect time order
+    hints_for_you.sort(key=lambda h: h.get('timestamp', '0'), reverse=True)
+    hints_by_you.sort(key=lambda h: h.get('timestamp', '0'), reverse=True)
+
+    return {"hints_for_you": hints_for_you, "hints_by_you": hints_by_you}
+
+
+@bp.route('/history/hints', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_global_hint_history(current_user):
+    """Returns categorized global hint history for the authenticated user."""
+    since = request.args.get('since')
+    
+    # --- NEW: Get include_found param ---
+    include_found_str = request.args.get('include_found', 'false')
+    include_found = include_found_str.lower() in ['true', '1', 't', 'yes']
+    # --- END NEW ---
+    
+    session = Session()
+    try:
+        # --- MODIFIED: Pass param ---
+        result = process_hints_for_user(
+            session, 
+            current_user.id, 
+            since_timestamp=since,
+            include_found=include_found
+        )
+        return jsonify(result)
+    finally:
+        Session.remove()
+
+
+@bp.route('/rooms/<int:room_db_id>/history/hints', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_room_hint_history(current_user, room_db_id):
+    """Returns categorized hint history for a specific room for the authenticated user."""
+    since = request.args.get('since')
+    
+    # --- NEW: Get include_found param ---
+    include_found_str = request.args.get('include_found', 'false')
+    include_found = include_found_str.lower() in ['true', '1', 't', 'yes']
+    # --- END NEW ---
+    
+    session = Session()
+    try:
+        # Basic check: Does user subscribe to this room at all?
+        sub_exists = session.query(UserRoomSubscription.user_id).filter_by(
+            user_id=current_user.id, room_id=room_db_id
+        ).limit(1).scalar() is not None
+        if not sub_exists:
+            return jsonify({'error': 'Subscription not found'}), 404
+
+        # --- MODIFIED: Pass param ---
+        result = process_hints_for_user(
+            session, 
+            current_user.id, 
+            room_db_id=room_db_id, 
+            since_timestamp=since,
+            include_found=include_found
+        )
+        return jsonify(result)
     finally:
         Session.remove()

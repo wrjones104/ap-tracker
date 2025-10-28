@@ -8,9 +8,9 @@ import kotlinx.coroutines.flow.combine // Import combine
 class HistoryRepository(
     private val apiService: ApiService,
     private val historyDao: HistoryDao,
-    private val hintDao: HintDao // --- ADD HINT DAO ---
+    private val hintDao: HintDao
 ) {
-    // --- Item History (Existing) ---
+    // --- Item History (Existing, no changes) ---
     fun getHistoryForRoom(roomId: Int): Flow<List<HistoryItemEntity>> {
         return historyDao.getHistoryForRoom(roomId)
     }
@@ -19,7 +19,7 @@ class HistoryRepository(
         return historyDao.getGlobalHistory()
     }
 
-    suspend fun refreshItemHistory() { // Renamed for clarity
+    suspend fun refreshItemHistory() {
         Log.d("HISTORY_DEBUG", "Starting ITEM history refresh...")
         val latestTimestamp = historyDao.getLatestGlobalTimestamp()
         try {
@@ -28,14 +28,13 @@ class HistoryRepository(
             if (newItems.isNotEmpty()) {
                 val entities = newItems.mapNotNull { item ->
                     try {
-                        // --- THE FIX: Safely handle potential nulls ---
                         val entity = HistoryItemEntity(
-                            roomId = item.db_id, // roomId is already nullable
+                            roomId = item.db_id,
                             message = item.message,
                             timestamp = item.timestamp,
-                            tracker_id = item.tracker_id, // tracker_id is already nullable
-                            slot_id = item.slot_id,     // slot_id is already nullable
-                            icon_name = item.icon_name  // icon_name is already nullable
+                            tracker_id = item.tracker_id,
+                            slot_id = item.slot_id,
+                            icon_name = item.icon_name
                         )
                         Log.d("HISTORY_DEBUG", "Successfully parsed item: ${entity.message}")
                         entity
@@ -54,8 +53,9 @@ class HistoryRepository(
             Log.e("HISTORY_DEBUG", "!!! FAILED item history refresh: ${e.message}", e)
         }
     }
-    // Existing mapping code from previous snippet
+
     private fun mapHistoryItemToEntity(item: HistoryItem): HistoryItemEntity? {
+        // This function seems unused, but we'll leave it
         return try {
             HistoryItemEntity(
                 roomId = item.db_id,
@@ -72,49 +72,72 @@ class HistoryRepository(
     }
 
 
-    // --- Hint History (New) ---
+    // --- Hint History (MODIFIED) ---
 
-    // --- MODIFIED: Added includeFound param ---
+    // --- MODIFIED: Use explicit DAO calls ---
     fun getHintsForRoom(roomId: Int, includeFound: Boolean): Flow<Pair<List<HintEntity>, List<HintEntity>>> {
-        // --- NEW: Explicitly convert Boolean to Int ---
-        val includeFoundInt = if (includeFound) 1 else 0
+        Log.d("HintToggleDebug", "Repo: getHintsForRoom (DAO Read) | includeFound: $includeFound")
 
-        // --- MODIFIED: Pass Int to DAO ---
-        val hintsForYou = hintDao.getHintsForRoom(roomId, "for_you", includeFoundInt)
-        val hintsByYou = hintDao.getHintsForRoom(roomId, "by_you", includeFoundInt)
+        val hintsForYou = if (includeFound) {
+            hintDao.getAllHintsForRoom(roomId, "for_you")
+        } else {
+            hintDao.getUnfoundHintsForRoom(roomId, "for_you")
+        }
+
+        val hintsByYou = if (includeFound) {
+            hintDao.getAllHintsForRoom(roomId, "by_you")
+        } else {
+            hintDao.getUnfoundHintsForRoom(roomId, "by_you")
+        }
+
         return combine(hintsForYou, hintsByYou) { forYou, byYou -> Pair(forYou, byYou) }
     }
 
-    // --- MODIFIED: Added includeFound param ---
+    // --- MODIFIED: Use explicit DAO calls ---
     fun getGlobalHints(includeFound: Boolean): Flow<Pair<List<HintEntity>, List<HintEntity>>> {
-        // --- NEW: Explicitly convert Boolean to Int ---
-        val includeFoundInt = if (includeFound) 1 else 0
+        Log.d("HintToggleDebug", "Repo: getGlobalHints (DAO Read) | includeFound: $includeFound")
 
-        // --- MODIFIED: Pass Int to DAO ---
-        val hintsForYou = hintDao.getGlobalHints("for_you", includeFoundInt)
-        val hintsByYou = hintDao.getGlobalHints("by_you", includeFoundInt)
+        val hintsForYou = if (includeFound) {
+            hintDao.getAllGlobalHints("for_you")
+        } else {
+            hintDao.getUnfoundGlobalHints("for_you")
+        }
+
+        val hintsByYou = if (includeFound) {
+            hintDao.getAllGlobalHints("by_you")
+        } else {
+            hintDao.getUnfoundGlobalHints("by_you")
+        }
+
         return combine(hintsForYou, hintsByYou) { forYou, byYou -> Pair(forYou, byYou) }
     }
 
-    // --- MODIFIED: Added includeFound param ---
+    // This function remains the same, it correctly passes the boolean to the API
     suspend fun refreshHintHistory(roomId: Int? = null, includeFound: Boolean) {
-        Log.d("HINT_DEBUG", "Starting HINT history refresh... (Room: ${roomId ?: "Global"}, Found: $includeFound)")
+        Log.d("HintToggleDebug", "Repo: refreshHintHistory (API Fetch) | includeFound: $includeFound")
         val latestTimestamp = if (roomId != null) {
             hintDao.getLatestTimestampForRoom(roomId)
         } else {
             hintDao.getLatestGlobalTimestamp()
         }
 
+        Log.d("HintToggleDebug", "Repo: API 'since' param will be: $latestTimestamp")
+
         try {
             val response = if (roomId != null) {
-                // --- MODIFIED: Pass param to API service ---
                 apiService.getRoomHintHistory(roomId, since = latestTimestamp, includeFound = includeFound)
             } else {
-                // --- MODIFIED: Pass param to API service ---
                 apiService.getGlobalHintHistory(since = latestTimestamp, includeFound = includeFound)
             }
 
             Log.d("HINT_DEBUG", "Received ${response.hints_for_you.size} 'for_you' and ${response.hints_by_you.size} 'by_you' hints.")
+
+            if (response.hints_for_you.isNotEmpty()) {
+                Log.d("HintToggleDebug", "Repo: First 'for_you' hint from API has is_found=${response.hints_for_you[0].is_found} (ID: ${response.hints_for_you[0].id})")
+            }
+            if (response.hints_by_you.isNotEmpty()) {
+                Log.d("HintToggleDebug", "Repo: First 'by_you' hint from API has is_found=${response.hints_by_you[0].is_found} (ID: ${response.hints_by_you[0].id})")
+            }
 
             val entitiesToInsert = mutableListOf<HintEntity>()
 
@@ -126,15 +149,15 @@ class HistoryRepository(
             }
 
             if (entitiesToInsert.isNotEmpty()) {
-                Log.d("HINT_DEBUG", "Inserting ${entitiesToInsert.size} new hint entities.")
+                Log.d("HintToggleDebug", "Repo: Inserting ${entitiesToInsert.size} hints. First hint's isFound=${entitiesToInsert[0].isFound} (ID: ${entitiesToInsert[0].hint_db_id})")
                 hintDao.insertHints(entitiesToInsert)
+                Log.d("HintToggleDebug", "Repo: Insertion complete.")
             }
         } catch (e: Exception) {
             Log.e("HINT_DEBUG", "!!! FAILED hint history refresh: ${e.message}", e)
         }
     }
 
-    // Helper function to map API response to DB entity
     private fun mapHintDetailToEntity(detail: HintDetail, type: String): HintEntity {
         return HintEntity(
             hint_db_id = detail.id,
