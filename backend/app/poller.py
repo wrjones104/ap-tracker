@@ -13,7 +13,7 @@ from sqlalchemy.exc import OperationalError, IntegrityError
 
 from . import Session, get_firebase_app, process
 from .models import (
-    Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
+    User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint
 )
 
@@ -99,7 +99,7 @@ async def poll_room_instance(room_info):
     Refactored version: Separates slow network I/O from the database transaction
     to prevent "database is locked" errors during room setup.
     
-    (Version 3: Now includes hint suppression logic)
+    (Version 6: Fixes setup loop from datapackage race condition)
     """
     db_id = room_info['db_id']
     hostname = room_info['hostname']
@@ -229,16 +229,25 @@ async def poll_room_instance(room_info):
             if 'game_checksums_json' in setup_data:
                 room.game_checksums_json = setup_data['game_checksums_json']
             
+            # --- FIX: Commit all room metadata changes FIRST ---
+            # This creates a "save point" before we try the datapackage.
+            session.commit()
+            print(f"[POLLER_SETUP][RoomDBID:{db_id}] Room metadata committed to DB.")
+            # --- END FIX ---
+            
             if setup_data.get('datapackage_entries'):
                 try:
                     session.bulk_save_objects(setup_data['datapackage_entries'])
                     print(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Saved {len(setup_data['datapackage_entries'])} new datapackage entries.")
+                    # Commit the datapackage changes separately
+                    session.commit()
                 except IntegrityError:
-                    session.rollback() # Handle race condition
+                    # This rollback now ONLY affects the bulk_save_objects.
+                    # The room metadata is already safely committed.
+                    session.rollback() 
                     print(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Datapackage race condition occurred. Safe to ignore.")
                 
-            session.commit() # Commit all setup changes
-            print(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup data committed to DB.")
+            # (Old session.commit() was here, now moved up)
 
 
         # --- Main Polling Logic ---
@@ -272,16 +281,28 @@ async def poll_room_instance(room_info):
         existing_items_in_db = set(session.query(NotifiedItem.receiving_slot_id, NotifiedItem.item_id, NotifiedItem.location_id).filter_by(room_id=room_uuid))
         existing_hints_in_db = set(session.query(NotifiedHint.item_owner_id, NotifiedHint.location_owner_id, NotifiedHint.item_id, NotifiedHint.location_id).filter_by(room_id=room_uuid))
 
-        tracked_slots_by_user = {}
-        all_tracked_slots_query = session.query(UserTrackedSlot.user_id, UserTrackedSlot.slot_id).filter_by(room_id=db_id)
-        for user_id, slot_id in all_tracked_slots_query:
-            tracked_slots_by_user.setdefault(user_id, set()).add(slot_id)
-
-        if not tracked_slots_by_user:
+        # --- NEW: Fetch all preference data for this room ---
+        all_tracked_slots_in_room = session.query(UserTrackedSlot).filter_by(room_id=db_id).all()
+        if not all_tracked_slots_in_room:
              session.commit() # Commit poll time update
              return
 
-        aliases_by_user = { sub.user_id: sub.alias for sub in session.query(UserRoomSubscription).filter(UserRoomSubscription.user_id.in_(tracked_slots_by_user.keys()), UserRoomSubscription.room_id == db_id) }
+        # Build maps for efficient lookup
+        tracked_slots_by_user = {}
+        prefs_by_user_slot = {}
+        all_user_ids_in_room = set()
+        
+        for slot in all_tracked_slots_in_room:
+            tracked_slots_by_user.setdefault(slot.user_id, set()).add(slot.slot_id)
+            prefs_by_user_slot.setdefault(slot.user_id, {})[slot.slot_id] = slot
+            all_user_ids_in_room.add(slot.user_id)
+
+        # Fetch all relevant user objects (for global defaults)
+        users_by_id = {u.id: u for u in session.query(User).filter(User.id.in_(all_user_ids_in_room))}
+        
+        # --- End new data fetch ---
+
+        aliases_by_user = { sub.user_id: sub.alias for sub in session.query(UserRoomSubscription).filter(UserRoomSubscription.user_id.in_(all_user_ids_in_room), UserRoomSubscription.room_id == db_id) }
 
         notifications_by_user = {}
 
@@ -308,7 +329,7 @@ async def poll_room_instance(room_info):
                 player_names_str = ", ".join(names)
                 alias = aliases_by_user.get(user_id, "Unknown Room")
                 notifications_by_user.setdefault(user_id, []).append({
-                    'title': f"潤 Player(s) Finished!",
+                    'title': f"🏁 Player(s) Finished!",
                     'body': f"{player_names_str} finished in '{alias}'. Slot(s) untracked.",
                     'type': 'player_finish',
                     'details': (room_uuid, user_id, player_names_str)
@@ -403,30 +424,48 @@ async def poll_room_instance(room_info):
                             alias = aliases_by_user.get(user_id, "Unknown Room")
                             
                             # --- ITEM SUPPRESSION LOGIC ---
-                            user_slot_query = session.query(UserTrackedSlot.added_at).filter_by(
+                            user_slot_added_at = session.query(UserTrackedSlot.added_at).filter_by(
                                 user_id=user_id, room_id=db_id, slot_id=rid
                             ).scalar()
                             
-                            if user_slot_query and datetime.utcnow() - user_slot_query < timedelta(minutes=2):
-                                logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {user_slot_query}. Suppressing notification for item {item_id}.")
+                            # --- FIX 2: Increased suppression time to 15 minutes ---
+                            if user_slot_added_at and datetime.utcnow() - user_slot_added_at < timedelta(minutes=15):
+                                logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {user_slot_added_at}. Suppressing notification for item {item_id}.")
                                 continue 
                             # --- END SUPPRESSION LOGIC ---
 
+                            # --- NEW NOTIFICATION PREFERENCE LOGIC ---
+                            user_prefs = users_by_id.get(user_id)
+                            slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
+
+                            if not user_prefs or not slot_prefs:
+                                logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
+                                continue # Safety check
+
                             is_progression = bool(flags & 1)
+                            should_notify = False
+                            title = ""
+                            item_type = ""
                             
                             if is_progression:
-                                title = f"笨ｨ {item_name}"
+                                title = f"🏆 {item_name}"
                                 item_type = "item_progression"
-                            else: # It must be Useful if it's not Progression
-                                title = f"総 {item_name}"
+                                notify_override = slot_prefs.notify_progression
+                                should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
+                            else: # It must be Useful
+                                title = f"✅ {item_name}"
                                 item_type = "item_useful"
-
-                            notifications_by_user.setdefault(user_id, []).append({
-                                'title': title,
-                                'body': f"Received by {name_map.get(rid, f'P{rid}')} in '{alias}'",
-                                'type': item_type,
-                                'details': item_key_batch
+                                notify_override = slot_prefs.notify_useful
+                                should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
+                            
+                            if should_notify:
+                                notifications_by_user.setdefault(user_id, []).append({
+                                    'title': title,
+                                    'body': f"Received by {name_map.get(rid, f'P{rid}')} in '{alias}'",
+                                    'type': item_type,
+                                    'details': item_key_batch
                                 })
+                            # --- END NEW PREFERENCE LOGIC ---
                 else:
                     logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] 'has_item_history' is False. Suppressing notification for item {item_id} (Slot {rid}) during initial backfill.")
 
@@ -455,37 +494,60 @@ async def poll_room_instance(room_info):
                  hints_in_this_batch.add(hint_key_batch)
                  hints_added_count += 1
 
-                 for user_id, tracked_slots in tracked_slots_by_user.items():
-                     is_for_us, is_at_our_location = io_id in tracked_slots, lo_id in tracked_slots
-                     if is_for_us or is_at_our_location:
-                         
-                         # --- NEW HINT SUPPRESSION LOGIC ---
-                         # We check the timestamp of whichever slot triggered this notification (io_id or lo_id)
-                         slot_to_check = io_id if is_for_us else lo_id
-                         
-                         user_slot_query = session.query(UserTrackedSlot.added_at).filter_by(
-                             user_id=user_id, room_id=db_id, slot_id=slot_to_check
-                         ).scalar()
+                 # --- FIX 1: Wrap hint notification logic in has_hint_history check ---
+                 if has_hint_history:
+                     for user_id, tracked_slots in tracked_slots_by_user.items():
+                         is_for_us, is_at_our_location = io_id in tracked_slots, lo_id in tracked_slots
+                         if is_for_us or is_at_our_location:
+                             
+                             # --- HINT SUPPRESSION LOGIC ---
+                             slot_to_check = io_id if is_for_us else lo_id
+                             
+                             user_slot_added_at = session.query(UserTrackedSlot.added_at).filter_by(
+                                 user_id=user_id, room_id=db_id, slot_id=slot_to_check
+                             ).scalar()
 
-                         if user_slot_query and datetime.utcnow() - user_slot_query < timedelta(minutes=2):
-                             logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {slot_to_check}, but it was added at {user_slot_query}. Suppressing hint notification.")
-                             continue
-                         # --- END NEW HINT SUPPRESSION LOGIC ---
+                             # --- FIX 2: Increased suppression time to 15 minutes ---
+                             if user_slot_added_at and datetime.utcnow() - user_slot_added_at < timedelta(minutes=15):
+                                 logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {slot_to_check}, but it was added at {user_slot_added_at}. Suppressing hint notification.")
+                                 continue
+                             # --- END HINT SUPPRESSION LOGIC ---
 
-                         io_game, lo_game = game_map.get(io_id, "Unknown"), game_map.get(lo_id, "Unknown")
-                         item_name = session.query(DatapackageCache.entity_name).filter_by(game=io_game, checksum=game_checksums.get(io_game), entity_type='item', entity_id=item_id).scalar() or f"ID {item_id}"
-                         loc_name = session.query(DatapackageCache.entity_name).filter_by(game=lo_game, checksum=game_checksums.get(lo_game), entity_type='location', entity_id=loc_id).scalar() or f"ID {loc_id}"
-                         alias = aliases_by_user.get(user_id, "Unknown Room")
-                         title, body = "", ""
+                             # --- NEW HINT PREFERENCE LOGIC ---
+                             user_prefs = users_by_id.get(user_id)
+                             slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_to_check)
 
-                         if is_for_us:
-                             title = f"剥 Hint for your {item_name}!"
-                             body = f"It's at {name_map.get(lo_id, f'P{lo_id}')}'s location: '{loc_name}' in '{alias}'"
-                         elif is_at_our_location:
-                             title = f"剥 Item at your location!"
-                             body = f"{name_map.get(io_id, f'P{io_id}')}'s {item_name} is at your location: '{loc_name}' in '{alias}'"
+                             if not user_prefs or not slot_prefs:
+                                 logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
+                                 continue # Safety check
+                             
+                             notify_override = slot_prefs.notify_hints
+                             should_notify = notify_override if notify_override is not None else user_prefs.notify_hints_default
+                             
+                             if not should_notify:
+                                 continue # Skip this hint for this user
+                             # --- END NEW HINT PREFERENCE LOGIC ---
 
-                         notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_key_batch})
+                             io_game, lo_game = game_map.get(io_id, "Unknown"), game_map.get(lo_id, "Unknown")
+                             item_name = session.query(DatapackageCache.entity_name).filter_by(game=io_game, checksum=game_checksums.get(io_game), entity_type='item', entity_id=item_id).scalar() or f"ID {item_id}"
+                             loc_name = session.query(DatapackageCache.entity_name).filter_by(game=lo_game, checksum=game_checksums.get(lo_game), entity_type='location', entity_id=loc_id).scalar() or f"ID {loc_id}"
+                             alias = aliases_by_user.get(user_id, "Unknown Room")
+                             title, body = "", ""
+
+                             if is_for_us:
+                                 title = f"💡 Hint for your {item_name}!"
+                                 body = f"It's at {name_map.get(lo_id, f'P{lo_id}')}'s location: '{loc_name}' in '{alias}'"
+                             elif is_at_our_location:
+                                 title = f"💡 Item at your location!"
+                                 body = f"{name_map.get(io_id, f'P{io_id}')}'s {item_name} is at your location: '{loc_name}' in '{alias}'"
+
+                             notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_key_batch})
+                 
+                 # --- END OF FIX 1 WRAPPER ---
+                 else:
+                     # This will now be logged on the first poll instead of sending a flood
+                     logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] 'has_hint_history' is False. Suppressing hint notification during initial backfill.")
+
 
         if hints_processed_count > 0:
              print(f"[POLLER_DEBUG][RoomDBID:{db_id}] Hint Stats: Processed={hints_processed_count}, Added={hints_added_count}")
@@ -525,7 +587,7 @@ async def poll_room_instance(room_info):
             elif not notifications_by_user: 
                  print(f"[POLLER][RoomDBID:{db_id}] Silently added {len(hints_to_add_to_db)} new hints.")
 
-        # Final single commit
+        # Final single commit for main poll data
         session.commit()
 
     except OperationalError as oe: 

@@ -22,7 +22,7 @@ fun AppNavigation(
     isLoggedIn: Boolean,
     isLoading: Boolean,
     onLoginClick: () -> Unit,
-    onLogoutClick: () -> Unit // <-- Pass logout callback
+    onLogoutClick: () -> Unit
 ) {
     if (isLoggedIn) {
         val navController = rememberNavController()
@@ -44,7 +44,13 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
                 onHistoryClick = {
                     navController.navigate("history")
                 },
-                onLogoutClick = onLogoutClick
+                onLogoutClick = onLogoutClick,
+                onSettingsClick = { navController.navigate("profile") }
+            )
+        }
+        composable("profile") {
+            ProfileScreen(
+                onBackClick = { navController.popBackStack() }
             )
         }
         composable(

@@ -353,58 +353,50 @@ def unsubscribe_from_room(current_user, room_db_id):
 @token_required
 def get_room_players(current_user, room_db_id):
     """
-    Returns the list of players for a specific room, along with which ones
-    the current user is tracking.
+    Returns a list of all players in a room, indicating which are tracked
+    by the current user and their notification preferences.
     """
     session = Session()
-    subscription = session.query(UserRoomSubscription).filter_by(
-        user_id=current_user.id,
-        room_id=room_db_id
-    ).first()
-    if not subscription:
-        return jsonify({'error': 'Not subscribed to this room'}), 403
-
-    room = subscription.room
-    if not room.cached_players_json:
-        # Attempt to fetch players if missing (e.g., if setup hasn't run)
-        try:
-            status_url = f"https://{room.hostname}/api/room_status/{room.room_id}"
-            response = requests.get(status_url, timeout=10)
-            response.raise_for_status()
-            status_data = response.json()
-            # Format the data correctly, just like in add_room
-            players_raw = status_data.get('players', [])
-            player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players_raw)]
-            room.cached_players_json = json.dumps(player_list)
-            room.cached_total_slots = len(player_list)
-            session.commit()
-            print(f"[API] Fetched missing player list for room {room.room_id}")
-        except Exception as e:
-            print(f"[API_ERROR] Failed to fetch players for room {room.room_id}: {e}")
-            return jsonify({'error': 'Player data not yet cached for this room. Please wait.'}), 404
-
     try:
-        players = json.loads(room.cached_players_json)
-    except json.JSONDecodeError:
-        players = []
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+        if not room:
+            return jsonify({'error': 'Room not found'}), 404
 
-    tracked_slots_query = session.query(UserTrackedSlot.slot_id).filter_by(
-        user_id=current_user.id,
-        room_id=room_db_id
-    )
-    tracked_slot_ids = {slot.slot_id for slot in tracked_slots_query.all()}
-    
-    player_list_with_tracking = []
-    for p in players:
-        # This loop now correctly receives a dictionary
-        player_list_with_tracking.append({
-            'slot_id': p['slot_id'],
-            'name': p['name'],
-            'game': p['game'],
-            'is_tracked': p['slot_id'] in tracked_slot_ids
-        })
+        players_list = json.loads(room.cached_players_json or '[]')
 
-    return jsonify(player_list_with_tracking)
+        # --- MODIFICATION START ---
+
+        # Get all tracked slots for this user in this room in one query
+        tracked_slots_query = session.query(UserTrackedSlot).filter_by(
+            user_id=current_user.id,
+            room_id=room_db_id
+        ).all()
+        
+        # Create a dict for fast lookup: {slot_id: UserTrackedSlot}
+        tracked_slots_map = {ts.slot_id: ts for ts in tracked_slots_query}
+
+        response_players = []
+        for p in players_list:
+            slot_id = p.get('slot_id')
+            tracked_slot_entry = tracked_slots_map.get(slot_id)
+
+            response_players.append({
+                'slot_id': slot_id,
+                'name': p.get('name'),
+                'game': p.get('game'),
+                'is_tracked': tracked_slot_entry is not None,
+                
+                # Add these new keys
+                'notify_progression': tracked_slot_entry.notify_progression if tracked_slot_entry else None,
+                'notify_useful': tracked_slot_entry.notify_useful if tracked_slot_entry else None,
+                'notify_hints': tracked_slot_entry.notify_hints if tracked_slot_entry else None
+            })
+        
+        # --- MODIFICATION END ---
+            
+        return jsonify(response_players)
+    finally:
+        Session.remove()
 
 
 @bp.route('/rooms/<int:room_db_id>/slots', methods=['PUT'])
@@ -659,5 +651,78 @@ def get_current_user(current_user):
     return jsonify({
         'discord_id': current_user.discord_id,
         'username': current_user.discord_username,
-        'avatar_url': avatar_url
+        'avatar_url': avatar_url,
+        'notify_progression_default': current_user.notify_progression_default,
+        'notify_useful_default': current_user.notify_useful_default,
+        'notify_hints_default': current_user.notify_hints_default
     })
+
+@bp.route('/users/me/preferences', methods=['PUT'])
+@handle_db_errors
+@log_api_call
+@token_required
+def update_user_preferences(current_user):
+    """
+    Updates the global notification preferences for the authenticated user.
+    """
+    data = request.json
+    session = Session()
+    try:
+        user = session.query(User).filter_by(id=current_user.id).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Update fields only if they are present in the request
+        if 'notify_progression' in data:
+            user.notify_progression_default = bool(data['notify_progression'])
+        if 'notify_useful' in data:
+            user.notify_useful_default = bool(data['notify_useful'])
+        if 'notify_hints' in data:
+            user.notify_hints_default = bool(data['notify_hints'])
+
+        session.commit()
+        return jsonify({'message': 'Preferences updated successfully'}), 200
+    except Exception as e:
+        session.rollback()
+        return jsonify({'error': f'Failed to update preferences: {e}'}), 500
+    finally:
+        Session.remove()
+
+
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/preferences', methods=['PUT'])
+@handle_db_errors
+@log_api_call
+@token_required
+def update_slot_preferences(current_user, room_db_id, slot_id):
+    """
+    Updates the per-slot notification preferences for the authenticated user.
+    'None' (null) means "use global default".
+    """
+    data = request.json
+    session = Session()
+    try:
+        # Find the specific slot the user is tracking
+        tracked_slot = session.query(UserTrackedSlot).filter_by(
+            user_id=current_user.id,
+            room_id=room_db_id,
+            slot_id=slot_id
+        ).first()
+
+        if not tracked_slot:
+            return jsonify({'error': 'Tracked slot not found'}), 404
+
+        # Update fields. 'None' is a valid value to "unset" the override.
+        if 'notify_progression' in data:
+            tracked_slot.notify_progression = data['notify_progression']
+        if 'notify_useful' in data:
+            tracked_slot.notify_useful = data['notify_useful']
+        if 'notify_hints' in data:
+            tracked_slot.notify_hints = data['notify_hints']
+
+        session.commit()
+        return jsonify({'message': 'Slot preferences updated successfully'}), 200
+    except Exception as e:
+        session.rollback()
+        return jsonify({'error': f'Failed to update slot preferences: {e}'}), 500
+    finally:
+        Session.remove()

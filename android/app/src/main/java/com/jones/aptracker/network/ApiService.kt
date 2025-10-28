@@ -36,6 +36,16 @@ interface ApiService {
 
     @GET("users/me")
     suspend fun getUserProfile(): UserProfile
+
+    @PUT("users/me/preferences")
+    suspend fun updateUserPreferences(@Body request: UpdateGlobalPrefsRequest): Response<Unit>
+
+    @PUT("rooms/{id}/slots/{slot_id}/preferences")
+    suspend fun updateSlotPreferences(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int,
+        @Body request: UpdateSlotPrefsRequest // We'll define this later
+    ): Response<Unit>
 }
 
 data class Room(
@@ -63,7 +73,10 @@ data class Player(
     val slot_id: Int,
     val name: String?,
     val game: String?,
-    val is_tracked: Boolean
+    val is_tracked: Boolean,
+    val notify_progression: Boolean?,
+    val notify_useful: Boolean?,
+    val notify_hints: Boolean?
 )
 
 data class UpdateSlotsRequest(
@@ -92,6 +105,22 @@ data class AuthRequest(
 data class AuthResponse(val token: String)
 
 data class UserProfile(
+    val discord_id: String,
     val discord_username: String,
-    val avatar_url: String?
+    val avatar_url: String?,
+    val notify_progression_default: Boolean,
+    val notify_useful_default: Boolean,
+    val notify_hints_default: Boolean
+)
+
+data class UpdateGlobalPrefsRequest(
+    val notify_progression: Boolean? = null,
+    val notify_useful: Boolean? = null,
+    val notify_hints: Boolean? = null
+)
+
+data class UpdateSlotPrefsRequest(
+    val notify_progression: Boolean?,
+    val notify_useful: Boolean?,
+    val notify_hints: Boolean?
 )
