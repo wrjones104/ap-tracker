@@ -9,6 +9,7 @@ from threading import local
 from sqlalchemy import or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
+# We removed the 'tuple_' import as it's no longer needed
 
 
 from . import Session, get_firebase_app, process
@@ -99,7 +100,7 @@ async def poll_room_instance(room_info):
     Refactored version: Separates slow network I/O from the database transaction
     to prevent "database is locked" errors during room setup.
     
-    (Version 6: Fixes setup loop from datapackage race condition)
+    (Version 7: Fixes datapackage race condition and hint 'is_found' logic)
     """
     db_id = room_info['db_id']
     hostname = room_info['hostname']
@@ -168,7 +169,10 @@ async def poll_room_instance(room_info):
                 checksums = room_status.get('datapackage_checksums', {})
 
             new_checksums_json_str = json.dumps(checksums)
-            datapackage_entries_to_add = []
+            
+            # --- MODIFICATION 1: Change list to a dict ---
+            datapackage_entries_by_game = {} # New
+            # --- END MODIFICATION ---
 
             if checksums and new_checksums_json_str != game_checksums_json_str:
                 print(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] New/updated checksums found. Fetching datapackages...")
@@ -183,14 +187,22 @@ async def poll_room_instance(room_info):
                         game_data = await fetch_json(f"https://{hostname}/api/datapackage/{checksum}")
                         if not game_data: continue
                         
+                        # --- MODIFICATION 2: Build a per-game list ---
+                        current_game_entries = [] # New
                         actual_data = game_data.get('games', {}).get(game, game_data)
                         for n, eid in actual_data.get('item_name_to_id', {}).items():
-                            datapackage_entries_to_add.append(DatapackageCache(game=game, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n))
+                            current_game_entries.append(DatapackageCache(game=game, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n))
                         for n, eid in actual_data.get('location_name_to_id', {}).items():
-                            datapackage_entries_to_add.append(DatapackageCache(game=game, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n))
+                            current_game_entries.append(DatapackageCache(game=game, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n))
+                        
+                        if current_game_entries: # New
+                            datapackage_entries_by_game[game] = current_game_entries # New
+                        # --- END MODIFICATION ---
                 
-                if datapackage_entries_to_add:
-                    setup_data['datapackage_entries'] = datapackage_entries_to_add
+                # --- MODIFICATION 3: Save the dict ---
+                if datapackage_entries_by_game:
+                    setup_data['datapackage_entries_by_game'] = datapackage_entries_by_game
+                # --- END MODIFICATION ---
                 
                 setup_data['game_checksums_json'] = new_checksums_json_str
                 game_checksums_json_str = new_checksums_json_str # Update local var
@@ -235,19 +247,26 @@ async def poll_room_instance(room_info):
             print(f"[POLLER_SETUP][RoomDBID:{db_id}] Room metadata committed to DB.")
             # --- END FIX ---
             
-            if setup_data.get('datapackage_entries'):
-                try:
-                    session.bulk_save_objects(setup_data['datapackage_entries'])
-                    print(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Saved {len(setup_data['datapackage_entries'])} new datapackage entries.")
-                    # Commit the datapackage changes separately
-                    session.commit()
-                except IntegrityError:
-                    # This rollback now ONLY affects the bulk_save_objects.
-                    # The room metadata is already safely committed.
-                    session.rollback() 
-                    print(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Datapackage race condition occurred. Safe to ignore.")
-                
-            # (Old session.commit() was here, now moved up)
+            
+            # --- MODIFICATION 4: Replace the datapackage save logic ---
+            if setup_data.get('datapackage_entries_by_game'):
+                print(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Saving new datapackage entries for {len(setup_data['datapackage_entries_by_game'])} game(s)...")
+                # Loop and save PER-GAME
+                for game, entries in setup_data['datapackage_entries_by_game'].items():
+                    try:
+                        session.bulk_save_objects(entries)
+                        session.commit() # Commit after each game
+                        print(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Saved {len(entries)} entries for game '{game}'.")
+                    except IntegrityError:
+                        # This is the *real* race condition fix.
+                        # We rollback this specific game's transaction.
+                        session.rollback() 
+                        print(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Datapackage race condition for game '{game}'. Another poller saved it first. Safe to ignore.")
+                    except Exception as e:
+                        # Catch other potential errors
+                        session.rollback()
+                        print(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Error saving datapackage for game '{game}': {e}")
+            # --- END MODIFICATION ---
 
 
         # --- Main Polling Logic ---
@@ -365,6 +384,24 @@ async def poll_room_instance(room_info):
         items_skipped_duplicate = 0
         items_added_count = 0
         added_items_details = [] 
+
+        # --- NEW HINT LOGIC (STEP 1) ---
+        # Build a set of all (location_id, item_id) pairs that have been received.
+        # We do this *before* skipping any items, as per your insight.
+        all_received_item_loc_pairs = set()
+        for p_items in tracker_data.get('player_items_received', []):
+            for item_tuple_data in p_items.get('items', []):
+                try:
+                    if len(item_tuple_data) < 4: continue
+                    item_id, loc_id, _, _ = item_tuple_data 
+                    all_received_item_loc_pairs.add((loc_id, item_id))
+                except (ValueError, TypeError, IndexError):
+                    continue # Skip malformed tuples
+        
+        if all_received_item_loc_pairs:
+             print(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] Found {len(all_received_item_loc_pairs)} total (loc_id, item_id) pairs in 'player_items_received'.")
+        # --- END NEW HINT LOGIC (STEP 1) ---
+
 
         for p_items in tracker_data.get('player_items_received', []):
             rid = p_items.get('player') # receiver_id
@@ -515,6 +552,7 @@ async def poll_room_instance(room_info):
 
                              # --- NEW HINT PREFERENCE LOGIC ---
                              user_prefs = users_by_id.get(user_id)
+                             # --- CRITICAL BUG FIX: 'user_D' -> 'user_id' ---
                              slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_to_check)
 
                              if not user_prefs or not slot_prefs:
@@ -586,6 +624,41 @@ async def poll_room_instance(room_info):
                 print(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(hints_to_add_to_db)} historical hints.")
             elif not notifications_by_user: 
                  print(f"[POLLER][RoomDBID:{db_id}] Silently added {len(hints_to_add_to_db)} new hints.")
+
+        # --- MODIFICATION 5: Use the *correct* hint update logic ---
+        # Update is_found status based on your cross-referencing idea
+        try:
+            if not all_received_item_loc_pairs:
+                print(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] No received items found, skipping hint update.")
+            else:
+                # This is the new, efficient logic:
+                # 1. Get the *small* list of unfound hints from our DB
+                unfound_hints_in_room = session.query(NotifiedHint).filter(
+                    NotifiedHint.room_id == room_uuid,
+                    NotifiedHint.is_found == False
+                ).all()
+
+                if not unfound_hints_in_room:
+                    print(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] No unfound hints in DB to check.")
+                else:
+                    # 2. Loop through them in Python and check against the *big* set
+                    updated_hint_count = 0
+                    for hint in unfound_hints_in_room:
+                        # This check is very fast because all_received_item_loc_pairs is a set
+                        if (hint.location_id, hint.item_id) in all_received_item_loc_pairs:
+                            hint.is_found = True # Mark it as found
+                            updated_hint_count += 1
+                    
+                    if updated_hint_count > 0:
+                        print(f"[POLLER_ACTION][RoomDBID:{db_id}] Marked {updated_hint_count} hints as found using received_items list.")
+                    else:
+                        print(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] Checked {len(unfound_hints_in_room)} unfound hints, but none matched the received_items list.")
+
+        except Exception as e:
+            # Log error but don't crash the poll
+            print(f"[POLLER_ERROR][RoomDBID:{db_id}] Failed to update 'is_found' status for hints using items list: {e}")
+            traceback.print_exc()
+        # --- END MODIFICATION ---
 
         # Final single commit for main poll data
         session.commit()
