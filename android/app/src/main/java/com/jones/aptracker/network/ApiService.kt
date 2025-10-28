@@ -49,6 +49,20 @@ interface ApiService {
 
     @GET("users/me/tracked-slots") // <-- ADD THIS FUNCTION
     suspend fun getUserTrackedSlots(): List<RoomWithTrackedSlots>
+
+    @GET("history/hints")
+    suspend fun getGlobalHintHistory(
+        @Query("since") since: String?,
+        @Query("include_found") includeFound: Boolean // <-- ADD THIS
+    ): HintHistoryResponse
+
+    @GET("rooms/{id}/history/hints")
+    suspend fun getRoomHintHistory(
+        @Path("id") roomId: Int,
+        @Query("since") since: String?,
+        @Query("include_found") includeFound: Boolean // <-- ADD THIS
+    ): HintHistoryResponse
+
 }
 
 data class Room(
@@ -141,4 +155,23 @@ data class TrackedSlotDetail(
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?
+)
+
+data class HintHistoryResponse(
+    val hints_for_you: List<HintDetail>,
+    val hints_by_you: List<HintDetail>
+)
+
+data class HintDetail(
+    val id: Int, // Backend DB ID
+    val room_db_id: Int,
+    val room_alias: String,
+    val item_owner_id: Int,
+    val item_owner_name: String,
+    val location_owner_id: Int,
+    val location_owner_name: String,
+    val item_name: String,
+    val location_name: String,
+    val is_found: Boolean,
+    val timestamp: String // ISO 8601 string
 )
