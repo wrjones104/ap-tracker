@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import OperationalError, IntegrityError
+from sqlalchemy.orm import selectinload
 from sqlalchemy import or_
 
 from . import Session
@@ -656,6 +657,52 @@ def get_current_user(current_user):
         'notify_useful_default': current_user.notify_useful_default,
         'notify_hints_default': current_user.notify_hints_default
     })
+
+@bp.route('/users/me/tracked-slots', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_user_tracked_slots(current_user):
+    """
+    Returns a list of all rooms and slots the authenticated user is tracking,
+    including their notification preferences for each slot.
+    """
+    session = Session()
+    try:
+        # Fetch all subscriptions for the user, eagerly loading related rooms and slots
+        subscriptions = session.query(UserRoomSubscription).filter_by(user_id=current_user.id).options(
+            selectinload(UserRoomSubscription.room),
+            selectinload(UserRoomSubscription.tracked_slots)
+        ).order_by(UserRoomSubscription.alias).all()
+
+        response_data = []
+        for sub in subscriptions:
+            room_data = sub.room
+            if not room_data: continue # Skip if room somehow doesn't exist
+
+            # Get player names from the cached JSON for this room
+            players_map = {p['slot_id']: p['name'] for p in json.loads(room_data.cached_players_json or '[]')}
+
+            tracked_slots_list = []
+            for slot in sorted(sub.tracked_slots, key=lambda s: s.slot_id):
+                tracked_slots_list.append({
+                    'slot_id': slot.slot_id,
+                    'player_name': players_map.get(slot.slot_id, f"Player {slot.slot_id}"),
+                    'notify_progression': slot.notify_progression,
+                    'notify_useful': slot.notify_useful,
+                    'notify_hints': slot.notify_hints
+                })
+
+            response_data.append({
+                'room_db_id': sub.room_id,
+                'room_alias': sub.alias,
+                'icon_name': sub.icon_name,
+                'tracked_slots': tracked_slots_list
+            })
+
+        return jsonify(response_data)
+    finally:
+        Session.remove()
 
 @bp.route('/users/me/preferences', methods=['PUT'])
 @handle_db_errors

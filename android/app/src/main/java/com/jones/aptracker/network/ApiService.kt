@@ -46,6 +46,9 @@ interface ApiService {
         @Path("slot_id") slotId: Int,
         @Body request: UpdateSlotPrefsRequest // We'll define this later
     ): Response<Unit>
+
+    @GET("users/me/tracked-slots") // <-- ADD THIS FUNCTION
+    suspend fun getUserTrackedSlots(): List<RoomWithTrackedSlots>
 }
 
 data class Room(
@@ -120,6 +123,21 @@ data class UpdateGlobalPrefsRequest(
 )
 
 data class UpdateSlotPrefsRequest(
+    val notify_progression: Boolean?,
+    val notify_useful: Boolean?,
+    val notify_hints: Boolean?
+)
+
+data class RoomWithTrackedSlots(
+    val room_db_id: Int,
+    val room_alias: String,
+    val icon_name: String,
+    val tracked_slots: List<TrackedSlotDetail>
+)
+
+data class TrackedSlotDetail(
+    val slot_id: Int,
+    val player_name: String,
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?
