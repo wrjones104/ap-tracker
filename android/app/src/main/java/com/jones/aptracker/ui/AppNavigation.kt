@@ -1,5 +1,6 @@
 package com.jones.aptracker.ui
 
+import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -39,13 +40,16 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
         composable("rooms") {
             RoomsScreen(
                 onRoomClick = { roomId, roomAlias ->
-                    navController.navigate("players/$roomId/$roomAlias")
+                    navController.navigate("players/$roomId/${Uri.encode(roomAlias)}") // Encode alias
                 },
+                // Updated History click to go to the specific Global route
                 onHistoryClick = {
-                    navController.navigate("history")
+                    navController.navigate("history/global/All Rooms") // Use distinct global route
                 },
                 onLogoutClick = onLogoutClick,
                 onSettingsClick = { navController.navigate("profile") }
+                // Pass navController if RoomsScreen needs it directly (unlikely now)
+                // navController = navController
             )
         }
         composable("profile") {
@@ -61,17 +65,26 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
             )
         ) { backStackEntry ->
             val roomId = backStackEntry.arguments?.getInt("roomId")!!
-            val roomAlias = backStackEntry.arguments?.getString("roomAlias")!!
+            // Decode the alias when retrieving it
+            val roomAlias = Uri.decode(backStackEntry.arguments?.getString("roomAlias")!!)
             PlayersScreen(
                 roomId = roomId,
                 roomAlias = roomAlias,
-                onSave = { navController.popBackStack() },
-                onHistoryClick = { navController.navigate("history/$roomId/$roomAlias") }
+                onSave = { navController.popBackStack() }, // Navigate back after saving
+                onHistoryClick = { navController.navigate("history/$roomId/${Uri.encode(roomAlias)}") } // Encode alias
             )
         }
-        composable("history") {
-            HistoryScreen(roomId = null, roomAlias = null)
+
+        // Distinct route for Global History
+        composable("history/global/All Rooms") {
+            HistoryScreen(
+                roomId = null, // Explicitly null for global
+                roomAlias = "Global History", // Set a title
+                onBackClick = { navController.popBackStack() } // Add back navigation
+            )
         }
+
+        // Route for Per-Room History
         composable(
             route = "history/{roomId}/{roomAlias}",
             arguments = listOf(
@@ -80,8 +93,13 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
             )
         ) { backStackEntry ->
             val roomId = backStackEntry.arguments?.getInt("roomId")!!
-            val roomAlias = backStackEntry.arguments?.getString("roomAlias")!!
-            HistoryScreen(roomId = roomId, roomAlias = roomAlias)
+            // Decode the alias
+            val roomAlias = Uri.decode(backStackEntry.arguments?.getString("roomAlias")!!)
+            HistoryScreen(
+                roomId = roomId,
+                roomAlias = roomAlias,
+                onBackClick = { navController.popBackStack() } // Add back navigation
+            )
         }
     }
 }
