@@ -1,20 +1,40 @@
 package com.jones.aptracker.network
 
+import android.content.Context
+import com.jones.aptracker.BuildConfig
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
-// This object provides a single, configured instance of our ApiService
 object RetrofitClient {
 
-    // IMPORTANT: Replace with the IP address of the computer running your Python script.
-    // Use your computer's local network IP (e.g., 192.168.1.100), not "localhost" or "127.0.0.1".
-    private const val BASE_URL = "http://192.168.1.206:5000/"
+    private lateinit var apiService: ApiService
+    private lateinit var tokenManager: TokenManager
 
-    val instance: ApiService by lazy {
+    fun init(context: Context) {
+        tokenManager = TokenManager(context)
+
+        // Create a logging interceptor to see request details in Logcat (for debugging)
+        val logging = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BODY
+        }
+
+        // Create an OkHttpClient and add both our interceptors
+        val httpClient = OkHttpClient.Builder()
+            .addInterceptor(AuthInterceptor(tokenManager))
+            .addInterceptor(logging) // Add logging interceptor for easier debugging
+            .build()
+
         val retrofit = Retrofit.Builder()
-            .baseUrl(BASE_URL)
+            .baseUrl(BuildConfig.BASE_URL)
+            .client(httpClient) // Use our custom client
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-        retrofit.create(ApiService::class.java)
+
+        apiService = retrofit.create(ApiService::class.java)
     }
+
+    val instance: ApiService
+        get() = apiService
 }

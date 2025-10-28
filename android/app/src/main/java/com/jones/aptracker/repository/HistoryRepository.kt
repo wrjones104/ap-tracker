@@ -1,15 +1,16 @@
 package com.jones.aptracker.repository
 
 import android.util.Log
-import com.jones.aptracker.network.ApiService
-import com.jones.aptracker.network.HistoryDao
-import com.jones.aptracker.network.HistoryItemEntity
+import com.jones.aptracker.network.* // Ensure new Hint classes/DAO are imported
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine // Import combine
 
 class HistoryRepository(
     private val apiService: ApiService,
-    private val historyDao: HistoryDao
+    private val historyDao: HistoryDao,
+    private val hintDao: HintDao
 ) {
+    // --- Item History (Existing, no changes) ---
     fun getHistoryForRoom(roomId: Int): Flow<List<HistoryItemEntity>> {
         return historyDao.getHistoryForRoom(roomId)
     }
@@ -18,26 +19,22 @@ class HistoryRepository(
         return historyDao.getGlobalHistory()
     }
 
-    suspend fun refreshHistory() {
-        // --- ADDED: Log that the refresh is starting ---
-        Log.d("HISTORY_DEBUG", "Starting history refresh...")
+    suspend fun refreshItemHistory() {
+        Log.d("HISTORY_DEBUG", "Starting ITEM history refresh...")
         val latestTimestamp = historyDao.getLatestGlobalTimestamp()
-
         try {
             val newItems = apiService.getGlobalItemHistory(since = latestTimestamp)
             Log.d("HISTORY_DEBUG", "Received ${newItems.size} new items from the API.")
-
             if (newItems.isNotEmpty()) {
                 val entities = newItems.mapNotNull { item ->
                     try {
-                        // --- THE FIX: Safely handle potential nulls ---
                         val entity = HistoryItemEntity(
-                            roomId = item.db_id, // roomId is already nullable
+                            roomId = item.db_id,
                             message = item.message,
                             timestamp = item.timestamp,
-                            tracker_id = item.tracker_id, // tracker_id is already nullable
-                            slot_id = item.slot_id,     // slot_id is already nullable
-                            icon_name = item.icon_name  // icon_name is already nullable
+                            tracker_id = item.tracker_id,
+                            slot_id = item.slot_id,
+                            icon_name = item.icon_name
                         )
                         Log.d("HISTORY_DEBUG", "Successfully parsed item: ${entity.message}")
                         entity
@@ -47,15 +44,132 @@ class HistoryRepository(
                         null
                     }
                 }
-
                 if (entities.isNotEmpty()) {
-                    Log.d("HISTORY_DEBUG", "Inserting ${entities.size} new entities into the database.")
+                    Log.d("HISTORY_DEBUG", "Inserting ${entities.size} new item entities.")
                     historyDao.insertHistoryItems(entities)
                 }
             }
         } catch (e: Exception) {
-            // --- ADDED: Catch errors from the API call itself ---
-            Log.e("HISTORY_DEBUG", "!!! FAILED to fetch or parse history from network. Error: ${e.message}", e)
+            Log.e("HISTORY_DEBUG", "!!! FAILED item history refresh: ${e.message}", e)
         }
+    }
+
+    private fun mapHistoryItemToEntity(item: HistoryItem): HistoryItemEntity? {
+        // This function seems unused, but we'll leave it
+        return try {
+            HistoryItemEntity(
+                roomId = item.db_id,
+                message = item.message,
+                timestamp = item.timestamp,
+                tracker_id = item.tracker_id,
+                slot_id = item.slot_id,
+                icon_name = item.icon_name
+            )
+        } catch (e: Exception) {
+            Log.e("HISTORY_DEBUG", "Failed to process history item: $item", e)
+            null
+        }
+    }
+
+
+    // --- Hint History (MODIFIED) ---
+
+    // --- MODIFIED: Use explicit DAO calls ---
+    fun getHintsForRoom(roomId: Int, includeFound: Boolean): Flow<Pair<List<HintEntity>, List<HintEntity>>> {
+        Log.d("HintToggleDebug", "Repo: getHintsForRoom (DAO Read) | includeFound: $includeFound")
+
+        val hintsForYou = if (includeFound) {
+            hintDao.getAllHintsForRoom(roomId, "for_you")
+        } else {
+            hintDao.getUnfoundHintsForRoom(roomId, "for_you")
+        }
+
+        val hintsByYou = if (includeFound) {
+            hintDao.getAllHintsForRoom(roomId, "by_you")
+        } else {
+            hintDao.getUnfoundHintsForRoom(roomId, "by_you")
+        }
+
+        return combine(hintsForYou, hintsByYou) { forYou, byYou -> Pair(forYou, byYou) }
+    }
+
+    // --- MODIFIED: Use explicit DAO calls ---
+    fun getGlobalHints(includeFound: Boolean): Flow<Pair<List<HintEntity>, List<HintEntity>>> {
+        Log.d("HintToggleDebug", "Repo: getGlobalHints (DAO Read) | includeFound: $includeFound")
+
+        val hintsForYou = if (includeFound) {
+            hintDao.getAllGlobalHints("for_you")
+        } else {
+            hintDao.getUnfoundGlobalHints("for_you")
+        }
+
+        val hintsByYou = if (includeFound) {
+            hintDao.getAllGlobalHints("by_you")
+        } else {
+            hintDao.getUnfoundGlobalHints("by_you")
+        }
+
+        return combine(hintsForYou, hintsByYou) { forYou, byYou -> Pair(forYou, byYou) }
+    }
+
+    // This function remains the same, it correctly passes the boolean to the API
+    suspend fun refreshHintHistory(roomId: Int? = null, includeFound: Boolean) {
+        Log.d("HintToggleDebug", "Repo: refreshHintHistory (API Fetch) | includeFound: $includeFound")
+        val latestTimestamp = if (roomId != null) {
+            hintDao.getLatestTimestampForRoom(roomId)
+        } else {
+            hintDao.getLatestGlobalTimestamp()
+        }
+
+        Log.d("HintToggleDebug", "Repo: API 'since' param will be: $latestTimestamp")
+
+        try {
+            val response = if (roomId != null) {
+                apiService.getRoomHintHistory(roomId, since = latestTimestamp, includeFound = includeFound)
+            } else {
+                apiService.getGlobalHintHistory(since = latestTimestamp, includeFound = includeFound)
+            }
+
+            Log.d("HINT_DEBUG", "Received ${response.hints_for_you.size} 'for_you' and ${response.hints_by_you.size} 'by_you' hints.")
+
+            if (response.hints_for_you.isNotEmpty()) {
+                Log.d("HintToggleDebug", "Repo: First 'for_you' hint from API has is_found=${response.hints_for_you[0].is_found} (ID: ${response.hints_for_you[0].id})")
+            }
+            if (response.hints_by_you.isNotEmpty()) {
+                Log.d("HintToggleDebug", "Repo: First 'by_you' hint from API has is_found=${response.hints_by_you[0].is_found} (ID: ${response.hints_by_you[0].id})")
+            }
+
+            val entitiesToInsert = mutableListOf<HintEntity>()
+
+            response.hints_for_you.mapTo(entitiesToInsert) { detail ->
+                mapHintDetailToEntity(detail, "for_you")
+            }
+            response.hints_by_you.mapTo(entitiesToInsert) { detail ->
+                mapHintDetailToEntity(detail, "by_you")
+            }
+
+            if (entitiesToInsert.isNotEmpty()) {
+                Log.d("HintToggleDebug", "Repo: Inserting ${entitiesToInsert.size} hints. First hint's isFound=${entitiesToInsert[0].isFound} (ID: ${entitiesToInsert[0].hint_db_id})")
+                hintDao.insertHints(entitiesToInsert)
+                Log.d("HintToggleDebug", "Repo: Insertion complete.")
+            }
+        } catch (e: Exception) {
+            Log.e("HINT_DEBUG", "!!! FAILED hint history refresh: ${e.message}", e)
+        }
+    }
+
+    private fun mapHintDetailToEntity(detail: HintDetail, type: String): HintEntity {
+        return HintEntity(
+            hint_db_id = detail.id,
+            roomDbId = detail.room_db_id,
+            roomAlias = detail.room_alias,
+            hintType = type,
+            itemOwnerName = detail.item_owner_name,
+            locationOwnerName = detail.location_owner_name,
+            itemName = detail.item_name,
+            locationName = detail.location_name,
+            isFound = detail.is_found,
+            timestamp = detail.timestamp
+        )
     }
 }

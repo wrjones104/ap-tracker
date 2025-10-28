@@ -1,130 +1,136 @@
 package com.jones.aptracker
 
-import android.Manifest
-import android.os.Build
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.lifecycleScope
-import androidx.navigation.NavType
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
-import com.google.firebase.ktx.Firebase
-import com.google.firebase.messaging.ktx.messaging
-import com.jones.aptracker.network.RegisterDeviceRequest
+import com.jones.aptracker.network.AuthRequest
 import com.jones.aptracker.network.RetrofitClient
-import com.jones.aptracker.ui.HistoryScreen
-import com.jones.aptracker.ui.PlayersScreen
-import com.jones.aptracker.ui.RoomsScreen
+import com.jones.aptracker.network.TokenManager
+import com.jones.aptracker.ui.AppNavigation
 import com.jones.aptracker.ui.theme.APTrackerTheme
+import com.jones.aptracker.ui.AuthViewModel
 import kotlinx.coroutines.launch
-import java.net.URLDecoder // <-- ADD THIS IMPORT
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
+import net.openid.appauth.*
 
 class MainActivity : ComponentActivity() {
 
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { isGranted: Boolean ->
-        if (isGranted) { Log.d("PERMISSION", "Notification permission granted.")
-        } else { Log.d("PERMISSION", "Notification permission denied.") }
-    }
-    private fun askNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
-
+    private lateinit var authService: AuthorizationService
+    private lateinit var tokenManager: TokenManager
+    private val authViewModel: AuthViewModel by viewModels()
+    private var currentCodeVerifier: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        askNotificationPermission()
-        getDeviceToken()
+        authService = AuthorizationService(this)
+        tokenManager = TokenManager(applicationContext)
 
-        setContent {
-            APTrackerTheme {
-                val navController = rememberNavController()
+        authViewModel.checkAuthStatus(tokenManager)
 
-                NavHost(navController = navController, startDestination = "rooms") {
-                    composable("rooms") {
-                        RoomsScreen(
-                            onRoomClick = { roomId, roomAlias ->
-                                val encodedAlias = URLEncoder.encode(roomAlias, StandardCharsets.UTF_8.toString())
-                                navController.navigate("players/$roomId/$encodedAlias")
-                            },
-                            onHistoryClick = {
-                                navController.navigate("history")
-                            }
-                        )
-                    }
+        val authLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            val data = result.data
+            if (result.resultCode == RESULT_OK && data != null) {
+                val response = AuthorizationResponse.fromIntent(data)
+                val ex = AuthorizationException.fromIntent(data)
+                val savedCodeVerifier = currentCodeVerifier
 
-                    composable("players/{roomId}/{roomAlias}") { backStackEntry ->
-                        val roomId = backStackEntry.arguments?.getString("roomId")?.toIntOrNull() ?: 0
-                        // **THE FIX**: Decode the alias from the URL
-                        val encodedAlias = backStackEntry.arguments?.getString("roomAlias") ?: "Room"
-                        val roomAlias = URLDecoder.decode(encodedAlias, StandardCharsets.UTF_8.toString())
-
-                        PlayersScreen(
-                            roomId = roomId,
-                            roomAlias = roomAlias,
-                            onSave = { navController.popBackStack() },
-                            onHistoryClick = {
-                                val reEncodedAlias = URLEncoder.encode(roomAlias, StandardCharsets.UTF_8.toString())
-                                navController.navigate("history?roomId=$roomId&roomAlias=$reEncodedAlias")
-                            }
-                        )
-                    }
-                    composable(
-                        route = "history?roomId={roomId}&roomAlias={roomAlias}",
-                        arguments = listOf(
-                            navArgument("roomId") {
-                                type = NavType.StringType
-                                nullable = true
-                            },
-                            navArgument("roomAlias") {
-                                type = NavType.StringType
-                                nullable = true
-                            }
-                        )
-                    ) { backStackEntry ->
-                        val roomId = backStackEntry.arguments?.getString("roomId")?.toIntOrNull()
-                        val encodedAlias = backStackEntry.arguments?.getString("roomAlias")
-                        val roomAlias = encodedAlias?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.toString()) }
-
-                        HistoryScreen(roomId = roomId, roomAlias = roomAlias)
-                    }
+                if (response?.authorizationCode != null && savedCodeVerifier != null) {
+                    exchangeCodeForToken(
+                        code = response.authorizationCode!!,
+                        codeVerifier = savedCodeVerifier
+                    )
+                } else {
+                    Log.e("LOGIN_FAILED", "Auth failed: ${ex?.errorDescription}")
                 }
             }
         }
-    }
 
-    private fun getDeviceToken() {
-        Firebase.messaging.token.addOnCompleteListener { task ->
-            if (!task.isSuccessful) {
-                Log.w("FCM", "Fetching FCM registration token failed", task.exception)
-                return@addOnCompleteListener
+        setContent {
+            APTrackerTheme {
+                val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
+                val isLoading by authViewModel.isLoading.collectAsState()
+
+                AppNavigation(
+                    isLoggedIn = isLoggedIn,
+                    isLoading = isLoading,
+                    onLoginClick = { startAuthentication(authLauncher) },
+                    onLogoutClick = { handleLogout() } // <-- Connect the logout handler
+                )
             }
-            val token = task.result
-            Log.d("FCM_TOKEN", token)
-            sendTokenToServer(token)
         }
     }
 
-    private fun sendTokenToServer(token: String) {
+    private fun startAuthentication(launcher: ActivityResultLauncher<Intent>) {
+        val serviceConfig = AuthorizationServiceConfiguration(
+            Uri.parse("https://discord.com/api/oauth2/authorize"),
+            Uri.parse("https://discord.com/api/oauth2/token")
+        )
+
+        val clientId = "1429821538332577974"
+        val redirectUri = Uri.parse("com.jones.aptracker:/oauth2redirect")
+
+        val request = AuthorizationRequest.Builder(
+            serviceConfig, clientId, ResponseTypeValues.CODE, redirectUri
+        ).setScope("identify").build()
+
+        currentCodeVerifier = request.codeVerifier
+
+        launcher.launch(authService.getAuthorizationRequestIntent(request))
+    }
+
+    // --- THE FIX IS HERE: The function now accepts 'codeVerifier' as a parameter ---
+    private fun exchangeCodeForToken(code: String, codeVerifier: String) {
+        authViewModel.setLoading(true)
         lifecycleScope.launch {
             try {
-                val request = RegisterDeviceRequest(token = token)
-                RetrofitClient.instance.registerDevice(request)
-                Log.d("API", "Device token sent to server successfully.")
+                val redirectUri = "com.jones.aptracker:/oauth2redirect"
+                val authRequest = AuthRequest(code, redirectUri, codeVerifier)
+
+                val response = RetrofitClient.instance.exchangeCodeForToken(authRequest)
+                tokenManager.saveToken(response.token)
+                authViewModel.onLoginSuccess()
+                authViewModel.registerDeviceToken(applicationContext)
+                Toast.makeText(this@MainActivity, "Login Successful!", Toast.LENGTH_SHORT).show()
+
+                // After successful login, relaunch MainActivity to show the main content
+                // and clear the activity stack.
+                val intent = Intent(this@MainActivity, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+                startActivity(intent)
+
             } catch (e: Exception) {
-                Log.e("API", "Failed to send device token to server.", e)
+                Log.e("LOGIN_ERROR", "Failed to exchange token", e)
+                Toast.makeText(this@MainActivity, "Login Failed", Toast.LENGTH_SHORT).show()
+            } finally {
+                authViewModel.setLoading(false)
             }
         }
+    }
+
+    private fun handleLogout() {
+        // Delete the saved token
+        tokenManager.deleteToken()
+        // Update the UI state to show the login screen
+        authViewModel.onLogout()
+        // You can optionally show a toast message
+        Toast.makeText(this, "Logged out", Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        authService.dispose()
     }
 }
