@@ -46,7 +46,8 @@ fun RoomsScreen(
     userViewModel: UserViewModel = viewModel(),
     onRoomClick: (Int, String) -> Unit,
     onHistoryClick: () -> Unit,
-    onLogoutClick: () -> Unit
+    onLogoutClick: () -> Unit,
+    onSettingsClick: () -> Unit
 ) {
     val rooms by roomsViewModel.rooms.collectAsState()
     val isLoading by roomsViewModel.isLoading.collectAsState()
@@ -63,7 +64,8 @@ fun RoomsScreen(
                     ProfileMenu(
                         userViewModel = userViewModel,
                         onHistoryClick = onHistoryClick,
-                        onLogoutClick = onLogoutClick
+                        onLogoutClick = onLogoutClick,
+                        onSettingsClick = onSettingsClick
                     )
                 }
             )
@@ -336,7 +338,8 @@ fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String, String
 fun ProfileMenu(
     userViewModel: UserViewModel,
     onHistoryClick: () -> Unit,
-    onLogoutClick: () -> Unit
+    onLogoutClick: () -> Unit,
+    onSettingsClick: () -> Unit
 ) {
     val userProfile by userViewModel.userProfile.collectAsState()
     var menuExpanded by remember { mutableStateOf(false) }
@@ -371,6 +374,13 @@ fun ProfileMenu(
                 text = { Text("Item History") },
                 onClick = {
                     onHistoryClick()
+                    menuExpanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Settings") },
+                onClick = {
+                    onSettingsClick() // We'll add this parameter to the function
                     menuExpanded = false
                 }
             )

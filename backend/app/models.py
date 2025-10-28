@@ -16,6 +16,9 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     subscriptions = relationship("UserRoomSubscription", back_populates="user", cascade="all, delete-orphan")
     devices = relationship("Device", back_populates="user", cascade="all, delete-orphan")
+    notify_progression_default = Column(Boolean, default=True, nullable=False)
+    notify_useful_default = Column(Boolean, default=True, nullable=False)
+    notify_hints_default = Column(Boolean, default=True, nullable=False)
 
 class Device(Base):
     __tablename__ = 'devices'
@@ -61,7 +64,10 @@ class UserTrackedSlot(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     room_id = Column(Integer, ForeignKey('tracked_rooms.id'), nullable=False)
     slot_id = Column(Integer, nullable=False)
-    added_at = Column(DateTime, default=datetime.utcnow) # <-- ADD THIS LINE
+    added_at = Column(DateTime, default=datetime.utcnow) 
+    notify_progression = Column(Boolean, nullable=True, default=None)
+    notify_useful = Column(Boolean, nullable=True, default=None)
+    notify_hints = Column(Boolean, nullable=True, default=None)
     
     __table_args__ = (
         ForeignKeyConstraint(['user_id', 'room_id'], ['user_room_subscriptions.user_id', 'user_room_subscriptions.room_id']),
