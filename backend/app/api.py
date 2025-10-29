@@ -1,4 +1,4 @@
-import logging
+import logging  # <-- NEW
 import json
 import os
 import requests
@@ -34,7 +34,8 @@ def log_api_call(f):
             except Exception:
                 payload = "Error dumping JSON payload"
         
-        logging.warning(f"[API] Call: {request.method} {request.path} | Payload: {payload}")
+        # --- CHANGED: Use DEBUG for high-frequency logs ---
+        logging.debug(f"[API] Call: {request.method} {request.path} | Payload: {payload}")
         
         try:
             # 2. Execute the actual API function
@@ -51,11 +52,12 @@ def log_api_call(f):
             else:
                 response_data = str(response) # Should not happen with jsonify, but a fallback.
 
-            logging.warning(f"[API] Response: {request.path} | Body: {response_data}...")
+            # --- CHANGED: Use DEBUG for high-frequency logs ---
+            logging.debug(f"[API] Response: {request.path} | Body: {response_data}...")
             return response
         
         except Exception as e:
-            # 4. Log any exceptions
+            # 4. Log any exceptions (This was already correct)
             logging.error(f"[API] Error: {request.path} | Exception: {e}", exc_info=True)
             # Re-raise the exception to be handled by @handle_db_errors or Flask
             raise e
@@ -71,29 +73,38 @@ def token_required(f):
             try:
                 token = auth_header.split(" ")[1]
             except IndexError:
+                logging.warning(f"Malformed Authorization header from {request.remote_addr}.")
                 return jsonify({'error': 'Malformed Authorization header'}), 401
 
         if not token:
+            logging.warning(f"Missing auth token from {request.remote_addr}.")
             return jsonify({'error': 'Authentication token is missing'}), 401
 
+        session = None  # <-- FIX 1: Initialize session to None
         try:
             secret = current_app.config['SECRET_KEY']
             data = jwt.decode(token, secret, algorithms=['HS256'])
 
-            session = Session()
+            session = Session() # <-- Session is created
             current_user = session.query(User).filter_by(id=data['user_id']).first()
             if not current_user:
+                logging.warning(f"Auth success, but user {data['user_id']} not found in DB.")
                 return jsonify({'error': 'User not found'}), 401
         except jwt.ExpiredSignatureError:
+            logging.info(f"Auth failure: Token has expired.")
             return jsonify({'error': 'Token has expired'}), 401
         except jwt.InvalidTokenError:
+            logging.warning(f"Auth failure: Invalid token received.")
             return jsonify({'error': 'Invalid token'}), 401
         except Exception as e:
-            session.rollback()
+            if session:  # <-- FIX 2: Check if session exists before rollback
+                session.rollback()
+            logging.error(f"Token processing error: {e}", exc_info=True)
             return jsonify({'error': f'Token processing error: {e}'}), 500
         finally:
-            session.close()
-
+            if session:  # <-- FIX 3: Check if session exists before removing
+                Session.remove()  # <-- THE CRITICAL FIX: Was session.close()
+                
         return f(current_user, *args, **kwargs)
     return decorated_function
 
@@ -107,16 +118,18 @@ def handle_db_errors(f):
             return result
         except OperationalError as e:
             session.rollback()
-            print(f"[API_ERROR] Database locked or operational error: {e}")
+            # --- CHANGED: print -> logging.error ---
+            logging.error(f"[API_ERROR] Database locked or operational error: {e}")
             return jsonify({'error': 'Database is busy, please try again.'}), 503
         except IntegrityError as e:
             session.rollback()
-            print(f"[API_ERROR] Database integrity error: {e}")
+            # --- CHANGED: print -> logging.warning ---
+            logging.warning(f"[API_ERROR] Database integrity error: {e}")
             return jsonify({'error': 'A record with this value already exists.'}), 409
         except Exception as e:
             session.rollback()
-            print(f"[API_ERROR] An unhandled API error occurred: {e}")
-            traceback.print_exc() 
+            # --- CHANGED: print -> logging.error (and removed traceback) ---
+            logging.error(f"[API_ERROR] An unhandled API error occurred: {e}", exc_info=True)
             return jsonify({'error': f'An internal server error occurred: {e}'}), 500
         finally:
             Session.remove()
@@ -146,13 +159,16 @@ def register_device(current_user):
     if device:
         if device.user_id != current_user.id:
             device.user_id = current_user.id
-            print(f"[API] Re-assigned existing device token to user {current_user.id}")
+            # --- CHANGED: print -> logging.info ---
+            logging.info(f"[API] Re-assigned existing device token to user {current_user.id}")
         else:
-            print(f"[API] Refreshed device token for user {current_user.id}")
+            # --- CHANGED: print -> logging.info ---
+            logging.info(f"[API] Refreshed device token for user {current_user.id}")
     else:
         device = Device(fcm_token=fcm_token, user_id=current_user.id)
         session.add(device)
-        print(f"[API] Registered new device for user {current_user.id}")
+        # --- CHANGED: print -> logging.info ---
+        logging.info(f"[API] Registered new device for user {current_user.id}")
 
     session.commit()
     return jsonify({'message': 'Device registered successfully'}), 201
@@ -228,7 +244,8 @@ def add_room(current_user):
     room = session.query(TrackedRoom).filter_by(room_id=room_id).first()
 
     if not room:
-        print(f"[API] First time seeing room {room_id}. Creating global record.")
+        # --- CHANGED: print -> logging.info ---
+        logging.info(f"[API] First time seeing room {room_id}. Creating global record.")
         try:
             # Ping the room status to get the port
             status_url = f"https://{hostname}/api/room_status/{room_id}"
@@ -256,11 +273,13 @@ def add_room(current_user):
             session.flush() # Flush to get the room.id
         
         except requests.exceptions.RequestException as e:
-            print(f"[API_ERROR] Failed to fetch initial room status for {room_id}: {e}")
+            # --- CHANGED: print -> logging.error ---
+            logging.error(f"[API_ERROR] Failed to fetch initial room status for {room_id}: {e}")
             return jsonify({'error': 'Could not connect to the room to verify its status.'}), 404
         except Exception as e:
             session.rollback()
-            print(f"[API_ERROR] Failed to process room status for {room_id}: {e}")
+            # --- CHANGED: print -> logging.error ---
+            logging.error(f"[API_ERROR] Failed to process room status for {room_id}: {e}", exc_info=True)
             return jsonify({'error': f'Error processing room status: {e}'}), 500
 
     # Now subscribe the user
@@ -341,7 +360,8 @@ def unsubscribe_from_room(current_user, room_db_id):
     session.delete(subscription)
     session.commit()
     
-    print(f"[API] User {current_user.id} unsubscribed from room {room_db_id}")
+    # --- CHANGED: print -> logging.info ---
+    logging.info(f"[API] User {current_user.id} unsubscribed from room {room_db_id}")
     return jsonify({'message': 'Successfully unsubscribed from room.'})
 
 # =============================================================================
@@ -424,7 +444,7 @@ def update_tracked_slots(current_user, room_db_id):
     room = subscription.room
     requested_ids = set(data.get('tracked_slot_ids', []))
 
-    # --- History pre-fill logic has been REMOVED ---
+    # --- History pre-fill logic has been REMOVED (This is correct) ---
     
     # --- Update the user's tracked slots ---
     current_slots_query = session.query(UserTrackedSlot.slot_id).filter_by(user_id=current_user.id, room_id=room_db_id)
@@ -439,6 +459,7 @@ def update_tracked_slots(current_user, room_db_id):
             UserTrackedSlot.room_id == room_db_id,
             UserTrackedSlot.slot_id.in_(slots_to_remove)
         ).delete(synchronize_session=False)
+        logging.info(f"[API] User {current_user.id} untracked {len(slots_to_remove)} slots in room {room_db_id}.")
 
     if slots_to_add:
         objects_to_add = [
@@ -446,6 +467,7 @@ def update_tracked_slots(current_user, room_db_id):
             for slot_id in slots_to_add if isinstance(slot_id, int) and slot_id > 0
         ]
         session.bulk_save_objects(objects_to_add)
+        logging.info(f"[API] User {current_user.id} tracked {len(objects_to_add)} new slots in room {room_db_id}.")
 
     session.commit()
     return jsonify({'message': 'Tracked slots updated.'})
@@ -490,13 +512,14 @@ def get_item_history(current_user, room_db_id):
         except (ValueError, TypeError):
             pass 
 
-    # --- Limit removed to allow full history, per our 16k vs 2.6k discussion ---
+    # --- Limit removed (This is correct based on our discussion) ---
     items = query.order_by(NotifiedItem.id.desc()).all()
 
     try:
         game_checksums = json.loads(room.game_checksums_json or '{}')
         players = json.loads(room.cached_players_json or '[]')
     except json.JSONDecodeError:
+        logging.error(f"[API_ERROR] Room data for {room_db_id} is corrupt.", exc_info=True)
         return jsonify({'error': 'Room data is corrupt or missing.'}), 500
         
     name_map = {p['slot_id']: p['name'] for p in players}
@@ -576,7 +599,7 @@ def get_global_item_history(current_user):
         except (ValueError, TypeError):
             pass
 
-    # --- Limit removed to allow full history, per our 16k vs 2.6k discussion ---
+    # --- Limit removed (This is correct) ---
     items = query.order_by(NotifiedItem.id.desc()).all()
 
     all_room_data = {
@@ -731,6 +754,8 @@ def update_user_preferences(current_user):
         return jsonify({'message': 'Preferences updated successfully'}), 200
     except Exception as e:
         session.rollback()
+        # --- NEW: Added logging ---
+        logging.error(f"Failed to update preferences for user {current_user.id}: {e}", exc_info=True)
         return jsonify({'error': f'Failed to update preferences: {e}'}), 500
     finally:
         Session.remove()
@@ -770,6 +795,8 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
         return jsonify({'message': 'Slot preferences updated successfully'}), 200
     except Exception as e:
         session.rollback()
+        # --- NEW: Added logging ---
+        logging.error(f"Failed to update slot preferences for user {current_user.id} (room {room_db_id}, slot {slot_id}): {e}", exc_info=True)
         return jsonify({'error': f'Failed to update slot preferences: {e}'}), 500
     finally:
         Session.remove()
@@ -827,10 +854,12 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             else:
                  # If no timestamp, 'since' might be hard to implement reliably without storing it
                  # For now, let's proceed assuming we might fetch more than needed without timestamp
-                 print(f"[HINT_API_WARN] 'since' parameter provided but NotifiedHint has no timestamp column.")
+                 # --- CHANGED: print -> logging.warning ---
+                 logging.warning(f"[HINT_API_WARN] 'since' parameter provided but NotifiedHint has no timestamp column.")
 
         except ValueError:
-            print(f"[HINT_API_WARN] Invalid 'since' timestamp format: {since_timestamp}")
+            # --- CHANGED: print -> logging.warning ---
+            logging.warning(f"[HINT_API_WARN] Invalid 'since' timestamp format: {since_timestamp}")
 
 
     all_relevant_hints = hints_query.all()
