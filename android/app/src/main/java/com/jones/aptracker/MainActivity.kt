@@ -21,6 +21,11 @@ import com.jones.aptracker.ui.theme.APTrackerTheme
 import com.jones.aptracker.ui.AuthViewModel
 import kotlinx.coroutines.launch
 import net.openid.appauth.*
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.compose.runtime.LaunchedEffect
+import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
 
@@ -28,6 +33,18 @@ class MainActivity : ComponentActivity() {
     private lateinit var tokenManager: TokenManager
     private val authViewModel: AuthViewModel by viewModels()
     private var currentCodeVerifier: String? = null
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            // Permission is granted.
+            Toast.makeText(this, "Notifications enabled!", Toast.LENGTH_SHORT).show()
+        } else {
+            // Permission denied.
+            // You can show a message explaining why notifications are helpful.
+            Toast.makeText(this, "Notifications are disabled. You can enable them in app settings.", Toast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,6 +84,13 @@ class MainActivity : ComponentActivity() {
                 val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
                 val isLoading by authViewModel.isLoading.collectAsState()
 
+                LaunchedEffect(isLoggedIn) {
+                    if (isLoggedIn) {
+                        // User is logged in, this is the perfect time to ask!
+                        checkAndRequestNotificationPermission()
+                    }
+                }
+
                 AppNavigation(
                     isLoggedIn = isLoggedIn,
                     isLoading = isLoading,
@@ -75,6 +99,25 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    private fun checkAndRequestNotificationPermission() {
+        // Notification permission is only required on Android 13 (API 33) and above.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Check if permission is already granted
+            val hasPermission = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasPermission) {
+                // If not granted, launch the permission request.
+                // The system will only show the dialog if the user hasn't
+                // permanently denied it.
+                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        // On older Android versions, permission is granted by default at install time.
     }
 
     private fun startAuthentication(launcher: ActivityResultLauncher<Intent>) {
