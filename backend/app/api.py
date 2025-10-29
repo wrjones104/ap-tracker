@@ -73,41 +73,38 @@ def token_required(f):
             try:
                 token = auth_header.split(" ")[1]
             except IndexError:
-                # --- NEW: Added logging ---
                 logging.warning(f"Malformed Authorization header from {request.remote_addr}.")
                 return jsonify({'error': 'Malformed Authorization header'}), 401
 
         if not token:
-            # --- NEW: Added logging ---
             logging.warning(f"Missing auth token from {request.remote_addr}.")
             return jsonify({'error': 'Authentication token is missing'}), 401
 
+        session = None  # <-- FIX 1: Initialize session to None
         try:
             secret = current_app.config['SECRET_KEY']
             data = jwt.decode(token, secret, algorithms=['HS256'])
 
-            session = Session()
+            session = Session() # <-- Session is created
             current_user = session.query(User).filter_by(id=data['user_id']).first()
             if not current_user:
-                # --- NEW: Added logging ---
                 logging.warning(f"Auth success, but user {data['user_id']} not found in DB.")
                 return jsonify({'error': 'User not found'}), 401
         except jwt.ExpiredSignatureError:
-            # --- NEW: Added logging ---
             logging.info(f"Auth failure: Token has expired.")
             return jsonify({'error': 'Token has expired'}), 401
         except jwt.InvalidTokenError:
-            # --- NEW: Added logging ---
             logging.warning(f"Auth failure: Invalid token received.")
             return jsonify({'error': 'Invalid token'}), 401
         except Exception as e:
-            session.rollback()
-            # --- NEW: Added logging ---
+            if session:  # <-- FIX 2: Check if session exists before rollback
+                session.rollback()
             logging.error(f"Token processing error: {e}", exc_info=True)
             return jsonify({'error': f'Token processing error: {e}'}), 500
         finally:
-            session.close()
-
+            if session:  # <-- FIX 3: Check if session exists before removing
+                Session.remove()  # <-- THE CRITICAL FIX: Was session.close()
+                
         return f(current_user, *args, **kwargs)
     return decorated_function
 
