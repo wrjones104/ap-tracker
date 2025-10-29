@@ -27,7 +27,7 @@ object RetrofitClient {
             .build()
 
         val retrofit = Retrofit.Builder()
-            .baseUrl(BuildConfig.BASE_URL)
+            .baseUrl(BuildConfig.API_BASE_URL)
             .client(httpClient) // Use our custom client
             .addConverterFactory(GsonConverterFactory.create())
             .build()

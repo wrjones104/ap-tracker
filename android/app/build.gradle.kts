@@ -6,11 +6,14 @@ plugins {
     id("kotlin-kapt")
 }
 
+// In your app/build.gradle.kts file
+
 android {
+    flavorDimensions("environment")
     namespace = "com.jones.aptracker"
-    compileSdk {
-        version = release(36)
-    }
+
+    // FIX 1: This is the standard way to set the compileSdk
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.jones.aptracker"
@@ -18,24 +21,53 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "com.jones.aptracker"
     }
 
-    buildTypes {
-        getByName("debug") {
-            buildConfigField("String", "BASE_URL", "\"http://Will-Office:5000/\"")
+    // FIX 2: We are now EDITING your existing productFlavors block
+    productFlavors {
+
+        // Your existing 'dev' flavor
+        create("dev") {
+            dimension = "environment"
+            applicationIdSuffix = ".dev"
+            buildConfigField("String", "API_BASE_URL", "\"http://Will-Office:5000/\"")
         }
-        getByName("release") {
-            buildConfigField("String", "BASE_URL", "\"http://Will-Linux:5000/\"")
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+
+        // Your existing 'uat' flavor, with the URL corrected
+        create("uat") {
+            dimension = "environment"
+            applicationIdSuffix = ".uat"
+            // FIX 3: This URL now matches your server
+            buildConfigField("String", "API_BASE_URL", "\"https://uat-ap.seedbot.net\"")
+        }
+
+        // Your existing 'prod' flavor
+        create("prod") {
+            dimension = "environment"
+            buildConfigField("String", "API_BASE_URL", "\"http://ap-tracker.seedbot.net/\"")
         }
     }
+
+    // FIX 4: We are EDITING your existing buildTypes block
+    buildTypes {
+
+        // We add this block to configure the default 'debug' type
+        getByName("debug") {
+            applicationIdSuffix = ".debug"
+            isDebuggable = true // This is the correct property
+        }
+
+        // This is your existing 'release' configuration
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    // The rest of your file is perfect
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11

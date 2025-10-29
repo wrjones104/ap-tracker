@@ -52,7 +52,12 @@ class MainActivity : ComponentActivity() {
                         codeVerifier = savedCodeVerifier
                     )
                 } else {
-                    Log.e("LOGIN_FAILED", "Auth failed: ${ex?.errorDescription}")
+                    // Get the detailed error from the AuthorizationException
+                    val errorDetails = ex?.errorDescription ?: "Authorization cancelled or unknown error"
+                    Log.e("LOGIN_FAILED", "Auth failed: $errorDetails")
+                    // Show the detailed error in a long-running Toast
+                    Toast.makeText(this, "Login Failed: $errorDetails", Toast.LENGTH_LONG).show()
+                    authViewModel.setLoading(false) // Make sure to stop loading
                 }
             }
         }
@@ -111,9 +116,13 @@ class MainActivity : ComponentActivity() {
                 }
                 startActivity(intent)
 
+// --- New Code ---
             } catch (e: Exception) {
+                // Get the exception class name and message
+                val errorDetails = e.toString() // e.g., "retrofit2.HttpException: HTTP 404 Not Found"
                 Log.e("LOGIN_ERROR", "Failed to exchange token", e)
-                Toast.makeText(this@MainActivity, "Login Failed", Toast.LENGTH_SHORT).show()
+                // Show the detailed error in a long-running Toast
+                Toast.makeText(this@MainActivity, "Exchange Failed: $errorDetails", Toast.LENGTH_LONG).show()
             } finally {
                 authViewModel.setLoading(false)
             }
