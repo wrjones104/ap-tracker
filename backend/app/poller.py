@@ -6,7 +6,7 @@ import websockets
 import traceback
 from datetime import datetime, timezone, timedelta
 from threading import local
-from sqlalchemy import or_, exc # --- MODIFIED ---
+from sqlalchemy import or_, exc
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
 
@@ -20,20 +20,13 @@ from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
 thread_local_data = local()
 
-# --- NEW: Get running loop helper ---
-# We need this to dispatch DB calls from any async function
-def get_loop():
-    try:
-        return asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.new_event_loop()
+# --- REMOVED THE LEAKY get_loop() FUNCTION ---
 
 async def close_aiohttp_session():
     session = getattr(thread_local_data, "aiohttp_session", None)
     if session:
         await session.close()
-        logging.info("[POLLER] Aiohttp session closed.") # <-- Logging
-    # Ensure thread_local_data.aiohttp_session is cleared
+        logging.info("[POLLER] Aiohttp session closed.")
     if hasattr(thread_local_data, "aiohttp_session"):
         del thread_local_data.aiohttp_session
 
@@ -48,10 +41,9 @@ def log_resource_usage(app):
     cpu_usage = process.cpu_percent(interval=None)
     memory_info = process.memory_info()
     memory_mb = memory_info.rss / (1024 * 1024)
-    # This is very noisy, so it's a perfect candidate for DEBUG
     logging.debug(f"[RESOURCES] CPU: {cpu_usage:.2f}% | Memory: {memory_mb:.2f} MB")
 
-async def send_push_notifications(notifications, device_tokens):
+async def send_push_notifications(notifications, device_tokens, loop): # <-- Get loop
     firebase_app = get_firebase_app()
     if not firebase_app or not notifications or not device_tokens: return
 
@@ -60,7 +52,6 @@ async def send_push_notifications(notifications, device_tokens):
     messages = []
     for content in notifications:
         try:
-            # This is a normal operation, not a warning
             logging.info(f"[NOTIFIER] Preparing notification for {len(device_tokens)} devices. Title: {content['title']} | Body: {content['body']}")
         except Exception as e:
             logging.error(f"[NOTIFIER] Error creating log message: {e}")
@@ -72,7 +63,7 @@ async def send_push_notifications(notifications, device_tokens):
             ))
     if not messages: return
 
-    loop = get_loop() # --- MODIFIED ---
+    # loop = get_loop() <-- REMOVED
     for i in range(0, len(messages), 10):
         chunk = messages[i:i + 10]
         try:
@@ -88,7 +79,6 @@ async def send_push_notifications(notifications, device_tokens):
 
             if unregistered_tokens:
                 logging.info(f"[FCM] Found {len(unregistered_tokens)} invalid devices. Removing from DB.")
-                # --- NEW: Run DB cleanup in executor ---
                 await loop.run_in_executor(None, db_remove_invalid_tokens, unregistered_tokens)
                 
         except Exception as e:
@@ -116,18 +106,17 @@ async def fetch_json(url):
             response.raise_for_status()
             return await response.json()
     except Exception as e:
-        # Don't log here, the calling function will log the failure context
         return None
 
 # --- REFACTORED: This is now JUST the poll logic (Plan 1) ---
-async def run_room_poll(room_info):
+async def run_room_poll(room_info, loop): # <-- Get loop
     """
     Runs a single lightweight poll cycle for an *already set up* room.
     All DB logic is deferred to an executor.
     """
     db_id = room_info['db_id']
     hostname = room_info['hostname']
-    loop = get_loop()
+    # loop = get_loop() <-- REMOVED
     
     # --- STEP 1: Initial Read (in executor) ---
     room_data = await loop.run_in_executor(None, db_read_room_poll_state, db_id)
@@ -147,21 +136,20 @@ async def run_room_poll(room_info):
 
     # --- STEP 3: Database Transaction (in executor) ---
     try:
-        # Pass all async-gathered data to the sync DB function
         notifications_to_send = await loop.run_in_executor(
             None, 
             db_process_poll_data, 
             db_id, 
             room_uuid, 
             tracker_data, 
-            room_data # Pass all initial state
+            room_data 
         )
         
         # --- STEP 4: Send Notifications (Async) ---
         if notifications_to_send:
             for user_id, data in notifications_to_send.items():
                 logging.info(f"[NOTIFY] Sending {len(data['notifications'])} notification(s) to user {user_id} for room '{data['alias']}'")
-                await send_push_notifications(data['notifications'], data['tokens'])
+                await send_push_notifications(data['notifications'], data['tokens'], loop) # <-- Pass loop
 
     except Exception as e:
         logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] An unhandled exception occurred in run_room_poll!", exc_info=True)
@@ -175,7 +163,6 @@ def db_read_room_poll_state(db_id):
         if not room:
             return None
             
-        # Load all needed attributes into a dict to return
         return {
             'room_uuid': room.room_id,
             'tracker_id': room.tracker_id,
@@ -212,7 +199,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         room.failed_poll_count = 0
         room.last_successful_poll = datetime.utcnow()
         
-        # Load data from the initial read
         cached_players_json_str = room_data['cached_players_json_str']
         game_checksums_json_str = room_data['game_checksums_json_str']
         is_complete_status = room_data['is_complete_status']
@@ -245,7 +231,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         users_by_id = {u.id: u for u in session.query(User).filter(User.id.in_(all_user_ids_in_room))}
         aliases_by_user = { sub.user_id: sub.alias for sub in session.query(UserRoomSubscription).filter(UserRoomSubscription.user_id.in_(all_user_ids_in_room), UserRoomSubscription.room_id == db_id) }
 
-        notifications_by_user = {} # This will be the basis of our return value
+        notifications_by_user = {} 
 
         player_statuses_raw = tracker_data.get('player_status', {})
         finished_player_ids = set()
@@ -300,7 +286,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         items_added_count = 0
         added_items_details = [] 
         
-        # --- NEW: Counter for log consolidation ---
         items_skipped_backfill = 0
 
         all_received_item_loc_pairs = set()
@@ -378,7 +363,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                             ).scalar()
                             
                             if user_slot_added_at and datetime.utcnow() - user_slot_added_at < timedelta(minutes=15):
-                                # This is normal, expected behavior, not a warning
                                 logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {user_slot_added_at}. Suppressing notification for item {item_id}.")
                                 continue 
 
@@ -386,7 +370,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                             slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
 
                             if not user_prefs or not slot_prefs:
-                                # This IS a warning, as it implies a data integrity issue
                                 logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
                                 continue
 
@@ -414,22 +397,18 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                                     'details': item_key_batch
                                 })
                 else:
-                    # --- CONSOLIDATED LOG ---
-                    # Increment counter instead of logging in a loop
                     items_skipped_backfill += 1
 
         if items_processed_count > 0: 
              added_items_log_str = ", ".join(added_items_details) if added_items_details else "None"
              logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Item Stats: Processed={items_processed_count}, Skipped (Class)={items_skipped_classification}, Skipped (Dupe)={items_skipped_duplicate}, Added={items_added_count} | New Items: [{added_items_log_str}]")
 
-        # --- NEW: Log summary for skipped backfill items ---
         if items_skipped_backfill > 0:
             logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {items_skipped_backfill} item notifications during initial backfill.")
 
         hints_processed_count = 0
         hints_added_count = 0
         
-        # --- NEW: Counter for log consolidation ---
         hints_skipped_backfill = 0
         
         for p_hints in tracker_data.get('hints', []):
@@ -462,7 +441,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                              ).scalar()
 
                              if user_slot_added_at and datetime.utcnow() - user_slot_added_at < timedelta(minutes=15):
-                                 # Normal, expected behavior
                                  logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {slot_to_check}, but it was added at {user_slot_added_at}. Suppressing hint notification.")
                                  continue
 
@@ -470,7 +448,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                              slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_to_check)
 
                              if not user_prefs or not slot_prefs:
-                                 # This IS a warning
                                  logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
                                  continue
                              
@@ -496,18 +473,15 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                              notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_key_batch})
                  
                  else:
-                     # --- CONSOLIDATED LOG ---
                      hints_skipped_backfill += 1
 
 
         if hints_processed_count > 0:
              logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Hint Stats: Processed={hints_processed_count}, Added={hints_added_count}")
 
-        # --- NEW: Log summary for skipped backfill hints ---
         if hints_skipped_backfill > 0:
             logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {hints_skipped_backfill} hint notifications during initial backfill.")
 
-        # --- REFACTORED: Prepare notification data for return ---
         notifications_to_send = {}
         if notifications_by_user:
             all_user_ids = notifications_by_user.keys()
@@ -571,7 +545,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Failed to update 'is_found' status for hints using items list: {e}", exc_info=True)
 
         session.commit()
-        return notifications_to_send # Return the dict
+        return notifications_to_send
 
     except OperationalError as oe: 
         logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Database was locked during main poll. Skipping cycle. Error: {oe}")
@@ -585,7 +559,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
 
 # --- NEW: Async function for room setup (Plan 1) ---
-async def run_room_setup(room_info):
+async def run_room_setup(room_info, loop): # <-- Get loop
     """
     Performs the heavy, memory-intensive setup for a single new room.
     All DB logic is deferred to an executor.
@@ -593,12 +567,12 @@ async def run_room_setup(room_info):
     db_id = room_info['db_id']
     hostname = room_info['hostname']
     room_uuid = room_info['room_uuid']
-    loop = get_loop()
+    # loop = get_loop() <-- REMOVED
     
     logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Starting setup...")
     
     # --- STEP 1: Network I/O (Async) ---
-    setup_data = {} # Will hold all data we need to commit
+    setup_data = {} 
     
     try:
         room_status = await fetch_json(f"https://{hostname}/api/room_status/{room_uuid}")
@@ -641,10 +615,8 @@ async def run_room_setup(room_info):
         if checksums:
             logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] New/updated checksums found. Fetching datapackages...")
             
-            # --- OPTIMIZATION (Plan 2b) ---
             checksums_to_check = set(checksums.values())
             
-            # Run the optimized DB query in the executor
             existing_in_db = await loop.run_in_executor(
                 None, 
                 db_check_existing_checksums, 
@@ -652,10 +624,9 @@ async def run_room_setup(room_info):
             )
             
             new_checksums_to_fetch = checksums_to_check - existing_in_db
-            # --- END OPTIMIZATION ---
 
             for game, checksum in checksums.items():
-                if checksum in new_checksums_to_fetch: # Use the new set
+                if checksum in new_checksums_to_fetch: 
                     game_data = await fetch_json(f"https://{hostname}/api/datapackage/{checksum}")
                     if not game_data: continue
                     
@@ -674,13 +645,12 @@ async def run_room_setup(room_info):
             
             setup_data['game_checksums_json'] = new_checksums_json_str
 
-        # --- THIS IS THE KEY (Plan 1) ---
         setup_data['is_setup'] = True 
         logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup network fetch complete.")
 
     except Exception as e:
         logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Unhandled setup network error: {e}", exc_info=True)
-        return # Exit if network setup fails
+        return 
 
     # --- STEP 2: Database Transaction (in executor) ---
     try:
@@ -702,7 +672,7 @@ def db_check_existing_checksums(checksums_to_check):
         return existing
     except Exception as e:
         logging.error(f"[POLLER_DB_ERROR] Failed to check existing checksums: {e}")
-        return set() # Return empty set on error
+        return set()
     finally:
         Session.remove()
 
@@ -731,9 +701,8 @@ def db_commit_setup_data(db_id, setup_data):
         if 'game_checksums_json' in setup_data:
             room.game_checksums_json = setup_data['game_checksums_json']
         
-        # --- THIS IS THE KEY (Plan 1) ---
         if setup_data.get('is_setup'):
-            room.is_setup = True # Mark as setup!
+            room.is_setup = True
 
         session.commit()
         logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Room metadata committed to DB.")
@@ -763,14 +732,13 @@ def db_commit_setup_data(db_id, setup_data):
 
 
 # --- REFACTORED: Now calls run_room_poll (Plan 1) ---
-async def poll_room_with_interval(room_info):
+async def poll_room_with_interval(room_info, loop): # <-- Get loop
     """
     Wrapper that calls the lightweight polling logic at a regular interval.
     """
     while True:
         try:
-            # --- MODIFIED: Calls the new lightweight poll function ---
-            await run_room_poll(room_info)
+            await run_room_poll(room_info, loop) # <-- Pass loop
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -780,20 +748,18 @@ async def poll_room_with_interval(room_info):
         try:
             await asyncio.sleep(POLLING_INTERVAL_SECONDS)
         except asyncio.CancelledError:
-            break # Exit loop cleanly if cancelled
+            break
 
 # --- NEW: Setup worker (Plan 1) ---
-async def setup_worker(setup_queue, setup_semaphore):
+async def setup_worker(setup_queue, setup_semaphore, loop): # <-- Get loop
     """A worker that processes the room setup queue one by one."""
     while True:
         try:
-            # Get a room_info dict from the queue
             room_info = await setup_queue.get()
             
             async with setup_semaphore:
-                # Run the memory-heavy setup
                 logging.info(f"[SETUP_WORKER] Starting setup for room {room_info['db_id']}")
-                await run_room_setup(room_info)
+                await run_room_setup(room_info, loop) # <-- Pass loop
                 logging.info(f"[SETUP_WORKER] Finished setup for room {room_info['db_id']}")
                 
             setup_queue.task_done()
@@ -801,7 +767,7 @@ async def setup_worker(setup_queue, setup_semaphore):
             logging.error(f"[SETUP_WORKER_ERROR] Unhandled error: {e}", exc_info=True)
 
 # --- REFACTORED: Supervisor now manages the setup queue (Plan 1 & 2c) ---
-async def poller_supervisor(app):
+async def poller_supervisor(app, loop): # <-- Get loop
     """
     The main supervisor loop for the background poller.
     - Manages which rooms are actively being polled.
@@ -811,16 +777,16 @@ async def poller_supervisor(app):
     logging.info("[POLLER] Background polling service starting...")
     running_tasks = {}
     last_cleanup_time = datetime.utcnow()
-    loop = get_loop() # --- NEW ---
+    # loop = get_loop() <-- REMOVED
 
     # --- NEW: Setup Queue and Semaphore (Plan 1) ---
     setup_queue = asyncio.Queue()
-    setup_semaphore = asyncio.Semaphore(2) # Allow max 2 setups at once
+    setup_semaphore = asyncio.Semaphore(2) 
     
     # --- NEW: Start setup workers (Plan 1) ---
     logging.info(f"[SUPERVISOR] Starting 2 setup workers...")
-    asyncio.create_task(setup_worker(setup_queue, setup_semaphore))
-    asyncio.create_task(setup_worker(setup_queue, setup_semaphore))
+    asyncio.create_task(setup_worker(setup_queue, setup_semaphore, loop)) # <-- Pass loop
+    asyncio.create_task(setup_worker(setup_queue, setup_semaphore, loop)) # <-- Pass loop
     
     while True:
         try:
@@ -839,15 +805,12 @@ async def poller_supervisor(app):
                 room_info = {'db_id': room.id, 'hostname': room.hostname, 'room_uuid': room.room_id}
                 
                 if room.id not in running_tasks:
-                    # --- NEW: Check is_setup flag (Plan 1) ---
                     if not room.is_setup:
-                        # NEW: Don't start a task, just add it to the queue
                         logging.info(f"[SUPERVISOR] Queuing new room {room.id} ({room.room_id}) for setup.")
                         await setup_queue.put(room_info)
                     else:
-                        # It's already set up, start polling
                         logging.info(f"[SUPERVISOR] Starting poller for already-setup room {room.id} ({room.room_id})")
-                        task = asyncio.create_task(poll_room_with_interval(room_info))
+                        task = asyncio.create_task(poll_room_with_interval(room_info, loop)) # <-- Pass loop
                         running_tasks[room.id] = task
 
             inactive_room_ids = set(running_tasks.keys()) - current_active_room_ids
@@ -859,14 +822,12 @@ async def poller_supervisor(app):
 
             if datetime.utcnow() - last_cleanup_time > timedelta(hours=24):
                 logging.info("[JANITOR] Running daily cleanup of old, un-subscribed rooms...")
-                # --- REFACTORED: DB logic moved to executor (Plan 2c) ---
                 await loop.run_in_executor(None, db_run_cleanup)
                 last_cleanup_time = datetime.utcnow()
 
         except Exception as e:
             logging.error(f"[SUPERVISOR] An unhandled error occurred: {e}", exc_info=True)
         finally:
-            # Session is no longer managed here
             pass
 
         await asyncio.sleep(SUPERVISOR_INTERVAL_SECONDS)
@@ -883,7 +844,7 @@ def db_get_active_rooms():
     except Exception as e:
         logging.error(f"[SUPERVISOR_DB_ERROR] Failed to get active rooms: {e}", exc_info=True)
         session.rollback()
-        return None # Return None on error
+        return None
     finally:
         Session.remove()
 
@@ -917,22 +878,17 @@ def db_run_cleanup():
 
 def run_poller(app):
     """The entry point for the poller thread."""
+    loop = asyncio.new_event_loop() # <-- Create loop
+    asyncio.set_event_loop(loop)
+    
+    main_task = loop.create_task(poller_supervisor(app, loop)) # <-- Pass loop
+    
     try:
-        # Create a new event loop for this thread
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Gather the main supervisor task and a shutdown handler for aiohttp
-        main_task = loop.create_task(poller_supervisor(app))
         loop.run_until_complete(main_task)
-
     except Exception as e:
         logging.critical(f"[POLLER_CRITICAL] asyncio.run() failed: {e}", exc_info=True)
     finally:
-        # Clean up the aiohttp session when the poller stops
         logging.info("[POLLER] Poller is shutting down. Cleaning up session.")
-        # Get the loop one last time (or create it) to run cleanup
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(close_aiohttp_session())
+        loop.run_until_complete(close_aiohttp_session()) # <-- Use correct loop
         loop.close()
         logging.info("[POLLER] Shutdown complete.")
