@@ -3,6 +3,8 @@ import json
 import requests
 import firebase_admin
 import psutil
+import logging  # <-- NEW
+import sys      # <-- NEW
 
 from flask import Flask
 from waitress import serve
@@ -18,12 +20,38 @@ from config import app_config
 load_dotenv()
 
 # ==============================================================================
+# 0. LOGGING SETUP (NEW)
+# ==============================================================================
+
+# Get the environment, default to 'production' if not set
+FLASK_ENV = os.getenv('FLASK_ENV', 'production')
+
+# Map environment names to logging levels
+log_levels = {
+    'development': logging.DEBUG,
+    'uat': logging.INFO,
+    'production': logging.INFO,  # Default production to INFO
+}
+log_level = log_levels.get(FLASK_ENV, logging.INFO)
+
+# Configure the root logger
+logging.basicConfig(
+    level=log_level,
+    # Format includes timestamp, level, function name (for context), and message
+    format='%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s',
+    # Stream to stdout so it can be captured by Cloud Log, Docker, etc.
+    stream=sys.stdout
+)
+
+logging.info(f"Logging level set to {logging.getLevelName(log_level)} for '{FLASK_ENV}' environment.")
+
+# ==============================================================================
 # 1. CONFIGURATION & CONSTANTS
 # ==============================================================================
 
 DATABASE_FILE = "ap_tracker.db"
-POLLING_INTERVAL_SECONDS = 60
-SUPERVISOR_INTERVAL_SECONDS = 30
+POLLING_INTERVAL_SECONDS = 180
+SUPERVISOR_INTERVAL_SECONDS = 60
 FIREBASE_KEY_FILE = "service-account-key.json"
 
 process = psutil.Process(os.getpid())
@@ -65,9 +93,9 @@ def get_firebase_app():
         try:
             cred = credentials.Certificate(FIREBASE_KEY_FILE)
             _firebase_app = firebase_admin.initialize_app(cred, {'http_client': firebase_http_session})
-            print("[FIREBASE] Firebase initialized successfully.")
+            logging.info("[FIREBASE] Firebase initialized successfully.") # <-- MODIFIED
         except Exception as e:
-            print(f"[FIREBASE] !!! FIREBASE ERROR: Could not initialize. Error: {e}")
+            logging.critical(f"[FIREBASE] !!! FIREBASE ERROR: Could not initialize. Error: {e}") # <-- MODIFIED
     return _firebase_app
 
 # ==============================================================================
@@ -78,11 +106,14 @@ def create_app():
     """Creates and configures an instance of the Flask application."""
     app = Flask(__name__)
     app.config.from_object(app_config)
-    print(f"[MAIN] Application running in {'DEBUG' if app.config.get('DEBUG') else 'PRODUCTION'} mode.")
+    
+    # Use logging, not print
+    log_mode = 'DEBUG' if app.config.get('DEBUG') else 'PRODUCTION'
+    logging.info(f"[MAIN] Application running in {log_mode} mode (FLASK_ENV: {FLASK_ENV}).")
     
     from . import models
     models.Base.metadata.create_all(engine)
-    print("[MAIN] Database tables verified/created.")
+    logging.info("[MAIN] Database tables verified/created.") # <-- MODIFIED
 
     @app.teardown_appcontext
     def shutdown_session(exception=None):

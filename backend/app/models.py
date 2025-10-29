@@ -34,17 +34,15 @@ class TrackedRoom(Base):
     hostname = Column(String, default="archipelago.gg")
     tracker_id = Column(String)
     game_checksums_json = Column(String, default='{}')
-
     is_complete = Column(Boolean, default=False, nullable=False)
     is_suspended = Column(Boolean, default=False, nullable=False)
     last_successful_poll = Column(DateTime)
     failed_poll_count = Column(Integer, default=0, nullable=False)
-
     cached_full_address = Column(String, default="archipelago.gg")
     cached_total_slots = Column(Integer, default=0)
     last_api_check = Column(DateTime)
     cached_players_json = Column(String, default='[]')
-    
+    is_setup = Column(Boolean, default=False, nullable=False)
     subscriptions = relationship("UserRoomSubscription", back_populates="room", cascade="all, delete-orphan")
 
 class UserRoomSubscription(Base):
