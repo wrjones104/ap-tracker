@@ -6,3 +6,4 @@ backend/ap_tracker.db
 service-account-key.json
 backend/ap_tracker.db-shm
 backend/ap_tracker.db-wal
+venv/
