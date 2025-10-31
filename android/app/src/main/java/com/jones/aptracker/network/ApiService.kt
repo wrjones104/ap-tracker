@@ -29,7 +29,7 @@ interface ApiService {
     suspend fun getGlobalItemHistory(@Query("since") since: String?): List<HistoryItem>
 
     @POST("devices")
-    suspend fun registerDevice(@Body request: RegisterDeviceRequest): Response<Unit>
+    suspend fun registerDevice(@Body request: DeviceRegisterRequest): Response<Unit>
 
     @POST("auth/callback")
     suspend fun exchangeCodeForToken(@Body request: AuthRequest): AuthResponse
