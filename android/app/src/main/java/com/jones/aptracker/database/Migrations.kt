@@ -19,7 +19,6 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 val MIGRATION_5_6 = object : Migration(5, 6) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        // 1. Create the new table with the correct schema
         db.execSQL("""
             CREATE TABLE hints_new (
                 `hint_db_id` INTEGER NOT NULL,
@@ -34,10 +33,8 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
                 `timestamp` TEXT NOT NULL,
                 PRIMARY KEY(`hint_db_id`)
             )
-        """.trimIndent()) // <-- The typo was on the 'locationName' line
+        """.trimIndent())
 
-        // 2. Copy all data from the old table to the new one.
-        // We use GROUP BY hint_db_id to de-duplicate the data.
         db.execSQL("""
             INSERT INTO hints_new (
                 hint_db_id, roomDbId, roomAlias, hintType, itemOwnerName, 
@@ -50,10 +47,8 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
             GROUP BY hint_db_id
         """.trimIndent())
 
-        // 3. Drop the old, incorrect table
         db.execSQL("DROP TABLE hints")
 
-        // 4. Rename the new table to 'hints'
         db.execSQL("ALTER TABLE hints_new RENAME TO hints")
     }
 }

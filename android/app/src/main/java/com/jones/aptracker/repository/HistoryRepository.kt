@@ -1,16 +1,21 @@
 package com.jones.aptracker.repository
 
 import android.util.Log
-import com.jones.aptracker.network.* // Ensure new Hint classes/DAO are imported
+import com.jones.aptracker.network.ApiService
+import com.jones.aptracker.network.HintDao
+import com.jones.aptracker.network.HintDetail
+import com.jones.aptracker.network.HintEntity
+import com.jones.aptracker.network.HistoryDao
+import com.jones.aptracker.network.HistoryItem
+import com.jones.aptracker.network.HistoryItemEntity
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine // Import combine
+import kotlinx.coroutines.flow.combine
 
 class HistoryRepository(
     private val apiService: ApiService,
     private val historyDao: HistoryDao,
     private val hintDao: HintDao
 ) {
-    // --- Item History (Existing, no changes) ---
     fun getHistoryForRoom(roomId: Int): Flow<List<HistoryItemEntity>> {
         return historyDao.getHistoryForRoom(roomId)
     }
@@ -55,7 +60,6 @@ class HistoryRepository(
     }
 
     private fun mapHistoryItemToEntity(item: HistoryItem): HistoryItemEntity? {
-        // This function seems unused, but we'll leave it
         return try {
             HistoryItemEntity(
                 roomId = item.db_id,
@@ -72,9 +76,7 @@ class HistoryRepository(
     }
 
 
-    // --- Hint History (MODIFIED) ---
 
-    // --- MODIFIED: Use explicit DAO calls ---
     fun getHintsForRoom(roomId: Int, includeFound: Boolean): Flow<Pair<List<HintEntity>, List<HintEntity>>> {
         Log.d("HintToggleDebug", "Repo: getHintsForRoom (DAO Read) | includeFound: $includeFound")
 
@@ -93,7 +95,6 @@ class HistoryRepository(
         return combine(hintsForYou, hintsByYou) { forYou, byYou -> Pair(forYou, byYou) }
     }
 
-    // --- MODIFIED: Use explicit DAO calls ---
     fun getGlobalHints(includeFound: Boolean): Flow<Pair<List<HintEntity>, List<HintEntity>>> {
         Log.d("HintToggleDebug", "Repo: getGlobalHints (DAO Read) | includeFound: $includeFound")
 
@@ -112,7 +113,6 @@ class HistoryRepository(
         return combine(hintsForYou, hintsByYou) { forYou, byYou -> Pair(forYou, byYou) }
     }
 
-    // This function remains the same, it correctly passes the boolean to the API
     suspend fun refreshHintHistory(roomId: Int? = null, includeFound: Boolean) {
         Log.d("HintToggleDebug", "Repo: refreshHintHistory (API Fetch) | includeFound: $includeFound")
         val latestTimestamp = if (roomId != null) {

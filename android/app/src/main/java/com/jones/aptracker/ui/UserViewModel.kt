@@ -3,13 +3,13 @@ package com.jones.aptracker.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.network.RetrofitClient
+import com.jones.aptracker.network.RoomWithTrackedSlots
+import com.jones.aptracker.network.UpdateGlobalPrefsRequest
+import com.jones.aptracker.network.UpdateSlotPrefsRequest
 import com.jones.aptracker.network.UserProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import com.jones.aptracker.network.UpdateGlobalPrefsRequest
-import com.jones.aptracker.network.RoomWithTrackedSlots
-import com.jones.aptracker.network.UpdateSlotPrefsRequest
 
 class UserViewModel : ViewModel() {
     private val _userProfile = MutableStateFlow<UserProfile?>(null)
@@ -39,7 +39,7 @@ class UserViewModel : ViewModel() {
             } catch (e: Exception) {
                 // TODO: Show tracked slots loading error
                 e.printStackTrace()
-                _trackedSlotsByRoom.value = emptyList() // Clear on error
+                _trackedSlotsByRoom.value = emptyList()
             }
         }
     }
@@ -58,7 +58,6 @@ class UserViewModel : ViewModel() {
                 )
                 RetrofitClient.instance.updateUserPreferences(request)
 
-                // Refresh the local profile data after saving
                 fetchUserProfile()
 
             } catch (e: Exception) {
@@ -83,7 +82,6 @@ class UserViewModel : ViewModel() {
                     notify_hints = hints
                 )
                 RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
-                // Refresh the list after saving to show the updated state
                 fetchTrackedSlots()
             } catch (e: Exception) {
                 // TODO: Show save error to user

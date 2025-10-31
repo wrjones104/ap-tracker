@@ -4,9 +4,13 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import com.jones.aptracker.network.* // Ensure HintEntity and HintDao are imported
+import com.jones.aptracker.network.HintDao
+import com.jones.aptracker.network.HintEntity
+import com.jones.aptracker.network.HistoryDao
+import com.jones.aptracker.network.HistoryItemEntity
+import com.jones.aptracker.network.RoomDao
+import com.jones.aptracker.network.RoomEntity
 
-// --- 1. INCREMENT VERSION TO 6 ---
 @Database(entities = [RoomEntity::class, HistoryItemEntity::class, HintEntity::class], version = 6)
 abstract class AppDatabase : RoomDatabase() {
 
@@ -25,10 +29,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ap_tracker_database"
                 )
-                    // --- 2. REMOVE destructive migration ---
-                    // .fallbackToDestructiveMigration()
 
-                    // --- 3. ADD YOUR NEW MIGRATION ---
                     .addMigrations(MIGRATION_5_6)
                     .build()
                 INSTANCE = instance

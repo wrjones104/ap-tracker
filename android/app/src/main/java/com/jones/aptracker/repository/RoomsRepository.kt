@@ -10,8 +10,6 @@ class RoomsRepository(
     private val roomDao: RoomDao
 ) {
 
-    // This Flow will always emit the latest list of rooms from our local database.
-    // The UI will observe this to get its data.
     val allRooms: Flow<List<RoomEntity>> = roomDao.getAllRooms()
 
     /**

@@ -1,7 +1,10 @@
 package com.jones.aptracker
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -10,22 +13,27 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.jones.aptracker.network.AuthRequest
 import com.jones.aptracker.network.RetrofitClient
+import com.jones.aptracker.network.SessionManager
 import com.jones.aptracker.network.TokenManager
 import com.jones.aptracker.ui.AppNavigation
-import com.jones.aptracker.ui.theme.APTrackerTheme
 import com.jones.aptracker.ui.AuthViewModel
+import com.jones.aptracker.ui.theme.APTrackerTheme
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
-import net.openid.appauth.*
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.compose.runtime.LaunchedEffect
-import androidx.core.content.ContextCompat
+import net.openid.appauth.AuthorizationException
+import net.openid.appauth.AuthorizationRequest
+import net.openid.appauth.AuthorizationResponse
+import net.openid.appauth.AuthorizationService
+import net.openid.appauth.AuthorizationServiceConfiguration
+import net.openid.appauth.ResponseTypeValues
 
 class MainActivity : ComponentActivity() {
 
@@ -44,6 +52,7 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Notifications are disabled. You can enable them in app settings.", Toast.LENGTH_LONG).show()
         }
     }
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,6 +87,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        observeLogoutEvents()
+
         setContent {
             APTrackerTheme {
                 val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
@@ -98,6 +109,29 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    private fun observeLogoutEvents() {
+        SessionManager.logoutEvent
+            .onEach {
+                // This is the "self-destruct" for the UI.
+                // We re-launch the app's main activity and clear
+                // the entire activity history. This effectively
+                // reboots the app and forces the user to the login screen.
+
+                // Show a toast message
+                Toast.makeText(
+                    this,
+                    "Your session has expired. Please log in again.",
+                    Toast.LENGTH_LONG
+                ).show()
+
+                val intent = Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+                startActivity(intent)
+            }
+            .launchIn(lifecycleScope) // This ties it to the Activity's lifecycle
     }
 
     private fun checkAndRequestNotificationPermission() {

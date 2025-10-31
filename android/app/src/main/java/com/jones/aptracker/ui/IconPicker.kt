@@ -1,10 +1,18 @@
 package com.jones.aptracker.ui
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.outlined.VideogameAsset
 import androidx.compose.ui.graphics.vector.ImageVector
 
-// 1. Define the list of available icons
 object AppIcons {
     val allIcons = mapOf(
         "default_icon" to Icons.Outlined.Home,
@@ -20,7 +28,6 @@ object AppIcons {
     )
 }
 
-// 2. Helper function to get an icon by its name
 fun getIconByName(name: String?): ImageVector {
-    return AppIcons.allIcons[name] ?: Icons.Outlined.Home // Return Home icon as a fallback
+    return AppIcons.allIcons[name] ?: Icons.Outlined.Home
 }
