@@ -289,7 +289,7 @@ fun HintHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
                 }
                 // --- NEW: Conditionally show items ---
                 if (isForYouExpanded) {
-                    items(filteredHintsForYou, key = { it.local_id }) { hint ->
+                    items(filteredHintsForYou, key = { it.hint_db_id }) { hint ->
                         HintCard(hint = hint, formatter = formatter, type = "for_you")
                     }
                 }
@@ -314,7 +314,7 @@ fun HintHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
                 }
                 // --- NEW: Conditionally show items ---
                 if (isByYouExpanded) {
-                    items(filteredHintsByYou, key = { it.local_id }) { hint ->
+                    items(filteredHintsByYou, key = { it.hint_db_id }) { hint ->
                         HintCard(hint = hint, formatter = formatter, type = "by_you")
                     }
                 }
