@@ -50,13 +50,13 @@ android {
         create("uat") {
             dimension = "environment"
             applicationIdSuffix = ".uat"
-            val uatUrl = localProperties.getProperty("UAT_API_BASE_URL")
+            val uatUrl = localProperties.getProperty("UAT_API_BASE_URL") ?: throw org.gradle.api.GradleException("UAT_API_BASE_URL not found in local.properties")
             buildConfigField("String", "API_BASE_URL", "\"$uatUrl\"")
         }
 
         create("prod") {
             dimension = "environment"
-            val prodUrl = localProperties.getProperty("PROD_API_BASE_URL")
+            val prodUrl = localProperties.getProperty("PROD_API_BASE_URL") ?: throw org.gradle.api.GradleException("PROD_API_BASE_URL not found in local.properties")
             buildConfigField("String", "API_BASE_URL", "\"$prodUrl\"")
         }
     }
