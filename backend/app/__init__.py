@@ -49,7 +49,7 @@ logging.info(f"Logging level set to {logging.getLevelName(log_level)} for '{FLAS
 # 1. CONFIGURATION & CONSTANTS
 # ==============================================================================
 
-DATABASE_FILE = "ap_tracker.db"
+DATABASE_FILE = os.environ.get('DATABASE_URL', "sqlite:///./ap_tracker.db")
 POLLING_INTERVAL_SECONDS = 180
 SUPERVISOR_INTERVAL_SECONDS = 60
 FIREBASE_KEY_FILE = "service-account-key.json"
@@ -68,7 +68,7 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.close()
 
 engine = create_engine(
-    f"sqlite:///{DATABASE_FILE}",
+    DATABASE_FILE,
     connect_args={"check_same_thread": False, "timeout": 30}
 )
 session_factory = sessionmaker(bind=engine)
