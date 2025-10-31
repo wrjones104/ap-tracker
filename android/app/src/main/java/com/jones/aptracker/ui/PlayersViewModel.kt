@@ -25,7 +25,6 @@ class PlayersViewModel : ViewModel() {
             allPlayers.value
         } else {
             allPlayers.value.filter { player ->
-                // **THE FIX**: Safely check for nulls before filtering
                 (player.name?.contains(searchQuery.value, ignoreCase = true) ?: false) ||
                         (player.game?.contains(searchQuery.value, ignoreCase = true) ?: false)
             }

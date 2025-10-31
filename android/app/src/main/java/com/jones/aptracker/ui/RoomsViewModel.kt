@@ -17,7 +17,6 @@ import kotlinx.coroutines.launch
 
 class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
-    // --- SETUP THE REPOSITORY ---
     private val repository: RoomsRepository
 
     private val _rooms = MutableStateFlow<List<Room>>(emptyList())
@@ -26,16 +25,12 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     val isLoading = MutableStateFlow(true)
 
     init {
-        // --- INITIALIZE the database and repository ---
         val roomDao = AppDatabase.getInstance(application).roomDao()
         repository = RoomsRepository(RetrofitClient.instance, roomDao)
 
-        // --- OBSERVE the database for changes ---
         viewModelScope.launch {
-            // Listen to the flow of rooms from the repository
             repository.allRooms
                 .map { roomEntities ->
-                    // Convert database entities back to UI models
                     roomEntities.map { entity ->
                         Room(
                             id = entity.id,
@@ -49,19 +44,15 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 .catch {
-                    // Handle any errors from the database flow
                     it.printStackTrace()
                 }
                 .collect { roomList ->
                     _rooms.value = roomList
-                    // If we have data, we are not in the initial "loading" state
-                    // The refresh indicator is handled separately.
                     if (roomList.isNotEmpty()) {
                         isLoading.value = false
                     }
                 }
         }
-        // --- TRIGGER the initial refresh ---
         fetchRooms()
     }
 
@@ -71,8 +62,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 repository.refreshRooms()
             } catch (e: Exception) {
-                // The UI will continue showing the cached data.
-                // You could optionally show a Snackbar here to inform the user.
                 e.printStackTrace()
             } finally {
                 isLoading.value = false
@@ -80,8 +69,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // This is the function we fixed.
-    // The parameter is now 'roomUrl' instead of 'roomId'
     fun addRoom(roomUrl: String, alias: String, iconName: String) {
         viewModelScope.launch {
             try {
@@ -98,7 +85,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 RetrofitClient.instance.deleteRoom(roomId)
-                // After deleting, refresh the list to remove it from the UI
                 repository.refreshRooms()
             } catch (e: Exception) {
                 e.printStackTrace()

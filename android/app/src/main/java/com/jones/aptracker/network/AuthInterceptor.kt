@@ -10,7 +10,6 @@ class AuthInterceptor(private val tokenManager: TokenManager) : Interceptor {
 
         val requestBuilder = originalRequest.newBuilder()
         if (token != null) {
-            // If we have a token, add the Authorization header
             requestBuilder.addHeader("Authorization", "Bearer $token")
         }
 

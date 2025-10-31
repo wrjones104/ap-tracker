@@ -1,19 +1,49 @@
 package com.jones.aptracker.ui
 
-import androidx.compose.foundation.clickable // <-- Added missing import
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Settings // <-- Added missing import
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Divider
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.TrackedSlotDetail
 import com.jones.aptracker.network.UserProfile
 
@@ -26,7 +56,7 @@ fun ProfileScreen(
     val userProfile by userViewModel.userProfile.collectAsState()
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
 
-    var editingSlot by remember { mutableStateOf<Pair<Int, TrackedSlotDetail>?>(null) } // Pair(roomId, slotDetail)
+    var editingSlot by remember { mutableStateOf<Pair<Int, TrackedSlotDetail>?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     if (editingSlot != null && userProfile != null) {
@@ -35,7 +65,7 @@ fun ProfileScreen(
             onDismissRequest = { editingSlot = null },
             sheetState = sheetState
         ) {
-            SlotSettingsSheet( // Reusing the sheet composable
+            SlotSettingsSheet(
                 playerSlotId = slotDetail.slot_id,
                 playerName = slotDetail.player_name,
                 currentProgression = slotDetail.notify_progression,
@@ -44,9 +74,9 @@ fun ProfileScreen(
                 globalProfile = userProfile!!,
                 onSave = { prog, use, hint ->
                     userViewModel.updateSlotPreferences(roomId, slotDetail.slot_id, prog, use, hint)
-                    editingSlot = null // Close sheet on save
+                    editingSlot = null
                 },
-                onDismiss = { editingSlot = null } // Close sheet on dismiss
+                onDismiss = { editingSlot = null }
             )
         }
     }
@@ -79,7 +109,6 @@ fun ProfileScreen(
             item {
                 userProfile?.let { profile ->
                     Column {
-                        // Using the corrected NotificationToggle below
                         NotificationToggle(
                             text = "Progression Items",
                             checked = profile.notify_progression_default,
@@ -158,12 +187,11 @@ fun ProfileScreen(
     }
 }
 
-// --- CORRECTED Helper Composable for Global Toggles ---
 @Composable
 private fun NotificationToggle(
-    text: String, // Added parameter
-    checked: Boolean, // Added parameter
-    onCheckedChange: (Boolean) -> Unit // Added parameter
+    text: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -172,15 +200,14 @@ private fun NotificationToggle(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text, style = MaterialTheme.typography.bodyLarge) // Use parameter
+        Text(text, style = MaterialTheme.typography.bodyLarge)
         Switch(
-            checked = checked, // Use parameter
-            onCheckedChange = onCheckedChange // Use parameter
+            checked = checked,
+            onCheckedChange = onCheckedChange
         )
     }
 }
 
-// --- Helper Composable for Room Headers (Unchanged but verified) ---
 @Composable
 fun RoomHeader(alias: String) {
     Text(
@@ -193,7 +220,6 @@ fun RoomHeader(alias: String) {
     Divider()
 }
 
-// --- Helper Composable for Each Slot Item (Unchanged but verified) ---
 @Composable
 fun SlotPreferenceItem(
     slot: TrackedSlotDetail,
@@ -221,7 +247,6 @@ fun SlotPreferenceItem(
 }
 
 
-// --- Bottom Sheet Composable (Unchanged but verified) ---
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SlotSettingsSheet(
@@ -290,20 +315,18 @@ fun SlotSettingsSheet(
     }
 }
 
-// --- CORRECTED Helper Composable for 3-state Toggle ---
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PreferenceToggle(
-    selectedValue: Boolean?, // Added parameter
-    globalDefault: Boolean, // Added parameter
-    onValueChanged: (Boolean?) -> Unit // Added parameter
+    selectedValue: Boolean?,
+    globalDefault: Boolean,
+    onValueChanged: (Boolean?) -> Unit
 ) {
     val items = listOf("Off", "Default", "On")
     val selectedIndex = when (selectedValue) {
         null -> 1
         false -> 0
         true -> 2
-        // else branch not needed because Boolean? only has 3 states
     }
 
     val globalDefaultText = if (globalDefault) "(On)" else "(Off)"
@@ -317,7 +340,7 @@ fun PreferenceToggle(
                         0 -> false
                         1 -> null
                         2 -> true
-                        else -> null // Added else branch to satisfy compiler
+                        else -> null
                     }
                     onValueChanged(newValue)
                 },

@@ -25,9 +25,7 @@ interface RoomDao {
 
     @Transaction
     suspend fun syncRooms(rooms: List<RoomEntity>) {
-        // 1. Delete all rooms currently in the table
         clearAllRooms()
-        // 2. Insert the fresh list from the network
         insertOrUpdateRooms(rooms)
     }
 

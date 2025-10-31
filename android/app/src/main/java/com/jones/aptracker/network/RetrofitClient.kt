@@ -10,25 +10,26 @@ import retrofit2.converter.gson.GsonConverterFactory
 object RetrofitClient {
 
     private lateinit var apiService: ApiService
-    private lateinit var tokenManager: TokenManager
 
     fun init(context: Context) {
-        tokenManager = TokenManager(context)
 
-        // Create a logging interceptor to see request details in Logcat (for debugging)
+        SessionManager.init(context)
+
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BODY
         }
 
-        // Create an OkHttpClient and add both our interceptors
         val httpClient = OkHttpClient.Builder()
-            .addInterceptor(AuthInterceptor(tokenManager))
-            .addInterceptor(logging) // Add logging interceptor for easier debugging
+            .addInterceptor(AuthInterceptor(TokenManager(context)))
+
+            .authenticator(UnauthorizedAuthenticator())
+
+            .addInterceptor(logging)
             .build()
 
         val retrofit = Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(httpClient) // Use our custom client
+            .client(httpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
 

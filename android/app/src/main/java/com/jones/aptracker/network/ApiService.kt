@@ -1,7 +1,13 @@
 package com.jones.aptracker.network
 
 import retrofit2.Response
-import retrofit2.http.*
+import retrofit2.http.Body
+import retrofit2.http.DELETE
+import retrofit2.http.GET
+import retrofit2.http.POST
+import retrofit2.http.PUT
+import retrofit2.http.Path
+import retrofit2.http.Query
 
 interface ApiService {
     @GET("rooms")
@@ -44,23 +50,23 @@ interface ApiService {
     suspend fun updateSlotPreferences(
         @Path("id") roomId: Int,
         @Path("slot_id") slotId: Int,
-        @Body request: UpdateSlotPrefsRequest // We'll define this later
+        @Body request: UpdateSlotPrefsRequest
     ): Response<Unit>
 
-    @GET("users/me/tracked-slots") // <-- ADD THIS FUNCTION
+    @GET("users/me/tracked-slots")
     suspend fun getUserTrackedSlots(): List<RoomWithTrackedSlots>
 
     @GET("history/hints")
     suspend fun getGlobalHintHistory(
         @Query("since") since: String?,
-        @Query("include_found") includeFound: Boolean // <-- ADD THIS
+        @Query("include_found") includeFound: Boolean
     ): HintHistoryResponse
 
     @GET("rooms/{id}/history/hints")
     suspend fun getRoomHintHistory(
         @Path("id") roomId: Int,
         @Query("since") since: String?,
-        @Query("include_found") includeFound: Boolean // <-- ADD THIS
+        @Query("include_found") includeFound: Boolean
     ): HintHistoryResponse
 
 }
@@ -163,7 +169,7 @@ data class HintHistoryResponse(
 )
 
 data class HintDetail(
-    val id: Int, // Backend DB ID
+    val id: Int,
     val room_db_id: Int,
     val room_alias: String,
     val item_owner_id: Int,
@@ -173,5 +179,5 @@ data class HintDetail(
     val item_name: String,
     val location_name: String,
     val is_found: Boolean,
-    val timestamp: String // ISO 8601 string
+    val timestamp: String
 )
