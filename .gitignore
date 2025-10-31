@@ -7,3 +7,10 @@ service-account-key.json
 backend/ap_tracker.db-shm
 backend/ap_tracker.db-wal
 venv/
+android/app/src/dev/google-services.json
+.gitignore
+backend/datapackage.json
+android/app/src/uat/google-services.json
+backend/get_datapackages.py
+backend/get_room_status
+backend/tracker_data.json
