@@ -115,13 +115,19 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(app_config)
     
-    # Use logging, not print
     log_mode = 'DEBUG' if app.config.get('DEBUG') else 'PRODUCTION'
     logging.info(f"[MAIN] Application running in {log_mode} mode (FLASK_ENV: {FLASK_ENV}).")
     
     from . import models
-    models.Base.metadata.create_all(engine)
-    logging.info("[MAIN] Database tables verified/created.") # <-- MODIFIED
+
+    if is_sqlite:
+        # For local dev, auto-create all tables on startup.
+        # This lets you just delete the .db file and restart.
+        models.Base.metadata.create_all(engine)
+        logging.info("[MAIN] SQLite DB detected. Tables verified/created.")
+    else:
+        # For prod (Postgres), we trust Alembic to handle the schema.
+        logging.info("[MAIN] Production database engine initialized.")
 
     @app.teardown_appcontext
     def shutdown_session(exception=None):
