@@ -559,6 +559,7 @@ def get_global_item_history(current_user):
     """
     session = Session()
 
+    # Query 1: Get all (room_id, slot_id) tuples the user tracks.
     user_tracked_slots = session.query(UserTrackedSlot.room_id, UserTrackedSlot.slot_id).filter_by(
         user_id=current_user.id
     ).all()
@@ -572,6 +573,7 @@ def get_global_item_history(current_user):
             slots_by_room_db_id[room_db_id] = set()
         slots_by_room_db_id[room_db_id].add(slot_id)
 
+    # Query 2: Get a map of {room_db_id: room_uuid}.
     room_map = {
         room.id: room.room_id for room in
         session.query(TrackedRoom).filter(TrackedRoom.id.in_(slots_by_room_db_id.keys()))
@@ -589,6 +591,7 @@ def get_global_item_history(current_user):
     if not filters:
         return jsonify([])
 
+    # Query 3: Get all NotifiedItem objects that match the filters.
     query = session.query(NotifiedItem).filter(or_(*filters))
 
     since_timestamp = request.args.get('since')
@@ -599,21 +602,39 @@ def get_global_item_history(current_user):
         except (ValueError, TypeError):
             pass
 
-    # --- Limit removed (This is correct) ---
     items = query.order_by(NotifiedItem.id.desc()).all()
+    if not items:
+        return jsonify([])
 
+    # Query 4: Get ALL room data for all items found. (This part was already optimized)
     all_room_data = {
         r.room_id: r for r in
         session.query(TrackedRoom).filter(TrackedRoom.room_id.in_({i.room_id for i in items}))
     }
 
-    history = []
+    # --- OPTIMIZATION 1: Fix N+1 query for Subscriptions ---
+    # Get all relevant room_db_ids from the rooms we just fetched
+    relevant_room_db_ids = {r.id for r in all_room_data.values()}
+    
+    # Fetch all user subscriptions for these rooms in ONE query
+    subs_query = session.query(UserRoomSubscription).filter(
+        UserRoomSubscription.user_id == current_user.id,
+        UserRoomSubscription.room_id.in_(relevant_room_db_ids)
+    )
+    # Create a fast lookup map: {room_db_id: subscription}
+    subs_map = {sub.room_id: sub for sub in subs_query.all()}
+    # --- END OPTIMIZATION 1 ---
+
+    history_pre_cache = []
+    cache_keys_to_find = set()
+
     for item in items:
         room_data = all_room_data.get(item.room_id)
         if not room_data:
             continue
-            
-        sub = session.query(UserRoomSubscription).filter_by(user_id=current_user.id, room_id=room_data.id).first()
+        
+        # Use the map (O(1) lookup) instead of a query
+        sub = subs_map.get(room_data.id)
         if not sub:
             continue
         
@@ -630,24 +651,74 @@ def get_global_item_history(current_user):
         receiver_game = game_map.get(item.receiving_slot_id, "Unknown")
         game_checksum = game_checksums.get(receiver_game)
 
-        item_name = session.query(DatapackageCache.entity_name).filter_by(
-            game=receiver_game,
-            checksum=game_checksum,
-            entity_type='item',
-            entity_id=item.item_id
-        ).scalar() or f"Item ID {item.item_id}"
+        # --- OPTIMIZATION 2: Gather keys for name lookup ---
+        item_name_key = None
+        if receiver_game and game_checksum:
+            # This is the unique key for an item name
+            item_name_key = (receiver_game, game_checksum, 'item', item.item_id)
+            cache_keys_to_find.add(item_name_key)
+        # --- END OPTIMIZATION 2 ---
 
-        history.append({
+        history_pre_cache.append({
             "db_id": room_data.id, 
             "alias": sub.alias, 
             "icon_name": sub.icon_name,
-            "message": f"{receiver_name} received: {item_name}",
+            "receiver_name": receiver_name,
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": room_data.tracker_id,
-            "slot_id": item.receiving_slot_id
+            "slot_id": item.receiving_slot_id,
+            "_name_key": item_name_key, # Store key for lookup
+            "_raw_item_id": item.item_id # Fallback
+        })
+
+    # --- OPTIMIZATION 2: Fetch all names in ONE query ---
+    name_cache_map = {}
+    if cache_keys_to_find:
+        cache_filters = []
+        for game, checksum, etype, eid in cache_keys_to_find:
+            cache_filters.append(
+                (DatapackageCache.game == game) &
+                (DatapackageCache.checksum == checksum) &
+                (DatapackageCache.entity_type == etype) &
+                (DatapackageCache.entity_id == eid)
+            )
+        
+        # This is now Query 5, running outside the loop
+        cache_query = session.query(
+            DatapackageCache.game,
+            DatapackageCache.checksum,
+            DatapackageCache.entity_type,
+            DatapackageCache.entity_id,
+            DatapackageCache.entity_name
+        ).filter(or_(*cache_filters))
+
+        # Create a fast lookup map: {(game, checksum, type, id): name}
+        name_cache_map = {
+            (c.game, c.checksum, c.entity_type, c.entity_id): c.entity_name
+            for c in cache_query.all()
+        }
+    # --- END OPTIMIZATION 2 ---
+
+    # Now, build the final history list by populating the names
+    # This loop is fast and in-memory
+    history = []
+    for temp_item in history_pre_cache:
+        # Look up the name in our map
+        item_name = name_cache_map.get(temp_item["_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
+        
+        # Build the final object for the API
+        history.append({
+            "db_id": temp_item["db_id"], 
+            "alias": temp_item["alias"], 
+            "icon_name": temp_item["icon_name"],
+            "message": f"{temp_item['receiver_name']} received: {item_name}",
+            "timestamp": temp_item["timestamp"],
+            "tracker_id": temp_item["tracker_id"],
+            "slot_id": temp_item["slot_id"]
         })
 
     return jsonify(history)
+
 
 # =============================================================================
 # USER ENDPOINT

@@ -1,3 +1,12 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+val localProperties = Properties()
+val localPropertiesFile = project.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(FileInputStream(localPropertiesFile))
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,13 +15,9 @@ plugins {
     id("kotlin-kapt")
 }
 
-// In your app/build.gradle.kts file
-
 android {
     flavorDimensions("environment")
     namespace = "com.jones.aptracker"
-
-    // FIX 1: This is the standard way to set the compileSdk
     compileSdk = 36
 
     defaultConfig {
@@ -23,30 +28,36 @@ android {
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "com.jones.aptracker"
+        buildConfigField(
+            "String",
+            "DISCORD_CLIENT_ID",
+            "\"${localProperties.getProperty("DISCORD_CLIENT_ID", "ABCXYZ")}\""
+        )
     }
 
-    // FIX 2: We are now EDITING your existing productFlavors block
     productFlavors {
 
-        // Your existing 'dev' flavor
         create("dev") {
             dimension = "environment"
             applicationIdSuffix = ".dev"
-            buildConfigField("String", "API_BASE_URL", "\"http://Will-Office:5000/\"")
+            // This reads the URL from localProperties
+            // The fallback "http://10.0.2.2:5000/" is the special IP for your computer
+            // when running inside the Android emulator.
+            val devUrl = localProperties.getProperty("DEV_API_BASE_URL") ?: "http://10.0.2.2:5000/"
+            buildConfigField("String", "API_BASE_URL", "\"$devUrl\"")
         }
 
-        // Your existing 'uat' flavor, with the URL corrected
         create("uat") {
             dimension = "environment"
             applicationIdSuffix = ".uat"
-            // FIX 3: This URL now matches your server
-            buildConfigField("String", "API_BASE_URL", "\"https://uat-ap.seedbot.net\"")
+            val uatUrl = localProperties.getProperty("UAT_API_BASE_URL")
+            buildConfigField("String", "API_BASE_URL", "\"$uatUrl\"")
         }
 
-        // Your existing 'prod' flavor
         create("prod") {
             dimension = "environment"
-            buildConfigField("String", "API_BASE_URL", "\"http://ap-tracker.seedbot.net/\"")
+            val prodUrl = localProperties.getProperty("PROD_API_BASE_URL")
+            buildConfigField("String", "API_BASE_URL", "\"$prodUrl\"")
         }
     }
 
