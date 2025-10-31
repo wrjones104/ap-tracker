@@ -3,8 +3,8 @@ import json
 import requests
 import firebase_admin
 import psutil
-import logging  # <-- NEW
-import sys      # <-- NEW
+import logging
+import sys    
 
 from flask import Flask
 from waitress import serve
@@ -23,23 +23,18 @@ load_dotenv()
 # 0. LOGGING SETUP (NEW)
 # ==============================================================================
 
-# Get the environment, default to 'production' if not set
 FLASK_ENV = os.getenv('FLASK_ENV', 'production')
 
-# Map environment names to logging levels
 log_levels = {
     'development': logging.DEBUG,
     'uat': logging.INFO,
-    'production': logging.INFO,  # Default production to INFO
+    'production': logging.INFO, 
 }
 log_level = log_levels.get(FLASK_ENV, logging.INFO)
 
-# Configure the root logger
 logging.basicConfig(
     level=log_level,
-    # Format includes timestamp, level, function name (for context), and message
     format='%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s',
-    # Stream to stdout so it can be captured by Cloud Log, Docker, etc.
     stream=sys.stdout
 )
 
@@ -49,7 +44,7 @@ logging.info(f"Logging level set to {logging.getLevelName(log_level)} for '{FLAS
 # 1. CONFIGURATION & CONSTANTS
 # ==============================================================================
 
-DATABASE_FILE = os.environ.get('DATABASE_URL', "sqlite:///./ap_tracker.db")
+DATABASE_URL = os.environ.get('DATABASE_URL', "sqlite:///./ap_tracker.db")
 POLLING_INTERVAL_SECONDS = 180
 SUPERVISOR_INTERVAL_SECONDS = 60
 FIREBASE_KEY_FILE = "service-account-key.json"
@@ -61,18 +56,31 @@ process.cpu_percent(interval=None)
 # 2. DATABASE SETUP
 # ==============================================================================
 
-@event.listens_for(Engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.close()
+is_sqlite = DATABASE_URL.startswith("sqlite")
+connect_args = {}
+
+if is_sqlite:
+    connect_args = {"check_same_thread": False, "timeout": 30}
+else:
+    connect_args = {"connect_timeout": 10}
 
 engine = create_engine(
-    DATABASE_FILE,
-    connect_args={"check_same_thread": False, "timeout": 30}
+    DATABASE_URL,
+    connect_args=connect_args
 )
+
+if is_sqlite:
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma_instance(dbapi_connection, connection_record):
+        """Issues PRAGMA for WAL mode on connection for SQLite."""
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.close()
+    
+    logging.info("SQLite database detected. WAL mode enabled.")
+
 session_factory = sessionmaker(bind=engine)
-Session = scoped_session(session_factory) 
+Session = scoped_session(session_factory)
 
 # ==============================================================================
 # 3. GLOBAL SERVICES (Firebase, HTTP Session)
