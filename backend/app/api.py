@@ -146,29 +146,56 @@ def handle_db_errors(f):
 def register_device(current_user):
     """
     Registers a new device (FCM token) for the current user.
-    If the token already exists, it updates its user_id.
+    It now uses 'android_id' to uniquely identify a device and
+    update its FCM token, preventing duplicate device entries.
     """
     data = request.json
     fcm_token = data.get('fcm_token')
+    android_id = data.get('android_id') # New ID from the app
+
     if not fcm_token:
         return jsonify({'error': 'Missing fcm_token'}), 400
 
     session = Session()
-    device = session.query(Device).filter_by(fcm_token=fcm_token).first()
-    
-    if device:
-        if device.user_id != current_user.id:
-            device.user_id = current_user.id
-            # --- CHANGED: print -> logging.info ---
-            logging.info(f"[API] Re-assigned existing device token to user {current_user.id}")
+    device = None
+
+    if android_id:
+        # --- NEW LOGIC for new app versions ---
+        # Try to find the device by its permanent android_id
+        device = session.query(Device).filter_by(
+            user_id=current_user.id,
+            android_id=android_id
+        ).first()
+
+        if device:
+            # Device found! Just update its token.
+            device.fcm_token = fcm_token
+            logging.info(f"[API] Refreshed FCM token for existing device (Android ID: {android_id}) for user {current_user.id}")
         else:
-            # --- CHANGED: print -> logging.info ---
-            logging.info(f"[API] Refreshed device token for user {current_user.id}")
+            # This is a new device for this user
+            device = Device(
+                fcm_token=fcm_token, 
+                user_id=current_user.id, 
+                android_id=android_id
+            )
+            session.add(device)
+            logging.info(f"[API] Registered new device (Android ID: {android_id}) for user {current_user.id}")
+    
     else:
-        device = Device(fcm_token=fcm_token, user_id=current_user.id)
-        session.add(device)
-        # --- CHANGED: print -> logging.info ---
-        logging.info(f"[API] Registered new device for user {current_user.id}")
+        # --- LEGACY LOGIC for old app versions ---
+        # Fallback to old behavior if android_id is not sent
+        device = session.query(Device).filter_by(fcm_token=fcm_token).first()
+        
+        if device:
+            if device.user_id != current_user.id:
+                device.user_id = current_user.id
+                logging.info(f"[API] Re-assigned existing device token (legacy) to user {current_user.id}")
+            else:
+                logging.info(f"[API] Refreshed device token (legacy) for user {current_user.id}")
+        else:
+            device = Device(fcm_token=fcm_token, user_id=current_user.id)
+            session.add(device)
+            logging.info(f"[API] Registered new device (legacy) for user {current_user.id}")
 
     session.commit()
     return jsonify({'message': 'Device registered successfully'}), 201
