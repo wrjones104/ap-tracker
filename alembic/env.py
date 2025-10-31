@@ -8,10 +8,12 @@ from sqlalchemy import pool
 
 from alembic import context
 
+# --- This path setup is correct ---
 backend_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', 'backend'))
 sys.path.insert(0, backend_dir)
 
 from backend.app.models import Base
+# -----------------------------------
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -33,20 +35,29 @@ target_metadata = Base.metadata
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
+# --- NEW: Function to get the correct URL ---
+def get_url():
+    """
+    Returns the database URL.
+    Pulls from the DATABASE_URL environment variable if set,
+    otherwise, falls back to the alembic.ini file.
+    """
+    url = os.environ.get('DATABASE_URL')
+    if url:
+        return url
+    
+    return config.get_main_option("sqlalchemy.url")
+# ---------------------------------------------
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
+    ...
     """
-    url = config.get_main_option("sqlalchemy.url")
+    # --- CHANGED: Use our new get_url() function ---
+    url = get_url()
+    # ---------------------------------------------
+    
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -60,20 +71,35 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
+    ...
     """
+    
+    # --- NEW: Create a config dictionary for engine_from_config ---
+    # This allows us to inject our dynamic URL
+    
+    # 1. Get the plain config section from alembic.ini
+    connectable_config = config.get_section(config.config_ini_section, {})
+    
+    # 2. Get our URL (from env var or .ini file)
+    url = get_url()
+    
+    # 3. Set the URL in our config dictionary
+    connectable_config['sqlalchemy.url'] = url
+    # -------------------------------------------------------------
+
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        # --- CHANGED: Pass our new config dict ---
+        connectable_config,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata, render_as_batch=True
+            connection=connection, 
+            target_metadata=target_metadata, 
+            # This is important for SQLite migrations
+            render_as_batch=True 
         )
 
         with context.begin_transaction():
