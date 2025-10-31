@@ -1,5 +1,7 @@
 package com.jones.aptracker.ui
 
+import com.jones.aptracker.ui.RoomsViewModel
+import com.jones.aptracker.ui.UserViewModel
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,6 +19,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,13 +34,7 @@ import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.R
 import com.jones.aptracker.network.Room
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.ui.draw.clip
 import coil.compose.AsyncImage
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

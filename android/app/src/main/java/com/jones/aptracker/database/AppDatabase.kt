@@ -6,13 +6,13 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.jones.aptracker.network.* // Ensure HintEntity and HintDao are imported
 
-// --- INCREMENT VERSION TO 5 ---
-@Database(entities = [RoomEntity::class, HistoryItemEntity::class, HintEntity::class], version = 5)
+// --- 1. INCREMENT VERSION TO 6 ---
+@Database(entities = [RoomEntity::class, HistoryItemEntity::class, HintEntity::class], version = 6)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun roomDao(): RoomDao
     abstract fun historyDao(): HistoryDao
-    abstract fun hintDao(): HintDao // --- ADD HINT DAO ---
+    abstract fun hintDao(): HintDao
 
     companion object {
         @Volatile
@@ -25,9 +25,11 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ap_tracker_database"
                 )
-                    // Since we incremented the version and didn't provide a migration,
-                    // this will delete and recreate the DB. Fine for dev.
-                    .fallbackToDestructiveMigration()
+                    // --- 2. REMOVE destructive migration ---
+                    // .fallbackToDestructiveMigration()
+
+                    // --- 3. ADD YOUR NEW MIGRATION ---
+                    .addMigrations(MIGRATION_5_6)
                     .build()
                 INSTANCE = instance
                 instance
