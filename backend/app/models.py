@@ -1,6 +1,6 @@
 from sqlalchemy import (
     create_engine, Column, Integer, String, ForeignKey, DateTime, 
-    UniqueConstraint, Boolean, ForeignKeyConstraint
+    UniqueConstraint, Boolean, ForeignKeyConstraint, BigInteger
 )
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
@@ -82,7 +82,7 @@ class DatapackageCache(Base):
     game = Column(String, nullable=False, index=True)
     checksum = Column(String, nullable=False, index=True)
     entity_type = Column(String, nullable=False)
-    entity_id = Column(Integer, nullable=False)
+    entity_id = Column(BigInteger, nullable=False)
     entity_name = Column(String, nullable=False)
     __table_args__ = (UniqueConstraint('game', 'checksum', 'entity_type', 'entity_id', name='_game_checksum_entity_uc'),)
 
