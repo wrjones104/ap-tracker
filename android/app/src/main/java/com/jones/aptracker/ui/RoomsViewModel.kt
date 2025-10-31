@@ -80,10 +80,12 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addRoom(roomId: String, alias: String, iconName: String) {
+    // This is the function we fixed.
+    // The parameter is now 'roomUrl' instead of 'roomId'
+    fun addRoom(roomUrl: String, alias: String, iconName: String) {
         viewModelScope.launch {
             try {
-                val request = AddRoomRequest(room_url = roomId, alias = alias, icon_name = iconName)
+                val request = AddRoomRequest(room_url = roomUrl, alias = alias, icon_name = iconName)
                 RetrofitClient.instance.addRoom(request)
                 repository.refreshRooms()
             } catch (e: Exception) {

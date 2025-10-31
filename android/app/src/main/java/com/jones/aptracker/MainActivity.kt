@@ -41,7 +41,6 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Notifications enabled!", Toast.LENGTH_SHORT).show()
         } else {
             // Permission denied.
-            // You can show a message explaining why notifications are helpful.
             Toast.makeText(this, "Notifications are disabled. You can enable them in app settings.", Toast.LENGTH_LONG).show()
         }
     }
@@ -117,7 +116,6 @@ class MainActivity : ComponentActivity() {
                 requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        // On older Android versions, permission is granted by default at install time.
     }
 
     private fun startAuthentication(launcher: ActivityResultLauncher<Intent>) {
@@ -126,7 +124,8 @@ class MainActivity : ComponentActivity() {
             Uri.parse("https://discord.com/api/oauth2/token")
         )
 
-        val clientId = "1429821538332577974"
+        val clientId = BuildConfig.DISCORD_CLIENT_ID
+
         val redirectUri = Uri.parse("com.jones.aptracker:/oauth2redirect")
 
         val request = AuthorizationRequest.Builder(
