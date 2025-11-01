@@ -11,12 +11,14 @@ import com.jones.aptracker.network.UpdateRoomRequest
 import com.jones.aptracker.repository.RoomsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
+    // --- SETUP THE REPOSITORY ---
     private val repository: RoomsRepository
 
     private val _rooms = MutableStateFlow<List<Room>>(emptyList())
@@ -24,10 +26,16 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
     val isLoading = MutableStateFlow(true)
 
+    // --- NEW: Add the error message StateFlow ---
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
     init {
+        // --- INITIALIZE the database and repository ---
         val roomDao = AppDatabase.getInstance(application).roomDao()
         repository = RoomsRepository(RetrofitClient.instance, roomDao)
 
+        // --- OBSERVE the database for changes ---
         viewModelScope.launch {
             repository.allRooms
                 .map { roomEntities ->
@@ -44,6 +52,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 .catch {
+                    _errorMessage.value = "Failed to load rooms from database."
                     it.printStackTrace()
                 }
                 .collect { roomList ->
@@ -53,6 +62,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
         }
+        // --- TRIGGER the initial refresh ---
         fetchRooms()
     }
 
@@ -62,6 +72,8 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 repository.refreshRooms()
             } catch (e: Exception) {
+                // --- FIXED: Set error message ---
+                _errorMessage.value = "Failed to refresh rooms. Check connection."
                 e.printStackTrace()
             } finally {
                 isLoading.value = false
@@ -71,11 +83,29 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addRoom(roomUrl: String, alias: String, iconName: String) {
         viewModelScope.launch {
+            _errorMessage.value = null // Clear any old errors
             try {
                 val request = AddRoomRequest(room_url = roomUrl, alias = alias, icon_name = iconName)
-                RetrofitClient.instance.addRoom(request)
-                repository.refreshRooms()
+
+                // --- START FIX ---
+                // Capture the response from the Retrofit call
+                val response = RetrofitClient.instance.addRoom(request)
+
+                if (response.isSuccessful) {
+                    // Only refresh if the add was successful
+                    repository.refreshRooms()
+                } else {
+                    // Manually set the error message from the 400 response
+                    _errorMessage.value = "Failed to add room. Check URL or connection."
+                    // Optional: You could parse the JSON error from your server
+                    // val errorMsg = response.errorBody()?.string()
+                    // _errorMessage.value = "Error: $errorMsg"
+                }
+                // --- END FIX ---
+
             } catch (e: Exception) {
+                // This catch block will now only handle actual network/connection errors
+                _errorMessage.value = "Failed to add room. Check connection."
                 e.printStackTrace()
             }
         }
@@ -87,6 +117,8 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 RetrofitClient.instance.deleteRoom(roomId)
                 repository.refreshRooms()
             } catch (e: Exception) {
+                // --- FIXED: Set error message ---
+                _errorMessage.value = "Failed to delete room."
                 e.printStackTrace()
             }
         }
@@ -99,8 +131,15 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 RetrofitClient.instance.updateRoom(roomId, request)
                 repository.refreshRooms()
             } catch (e: Exception) {
+                // --- FIXED: Set error message ---
+                _errorMessage.value = "Failed to update room."
                 e.printStackTrace()
             }
         }
+    }
+
+    // --- NEW: Add the clear function ---
+    fun clearErrorMessage() {
+        _errorMessage.value = null
     }
 }

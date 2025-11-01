@@ -170,4 +170,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun onSearchQueryChanged(query: String) {
         searchQuery.value = query
     }
+    fun clearErrorMessage() {
+        errorMessage.value = null
+    }
 }

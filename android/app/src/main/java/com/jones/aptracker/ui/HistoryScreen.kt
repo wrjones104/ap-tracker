@@ -40,6 +40,11 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
+// --- NEW IMPORTS ---
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+// ---------------------
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -81,6 +86,18 @@ fun HistoryScreen(
     val searchQuery by historyViewModel.searchQuery
     val coroutineScope = rememberCoroutineScope()
 
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(errorMessage) {
+        if (errorMessage != null) {
+            snackbarHostState.showSnackbar(
+                message = errorMessage!!,
+                duration = SnackbarDuration.Short
+            )
+            historyViewModel.clearErrorMessage()
+        }
+    }
+
     val showFoundHints by historyViewModel.showFoundHints.collectAsState()
 
     val tabTitles = listOf("Items", "Hints")
@@ -88,6 +105,7 @@ fun HistoryScreen(
     val pagerState = rememberPagerState(pageCount = { tabTitles.size })
 
     Scaffold(
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(roomAlias ?: "Global History") },
@@ -116,13 +134,6 @@ fun HistoryScreen(
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 )
 
-                errorMessage?.let {
-                    Text(
-                        text = it,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                    )
-                }
 
                 AnimatedVisibility(visible = pagerState.currentPage == 1) {
                     Row(

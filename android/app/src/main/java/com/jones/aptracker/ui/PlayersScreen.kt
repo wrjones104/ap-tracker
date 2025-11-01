@@ -10,7 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.items // <-- IMPORT ADDED
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
@@ -22,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration // <-- IMPORT ADDED
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -29,6 +31,8 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState // <-- IMPORT ADDED
+import androidx.compose.runtime.getValue // <-- IMPORT ADDED
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,19 +43,41 @@ import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlayersScreen(roomId: Int, roomAlias: String, onSave: () -> Unit, onHistoryClick: () -> Unit, playersViewModel: PlayersViewModel = viewModel()) {
+fun PlayersScreen(
+    roomId: Int,
+    roomAlias: String,
+    onSave: () -> Unit,
+    onHistoryClick: () -> Unit,
+    playersViewModel: PlayersViewModel = viewModel()
+) {
     LaunchedEffect(key1 = roomId) {
         playersViewModel.fetchPlayers(roomId)
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // --- NEW: Collect error message from StateFlow ---
+    val errorMessage by playersViewModel.errorMessage.collectAsState()
+
+    // --- NEW: Show error Snackbar ---
+    LaunchedEffect(errorMessage) {
+        if (errorMessage != null) {
+            snackbarHostState.showSnackbar(
+                message = errorMessage!!,
+                duration = SnackbarDuration.Short
+            )
+            playersViewModel.clearErrorMessage()
+        }
+    }
+
     LaunchedEffect(playersViewModel.showSaveConfirmation.value) {
         if (playersViewModel.showSaveConfirmation.value) {
-            snackbarHostState.showSnackbar("Selections Saved!")
-            delay(1500)
+            // Show the snackbar, but don't wait for it
+            launch { snackbarHostState.showSnackbar("Selections Saved!") }
+
+            // Immediately reset the state and navigate
             playersViewModel.showSaveConfirmation.value = false
-            onSave()
+            onSave() // This will now navigate right away
         }
     }
 
@@ -88,18 +114,13 @@ fun PlayersScreen(roomId: Int, roomAlias: String, onSave: () -> Unit, onHistoryC
             )
 
             Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().weight(1f),
                 contentAlignment = Alignment.Center
             ) {
                 if (playersViewModel.isLoading.value) {
                     CircularProgressIndicator()
-                } else if (playersViewModel.errorMessage.value != null) {
-                    Text(
-                        text = playersViewModel.errorMessage.value!!,
-                        modifier = Modifier.padding(16.dp),
-                        color = Color.Red
-                    )
                 } else {
+                    // --- CHANGED: Removed the error text from here ---
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         items(playersViewModel.filteredPlayers) { player ->
                             val isChecked = playersViewModel.isPlayerChecked(player)
