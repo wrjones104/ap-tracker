@@ -69,6 +69,9 @@ interface ApiService {
         @Query("include_found") includeFound: Boolean
     ): HintHistoryResponse
 
+    @DELETE("users/me")
+    suspend fun deleteAccount(): Response<Unit>
+
 }
 
 data class Room(
