@@ -9,6 +9,8 @@ import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.network.Player
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.UpdateSlotsRequest
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class PlayersViewModel : ViewModel() {
@@ -18,7 +20,10 @@ class PlayersViewModel : ViewModel() {
     val isLoading = mutableStateOf(true)
     val showSaveConfirmation = mutableStateOf(false)
     val searchQuery = mutableStateOf("")
-    val errorMessage = mutableStateOf<String?>(null)
+
+    // --- We are now using StateFlow for errors ---
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage = _errorMessage.asStateFlow()
 
     val filteredPlayers by derivedStateOf {
         if (searchQuery.value.isBlank()) {
@@ -33,7 +38,7 @@ class PlayersViewModel : ViewModel() {
 
     fun fetchPlayers(roomId: Int) {
         isLoading.value = true
-        errorMessage.value = null
+        _errorMessage.value = null
         viewModelScope.launch {
             try {
                 val playerList = RetrofitClient.instance.getPlayersInRoom(roomId)
@@ -43,7 +48,7 @@ class PlayersViewModel : ViewModel() {
                     selections[player.slot_id] = player.is_tracked
                 }
             } catch (e: Exception) {
-                errorMessage.value = "Failed to load players: ${e.message}"
+                _errorMessage.value = "Failed to load players: ${e.message}"
                 e.printStackTrace()
             } finally {
                 isLoading.value = false
@@ -55,18 +60,25 @@ class PlayersViewModel : ViewModel() {
         selections[playerId] = isSelected
     }
 
+    // --- THIS IS THE CORRECTED FUNCTION ---
     fun saveSelections(roomId: Int) {
         viewModelScope.launch {
+            isLoading.value = true     // <-- SETS LOADING TO TRUE
+            _errorMessage.value = null // Clear any old errors
             try {
                 val selectedIds = selections.filter { it.value }.keys.toList()
                 val request = UpdateSlotsRequest(tracked_slot_ids = selectedIds)
                 RetrofitClient.instance.updateTrackedSlots(roomId, request)
                 showSaveConfirmation.value = true
             } catch (e: Exception) {
+                _errorMessage.value = "Failed to save selections."
                 e.printStackTrace()
+            } finally {
+                isLoading.value = false // <-- SETS LOADING TO FALSE
             }
         }
     }
+    // --- END OF FIX ---
 
     fun isPlayerChecked(player: Player): Boolean {
         return selections[player.slot_id] ?: false
@@ -74,5 +86,9 @@ class PlayersViewModel : ViewModel() {
 
     fun onSearchQueryChanged(query: String) {
         searchQuery.value = query
+    }
+
+    fun clearErrorMessage() {
+        _errorMessage.value = null
     }
 }
