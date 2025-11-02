@@ -14,6 +14,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -113,13 +116,18 @@ fun LoginScreen(isLoading: Boolean, onLoginClick: () -> Unit) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            val bannerImages = listOf(
+                R.drawable.login_1,
+                R.drawable.login_2,
+                R.drawable.login_3,
+            )
+            val randomBanner by remember { mutableStateOf(bannerImages.random()) }
             Image(
-                painter = painterResource(id = R.drawable.archipelago_tracker_banner),
+                painter = painterResource(id = randomBanner),
                 contentDescription = "App Banner",
                 modifier = Modifier.fillMaxWidth(0.8f)
             )
             Spacer(modifier = Modifier.height(32.dp))
-            Text("Welcome to AP Tracker", style = MaterialTheme.typography.headlineSmall)
             Spacer(modifier = Modifier.height(16.dp))
             if (isLoading) {
                 CircularProgressIndicator()

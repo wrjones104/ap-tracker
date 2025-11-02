@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -115,6 +116,21 @@ fun RoomsScreen(
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                     ) {
+                        val bannerImages = listOf(
+                            R.drawable.add_room_1,
+                            R.drawable.add_room_2,
+                            R.drawable.add_room_3,
+                        )
+                        val randomBanner by remember { mutableStateOf(bannerImages.random())}
+                        Image(
+                            painter = painterResource(id = randomBanner),
+                            contentDescription = "Archipelago Alerts Add-a-Room Banner",
+                            modifier = Modifier
+                                .fillMaxWidth(0.95f)
+                                .padding(bottom = 8.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.FillWidth
+                        )
                         Text(
                             text = "No rooms found. Tap the '+' to add a room.",
                             modifier = Modifier.align(Alignment.Center)
@@ -127,9 +143,21 @@ fun RoomsScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         item {
+                            val bannerImages = listOf(
+                                R.drawable.room_1,
+                                R.drawable.room_2,
+                                R.drawable.room_3,
+                                R.drawable.room_4,
+                                R.drawable.room_5,
+                                R.drawable.room_6,
+                                R.drawable.room_7,
+                                R.drawable.room_8,
+                                R.drawable.room_9,
+                            )
+                            val randomBanner by remember { mutableStateOf(bannerImages.random())}
                             Image(
-                                painter = painterResource(id = R.drawable.archipelago_tracker_banner),
-                                contentDescription = "Archipelago Tracker Banner",
+                                painter = painterResource(id = randomBanner),
+                                contentDescription = "Archipelago Alerts Room Banner",
                                 modifier = Modifier
                                     .fillMaxWidth(0.95f)
                                     .padding(bottom = 8.dp)
