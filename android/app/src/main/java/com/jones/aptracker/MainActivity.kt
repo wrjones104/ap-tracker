@@ -16,6 +16,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.jones.aptracker.network.AuthRequest
@@ -34,6 +35,7 @@ import net.openid.appauth.AuthorizationResponse
 import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.ResponseTypeValues
+import androidx.compose.ui.platform.LocalContext
 
 class MainActivity : ComponentActivity() {
 
@@ -93,6 +95,9 @@ class MainActivity : ComponentActivity() {
             APTrackerTheme {
                 val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
                 val isLoading by authViewModel.isLoading.collectAsState()
+                val context = LocalContext.current
+                val onLogout = { authViewModel.onLogout(context) }
+
 
                 LaunchedEffect(isLoggedIn) {
                     if (isLoggedIn) {
@@ -105,7 +110,7 @@ class MainActivity : ComponentActivity() {
                     isLoggedIn = isLoggedIn,
                     isLoading = isLoading,
                     onLoginClick = { startAuthentication(authLauncher) },
-                    onLogoutClick = { handleLogout() } // <-- Connect the logout handler
+                    onLogoutClick = onLogout
                 )
             }
         }
@@ -205,14 +210,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun handleLogout() {
-        // Delete the saved token
-        tokenManager.deleteToken()
-        // Update the UI state to show the login screen
-        authViewModel.onLogout()
-        // You can optionally show a toast message
-        Toast.makeText(this, "Logged out", Toast.LENGTH_SHORT).show()
-    }
 
     override fun onDestroy() {
         super.onDestroy()
