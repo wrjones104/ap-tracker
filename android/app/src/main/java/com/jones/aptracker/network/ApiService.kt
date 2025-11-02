@@ -4,6 +4,8 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.HTTP
+import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
@@ -35,7 +37,7 @@ interface ApiService {
     suspend fun getGlobalItemHistory(@Query("since") since: String?): List<HistoryItem>
 
     @POST("devices")
-    suspend fun registerDevice(@Body request: DeviceRegisterRequest): Response<Unit>
+    suspend fun registerDevice(@Body request: RegisterDeviceRequest): Response<Unit>
 
     @POST("auth/callback")
     suspend fun exchangeCodeForToken(@Body request: AuthRequest): AuthResponse
@@ -69,6 +71,8 @@ interface ApiService {
         @Query("include_found") includeFound: Boolean
     ): HintHistoryResponse
 
+    @HTTP(method = "DELETE", path = "devices", hasBody = true)
+    suspend fun unregisterDevice(@Body request: RegisterDeviceRequest): Response<Unit>
 }
 
 data class Room(
@@ -116,7 +120,8 @@ data class HistoryItem(
 )
 
 data class RegisterDeviceRequest(
-    val fcm_token: String
+    val fcm_token: String,
+    val android_id: String? = null
 )
 
 data class AuthRequest(
