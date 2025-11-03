@@ -73,6 +73,10 @@ interface ApiService {
 
     @HTTP(method = "DELETE", path = "devices", hasBody = true)
     suspend fun unregisterDevice(@Body request: RegisterDeviceRequest): Response<Unit>
+  
+    @DELETE("users/me")
+    suspend fun deleteAccount(): Response<Unit>
+
 }
 
 data class Room(
