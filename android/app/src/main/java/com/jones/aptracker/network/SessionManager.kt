@@ -30,11 +30,15 @@ object SessionManager {
      * data and notifies the UI to go back to the Login screen.
      */
     fun logout() {
+        // Run this on a background thread
         CoroutineScope(Dispatchers.IO).launch {
+            // 1. Delete the user's local auth token
             tokenManager.deleteToken()
 
+            // 2. Wipe all tables in the local Room database
             appDatabase.clearAllTables()
 
+            // 3. Fire the event to notify the UI
             _logoutEvent.emit(Unit)
         }
     }

@@ -1129,3 +1129,44 @@ def get_room_hint_history(current_user, room_db_id):
         return jsonify(result)
     finally:
         Session.remove()
+
+@bp.route('/devices', methods=['DELETE'])
+@handle_db_errors
+@log_api_call
+@token_required
+def unregister_device(current_user):
+    """
+    Deletes a specific device (identified by its FCM token)
+    from the user's account to stop notifications.
+    """
+    data = request.json
+    fcm_token = data.get('fcm_token')
+
+    if not fcm_token:
+        return jsonify({'error': 'Missing fcm_token'}), 400
+
+    session = Session()
+    try:
+        # Find the specific device for this user
+        device = session.query(Device).filter_by(
+            user_id=current_user.id,
+            fcm_token=fcm_token
+        ).first()
+
+        if not device:
+            # This is not really an error, the device just isn't registered.
+            logging.info(f"[API] Device {fcm_token} not found for user {current_user.id}, cannot unregister.")
+            return jsonify({'message': 'Device not found'}), 404
+
+        # Delete the device
+        session.delete(device)
+        session.commit()
+        logging.info(f"[API] User {current_user.id} unregistered device {fcm_token}.")
+        return jsonify({'message': 'Device unregistered successfully'}), 200
+
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Failed to unregister device for user {current_user.id}: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to unregister device: {e}'}), 500
+    finally:
+        Session.remove()
