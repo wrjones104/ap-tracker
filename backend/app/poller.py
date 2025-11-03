@@ -530,26 +530,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
   
         if hints_skipped_backfill > 0:
             logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {hints_skipped_backfill} hint notifications during initial backfill.")
-
-        notifications_to_send = {}
-        if notifications_by_user:
-            all_user_ids = notifications_by_user.keys()
-            devices_to_notify = session.query(Device).filter(Device.user_id.in_(all_user_ids)).all()
-            tokens_by_user = {}
-            for device in devices_to_notify: tokens_by_user.setdefault(device.user_id, []).append(device.fcm_token)
-
-            for user_id, notifications in notifications_by_user.items():
-                user_tokens = tokens_by_user.get(user_id)
-                if user_tokens:
-                    unique_notifications = list({json.dumps(d): d for d in notifications}.values())
-                    notifications_to_send[user_id] = {
-                        'notifications': unique_notifications,
-                        'tokens': user_tokens,
-                        'alias': aliases_by_user.get(user_id)
-                    }
-                else:
-                    logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} had {len(notifications)} notifications queued, but has NO registered device tokens.")
-        
+       
         elif items_added_count > 0:
             logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Added {items_added_count} new items, but no notifications were queued (e.g., all suppressed or no users tracking).")
 
@@ -643,6 +624,25 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
         except Exception as e:
             logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Failed to update 'is_found' status for hints using items list: {e}", exc_info=True)
+
+        notifications_to_send = {}
+        if notifications_by_user:
+            all_user_ids = notifications_by_user.keys()
+            devices_to_notify = session.query(Device).filter(Device.user_id.in_(all_user_ids)).all()
+            tokens_by_user = {}
+            for device in devices_to_notify: tokens_by_user.setdefault(device.user_id, []).append(device.fcm_token)
+
+            for user_id, notifications in notifications_by_user.items():
+                user_tokens = tokens_by_user.get(user_id)
+                if user_tokens:
+                    unique_notifications = list({json.dumps(d): d for d in notifications}.values())
+                    notifications_to_send[user_id] = {
+                        'notifications': unique_notifications,
+                        'tokens': user_tokens,
+                        'alias': aliases_by_user.get(user_id)
+                    }
+                else:
+                    logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} had {len(notifications)} notifications queued, but has NO registered device tokens.")
 
         session.commit()
         return notifications_to_send
