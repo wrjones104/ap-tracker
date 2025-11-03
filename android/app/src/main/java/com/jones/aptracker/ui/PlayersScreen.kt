@@ -47,7 +47,6 @@ fun PlayersScreen(
     roomId: Int,
     roomAlias: String,
     onSave: () -> Unit,
-    onHistoryClick: () -> Unit,
     playersViewModel: PlayersViewModel = viewModel()
 ) {
     LaunchedEffect(key1 = roomId) {
@@ -86,11 +85,6 @@ fun PlayersScreen(
         topBar = {
             TopAppBar(
                 title = { Text(roomAlias) },
-                actions = {
-                    IconButton(onClick = onHistoryClick) {
-                        Icon(Icons.Default.History, contentDescription = "View History")
-                    }
-                }
             )
         },
         floatingActionButton = {
