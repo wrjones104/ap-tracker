@@ -1,10 +1,9 @@
-import logging  # <-- NEW
+import logging
 import json
 import os
 import requests
 import jwt
 import asyncio
-import traceback # <-- This is needed
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from urllib.parse import urlparse
@@ -34,32 +33,25 @@ def log_api_call(f):
             except Exception:
                 payload = "Error dumping JSON payload"
         
-        # --- CHANGED: Use DEBUG for high-frequency logs ---
         logging.debug(f"[API] Call: {request.method} {request.path} | Payload: {payload}")
         
         try:
-            # 2. Execute the actual API function
             response = f(*args, **kwargs)
             
-            # 3. Log Response
             response_data = ""
-            if hasattr(response, 'get_data'): # This is a Flask Response object
+            if hasattr(response, 'get_data'):
                 try:
-                    # Truncate long responses (like history) to avoid spamming logs
                     response_data = response.get_data(as_text=True)[:500] 
                 except Exception:
                     response_data = "Error getting response data"
             else:
-                response_data = str(response) # Should not happen with jsonify, but a fallback.
+                response_data = str(response)
 
-            # --- CHANGED: Use DEBUG for high-frequency logs ---
             logging.debug(f"[API] Response: {request.path} | Body: {response_data}...")
             return response
         
         except Exception as e:
-            # 4. Log any exceptions (This was already correct)
             logging.error(f"[API] Error: {request.path} | Exception: {e}", exc_info=True)
-            # Re-raise the exception to be handled by @handle_db_errors or Flask
             raise e
             
     return decorated_function
@@ -80,12 +72,12 @@ def token_required(f):
             logging.warning(f"Missing auth token from {request.remote_addr}.")
             return jsonify({'error': 'Authentication token is missing'}), 401
 
-        session = None  # <-- FIX 1: Initialize session to None
+        session = None
         try:
             secret = current_app.config['SECRET_KEY']
             data = jwt.decode(token, secret, algorithms=['HS256'])
 
-            session = Session() # <-- Session is created
+            session = Session()
             current_user = session.query(User).filter_by(id=data['user_id']).first()
             if not current_user:
                 logging.warning(f"Auth success, but user {data['user_id']} not found in DB.")
@@ -97,13 +89,13 @@ def token_required(f):
             logging.warning(f"Auth failure: Invalid token received.")
             return jsonify({'error': 'Invalid token'}), 401
         except Exception as e:
-            if session:  # <-- FIX 2: Check if session exists before rollback
+            if session:
                 session.rollback()
             logging.error(f"Token processing error: {e}", exc_info=True)
-            return jsonify({'error': f'Token processing error: {e}'}), 500
+            return jsonify({'error': 'An internal server error occurred.'}), 500
         finally:
-            if session:  # <-- FIX 3: Check if session exists before removing
-                Session.remove()  # <-- THE CRITICAL FIX: Was session.close()
+            if session:
+                Session.remove()
                 
         return f(current_user, *args, **kwargs)
     return decorated_function
@@ -118,19 +110,16 @@ def handle_db_errors(f):
             return result
         except OperationalError as e:
             session.rollback()
-            # --- CHANGED: print -> logging.error ---
             logging.error(f"[API_ERROR] Database locked or operational error: {e}")
             return jsonify({'error': 'Database is busy, please try again.'}), 503
         except IntegrityError as e:
             session.rollback()
-            # --- CHANGED: print -> logging.warning ---
             logging.warning(f"[API_ERROR] Database integrity error: {e}")
             return jsonify({'error': 'A record with this value already exists.'}), 409
         except Exception as e:
             session.rollback()
-            # --- CHANGED: print -> logging.error (and removed traceback) ---
             logging.error(f"[API_ERROR] An unhandled API error occurred: {e}", exc_info=True)
-            return jsonify({'error': f'An internal server error occurred: {e}'}), 500
+            return jsonify({'error': 'An internal server error occurred.'}), 500
         finally:
             Session.remove()
     return decorated_function
@@ -160,19 +149,15 @@ def register_device(current_user):
     device = None
 
     if android_id:
-        # --- NEW LOGIC for new app versions ---
-        # Try to find the device by its permanent android_id
         device = session.query(Device).filter_by(
             user_id=current_user.id,
             android_id=android_id
         ).first()
 
         if device:
-            # Device found! Just update its token.
             device.fcm_token = fcm_token
             logging.info(f"[API] Refreshed FCM token for existing device (Android ID: {android_id}) for user {current_user.id}")
         else:
-            # This is a new device for this user
             device = Device(
                 fcm_token=fcm_token, 
                 user_id=current_user.id, 
@@ -182,8 +167,6 @@ def register_device(current_user):
             logging.info(f"[API] Registered new device (Android ID: {android_id}) for user {current_user.id}")
     
     else:
-        # --- LEGACY LOGIC for old app versions ---
-        # Fallback to old behavior if android_id is not sent
         device = session.query(Device).filter_by(fcm_token=fcm_token).first()
         
         if device:
@@ -271,45 +254,37 @@ def add_room(current_user):
     room = session.query(TrackedRoom).filter_by(room_id=room_id).first()
 
     if not room:
-        # --- CHANGED: print -> logging.info ---
         logging.info(f"[API] First time seeing room {room_id}. Creating global record.")
         try:
-            # Ping the room status to get the port
             status_url = f"https://{hostname}/api/room_status/{room_id}"
             response = requests.get(status_url, timeout=10)
             response.raise_for_status()
             status_data = response.json()
             port = status_data.get('last_port', '')
             
-            # --- THIS IS THE FIX ---
-            # Format the player data correctly before saving
             players_raw = status_data.get('players', [])
             player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players_raw)]
             players_json = json.dumps(player_list)
             total_slots = len(player_list)
-            # --- END OF FIX ---
 
             room = TrackedRoom(
                 room_id=room_id,
                 hostname=hostname,
                 cached_full_address=f"{hostname}:{port}",
-                cached_players_json=players_json, # Save the correctly formatted JSON
+                cached_players_json=players_json,
                 cached_total_slots=total_slots
             )
             session.add(room)
-            session.flush() # Flush to get the room.id
+            session.flush()
         
         except requests.exceptions.RequestException as e:
-            # --- CHANGED: print -> logging.error ---
             logging.error(f"[API_ERROR] Failed to fetch initial room status for {room_id}: {e}")
             return jsonify({'error': 'Could not connect to the room to verify its status.'}), 404
         except Exception as e:
             session.rollback()
-            # --- CHANGED: print -> logging.error ---
             logging.error(f"[API_ERROR] Failed to process room status for {room_id}: {e}", exc_info=True)
-            return jsonify({'error': f'Error processing room status: {e}'}), 500
+            return jsonify({'error': 'An internal server error occurred.'}), 500
 
-    # Now subscribe the user
     subscription = session.query(UserRoomSubscription).filter_by(
         user_id=current_user.id,
         room_id=room.id
@@ -383,11 +358,9 @@ def unsubscribe_from_room(current_user, room_db_id):
     if not subscription:
         return jsonify({'error': 'Not subscribed to this room'}), 404
 
-    # The relationship cascade should handle deleting UserTrackedSlot entries
     session.delete(subscription)
     session.commit()
     
-    # --- CHANGED: print -> logging.info ---
     logging.info(f"[API] User {current_user.id} unsubscribed from room {room_db_id}")
     return jsonify({'message': 'Successfully unsubscribed from room.'})
 
@@ -412,15 +385,11 @@ def get_room_players(current_user, room_db_id):
 
         players_list = json.loads(room.cached_players_json or '[]')
 
-        # --- MODIFICATION START ---
-
-        # Get all tracked slots for this user in this room in one query
         tracked_slots_query = session.query(UserTrackedSlot).filter_by(
             user_id=current_user.id,
             room_id=room_db_id
         ).all()
         
-        # Create a dict for fast lookup: {slot_id: UserTrackedSlot}
         tracked_slots_map = {ts.slot_id: ts for ts in tracked_slots_query}
 
         response_players = []
@@ -434,14 +403,11 @@ def get_room_players(current_user, room_db_id):
                 'game': p.get('game'),
                 'is_tracked': tracked_slot_entry is not None,
                 
-                # Add these new keys
                 'notify_progression': tracked_slot_entry.notify_progression if tracked_slot_entry else None,
                 'notify_useful': tracked_slot_entry.notify_useful if tracked_slot_entry else None,
                 'notify_hints': tracked_slot_entry.notify_hints if tracked_slot_entry else None
             })
         
-        # --- MODIFICATION END ---
-            
         return jsonify(response_players)
     finally:
         Session.remove()
@@ -471,9 +437,6 @@ def update_tracked_slots(current_user, room_db_id):
     room = subscription.room
     requested_ids = set(data.get('tracked_slot_ids', []))
 
-    # --- History pre-fill logic has been REMOVED (This is correct) ---
-    
-    # --- Update the user's tracked slots ---
     current_slots_query = session.query(UserTrackedSlot.slot_id).filter_by(user_id=current_user.id, room_id=room_db_id)
     current_tracked_ids = {slot.slot_id for slot in current_slots_query.all()}
     
@@ -539,7 +502,6 @@ def get_item_history(current_user, room_db_id):
         except (ValueError, TypeError):
             pass 
 
-    # --- Limit removed (This is correct based on our discussion) ---
     items = query.order_by(NotifiedItem.id.desc()).all()
 
     try:
@@ -639,18 +601,13 @@ def get_global_item_history(current_user):
         session.query(TrackedRoom).filter(TrackedRoom.room_id.in_({i.room_id for i in items}))
     }
 
-    # --- OPTIMIZATION 1: Fix N+1 query for Subscriptions ---
-    # Get all relevant room_db_ids from the rooms we just fetched
     relevant_room_db_ids = {r.id for r in all_room_data.values()}
     
-    # Fetch all user subscriptions for these rooms in ONE query
     subs_query = session.query(UserRoomSubscription).filter(
         UserRoomSubscription.user_id == current_user.id,
         UserRoomSubscription.room_id.in_(relevant_room_db_ids)
     )
-    # Create a fast lookup map: {room_db_id: subscription}
     subs_map = {sub.room_id: sub for sub in subs_query.all()}
-    # --- END OPTIMIZATION 1 ---
 
     history_pre_cache = []
     cache_keys_to_find = set()
@@ -660,7 +617,6 @@ def get_global_item_history(current_user):
         if not room_data:
             continue
         
-        # Use the map (O(1) lookup) instead of a query
         sub = subs_map.get(room_data.id)
         if not sub:
             continue
@@ -669,7 +625,7 @@ def get_global_item_history(current_user):
             players = json.loads(room_data.cached_players_json or '[]')
             game_checksums = json.loads(room_data.game_checksums_json or '{}')
         except json.JSONDecodeError:
-            continue # Skip this item if room data is bad
+            continue
 
         name_map = {p['slot_id']: p['name'] for p in players}
         game_map = {p['slot_id']: p['game'] for p in players}
@@ -678,13 +634,10 @@ def get_global_item_history(current_user):
         receiver_game = game_map.get(item.receiving_slot_id, "Unknown")
         game_checksum = game_checksums.get(receiver_game)
 
-        # --- OPTIMIZATION 2: Gather keys for name lookup ---
         item_name_key = None
         if receiver_game and game_checksum:
-            # This is the unique key for an item name
             item_name_key = (receiver_game, game_checksum, 'item', item.item_id)
             cache_keys_to_find.add(item_name_key)
-        # --- END OPTIMIZATION 2 ---
 
         history_pre_cache.append({
             "db_id": room_data.id, 
@@ -694,11 +647,10 @@ def get_global_item_history(current_user):
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": room_data.tracker_id,
             "slot_id": item.receiving_slot_id,
-            "_name_key": item_name_key, # Store key for lookup
-            "_raw_item_id": item.item_id # Fallback
+            "_name_key": item_name_key,
+            "_raw_item_id": item.item_id
         })
 
-    # --- OPTIMIZATION 2: Fetch all names in ONE query ---
     name_cache_map = {}
     if cache_keys_to_find:
         cache_filters = []
@@ -710,7 +662,6 @@ def get_global_item_history(current_user):
                 (DatapackageCache.entity_id == eid)
             )
         
-        # This is now Query 5, running outside the loop
         cache_query = session.query(
             DatapackageCache.game,
             DatapackageCache.checksum,
@@ -719,12 +670,10 @@ def get_global_item_history(current_user):
             DatapackageCache.entity_name
         ).filter(or_(*cache_filters))
 
-        # Create a fast lookup map: {(game, checksum, type, id): name}
         name_cache_map = {
             (c.game, c.checksum, c.entity_type, c.entity_id): c.entity_name
             for c in cache_query.all()
         }
-    # --- END OPTIMIZATION 2 ---
 
     # Now, build the final history list by populating the names
     # This loop is fast and in-memory
@@ -763,11 +712,10 @@ def get_current_user(current_user):
     if current_user.discord_avatar_hash:
         avatar_url = f"{base_url}/avatars/{current_user.discord_id}/{current_user.discord_avatar_hash}.png"
     else:
-        # Default avatar logic
         try:
             discriminator_int = int(current_user.discord_username.split('#')[-1]) % 5
         except (ValueError, IndexError):
-            discriminator_int = 0 # Fallback
+            discriminator_int = 0
         avatar_url = f"{base_url}/embed/avatars/{discriminator_int}.png"
         
     return jsonify({
@@ -840,7 +788,6 @@ def update_user_preferences(current_user):
         if not user:
             return jsonify({'error': 'User not found'}), 404
 
-        # Update fields only if they are present in the request
         if 'notify_progression' in data:
             user.notify_progression_default = bool(data['notify_progression'])
         if 'notify_useful' in data:
@@ -852,9 +799,8 @@ def update_user_preferences(current_user):
         return jsonify({'message': 'Preferences updated successfully'}), 200
     except Exception as e:
         session.rollback()
-        # --- NEW: Added logging ---
         logging.error(f"Failed to update preferences for user {current_user.id}: {e}", exc_info=True)
-        return jsonify({'error': f'Failed to update preferences: {e}'}), 500
+        return jsonify({'error': 'An internal server error occurred.'}), 500
     finally:
         Session.remove()
 
@@ -881,7 +827,6 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
         if not tracked_slot:
             return jsonify({'error': 'Tracked slot not found'}), 404
 
-        # Update fields. 'None' is a valid value to "unset" the override.
         if 'notify_progression' in data:
             tracked_slot.notify_progression = data['notify_progression']
         if 'notify_useful' in data:
@@ -893,9 +838,8 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
         return jsonify({'message': 'Slot preferences updated successfully'}), 200
     except Exception as e:
         session.rollback()
-        # --- NEW: Added logging ---
         logging.error(f"Failed to update slot preferences for user {current_user.id} (room {room_db_id}, slot {slot_id}): {e}", exc_info=True)
-        return jsonify({'error': f'Failed to update slot preferences: {e}'}), 500
+        return jsonify({'error': 'An internal server error occurred.'}), 500
     finally:
         Session.remove()
 
@@ -918,7 +862,7 @@ def delete_current_user(current_user):
     except Exception as e:
         session.rollback()
         logging.error(f"Failed to delete account for user {current_user.id}: {e}", exc_info=True)
-        return jsonify({'error': f'Failed to delete account: {e}'}), 500
+        return jsonify({'error': 'An internal server error occurred.'}), 500
     finally:
         Session.remove()
 
@@ -951,35 +895,25 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
     if not relevant_room_uuids:
          return {"hints_for_you": [], "hints_by_you": []}
 
-    # Base query for hints in relevant rooms
     hints_query = session.query(NotifiedHint).filter(
         NotifiedHint.room_id.in_(relevant_room_uuids)
     )
 
-    # --- NEW: Filter by is_found status ---
     if not include_found:
         hints_query = hints_query.filter(NotifiedHint.is_found == False)
-    # --- END NEW ---
 
-    hints_query = hints_query.order_by(desc(NotifiedHint.id)) # Order by ID assuming it correlates with time
+    hints_query = hints_query.order_by(desc(NotifiedHint.id))
 
 
-    # Apply timestamp filter if provided
     if since_timestamp:
         try:
             since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
-            # Assuming NotifiedHint has a timestamp field (add one if needed!)
-            # If not, we might need a different approach for 'since'
             if hasattr(NotifiedHint, 'timestamp'):
                  hints_query = hints_query.filter(NotifiedHint.timestamp > since_dt)
             else:
-                 # If no timestamp, 'since' might be hard to implement reliably without storing it
-                 # For now, let's proceed assuming we might fetch more than needed without timestamp
-                 # --- CHANGED: print -> logging.warning ---
                  logging.warning(f"[HINT_API_WARN] 'since' parameter provided but NotifiedHint has no timestamp column.")
 
         except ValueError:
-            # --- CHANGED: print -> logging.warning ---
             logging.warning(f"[HINT_API_WARN] Invalid 'since' timestamp format: {since_timestamp}")
 
 
@@ -1042,7 +976,7 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
 
 
         hint_data = {
-            "id": hint.id, # Include DB ID for potential future use
+            "id": hint.id,
             "room_db_id": room_db_id_for_hint,
             "room_alias": alias_map.get(room_db_id_for_hint, "Unknown Room"),
             "item_owner_id": hint.item_owner_id,
@@ -1051,18 +985,15 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             "location_owner_name": location_owner_name,
             "item_name": item_name,
             "location_name": location_name,
-            "is_found": getattr(hint, 'is_found', False), # Default to False if column doesn't exist yet
-            # Use hint.id as a proxy for timestamp if column doesn't exist
-            "timestamp": getattr(hint, 'timestamp', datetime.fromtimestamp(hint.id / 1000.0, tz=timezone.utc)).replace(tzinfo=timezone.utc).isoformat() if hasattr(hint, 'timestamp') else str(hint.id) # Fallback to ID if no timestamp
+            "is_found": getattr(hint, 'is_found', False),
+            "timestamp": (hint.timestamp.replace(tzinfo=timezone.utc).isoformat() if hasattr(hint, 'timestamp') and hint.timestamp else datetime.fromtimestamp(hint.id / 1000.0, tz=timezone.utc).isoformat())
         }
 
         if is_item_owner_tracked:
             hints_for_you.append(hint_data)
-        elif is_location_owner_tracked: # Only add to 'by_you' if not already 'for_you'
+        elif is_location_owner_tracked:
             hints_by_you.append(hint_data)
 
-    # We might need to sort again if using hint.id as fallback timestamp wasn't reliable
-    # Or if the original query order wasn't perfect time order
     hints_for_you.sort(key=lambda h: h.get('timestamp', '0'), reverse=True)
     hints_by_you.sort(key=lambda h: h.get('timestamp', '0'), reverse=True)
 
@@ -1077,14 +1008,11 @@ def get_global_hint_history(current_user):
     """Returns categorized global hint history for the authenticated user."""
     since = request.args.get('since')
     
-    # --- NEW: Get include_found param ---
     include_found_str = request.args.get('include_found', 'false')
     include_found = include_found_str.lower() in ['true', '1', 't', 'yes']
-    # --- END NEW ---
     
     session = Session()
     try:
-        # --- MODIFIED: Pass param ---
         result = process_hints_for_user(
             session, 
             current_user.id, 
@@ -1104,21 +1032,17 @@ def get_room_hint_history(current_user, room_db_id):
     """Returns categorized hint history for a specific room for the authenticated user."""
     since = request.args.get('since')
     
-    # --- NEW: Get include_found param ---
     include_found_str = request.args.get('include_found', 'false')
     include_found = include_found_str.lower() in ['true', '1', 't', 'yes']
-    # --- END NEW ---
     
     session = Session()
     try:
-        # Basic check: Does user subscribe to this room at all?
         sub_exists = session.query(UserRoomSubscription.user_id).filter_by(
             user_id=current_user.id, room_id=room_db_id
         ).limit(1).scalar() is not None
         if not sub_exists:
             return jsonify({'error': 'Subscription not found'}), 404
 
-        # --- MODIFIED: Pass param ---
         result = process_hints_for_user(
             session, 
             current_user.id, 
@@ -1167,6 +1091,6 @@ def unregister_device(current_user):
     except Exception as e:
         session.rollback()
         logging.error(f"Failed to unregister device for user {current_user.id}: {e}", exc_info=True)
-        return jsonify({'error': f'Failed to unregister device: {e}'}), 500
+        return jsonify({'error': 'An internal server error occurred.'}), 500
     finally:
         Session.remove()
