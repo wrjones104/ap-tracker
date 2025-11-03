@@ -16,12 +16,12 @@ class HistoryRepository(
     private val historyDao: HistoryDao,
     private val hintDao: HintDao
 ) {
-    fun getHistoryForRoom(roomId: Int): Flow<List<HistoryItemEntity>> {
-        return historyDao.getHistoryForRoom(roomId)
+    suspend fun getHistoryForRoom(roomId: Int): List<HistoryItemEntity> {
+        return historyDao.getHistoryForRoom(roomId) 
     }
 
-    fun getGlobalHistory(): Flow<List<HistoryItemEntity>> {
-        return historyDao.getGlobalHistory()
+    suspend fun getGlobalHistory(): List<HistoryItemEntity> {
+        return historyDao.getGlobalHistory() //
     }
 
     suspend fun refreshItemHistory() {
@@ -75,9 +75,7 @@ class HistoryRepository(
         }
     }
 
-
-
-    fun getHintsForRoom(roomId: Int, includeFound: Boolean): Flow<Pair<List<HintEntity>, List<HintEntity>>> {
+    suspend fun getHintsForRoom(roomId: Int, includeFound: Boolean): Pair<List<HintEntity>, List<HintEntity>> {
         Log.d("HintToggleDebug", "Repo: getHintsForRoom (DAO Read) | includeFound: $includeFound")
 
         val hintsForYou = if (includeFound) {
@@ -92,10 +90,10 @@ class HistoryRepository(
             hintDao.getUnfoundHintsForRoom(roomId, "by_you")
         }
 
-        return combine(hintsForYou, hintsByYou) { forYou, byYou -> Pair(forYou, byYou) }
+        return Pair(hintsForYou, hintsByYou)
     }
 
-    fun getGlobalHints(includeFound: Boolean): Flow<Pair<List<HintEntity>, List<HintEntity>>> {
+    suspend fun getGlobalHints(includeFound: Boolean): Pair<List<HintEntity>, List<HintEntity>> {
         Log.d("HintToggleDebug", "Repo: getGlobalHints (DAO Read) | includeFound: $includeFound")
 
         val hintsForYou = if (includeFound) {
@@ -110,7 +108,7 @@ class HistoryRepository(
             hintDao.getUnfoundGlobalHints("by_you")
         }
 
-        return combine(hintsForYou, hintsByYou) { forYou, byYou -> Pair(forYou, byYou) }
+        return Pair(hintsForYou, hintsByYou)
     }
 
     suspend fun refreshHintHistory(roomId: Int? = null, includeFound: Boolean) {
@@ -158,6 +156,7 @@ class HistoryRepository(
         }
     }
 
+    // --- (mapHintDetailToEntity function is unchanged) ---
     private fun mapHintDetailToEntity(detail: HintDetail, type: String): HintEntity {
         return HintEntity(
             hint_db_id = detail.id,

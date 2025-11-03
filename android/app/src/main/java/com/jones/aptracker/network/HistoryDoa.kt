@@ -10,10 +10,10 @@ import kotlinx.coroutines.flow.Flow
 interface HistoryDao {
 
     @Query("SELECT * FROM history_items WHERE roomId = :roomId ORDER BY timestamp DESC")
-    fun getHistoryForRoom(roomId: Int): Flow<List<HistoryItemEntity>>
+    suspend fun getHistoryForRoom(roomId: Int): List<HistoryItemEntity> // Was Flow
 
     @Query("SELECT * FROM history_items ORDER BY timestamp DESC")
-    fun getGlobalHistory(): Flow<List<HistoryItemEntity>>
+    suspend fun getGlobalHistory(): List<HistoryItemEntity> // Was Flow
 
     @Query("SELECT MAX(timestamp) FROM history_items WHERE roomId = :roomId")
     suspend fun getLatestTimestampForRoom(roomId: Int): String?

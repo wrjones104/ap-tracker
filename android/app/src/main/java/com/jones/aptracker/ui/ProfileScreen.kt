@@ -189,10 +189,14 @@ fun ProfileScreen(
                 }
             } else {
                 trackedSlotsByRoom.forEach { roomData ->
-                    item {
+                    item(key = "header_${roomData.room_db_id}") {
                         RoomHeader(alias = roomData.room_alias)
                     }
-                    items(roomData.tracked_slots, key = { it.slot_id }) { slot ->
+
+                    items(
+                        items = roomData.tracked_slots,
+                        key = { slot -> "slot_${roomData.room_db_id}_${slot.slot_id}" }
+                    ) { slot ->
                         SlotPreferenceItem(
                             slot = slot,
                             onClick = {
@@ -200,7 +204,8 @@ fun ProfileScreen(
                             }
                         )
                     }
-                    item {
+
+                    item(key = "spacer_${roomData.room_db_id}") {
                         Spacer(Modifier.height(16.dp))
                     }
                 }

@@ -44,88 +44,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         repository = HistoryRepository(RetrofitClient.instance, historyDao, hintDao)
     }
 
-    /**
-     * Main entry point to load all history for a room (or global).
-     */
     fun loadHistoryFor(roomId: Int?) {
-        currentRoomId = roomId // Store the room ID
+        currentRoomId = roomId
         Log.d("HistoryViewModel", "Loading history for Room ID: ${roomId ?: "Global"}")
-        isLoading.value = true
-        errorMessage.value = null
-
-        viewModelScope.launch {
-            val itemFlow = if (roomId != null) {
-                repository.getHistoryForRoom(roomId)
-            } else {
-                repository.getGlobalHistory()
-            }
-
-            itemFlow
-                .map { entities ->
-                    entities.map { entity ->
-                        HistoryItem(
-                            message = entity.message,
-                            timestamp = entity.timestamp,
-                            tracker_id = entity.tracker_id,
-                            slot_id = entity.slot_id,
-                            icon_name = entity.icon_name,
-                            db_id = entity.roomId
-                        )
-                    }
-                }
-                .catch { e ->
-                    errorMessage.value = "Failed to load item history: ${e.message}"
-                    Log.e("HistoryViewModel", "Error loading item history", e)
-                }
-                .collect { historyList ->
-                    _itemHistory.value = historyList
-                }
-        }
-
-        loadHintHistory(setLoading = true)
 
         refreshAllHistory()
     }
 
-    /**
-     * Loads *only* the hint history from the local DB, respecting the toggle.
-     * This is called by loadHistoryFor and setShowFoundHints.
-     */
-    private fun loadHintHistory(setLoading: Boolean = false) {
-        if (setLoading) {
-            isLoading.value = true
-        }
 
-        viewModelScope.launch {
-            val includeFound = _showFoundHints.value
-            Log.d("HintToggleDebug", "VM: loadHintHistory called, includeFound = $includeFound")
-
-            val hintFlow = if (currentRoomId != null) {
-                repository.getHintsForRoom(currentRoomId!!, includeFound)
-            } else {
-                repository.getGlobalHints(includeFound)
-            }
-
-            hintFlow
-                .catch { e ->
-                    errorMessage.value = "Failed to load hint history: ${e.message}"
-                    Log.e("HistoryViewModel", "Error loading hint history", e)
-                }
-                .collect { (forYou, byYou) ->
-                    Log.d("HintToggleDebug", "VM: DAO returned ${forYou.size} 'forYou' hints, ${byYou.size} 'byYou' hints.")
-                    _hintsForYou.value = forYou
-                    _hintsByYou.value = byYou
-                    if (setLoading) {
-                        isLoading.value = false
-                    }
-                    Log.d("HistoryViewModel", "Loaded ${forYou.size} hints for you, ${byYou.size} hints by you.")
-                }
-        }
-    }
-
-    /**
-     * Called by the UI when the "Show Found" toggle is changed.
-     */
     fun setShowFoundHints(show: Boolean) {
         if (show == _showFoundHints.value) {
             Log.d("HintToggleDebug", "VM: setShowFoundHints called with same value: $show. Skipping.")
@@ -134,35 +60,61 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         Log.d("HintToggleDebug", "VM: setShowFoundHints NEW value: $show")
         _showFoundHints.value = show
 
-        loadHintHistory(setLoading = false)
-
+        // --- SIMPLIFIED: Just call refreshAllHistory with the new toggle value ---
         refreshAllHistory()
     }
 
-    /**
-     * Triggers a network refresh for all data.
-     */
     fun refreshAllHistory() {
-        Log.d("HistoryViewModel", "Triggering background refresh for Room ID: ${currentRoomId ?: "Global"}")
+        Log.d("HistoryViewModel", "Triggering refresh for Room ID: ${currentRoomId ?: "Global"}")
         viewModelScope.launch {
             isLoading.value = true
             errorMessage.value = null
+
             try {
+                // 1. Refresh Item History (Network)
                 repository.refreshItemHistory()
-            } catch (e: Exception) {
-                errorMessage.value = "Item Refresh failed: ${e.message}"
-                Log.e("HistoryViewModel", "Error refreshing item history", e)
-            }
-            try {
+
+                // 2. Fetch fresh items from DB
+                // --- THIS IS THE FIX ---
+                val itemEntities = if (currentRoomId != null) {
+                    repository.getHistoryForRoom(currentRoomId!!)
+                } else {
+                    repository.getGlobalHistory()
+                }
+
+                _itemHistory.value = itemEntities.map { entity ->
+                    HistoryItem(
+                        message = entity.message,
+                        timestamp = entity.timestamp,
+                        tracker_id = entity.tracker_id,
+                        slot_id = entity.slot_id,
+                        icon_name = entity.icon_name,
+                        db_id = entity.roomId
+                    )
+                }
+                // --- END FIX ---
+
+                // 3. Refresh Hint History (Network)
                 val includeFound = _showFoundHints.value
                 Log.d("HintToggleDebug", "VM: refreshAllHistory calling refreshHintHistory, includeFound = $includeFound")
                 repository.refreshHintHistory(currentRoomId, includeFound)
+
+                // 4. Fetch fresh hints from DB
+                val (forYou, byYou) = if (currentRoomId != null) {
+                    repository.getHintsForRoom(currentRoomId!!, includeFound)
+                } else {
+                    repository.getGlobalHints(includeFound)
+                }
+                _hintsForYou.value = forYou
+                _hintsByYou.value = byYou
+                Log.d("HistoryViewModel", "Loaded ${forYou.size} hints for you, ${byYou.size} hints by you.")
+
             } catch (e: Exception) {
-                errorMessage.value = "Hint Refresh failed: ${e.message}"
-                Log.e("HistoryViewModel", "Error refreshing hint history", e)
+                errorMessage.value = "History Refresh failed: ${e.message}"
+                Log.e("HistoryViewModel", "Error during full history refresh", e)
             } finally {
                 isLoading.value = false
-                Log.d("HistoryViewModel", "Background refresh complete.")
+                Log.d("HistoryViewModel", "Full refresh complete.")
             }
         }
     }
