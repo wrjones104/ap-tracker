@@ -10,16 +10,16 @@ import kotlinx.coroutines.flow.Flow
 interface HintDao {
 
     @Query("SELECT * FROM hints WHERE roomDbId = :roomId AND hintType = :type AND isFound = 0 ORDER BY timestamp DESC")
-    fun getUnfoundHintsForRoom(roomId: Int, type: String): Flow<List<HintEntity>>
+    suspend fun getUnfoundHintsForRoom(roomId: Int, type: String): List<HintEntity>
 
     @Query("SELECT * FROM hints WHERE roomDbId = :roomId AND hintType = :type ORDER BY timestamp DESC")
-    fun getAllHintsForRoom(roomId: Int, type: String): Flow<List<HintEntity>>
+    suspend fun getAllHintsForRoom(roomId: Int, type: String): List<HintEntity>
 
     @Query("SELECT * FROM hints WHERE hintType = :type AND isFound = 0 ORDER BY timestamp DESC")
-    fun getUnfoundGlobalHints(type: String): Flow<List<HintEntity>>
+    suspend fun getUnfoundGlobalHints(type: String): List<HintEntity>
 
     @Query("SELECT * FROM hints WHERE hintType = :type ORDER BY timestamp DESC")
-    fun getAllGlobalHints(type: String): Flow<List<HintEntity>>
+    suspend fun getAllGlobalHints(type: String): List<HintEntity>
 
     @Query("SELECT MAX(timestamp) FROM hints")
     suspend fun getLatestGlobalTimestamp(): String?
@@ -29,5 +29,4 @@ interface HintDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHints(hints: List<HintEntity>)
-
 }
