@@ -899,6 +899,29 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
     finally:
         Session.remove()
 
+
+@bp.route('/users/me', methods=['DELETE'])
+@handle_db_errors
+@log_api_call
+@token_required
+def delete_current_user(current_user):
+    """
+    Deletes the currently authenticated user and all their associated data
+    (devices, subscriptions, tracked slots) from the database.
+    """
+    session = Session()
+    try:
+        session.delete(current_user)
+        session.commit()
+        logging.info(f"[API] User {current_user.id} ({current_user.discord_username}) has deleted their account.")
+        return jsonify({'message': 'Account deleted successfully'}), 200
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Failed to delete account for user {current_user.id}: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to delete account: {e}'}), 500
+    finally:
+        Session.remove()
+
 # Helper function to process hints
 def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=None, include_found=False):
     """Fetches and categorizes hints for a user, optionally filtered by room and timestamp."""

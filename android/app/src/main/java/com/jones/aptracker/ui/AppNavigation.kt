@@ -61,7 +61,8 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
         }
         composable("profile") {
             ProfileScreen(
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() },
+                onLogout = onLogoutClick
             )
         }
         composable(
