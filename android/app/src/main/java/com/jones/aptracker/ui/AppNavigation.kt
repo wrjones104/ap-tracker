@@ -50,13 +50,16 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
         composable("rooms") {
             RoomsScreen(
                 onRoomClick = { roomId, roomAlias ->
-                    navController.navigate("players/$roomId/${Uri.encode(roomAlias)}")
+                    navController.navigate("history/$roomId/${Uri.encode(roomAlias)}")
                 },
                 onHistoryClick = {
                     navController.navigate("history/global/All Rooms")
                 },
                 onLogoutClick = onLogoutClick,
-                onSettingsClick = { navController.navigate("profile") }
+                onSettingsClick = { navController.navigate("profile") },
+                onManageSlotsClick = { roomId, roomAlias ->
+                    navController.navigate("players/$roomId/${Uri.encode(roomAlias)}")
+                }
             )
         }
         composable("profile") {
@@ -77,8 +80,7 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
             PlayersScreen(
                 roomId = roomId,
                 roomAlias = roomAlias,
-                onSave = { navController.popBackStack() }, // Navigate back after saving
-                onHistoryClick = { navController.navigate("history/$roomId/${Uri.encode(roomAlias)}") } // Encode alias
+                onSave = { navController.popBackStack() },
             )
         }
 

@@ -211,7 +211,7 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
 
     if (itemsToShow.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No item history found.")
+            Text("No item history yet.")
         }
     } else {
         LazyColumn(
