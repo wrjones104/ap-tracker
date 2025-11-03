@@ -128,9 +128,10 @@ fun RoomsScreen(
                             modifier = Modifier
                                 .fillMaxWidth(0.95f)
                                 .padding(bottom = 8.dp)
+                                .align(Alignment.TopCenter)
                                 .clip(RoundedCornerShape(8.dp)),
                             contentScale = ContentScale.FillWidth
-                        )
+                            )
                         Text(
                             text = "No rooms found. Tap the '+' to add a room.",
                             modifier = Modifier.align(Alignment.Center)
