@@ -5,7 +5,7 @@ import json
 import websockets
 from datetime import datetime, timezone, timedelta
 from threading import local
-from sqlalchemy import or_, exc
+from sqlalchemy import or_, exc, tuple_  # <-- Added tuple_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
 
@@ -220,6 +220,10 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
         notifications_by_user = {} 
 
+        cache_keys_to_fetch = set()
+        new_items_for_notify = []
+        new_hints_for_notify = []
+
         player_statuses_raw = tracker_data.get('player_status', {})
         finished_player_ids = set()
         if isinstance(player_statuses_raw, dict): finished_player_ids = {int(p) for p, s in player_statuses_raw.items() if s == 30}
@@ -334,55 +338,18 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                     receiver_game = game_map.get(rid, "Unknown")
                     game_checksum = game_checksums.get(receiver_game)
 
-                    item_name = session.query(DatapackageCache.entity_name).filter_by(
-                        game=receiver_game,
-                        checksum=game_checksum,
-                        entity_type='item',
-                        entity_id=item_id
-                    ).scalar() or f"ID {item_id}"
-
-                    for user_id, tracked_slots in tracked_slots_by_user.items():
-                        if rid in tracked_slots:
-                            alias = aliases_by_user.get(user_id, "Unknown Room")
-                            
-                            user_slot_added_at = session.query(UserTrackedSlot.added_at).filter_by(
-                                user_id=user_id, room_id=db_id, slot_id=rid
-                            ).scalar()
-                            
-                            if user_slot_added_at and datetime.utcnow() - user_slot_added_at < timedelta(minutes=15):
-                                logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {user_slot_added_at}. Suppressing notification for item {item_id}.")
-                                continue 
-
-                            user_prefs = users_by_id.get(user_id)
-                            slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
-
-                            if not user_prefs or not slot_prefs:
-                                logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
-                                continue
-
-                            is_progression = bool(flags & 1)
-                            should_notify = False
-                            title = ""
-                            item_type = ""
-                            
-                            if is_progression:
-                                title = f"🏆 {item_name}"
-                                item_type = "item_progression"
-                                notify_override = slot_prefs.notify_progression
-                                should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
-                            else:
-                                title = f"✅ {item_name}"
-                                item_type = "item_useful"
-                                notify_override = slot_prefs.notify_useful
-                                should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
-                            
-                            if should_notify:
-                                notifications_by_user.setdefault(user_id, []).append({
-                                    'title': title,
-                                    'body': f"Received by {name_map.get(rid, f'P{rid}')} in '{alias}'",
-                                    'type': item_type,
-                                    'details': item_key_batch
-                                })
+                    if game_checksum:
+                        cache_keys_to_fetch.add((receiver_game, game_checksum, 'item', item_id))
+                    
+                    new_items_for_notify.append({
+                        'item_key_batch': item_key_batch,
+                        'receiving_slot_id': rid,
+                        'item_id': item_id,
+                        'location_id': loc_id,
+                        'flags': flags,
+                        'receiver_game': receiver_game,
+                        'game_checksum': game_checksum
+                    })
                 else:
                     items_skipped_backfill += 1
 
@@ -417,52 +384,159 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                  hints_added_count += 1
 
                  if has_hint_history:
-                     for user_id, tracked_slots in tracked_slots_by_user.items():
-                         is_for_us, is_at_our_location = io_id in tracked_slots, lo_id in tracked_slots
-                         if is_for_us or is_at_our_location:
-                             
-                             slot_to_check = io_id if is_for_us else lo_id
-                             
-                             user_slot_added_at = session.query(UserTrackedSlot.added_at).filter_by(
-                                 user_id=user_id, room_id=db_id, slot_id=slot_to_check
-                             ).scalar()
+                    io_game, lo_game = game_map.get(io_id, "Unknown"), game_map.get(lo_id, "Unknown")
+                    io_checksum = game_checksums.get(io_game)
+                    lo_checksum = game_checksums.get(lo_game)
 
-                             if user_slot_added_at and datetime.utcnow() - user_slot_added_at < timedelta(minutes=15):
-                                 logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {slot_to_check}, but it was added at {user_slot_added_at}. Suppressing hint notification.")
-                                 continue
-
-                             user_prefs = users_by_id.get(user_id)
-                             slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_to_check)
-
-                             if not user_prefs or not slot_prefs:
-                                 logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
-                                 continue
-                             
-                             notify_override = slot_prefs.notify_hints
-                             should_notify = notify_override if notify_override is not None else user_prefs.notify_hints_default
-                             
-                             if not should_notify:
-                                 continue
-
-                             io_game, lo_game = game_map.get(io_id, "Unknown"), game_map.get(lo_id, "Unknown")
-                             item_name = session.query(DatapackageCache.entity_name).filter_by(game=io_game, checksum=game_checksums.get(io_game), entity_type='item', entity_id=item_id).scalar() or f"ID {item_id}"
-                             loc_name = session.query(DatapackageCache.entity_name).filter_by(game=lo_game, checksum=game_checksums.get(lo_game), entity_type='location', entity_id=loc_id).scalar() or f"ID {loc_id}"
-                             alias = aliases_by_user.get(user_id, "Unknown Room")
-                             title, body = "", ""
-
-                             if is_for_us:
-                                 title = f"💡 Hint for your {item_name}!"
-                                 body = f"It's at {name_map.get(lo_id, f'P{lo_id}')}'s location: '{loc_name}' in '{alias}'"
-                             elif is_at_our_location:
-                                 title = f"💡 Item at your location!"
-                                 body = f"{name_map.get(io_id, f'P{io_id}')}'s {item_name} is at your location: '{loc_name}' in '{alias}'"
-
-                             notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_key_batch})
-                 
+                    if io_checksum:
+                        cache_keys_to_fetch.add((io_game, io_checksum, 'item', item_id))
+                    if lo_checksum:
+                        cache_keys_to_fetch.add((lo_game, lo_checksum, 'location', loc_id))
+                    
+                    new_hints_for_notify.append({
+                        'hint_key_batch': hint_key_batch,
+                        'io_id': io_id, 'lo_id': lo_id, 'item_id': item_id, 'loc_id': loc_id,
+                        'io_game': io_game, 'lo_game': lo_game,
+                        'io_checksum': io_checksum, 'lo_checksum': lo_checksum
+                    })
                  else:
                      hints_skipped_backfill += 1
 
 
+        if hints_processed_count > 0:
+             logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Hint Stats: Processed={hints_processed_count}, Added={hints_added_count}")
+
+        if hints_skipped_backfill > 0:
+            logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {hints_skipped_backfill} hint notifications during initial backfill.")
+
+
+        
+        name_lookup_map = {}
+        if cache_keys_to_fetch:
+            logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Fetching {len(cache_keys_to_fetch)} names from DatapackageCache...")
+            try:
+                results = session.query(
+                    DatapackageCache.game,
+                    DatapackageCache.checksum,
+                    DatapackageCache.entity_type,
+                    DatapackageCache.entity_id,
+                    DatapackageCache.entity_name
+                ).filter(
+                    tuple_(
+                        DatapackageCache.game,
+                        DatapackageCache.checksum,
+                        DatapackageCache.entity_type,
+                        DatapackageCache.entity_id
+                    ).in_(cache_keys_to_fetch)
+                )
+                
+                for game, chk, etype, eid, name in results:
+                    name_lookup_map[(game, chk, etype, eid)] = name
+            
+            except Exception as e:
+                logging.error(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Failed to bulk-fetch names: {e}")
+
+        for item_data in new_items_for_notify:
+            item_name = name_lookup_map.get(
+                (item_data['receiver_game'], item_data['game_checksum'], 'item', item_data['item_id']), 
+                f"ID {item_data['item_id']}"
+            )
+            
+            rid = item_data['receiving_slot_id']
+            for user_id, tracked_slots in tracked_slots_by_user.items():
+                if rid in tracked_slots:
+                    alias = aliases_by_user.get(user_id, "Unknown Room")
+                    
+                    user_slot_added_at = session.query(UserTrackedSlot.added_at).filter_by(
+                        user_id=user_id, room_id=db_id, slot_id=rid
+                    ).scalar()
+                    
+                    if user_slot_added_at and datetime.utcnow() - user_slot_added_at < timedelta(minutes=15):
+                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {user_slot_added_at}. Suppressing notification for item {item_data['item_id']}.")
+                        continue 
+
+                    user_prefs = users_by_id.get(user_id)
+                    slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
+
+                    if not user_prefs or not slot_prefs:
+                        logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
+                        continue
+
+                    is_progression = bool(item_data['flags'] & 1)
+                    should_notify = False
+                    title = ""
+                    item_type = ""
+                    
+                    if is_progression:
+                        title = f"🏆 {item_name}"
+                        item_type = "item_progression"
+                        notify_override = slot_prefs.notify_progression
+                        should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
+                    else:
+                        title = f"✅ {item_name}"
+                        item_type = "item_useful"
+                        notify_override = slot_prefs.notify_useful
+                        should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
+                    
+                    if should_notify:
+                        notifications_by_user.setdefault(user_id, []).append({
+                            'title': title,
+                            'body': f"Received by {name_map.get(rid, f'P{rid}')} in '{alias}'",
+                            'type': item_type,
+                            'details': item_data['item_key_batch']
+                        })
+
+        for hint_data in new_hints_for_notify:
+            item_name = name_lookup_map.get(
+                (hint_data['io_game'], hint_data['io_checksum'], 'item', hint_data['item_id']),
+                f"ID {hint_data['item_id']}"
+            )
+            loc_name = name_lookup_map.get(
+                (hint_data['lo_game'], hint_data['lo_checksum'], 'location', hint_data['loc_id']),
+                f"ID {hint_data['loc_id']}"
+            )
+            
+            io_id, lo_id = hint_data['io_id'], hint_data['lo_id']
+            for user_id, tracked_slots in tracked_slots_by_user.items():
+                is_for_us, is_at_our_location = io_id in tracked_slots, lo_id in tracked_slots
+                if is_for_us or is_at_our_location:
+                    
+                    slot_to_check = io_id if is_for_us else lo_id
+                    
+                    user_slot_added_at = session.query(UserTrackedSlot.added_at).filter_by(
+                        user_id=user_id, room_id=db_id, slot_id=slot_to_check
+                    ).scalar()
+
+                    if user_slot_added_at and datetime.utcnow() - user_slot_added_at < timedelta(minutes=15):
+                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {slot_to_check}, but it was added at {user_slot_added_at}. Suppressing hint notification.")
+                        continue
+
+                    user_prefs = users_by_id.get(user_id)
+                    slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_to_check)
+
+                    if not user_prefs or not slot_prefs:
+                        logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
+                        continue
+                    
+                    notify_override = slot_prefs.notify_hints
+                    should_notify = notify_override if notify_override is not None else user_prefs.notify_hints_default
+                    
+                    if not should_notify:
+                        continue
+
+                    alias = aliases_by_user.get(user_id, "Unknown Room")
+                    title, body = "", ""
+
+                    if is_for_us:
+                        title = f"💡 Hint for your {item_name}!"
+                        body = f"It's at {name_map.get(lo_id, f'P{lo_id}')}'s location: '{loc_name}' in '{alias}'"
+                    elif is_at_our_location:
+                        title = f"💡 Item at your location!"
+                        body = f"{name_map.get(io_id, f'P{io_id}')}'s {item_name} is at your location: '{loc_name}' in '{alias}'"
+
+                    notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']})
+        
+        
         if hints_processed_count > 0:
              logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Hint Stats: Processed={hints_processed_count}, Added={hints_added_count}")
 
