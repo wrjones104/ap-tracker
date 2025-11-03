@@ -986,7 +986,7 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             "item_name": item_name,
             "location_name": location_name,
             "is_found": getattr(hint, 'is_found', False),
-            "timestamp": getattr(hint, 'timestamp', datetime.fromtimestamp(hint.id / 1000.0, tz=timezone.utc)).replace(tzinfo=timezone.utc).isoformat() if hasattr(hint, 'timestamp') else str(hint.id)
+            "timestamp": (hint.timestamp.replace(tzinfo=timezone.utc).isoformat() if hasattr(hint, 'timestamp') and hint.timestamp else datetime.fromtimestamp(hint.id / 1000.0, tz=timezone.utc).isoformat())
         }
 
         if is_item_owner_tracked:
