@@ -454,7 +454,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
                         continue
 
-                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=5):
+                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(10):
                         logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {slot_prefs.added_at}. Suppressing notification for item {item_data['item_id']}.")
                         continue
 
@@ -506,7 +506,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
                         continue
 
-                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=5):
+                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(10):
                         logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {slot_to_check}, but it was added at {slot_prefs.added_at}. Suppressing hint notification.")
                         continue
                     
