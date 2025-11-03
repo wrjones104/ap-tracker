@@ -526,12 +526,8 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         title = f"💡 Item at your location!"
                         body = f"{name_map.get(io_id, f'P{io_id}')}'s {item_name} is at your location: '{loc_name}' in '{alias}'"
 
-                    notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']})
-        
-        
-        if hints_processed_count > 0:
-             logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Hint Stats: Processed={hints_processed_count}, Added={hints_added_count}")
-
+                    notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']})      
+  
         if hints_skipped_backfill > 0:
             logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {hints_skipped_backfill} hint notifications during initial backfill.")
 
