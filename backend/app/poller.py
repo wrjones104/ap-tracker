@@ -580,13 +580,64 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                     logging.debug(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] No unfound hints in DB to check.")
                 else:
                     updated_hint_count = 0
+                    found_hints_for_notify = []
                     for hint in unfound_hints_in_room:
                         if (hint.location_id, hint.item_id) in all_received_item_loc_pairs:
                             hint.is_found = True
                             updated_hint_count += 1
+                            found_hints_for_notify.append(hint)
                     
                     if updated_hint_count > 0:
                         logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Marked {updated_hint_count} hints as found using received_items list.")
+                        for hint in found_hints_for_notify:
+                            # 1. Get game/checksum/name info
+                            io_game, lo_game = game_map.get(hint.item_owner_id, "Unknown"), game_map.get(hint.location_owner_id, "Unknown")
+                            io_checksum = game_checksums.get(io_game)
+                            lo_checksum = game_checksums.get(lo_game)
+
+                            item_name = name_lookup_map.get(
+                                (io_game, io_checksum, 'item', hint.item_id),
+                                f"ID {hint.item_id}"
+                            )
+                            loc_name = name_lookup_map.get(
+                                (lo_game, lo_checksum, 'location', hint.location_id),
+                                f"ID {hint.location_id}"
+                            )
+                            
+                            io_id, lo_id = hint.item_owner_id, hint.location_owner_id
+
+                            # 2. Check which users need to be notified
+                            for user_id, tracked_slots in tracked_slots_by_user.items():
+                                is_for_us, is_at_our_location = io_id in tracked_slots, lo_id in tracked_slots
+                                if is_for_us or is_at_our_location:
+                                    
+                                    slot_to_check = io_id if is_for_us else lo_id
+                                    
+                                    user_prefs = users_by_id.get(user_id)
+                                    slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_to_check)
+
+                                    if not user_prefs or not slot_prefs:
+                                        logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for FOUND hint, user {user_id}, slot {slot_to_check}.")
+                                        continue
+                                    
+                                    notify_override = slot_prefs.notify_hints
+                                    should_notify = notify_override if notify_override is not None else user_prefs.notify_hints_default
+                                    
+                                    if not should_notify:
+                                        continue
+
+                                    # 3. Build the notification
+                                    alias = aliases_by_user.get(user_id, "Unknown Room")
+                                    title, body = "", ""
+
+                                    if is_for_us:
+                                        title = f"💡✅ FOUND: Your {item_name}!"
+                                        body = f"{name_map.get(lo_id, f'P{lo_id}')} found it at '{loc_name}' in '{alias}'"
+                                    elif is_at_our_location:
+                                        title = f"💡✅ FOUND: Item at your {loc_name}!"
+                                        body = f"{name_map.get(io_id, f'P{io_id}')}'s {item_name} was found at your location in '{alias}'"
+
+                                    notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint_found'})
                     else:
                         logging.debug(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] Checked {len(unfound_hints_in_room)} unfound hints, but none matched the received_items list.")
 
