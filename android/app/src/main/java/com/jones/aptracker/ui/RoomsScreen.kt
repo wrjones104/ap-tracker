@@ -46,7 +46,8 @@ fun RoomsScreen(
     onRoomClick: (Int, String) -> Unit,
     onHistoryClick: () -> Unit,
     onLogoutClick: () -> Unit,
-    onSettingsClick: () -> Unit
+    onSettingsClick: () -> Unit,
+    onManageSlotsClick: (Int, String) -> Unit
 ) {
     val rooms by roomsViewModel.rooms.collectAsState()
     val isLoading by roomsViewModel.isLoading.collectAsState()
@@ -55,18 +56,14 @@ fun RoomsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(snackbarHostState, roomsViewModel) {
-        // Create a "flow" that watches the 'errorMessage' val
-        snapshotFlow { errorMessage } // <-- This is the fix
-            .filterNotNull() // Only care about non-null errors
+        snapshotFlow { errorMessage }
+            .filterNotNull()
             .collect { message ->
-                // This is a suspend function. The coroutine will
-                // pause here until the snackbar is shown and dismissed.
                 snackbarHostState.showSnackbar(
                     message = message,
                     duration = SnackbarDuration.Short
                 )
 
-                // AFTER the snackbar is gone, we clear the error.
                 roomsViewModel.clearErrorMessage()
             }
     }
@@ -74,11 +71,20 @@ fun RoomsScreen(
     var showAddDialog by remember { mutableStateOf(false) }
     var roomToDelete by remember { mutableStateOf<Room?>(null) }
     var roomToEdit by remember { mutableStateOf<Room?>(null) }
+    var newRoomAliasToFind by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(rooms, newRoomAliasToFind) {
+        if (newRoomAliasToFind != null) {
+            val addedRoom = rooms.find { it.alias == newRoomAliasToFind }
+            if (addedRoom != null) {
+                onManageSlotsClick(addedRoom.id, addedRoom.alias)
+                newRoomAliasToFind = null
+            }
+        }
+    }
 
     Scaffold(
-        // --- NEW: Add SnackbarHost ---
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-        // --- END NEW ---
         topBar = {
             TopAppBar(
                 title = { Text("Tracked Rooms") },
@@ -103,7 +109,6 @@ fun RoomsScreen(
             onRefresh = { roomsViewModel.fetchRooms() },
             modifier = Modifier.padding(innerPadding)
         ) {
-            // ... (The rest of your UI is identical) ...
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -226,7 +231,9 @@ fun RoomsScreen(
             AddRoomDialog(
                 onDismiss = { showAddDialog = false },
                 onAdd = { roomUrl, alias, iconName ->
-                    roomsViewModel.addRoom(roomUrl, alias, iconName)
+                    roomsViewModel.addRoom(roomUrl, alias, iconName) {
+                        newRoomAliasToFind = alias
+                    }
                     showAddDialog = false
                 }
             )
@@ -239,6 +246,10 @@ fun RoomsScreen(
                 onConfirm = { newAlias, newIconName ->
                     roomsViewModel.updateRoom(room.id, newAlias, newIconName)
                     roomToEdit = null
+                },
+                onManageSlotsClick = {
+                    onManageSlotsClick(room.id, room.alias)
+                    roomToEdit = null // Dismiss the dialog
                 }
             )
         }
@@ -332,7 +343,12 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
 }
 
 @Composable
-fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
+fun EditRoomDialog(
+    room: Room,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit,
+    onManageSlotsClick: () -> Unit
+) {
     var alias by remember { mutableStateOf(room.alias) }
     var selectedIconName by remember { mutableStateOf(room.icon_name) }
 
@@ -367,6 +383,15 @@ fun EditRoomDialog(room: Room, onDismiss: () -> Unit, onConfirm: (String, String
                             Icon(imageVector = icon, contentDescription = name)
                         }
                     }
+                }
+                Spacer(Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = onManageSlotsClick,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Manage Slots")
                 }
             }
         },
