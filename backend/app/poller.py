@@ -447,19 +447,15 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 if rid in tracked_slots:
                     alias = aliases_by_user.get(user_id, "Unknown Room")
                     
-                    user_slot_added_at = session.query(UserTrackedSlot.added_at).filter_by(
-                        user_id=user_id, room_id=db_id, slot_id=rid
-                    ).scalar()
-                    
-                    if user_slot_added_at and datetime.utcnow() - user_slot_added_at < timedelta(minutes=15):
-                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {user_slot_added_at}. Suppressing notification for item {item_data['item_id']}.")
-                        continue 
-
                     user_prefs = users_by_id.get(user_id)
                     slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
 
                     if not user_prefs or not slot_prefs:
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
+                        continue
+
+                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=15):
+                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {slot_prefs.added_at}. Suppressing notification for item {item_data['item_id']}.")
                         continue
 
                     is_progression = bool(item_data['flags'] & 1)
