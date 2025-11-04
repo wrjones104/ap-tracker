@@ -317,7 +317,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 items_processed_count += 1
                 try:
                     if len(item_tuple_data) < 4: continue
-                    item_id, loc_id, _, flags = item_tuple_data 
+                    item_id, loc_id, send_id, flags = item_tuple_data
                 except (ValueError, TypeError, IndexError) as e:
                     logging.warning(f"[POLLER_WARN][RoomDBID:{db_id}] Error unpacking item tuple: {item_tuple_data} | Error: {e}")
                     continue 
@@ -349,15 +349,23 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
                     if game_checksum:
                         cache_keys_to_fetch.add((receiver_game, game_checksum, 'item', item_id))
+
+                    sender_game = game_map.get(send_id, "Unknown")
+                    sender_checksum = game_checksums.get(sender_game)
+                    if sender_checksum:
+                        cache_keys_to_fetch.add((sender_game, sender_checksum, 'location', loc_id))
                     
                     new_items_for_notify.append({
                         'item_key_batch': item_key_batch,
                         'receiving_slot_id': rid,
+                        'sending_slot_id': send_id,
                         'item_id': item_id,
                         'location_id': loc_id,
                         'flags': flags,
                         'receiver_game': receiver_game,
-                        'game_checksum': game_checksum
+                        'game_checksum': game_checksum,
+                        'sender_game': sender_game,
+                        'sender_checksum': sender_checksum
                     })
                 else:
                     items_skipped_backfill += 1
@@ -373,16 +381,13 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         hints_added_count = 0
         hints_skipped_backfill = 0
         
-        # REFACTOR: This entire loop is rewritten to use the 'is_found' boolean from the tracker
-        # and to populate 'just_found_hint_item_loc_pairs'.
         for p_hints in tracker_data.get('hints', []):
              for hint_data in p_hints.get('hints', []):
                 hints_processed_count += 1
                 try:
-                    if len(hint_data) < 5: continue # Ensure hint data is long enough
-                    # Unpack the 'found' boolean (index 4)
+                    if len(hint_data) < 5: continue 
                     io_id, lo_id, loc_id, item_id, is_found_from_tracker, *_ = hint_data
-                    is_found_from_tracker = bool(is_found_from_tracker) # Ensure it's a bool
+                    is_found_from_tracker = bool(is_found_from_tracker) 
                 except (ValueError, IndexError):
                     logging.warning(f"[POLLER_WARN][RoomDBID:{db_id}] Error unpacking hint tuple: {hint_data}")
                     continue
@@ -393,8 +398,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 existing_hint_obj = existing_hints_map.get(hint_key_db)
 
                 if not existing_hint_obj:
-                    # --- Case 1: This is a brand new hint ---
-                    if hint_key_batch in hints_in_this_batch: continue # Duplicate within this poll
+                    if hint_key_batch in hints_in_this_batch: continue
                     
                     hints_to_add_to_db.append(NotifiedHint(
                         room_id=room_uuid,
@@ -402,13 +406,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         location_owner_id=lo_id,
                         item_id=item_id,
                         location_id=loc_id,
-                        is_found=is_found_from_tracker # Set 'is_found' on creation
+                        is_found=is_found_from_tracker
                     ))
                     hints_in_this_batch.add(hint_key_batch)
                     hints_added_count += 1
 
                     if has_hint_history:
-                        # This is a new hint, queue a "New Hint" notification
                         io_game, lo_game = game_map.get(io_id, "Unknown"), game_map.get(lo_id, "Unknown")
                         io_checksum = game_checksums.get(io_game)
                         lo_checksum = game_checksums.get(lo_game)
@@ -426,16 +429,13 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         })
                         
                         if is_found_from_tracker:
-                            # This new hint is already found, add to our set for the "lightbulb"
                             logging.debug(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] New hint {hint_key_db} is already found.")
                             just_found_hint_item_loc_pairs.add((loc_id, item_id))
                     else:
                         hints_skipped_backfill += 1
                 
                 else:
-                    # --- Case 2: This is an existing hint ---
                     if is_found_from_tracker and not existing_hint_obj.is_found:
-                        # This hint was JUST found on this poll cycle
                         logging.debug(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] Existing hint {hint_key_db} marked as found.")
                         existing_hint_obj.is_found = True # Mark for update in the session
                         just_found_hint_item_loc_pairs.add((loc_id, item_id))
@@ -482,12 +482,18 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 f"ID {item_data['item_id']}"
             )
             
-            # REFACTOR: Check if this item corresponds to a "just found" hint
+            loc_name = name_lookup_map.get(
+                (item_data['sender_game'], item_data['sender_checksum'], 'location', item_data['location_id']),
+                f"ID {item_data['location_id']}"
+            )
+            
             item_id = item_data['item_id']
             loc_id = item_data['location_id']
             is_a_found_hint = (loc_id, item_id) in just_found_hint_item_loc_pairs
             
             rid = item_data['receiving_slot_id']
+            send_id = item_data['sending_slot_id']
+
             for user_id, tracked_slots in tracked_slots_by_user.items():
                 if rid in tracked_slots:
                     alias = aliases_by_user.get(user_id, "Unknown Room")
@@ -499,35 +505,40 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
                         continue
 
-                    # BUGFIX: Was timedelta(10) which is 10 days. Changed to 2 minutes.
                     if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=2):
                         logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {slot_prefs.added_at}. Suppressing notification for item {item_data['item_id']}.")
                         continue
 
                     is_progression = bool(item_data['flags'] & 1)
                     should_notify = False
-                    title = ""
+                    title_prefix = ""
                     item_type = ""
                     
                     if is_progression:
-                        title = f"🏆 {item_name}"
+                        title_prefix = f"🏆 {item_name}"
                         item_type = "item_progression"
                         notify_override = slot_prefs.notify_progression
                         should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
                     else:
-                        title = f"✅ {item_name}"
+                        title_prefix = f"✅ {item_name}"
                         item_type = "item_useful"
                         notify_override = slot_prefs.notify_useful
                         should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
                     
-                    # REFACTOR: Add the lightbulb prefix if this item was a "just found" hint
                     if is_a_found_hint:
-                        title = "💡 " + title
+                        title_prefix = "💡 " + title_prefix
+                    
+                    title = f"{title_prefix} - [{alias}]"
+                    
+                    sender_name = name_map.get(send_id, f'P{send_id}')
+                    receiver_name = name_map.get(rid, f'P{rid}')
+                    
+                    body = f"{sender_name} sent {item_name} to {receiver_name} ({loc_name})"
                     
                     if should_notify:
                         notifications_by_user.setdefault(user_id, []).append({
                             'title': title,
-                            'body': f"Received by {name_map.get(rid, f'P{rid}')} in '{alias}'",
+                            'body': body,
                             'type': item_type,
                             'details': item_data['item_key_batch']
                         })
@@ -556,7 +567,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
                         continue
 
-                    # BUGFIX: Was timedelta(10) which is 10 days. Changed to 2 minutes.
                     if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=2):
                         logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_to_check} added at {slot_prefs.added_at}. Suppressing hint notification.")
                         continue
@@ -568,17 +578,16 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         continue
 
                     alias = aliases_by_user.get(user_id, "Unknown Room")
-                    title, body = "", ""
+                    
+                    title = f"💡 New Hint! - [{alias}]"
 
-                    if is_for_us:
-                        title = f"💡 Hint for your {item_name}!"
-                        body = f"It's at {name_map.get(lo_id, f'P{lo_id}')}'s location: '{loc_name}' in '{alias}'"
-                    elif is_at_our_location:
-                        title = f"💡 Item at your location!"
-                        body = f"{name_map.get(io_id, f'P{io_id}')}'s {item_name} is at your location: '{loc_name}' in '{alias}'"
+                    item_owner_name = name_map.get(io_id, f'P{io_id}')
+                    location_owner_name = name_map.get(lo_id, f'P{lo_id}')
 
-                    notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']})      
-  
+                    body = f"{item_owner_name}'s {item_name} is at {loc_name} in {location_owner_name}'s World."
+
+                    notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']})
+    
         if hints_skipped_backfill > 0:
             logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {hints_skipped_backfill} hint notifications during initial backfill.")
        
@@ -599,8 +608,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             elif not notifications_by_user: 
                  logging.info(f"[POLLER][RoomDBID:{db_id}] Silently added {len(hints_to_add_to_db)} new hints.")
 
-        # REFACTOR: The entire 'try/except' block for manually finding hints
-        # (originally lines 515-593) has been deleted as it is now redundant.
 
         notifications_to_send = {}
         if notifications_by_user:
