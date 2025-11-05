@@ -318,6 +318,9 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 try:
                     if len(item_tuple_data) < 4: continue
                     item_id, loc_id, send_id, flags = item_tuple_data
+                    item_id = int(item_id)
+                    loc_id = int(loc_id)
+                    send_id = int(send_id)
                 except (ValueError, TypeError, IndexError) as e:
                     logging.warning(f"[POLLER_WARN][RoomDBID:{db_id}] Error unpacking item tuple: {item_tuple_data} | Error: {e}")
                     continue 
@@ -387,6 +390,10 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 try:
                     if len(hint_data) < 5: continue 
                     io_id, lo_id, loc_id, item_id, is_found_from_tracker, *_ = hint_data
+                    io_id = int(io_id)
+                    lo_id = int(lo_id)
+                    loc_id = int(loc_id)
+                    item_id = int(item_id)
                     is_found_from_tracker = bool(is_found_from_tracker) 
                 except (ValueError, IndexError):
                     logging.warning(f"[POLLER_WARN][RoomDBID:{db_id}] Error unpacking hint tuple: {hint_data}")
