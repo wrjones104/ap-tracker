@@ -39,7 +39,8 @@ class HistoryRepository(
                             timestamp = item.timestamp,
                             tracker_id = item.tracker_id,
                             slot_id = item.slot_id,
-                            icon_name = item.icon_name
+                            icon_name = item.icon_name,
+                            host = item.host
                         )
                         Log.d("HISTORY_DEBUG", "Successfully parsed item: ${entity.message}")
                         entity
@@ -67,7 +68,8 @@ class HistoryRepository(
                 timestamp = item.timestamp,
                 tracker_id = item.tracker_id,
                 slot_id = item.slot_id,
-                icon_name = item.icon_name
+                icon_name = item.icon_name,
+                host = item.host
             )
         } catch (e: Exception) {
             Log.e("HISTORY_DEBUG", "Failed to process history item: $item", e)
