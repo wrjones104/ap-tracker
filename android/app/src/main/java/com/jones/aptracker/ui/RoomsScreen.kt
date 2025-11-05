@@ -145,7 +145,12 @@ fun RoomsScreen(
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(8.dp),
+                        contentPadding = PaddingValues(
+                            start = 8.dp,
+                            top = 8.dp,
+                            end = 8.dp,
+                            bottom = 96.dp
+                        ),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         item {
