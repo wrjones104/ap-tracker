@@ -303,6 +303,8 @@ def add_room(current_user):
     
     room.is_suspended = False # Wake up the room if it was suspended
 
+    logging.info(f"[API] User {current_user.id} subscribed to room {room.id} ('{alias}')")
+
     session.commit()
     return jsonify({'message': f"Now tracking room '{alias}'."}), 201
 
