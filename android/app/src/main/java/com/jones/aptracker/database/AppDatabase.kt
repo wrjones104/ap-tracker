@@ -1,3 +1,4 @@
+// In AppDatabase.kt
 package com.jones.aptracker.database
 
 import android.content.Context
@@ -11,7 +12,7 @@ import com.jones.aptracker.network.HistoryItemEntity
 import com.jones.aptracker.network.RoomDao
 import com.jones.aptracker.network.RoomEntity
 
-@Database(entities = [RoomEntity::class, HistoryItemEntity::class, HintEntity::class], version = 6)
+@Database(entities = [RoomEntity::class, HistoryItemEntity::class, HintEntity::class], version = 7) // <-- 1. VERSION UP
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun roomDao(): RoomDao
@@ -29,8 +30,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ap_tracker_database"
                 )
-
-                    .addMigrations(MIGRATION_5_6)
+                    .addMigrations(MIGRATION_5_6, MIGRATION_6_7)
                     .build()
                 INSTANCE = instance
                 instance

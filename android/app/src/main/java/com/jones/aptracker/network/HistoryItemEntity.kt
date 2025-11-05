@@ -16,5 +16,6 @@ data class HistoryItemEntity(
     val timestamp: String,
     val tracker_id: String?,
     val slot_id: Int?,
-    val icon_name: String?
+    val icon_name: String?,
+    val host: String?
 )

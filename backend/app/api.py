@@ -534,6 +534,7 @@ def get_item_history(current_user, room_db_id):
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": room.tracker_id,
             "slot_id": item.receiving_slot_id,
+            "host": room.hostname
         })
 
     return jsonify(history)
@@ -649,6 +650,7 @@ def get_global_item_history(current_user):
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": room_data.tracker_id,
             "slot_id": item.receiving_slot_id,
+            "host": room_data.hostname,
             "_name_key": item_name_key,
             "_raw_item_id": item.item_id
         })
@@ -692,7 +694,8 @@ def get_global_item_history(current_user):
             "message": f"{temp_item['receiver_name']} received: {item_name}",
             "timestamp": temp_item["timestamp"],
             "tracker_id": temp_item["tracker_id"],
-            "slot_id": temp_item["slot_id"]
+            "slot_id": temp_item["slot_id"],
+            "host": temp_item["host"]
         })
 
     return jsonify(history)

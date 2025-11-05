@@ -120,7 +120,8 @@ data class HistoryItem(
     val tracker_id: String?,
     val slot_id: Int?,
     val icon_name: String?,
-    val db_id: Int?
+    val db_id: Int?,
+    val host: String?
 )
 
 data class RegisterDeviceRequest(
