@@ -223,8 +223,8 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
                         .fillMaxWidth()
                         .clickable(enabled = isClickable) {
                             if (isClickable) {
-                                val itemHost = item.host.takeIf { !it.isNullOrBlank() } ?: "archipelago.gg"
-                                val url = "https://${itemHost}/tracker/${item.tracker_id}/0/${item.slot_id}"
+val cleanHost = (item.host?.takeIf { it.isNotBlank() } ?: "archipelago.gg").removePrefix("https://").removePrefix("http://")
+val url = "https://${cleanHost}/tracker/${item.tracker_id}/0/${item.slot_id}"
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                                 context.startActivity(intent)
                             }
