@@ -30,22 +30,19 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
-// --- NEW IMPORTS ---
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-// ---------------------
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -226,7 +223,8 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
                         .fillMaxWidth()
                         .clickable(enabled = isClickable) {
                             if (isClickable) {
-                                val url = "https://archipelago.gg/tracker/${item.tracker_id}/0/${item.slot_id}"
+                                val itemHost = item.host.takeIf { !it.isNullOrBlank() } ?: "archipelago.gg"
+                                val url = "https://${itemHost}/tracker/${item.tracker_id}/0/${item.slot_id}"
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                                 context.startActivity(intent)
                             }

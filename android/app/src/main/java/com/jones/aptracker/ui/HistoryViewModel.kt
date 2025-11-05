@@ -89,7 +89,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         tracker_id = entity.tracker_id,
                         slot_id = entity.slot_id,
                         icon_name = entity.icon_name,
-                        db_id = entity.roomId
+                        db_id = entity.roomId,
+                        host = entity.host
                     )
                 }
                 // --- END FIX ---
