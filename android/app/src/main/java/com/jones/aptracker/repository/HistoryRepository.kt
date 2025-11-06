@@ -35,14 +35,17 @@ class HistoryRepository(
                     try {
                         val entity = HistoryItemEntity(
                             roomId = item.db_id,
-                            message = item.message,
+                            playerName = item.playerName,
+                            itemName = item.itemName,
+                            isPlayerFinished = item.isPlayerFinished,
+                            itemFlags = item.itemFlags,
                             timestamp = item.timestamp,
                             tracker_id = item.tracker_id,
                             slot_id = item.slot_id,
                             icon_name = item.icon_name,
                             host = item.host
                         )
-                        Log.d("HISTORY_DEBUG", "Successfully parsed item: ${entity.message}")
+                        Log.d("HISTORY_DEBUG", "Successfully parsed item: ${entity.playerName} received ${entity.itemName}")
                         entity
                     } catch (e: Exception) {
                         Log.e("HISTORY_DEBUG", "!!! FAILED to process history item. Error: ${e.message}")
@@ -57,23 +60,6 @@ class HistoryRepository(
             }
         } catch (e: Exception) {
             Log.e("HISTORY_DEBUG", "!!! FAILED item history refresh: ${e.message}", e)
-        }
-    }
-
-    private fun mapHistoryItemToEntity(item: HistoryItem): HistoryItemEntity? {
-        return try {
-            HistoryItemEntity(
-                roomId = item.db_id,
-                message = item.message,
-                timestamp = item.timestamp,
-                tracker_id = item.tracker_id,
-                slot_id = item.slot_id,
-                icon_name = item.icon_name,
-                host = item.host
-            )
-        } catch (e: Exception) {
-            Log.e("HISTORY_DEBUG", "Failed to process history item: $item", e)
-            null
         }
     }
 
@@ -172,5 +158,15 @@ class HistoryRepository(
             isFound = detail.is_found,
             timestamp = detail.timestamp
         )
+    }
+    suspend fun pruneSlotData(roomId: Int, slotIds: Set<Int>) {
+        if (slotIds.isEmpty()) return
+        Log.d("PRUNING", "Pruning data for room $roomId, slots: $slotIds")
+        try {
+            historyDao.deleteHistoryForSlots(roomId, slotIds)
+
+        } catch (e: Exception) {
+            Log.e("PRUNING", "Failed to prune slot data: ${e.message}", e)
+        }
     }
 }

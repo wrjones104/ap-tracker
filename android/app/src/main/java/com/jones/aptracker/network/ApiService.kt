@@ -77,6 +77,8 @@ interface ApiService {
     @DELETE("users/me")
     suspend fun deleteAccount(): Response<Unit>
 
+    @GET("config")
+    suspend fun getConfig(): ConfigResponse
 }
 
 data class Room(
@@ -105,6 +107,7 @@ data class Player(
     val name: String?,
     val game: String?,
     val is_tracked: Boolean,
+    val is_finished: Boolean,
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?
@@ -115,7 +118,11 @@ data class UpdateSlotsRequest(
 )
 
 data class HistoryItem(
-    val message: String,
+    val id: Long,
+    val playerName: String,
+    val itemName: String,
+    val isPlayerFinished: Boolean,
+    val itemFlags: Int,
     val timestamp: String,
     val tracker_id: String?,
     val slot_id: Int?,
@@ -190,4 +197,8 @@ data class HintDetail(
     val location_name: String,
     val is_found: Boolean,
     val timestamp: String
+)
+
+data class ConfigResponse(
+    val min_app_version: Int
 )

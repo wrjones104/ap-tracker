@@ -23,4 +23,7 @@ interface HistoryDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHistoryItems(items: List<HistoryItemEntity>)
+
+    @Query("DELETE FROM history_items WHERE roomId = :roomId AND slot_id IN (:slotIds)")
+    suspend fun deleteHistoryForSlots(roomId: Int, slotIds: Set<Int>)
 }
