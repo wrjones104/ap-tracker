@@ -13,18 +13,34 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jones.aptracker.network.AuthRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.SessionManager
 import com.jones.aptracker.network.TokenManager
 import com.jones.aptracker.ui.AppNavigation
+import com.jones.aptracker.ui.AppVersionState
 import com.jones.aptracker.ui.AuthViewModel
+import com.jones.aptracker.ui.MainViewModel
 import com.jones.aptracker.ui.theme.APTrackerTheme
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -35,7 +51,6 @@ import net.openid.appauth.AuthorizationResponse
 import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.ResponseTypeValues
-import androidx.compose.ui.platform.LocalContext
 
 class MainActivity : ComponentActivity() {
 
@@ -89,24 +104,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             APTrackerTheme {
-                val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
-                val isLoading by authViewModel.isLoading.collectAsState()
-                val context = LocalContext.current
-                val onLogout = { authViewModel.onLogout(context) }
-
-
-                LaunchedEffect(isLoggedIn) {
-                    if (isLoggedIn) {
-                        authViewModel.registerDeviceToken(context)
-                        checkAndRequestNotificationPermission()
-                    }
-                }
-
-                AppNavigation(
-                    isLoggedIn = isLoggedIn,
-                    isLoading = isLoading,
-                    onLoginClick = { startAuthentication(authLauncher) },
-                    onLogoutClick = onLogout
+                VersionGate(
+                    authViewModel = authViewModel,
+                    onStartAuth = { startAuthentication(authLauncher) },
+                    onCheckNotificationPermission = { checkAndRequestNotificationPermission() }
                 )
             }
         }
@@ -192,5 +193,101 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         authService.dispose()
+    }
+}
+
+@Composable
+fun VersionGate(
+    authViewModel: AuthViewModel,
+    mainViewModel: MainViewModel = viewModel(),
+    onStartAuth: () -> Unit,
+    onCheckNotificationPermission: () -> Unit
+) {
+    val versionState by mainViewModel.versionState.collectAsState()
+
+    // Observe the state from the ViewModel
+    when (val state = versionState) {
+        is AppVersionState.Checking -> {
+            // Show a simple loading screen
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        }
+        is AppVersionState.UpToDate -> {
+            // --- THIS IS YOUR EXISTING LOGIC ---
+            // The app is good! Load your real app.
+            val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
+            val isLoading by authViewModel.isLoading.collectAsState()
+            val context = LocalContext.current
+            val onLogout = { authViewModel.onLogout(context) }
+
+            LaunchedEffect(isLoggedIn) {
+                if (isLoggedIn) {
+                    authViewModel.registerDeviceToken(context)
+                    onCheckNotificationPermission()
+                }
+            }
+
+            AppNavigation(
+                isLoggedIn = isLoggedIn,
+                isLoading = isLoading,
+                onLoginClick = onStartAuth,
+                onLogoutClick = onLogout
+            )
+            // --- END OF YOUR EXISTING LOGIC ---
+        }
+        is AppVersionState.Outdated -> {
+            // Show the "blocking" dialog with your GitHub URL
+            UpdateRequiredScreen(storeUrl = state.storeUrl)
+        }
+        is AppVersionState.Error -> {
+            // Show a "retry" screen
+            ErrorScreen(message = state.message, onRetry = { mainViewModel.checkAppVersion() })
+        }
+    }
+}
+
+@Composable
+fun UpdateRequiredScreen(storeUrl: String) {
+    val context = LocalContext.current
+    val githubReleasesUrl = "https://github.com/wrjones104/ap-tracker/releases"
+
+    // This is a non-dismissible screen
+    AlertDialog(
+        onDismissRequest = { /* Do nothing, cannot be dismissed */ },
+        title = { Text("Update Required") },
+        text = { Text("This version of AP Tracker is no longer supported. Please update to the latest version to continue.") },
+        confirmButton = {
+            Button(onClick = {
+                // Open the GitHub Releases page
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(githubReleasesUrl))
+                context.startActivity(intent)
+            }) {
+                Text("Go to Releases")
+            }
+        },
+        dismissButton = null
+    )
+}
+
+@Composable
+fun ErrorScreen(message: String, onRetry: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "An error occurred:",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = onRetry) {
+                Text("Retry")
+            }
+        }
     }
 }

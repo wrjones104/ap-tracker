@@ -6,14 +6,17 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "history_items",
-    indices = [Index(value = ["message", "timestamp", "slot_id"], unique = true)]
+    indices = [Index(value = ["roomId", "playerName", "itemName"], unique = false)]
 )
 data class HistoryItemEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val roomId: Int?,
-    val message: String,
     val timestamp: String,
+    val playerName: String,
+    val itemName: String,
+    val isPlayerFinished: Boolean,
+    val itemFlags: Int,
     val tracker_id: String?,
     val slot_id: Int?,
     val icon_name: String?,
