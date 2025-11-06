@@ -1,30 +1,41 @@
 package com.jones.aptracker.ui
 
+import android.app.Application
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.Player
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.UpdateSlotsRequest
+import com.jones.aptracker.repository.HistoryRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class PlayersViewModel : ViewModel() {
+class PlayersViewModel(application: Application) : AndroidViewModel(application) {
     val allPlayers = mutableStateOf<List<Player>>(emptyList())
     val selections = mutableStateMapOf<Int, Boolean>()
 
     val isLoading = mutableStateOf(true)
     val showSaveConfirmation = mutableStateOf(false)
     val searchQuery = mutableStateOf("")
-
-    // --- We are now using StateFlow for errors ---
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage = _errorMessage.asStateFlow()
-
+    private val repository: HistoryRepository
+    private var initialTrackedSlots = setOf<Int>()
+    init {
+        val db = AppDatabase.getInstance(application)
+        repository = HistoryRepository(
+            RetrofitClient.instance,
+            db.historyDao(),
+            db.hintDao()
+        )
+    }
     val filteredPlayers by derivedStateOf {
         if (searchQuery.value.isBlank()) {
             allPlayers.value
@@ -44,9 +55,14 @@ class PlayersViewModel : ViewModel() {
                 val playerList = RetrofitClient.instance.getPlayersInRoom(roomId)
                 allPlayers.value = playerList
                 selections.clear()
+                val trackedSlots = mutableSetOf<Int>()
                 playerList.forEach { player ->
                     selections[player.slot_id] = player.is_tracked
+                    if (player.is_tracked) {
+                        trackedSlots.add(player.slot_id)
+                    }
                 }
+                initialTrackedSlots = trackedSlots
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to load players: ${e.message}"
                 e.printStackTrace()
@@ -60,25 +76,33 @@ class PlayersViewModel : ViewModel() {
         selections[playerId] = isSelected
     }
 
-    // --- THIS IS THE CORRECTED FUNCTION ---
     fun saveSelections(roomId: Int) {
         viewModelScope.launch {
-            isLoading.value = true     // <-- SETS LOADING TO TRUE
-            _errorMessage.value = null // Clear any old errors
+            isLoading.value = true
+            _errorMessage.value = null
             try {
-                val selectedIds = selections.filter { it.value }.keys.toList()
-                val request = UpdateSlotsRequest(tracked_slot_ids = selectedIds)
+                val newTrackedSlots = selections.filter { it.value }.keys.toSet()
+                val slotsToPrune = initialTrackedSlots - newTrackedSlots
+
+                if (slotsToPrune.isNotEmpty()) {
+                    repository.pruneSlotData(roomId, slotsToPrune)
+                }
+
+                // Now, call the API as normal
+                val request = UpdateSlotsRequest(tracked_slot_ids = newTrackedSlots.toList())
                 RetrofitClient.instance.updateTrackedSlots(roomId, request)
                 showSaveConfirmation.value = true
+
+                initialTrackedSlots = newTrackedSlots
+
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to save selections."
                 e.printStackTrace()
             } finally {
-                isLoading.value = false // <-- SETS LOADING TO FALSE
+                isLoading.value = false
             }
         }
     }
-    // --- END OF FIX ---
 
     fun isPlayerChecked(player: Player): Boolean {
         return selections[player.slot_id] ?: false

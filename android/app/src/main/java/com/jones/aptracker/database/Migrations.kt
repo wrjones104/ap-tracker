@@ -58,3 +58,47 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         db.execSQL("ALTER TABLE history_items ADD COLUMN host TEXT")
     }
 }
+
+
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+
+        // 1. Create the new table with the FINAL schema
+        //    (Note the new DEFAULT 0 and DEFAULT '' values)
+        db.execSQL("""
+            CREATE TABLE history_items_new (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `roomId` INTEGER,
+                `timestamp` TEXT NOT NULL,
+                `playerName` TEXT NOT NULL DEFAULT '',
+                `itemName` TEXT NOT NULL DEFAULT '',
+                `isPlayerFinished` INTEGER NOT NULL DEFAULT 0,
+                `itemFlags` INTEGER NOT NULL DEFAULT 0,
+                `tracker_id` TEXT,
+                `slot_id` INTEGER,
+                `icon_name` TEXT,
+                `host` TEXT
+            )
+        """.trimIndent())
+
+        // 2. Create the new index (from your @Entity)
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_history_items_roomId_playerName_itemName ON history_items_new (roomId, playerName, itemName)")
+
+        // 3. Copy all existing data from the old table to the new one.
+        //    (This will now work, as the new columns will get their defaults)
+        db.execSQL("""
+            INSERT INTO history_items_new (
+                id, roomId, timestamp, tracker_id, slot_id, icon_name, host
+            )
+            SELECT
+                id, roomId, timestamp, tracker_id, slot_id, icon_name, host
+            FROM history_items
+        """.trimIndent())
+
+        // 4. Drop the old table
+        db.execSQL("DROP TABLE history_items")
+
+        // 5. Rename the new table to the original name
+        db.execSQL("ALTER TABLE history_items_new RENAME TO history_items")
+    }
+}

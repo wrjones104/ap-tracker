@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.orm import selectinload, aliased
-from sqlalchemy import or_, desc
+from sqlalchemy import or_, desc, tuple_
 
 from . import Session
 from .models import (
@@ -123,6 +123,29 @@ def handle_db_errors(f):
         finally:
             Session.remove()
     return decorated_function
+
+# =============================================================================
+# PUBLIC CONFIG ENDPOINT
+# =============================================================================
+
+@bp.route('/config', methods=['GET'])
+@log_api_call 
+def get_public_config():
+    """
+    Returns public configuration data, such as the minimum
+    required app version, to all clients. This endpoint is
+    unauthenticated so the app can check it on launch.
+    """
+    try:
+        min_version = 8 
+        
+        return jsonify({
+            'min_app_version': min_version
+        })
+    except Exception as e:
+        logging.error(f"[CONFIG_ERROR] Failed to serve /config: {e}", exc_info=True)
+        return jsonify({'error': 'Could not fetch server config.'}), 500
+
 
 # =============================================================================
 # DEVICE MANAGEMENT
@@ -403,8 +426,8 @@ def get_room_players(current_user, room_db_id):
                 'slot_id': slot_id,
                 'name': p.get('name'),
                 'game': p.get('game'),
+                'is_finished': p.get('is_finished', False),
                 'is_tracked': tracked_slot_entry is not None,
-                
                 'notify_progression': tracked_slot_entry.notify_progression if tracked_slot_entry else None,
                 'notify_useful': tracked_slot_entry.notify_useful if tracked_slot_entry else None,
                 'notify_hints': tracked_slot_entry.notify_hints if tracked_slot_entry else None
@@ -475,7 +498,7 @@ def update_tracked_slots(current_user, room_db_id):
 def get_item_history(current_user, room_db_id):
     """
     Gets the item history for a specific room, filtered for the slots the
-    current user is tracking.
+    current user is tracking. (Refactored to send structured data)
     """
     session = Session()
     room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
@@ -513,28 +536,72 @@ def get_item_history(current_user, room_db_id):
         logging.error(f"[API_ERROR] Room data for {room_db_id} is corrupt.", exc_info=True)
         return jsonify({'error': 'Room data is corrupt or missing.'}), 500
         
-    name_map = {p['slot_id']: p['name'] for p in players}
-    game_map = {p['slot_id']: p['game'] for p in players}
+    player_map = {p['slot_id']: p for p in players}
+    game_map = {p['slot_id']: p.get('game') for p in players} # We removed original_game logic
 
-    history = []
+    history_pre_cache = []
+    cache_keys_to_find = set()
+    
     for item in items:
-        receiver_name = name_map.get(item.receiving_slot_id, f"Player {item.receiving_slot_id}")
-        receiver_game = game_map.get(item.receiving_slot_id, "Unknown")
+        receiver_id = item.receiving_slot_id
+        player_obj = player_map.get(receiver_id)
+        
+        receiver_name = player_obj.get('name', f"Player {receiver_id}") if player_obj else f"Player {receiver_id}"
+        receiver_game = game_map.get(receiver_id, "Unknown")
+        is_finished = player_obj.get('is_finished', False) if player_obj else False
         game_checksum = game_checksums.get(receiver_game)
 
-        item_name = session.query(DatapackageCache.entity_name).filter_by(
-            game=receiver_game,
-            checksum=game_checksum,
-            entity_type='item',
-            entity_id=item.item_id
-        ).scalar() or f"Item ID {item.item_id}"
+        item_name_key = None
+        if receiver_game and game_checksum:
+            item_name_key = (receiver_game, game_checksum, 'item', item.item_id)
+            cache_keys_to_find.add(item_name_key)
 
-        history.append({
-            "message": f"{receiver_name} received: {item_name}",
+        history_pre_cache.append({
+            "playerName": receiver_name,
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": room.tracker_id,
-            "slot_id": item.receiving_slot_id,
-            "host": room.hostname
+            "slot_id": receiver_id,
+            "host": room.hostname,
+            "isPlayerFinished": is_finished,
+            "itemFlags": item.item_flags or 0,
+            "_name_key": item_name_key,
+            "_raw_item_id": item.item_id
+        })
+
+    name_cache_map = {}
+    if cache_keys_to_find:
+        cache_query = session.query(
+            DatapackageCache.game,
+            DatapackageCache.checksum,
+            DatapackageCache.entity_type,
+            DatapackageCache.entity_id,
+            DatapackageCache.entity_name
+        ).filter(
+            tuple_(
+                DatapackageCache.game,
+                DatapackageCache.checksum,
+                DatapackageCache.entity_type,
+                DatapackageCache.entity_id
+            ).in_(cache_keys_to_find)
+        )
+        name_cache_map = {
+            (c.game, c.checksum, c.entity_type, c.entity_id): c.entity_name
+            for c in cache_query.all()
+        }
+
+    history = []
+    for temp_item in history_pre_cache:
+        item_name = name_cache_map.get(temp_item["_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
+        
+        history.append({
+            "playerName": temp_item["playerName"],
+            "itemName": item_name,
+            "isPlayerFinished": temp_item["isPlayerFinished"],
+            "itemFlags": temp_item["itemFlags"],
+            "timestamp": temp_item["timestamp"],
+            "tracker_id": temp_item["tracker_id"],
+            "slot_id": temp_item["slot_id"],
+            "host": temp_item["host"]
         })
 
     return jsonify(history)
@@ -633,6 +700,10 @@ def get_global_item_history(current_user):
         name_map = {p['slot_id']: p['name'] for p in players}
         game_map = {p['slot_id']: p['game'] for p in players}
 
+        player_map = {p['slot_id']: p for p in players}
+        player_obj = player_map.get(item.receiving_slot_id)
+        is_finished = player_obj.get('is_finished', False) if player_obj else False
+
         receiver_name = name_map.get(item.receiving_slot_id, f"Player {item.receiving_slot_id}")
         receiver_game = game_map.get(item.receiving_slot_id, "Unknown")
         game_checksum = game_checksums.get(receiver_game)
@@ -652,27 +723,27 @@ def get_global_item_history(current_user):
             "slot_id": item.receiving_slot_id,
             "host": room_data.hostname,
             "_name_key": item_name_key,
-            "_raw_item_id": item.item_id
+            "_raw_item_id": item.item_id,
+            "is_player_finished": is_finished,
+            "item_flags": item.item_flags or 0
         })
 
     name_cache_map = {}
     if cache_keys_to_find:
-        cache_filters = []
-        for game, checksum, etype, eid in cache_keys_to_find:
-            cache_filters.append(
-                (DatapackageCache.game == game) &
-                (DatapackageCache.checksum == checksum) &
-                (DatapackageCache.entity_type == etype) &
-                (DatapackageCache.entity_id == eid)
-            )
-        
         cache_query = session.query(
             DatapackageCache.game,
             DatapackageCache.checksum,
             DatapackageCache.entity_type,
             DatapackageCache.entity_id,
             DatapackageCache.entity_name
-        ).filter(or_(*cache_filters))
+        ).filter(
+            tuple_(
+                DatapackageCache.game,
+                DatapackageCache.checksum,
+                DatapackageCache.entity_type,
+                DatapackageCache.entity_id
+            ).in_(cache_keys_to_find)
+        )
 
         name_cache_map = {
             (c.game, c.checksum, c.entity_type, c.entity_id): c.entity_name
@@ -691,7 +762,10 @@ def get_global_item_history(current_user):
             "db_id": temp_item["db_id"], 
             "alias": temp_item["alias"], 
             "icon_name": temp_item["icon_name"],
-            "message": f"{temp_item['receiver_name']} received: {item_name}",
+            "playerName": temp_item['receiver_name'],
+            "itemName": item_name,
+            "isPlayerFinished": temp_item['is_player_finished'],
+            "itemFlags": temp_item['item_flags'],
             "timestamp": temp_item["timestamp"],
             "tracker_id": temp_item["tracker_id"],
             "slot_id": temp_item["slot_id"],
@@ -927,76 +1001,119 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
     hints_for_you = []
     hints_by_you = []
 
-    # We need datapackage cache for names
-    # Create aliases for cleaner joins
-    ItemOwnerCache = aliased(DatapackageCache)
-    LocationOwnerCache = aliased(DatapackageCache)
-    ItemNameCache = aliased(DatapackageCache)
-    LocationNameCache = aliased(DatapackageCache)
-
-    # Get room/player/game info needed for names - optimize later if needed
+    # Get room/player/game info needed for names
     all_room_db_ids = list(room_id_to_uuid.keys())
     all_subs = session.query(UserRoomSubscription).filter(UserRoomSubscription.room_id.in_(all_room_db_ids)).all()
     alias_map = {sub.room_id: sub.alias for sub in all_subs} # room_db_id -> alias
 
     all_rooms_full = session.query(TrackedRoom).filter(TrackedRoom.id.in_(all_room_db_ids)).all()
-    player_map_by_room = {r.id: {p['slot_id']: p['name'] for p in json.loads(r.cached_players_json or '[]')} for r in all_rooms_full} # room_db_id -> {slot_id: name}
-    game_map_by_room = {r.id: {p['slot_id']: p['game'] for p in json.loads(r.cached_players_json or '[]')} for r in all_rooms_full} # room_db_id -> {slot_id: game}
-    checksum_map_by_room = {r.id: json.loads(r.game_checksums_json or '{}') for r in all_rooms_full} # room_db_id -> {game: checksum}
+    
+    player_map_by_room = {r.id: {p['slot_id']: p['name'] for p in json.loads(r.cached_players_json or '[]')} for r in all_rooms_full}
+    game_map_by_room = {r.id: {p['slot_id']: p.get('game') for p in json.loads(r.cached_players_json or '[]')} for r in all_rooms_full}
+    
+    checksum_map_by_room = {r.id: json.loads(r.game_checksums_json or '{}') for r in all_rooms_full}
     uuid_to_db_id = {v: k for k, v in room_id_to_uuid.items()}
 
 
+    # 1. Gather all name keys we need to look up
+    cache_keys_to_find = set()
+    temp_hint_data = [] # Store processed hints temporarily
+
     for hint in all_relevant_hints:
         room_db_id_for_hint = uuid_to_db_id.get(hint.room_id)
-        if not room_db_id_for_hint: continue # Should not happen
+        if not room_db_id_for_hint: continue 
 
-        # Check if this hint involves a slot the user is tracking
         is_item_owner_tracked = (room_db_id_for_hint, hint.item_owner_id) in user_tracked_tuples
         is_location_owner_tracked = (room_db_id_for_hint, hint.location_owner_id) in user_tracked_tuples
 
         if not (is_item_owner_tracked or is_location_owner_tracked):
-            continue # Skip hints not involving user's tracked slots
+            continue 
 
-        # Get names using cached data
         player_map = player_map_by_room.get(room_db_id_for_hint, {})
         game_map = game_map_by_room.get(room_db_id_for_hint, {})
         checksum_map = checksum_map_by_room.get(room_db_id_for_hint, {})
 
         item_owner_name = player_map.get(hint.item_owner_id, f"Player {hint.item_owner_id}")
         location_owner_name = player_map.get(hint.location_owner_id, f"Player {hint.location_owner_id}")
-
+        
         item_owner_game = game_map.get(hint.item_owner_id)
         location_owner_game = game_map.get(hint.location_owner_id)
 
         item_checksum = checksum_map.get(item_owner_game) if item_owner_game else None
         location_checksum = checksum_map.get(location_owner_game) if location_owner_game else None
 
-        item_name = session.query(DatapackageCache.entity_name).filter_by(
-            game=item_owner_game, checksum=item_checksum, entity_type='item', entity_id=hint.item_id
-        ).scalar() or f"Item ID {hint.item_id}"
+        # === THIS IS THE OTHER FIX ===
+        # Create keys as None initially
+        item_name_key = None
+        location_name_key = None
 
-        location_name = session.query(DatapackageCache.entity_name).filter_by(
-            game=location_owner_game, checksum=location_checksum, entity_type='location', entity_id=hint.location_id
-        ).scalar() or f"Location ID {hint.location_id}"
+        # Only add to cache_keys_to_find if we have valid data
+        if item_owner_game and item_checksum:
+            item_name_key = (item_owner_game, item_checksum, 'item', hint.item_id)
+            cache_keys_to_find.add(item_name_key)
+            
+        if location_owner_game and location_checksum:
+            location_name_key = (location_owner_game, location_checksum, 'location', hint.location_id)
+            cache_keys_to_find.add(location_name_key)
+        # === END FIX ===
 
+        temp_hint_data.append({
+            "hint_obj": hint,
+            "room_db_id": room_db_id_for_hint,
+            "is_item_owner_tracked": is_item_owner_tracked,
+            "item_owner_name": item_owner_name,
+            "location_owner_name": location_owner_name,
+            "item_name_key": item_name_key,
+            "location_name_key": location_name_key
+        })
+
+    # 2. Run ONE query to get all names
+    name_cache_map = {}
+    if cache_keys_to_find:
+        cache_query = session.query(
+            DatapackageCache.game,
+            DatapackageCache.checksum,
+            DatapackageCache.entity_type,
+            DatapackageCache.entity_id,
+            DatapackageCache.entity_name
+        ).filter(
+            tuple_(
+                DatapackageCache.game,
+                DatapackageCache.checksum,
+                DatapackageCache.entity_type,
+                DatapackageCache.entity_id
+            ).in_(cache_keys_to_find)
+        )
+        name_cache_map = {
+            (c.game, c.checksum, c.entity_type, c.entity_id): c.entity_name
+            for c in cache_query.all()
+        }
+
+    # 3. Build the final hint lists using the name map
+    for temp_data in temp_hint_data:
+        hint = temp_data["hint_obj"]
+        
+        # Look up the name, falling back to ID if the key was None or not found
+        item_name = name_cache_map.get(temp_data["item_name_key"]) or f"Item ID {hint.item_id}"
+        location_name = name_cache_map.get(temp_data["location_name_key"]) or f"Location ID {hint.location_id}"
 
         hint_data = {
             "id": hint.id,
-            "room_db_id": room_db_id_for_hint,
-            "room_alias": alias_map.get(room_db_id_for_hint, "Unknown Room"),
+            "room_db_id": temp_data["room_db_id"],
+            "room_alias": alias_map.get(temp_data["room_db_id"], "Unknown Room"),
             "item_owner_id": hint.item_owner_id,
-            "item_owner_name": item_owner_name,
+            "item_owner_name": temp_data["item_owner_name"],
             "location_owner_id": hint.location_owner_id,
-            "location_owner_name": location_owner_name,
+            "location_owner_name": temp_data["location_owner_name"],
             "item_name": item_name,
             "location_name": location_name,
             "is_found": getattr(hint, 'is_found', False),
             "timestamp": (hint.timestamp.replace(tzinfo=timezone.utc).isoformat() if hasattr(hint, 'timestamp') and hint.timestamp else datetime.fromtimestamp(hint.id / 1000.0, tz=timezone.utc).isoformat())
         }
-
-        if is_item_owner_tracked:
+        
+        if temp_data["is_item_owner_tracked"]:
             hints_for_you.append(hint_data)
-        elif is_location_owner_tracked:
+        else: # is_location_owner_tracked must be true
             hints_by_you.append(hint_data)
 
     hints_for_you.sort(key=lambda h: h.get('timestamp', '0'), reverse=True)
