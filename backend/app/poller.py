@@ -200,7 +200,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
         existing_items_in_db = set(session.query(NotifiedItem.receiving_slot_id, NotifiedItem.item_id, NotifiedItem.location_id).filter_by(room_id=room_uuid))
         
-        # REFACTOR: Get a map of all existing hints and their objects
         existing_hints_map = {
             (h.item_owner_id, h.location_owner_id, h.item_id, h.location_id): h
             for h in session.query(NotifiedHint).filter_by(room_id=room_uuid)
@@ -228,7 +227,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         cache_keys_to_fetch = set()
         new_items_for_notify = []
         new_hints_for_notify = []
-        # REFACTOR: This set will hold (loc_id, item_id) for items linked to a "just found" hint
         just_found_hint_item_loc_pairs = set()
 
         player_statuses_raw = tracker_data.get('player_status', {})
@@ -239,33 +237,58 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                  if isinstance(status_info, dict) and status_info.get('status') == 30 and 'player' in status_info:
                      finished_player_ids.add(status_info.get('player'))
 
+        players_just_marked_finished = set()
+        players_list_updated = False
         if finished_player_ids:
-            players_to_untrack_by_user = {} 
+            for player in players:
+                if player.get('slot_id') in finished_player_ids and not player.get('is_finished'):
+                    player['is_finished'] = True
+                    players_list_updated = True
+                    players_just_marked_finished.add(player.get('slot_id'))
+            
+            if players_list_updated:
+                room.cached_players_json = json.dumps(players)
+                logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Updated cached_players_json for {len(finished_player_ids)} finished player(s).")
+
+        if finished_player_ids:
+            finished_players_by_user = {} 
             for user_id, tracked_slots in tracked_slots_by_user.items():
                 for slot_id in finished_player_ids:
+                    if slot_id not in players_just_marked_finished:
+                        continue
                     if slot_id in tracked_slots:
-                        players_to_untrack_by_user.setdefault(user_id, []).append(
-                            name_map.get(slot_id, f"Player {slot_id}")
+                        player_name = name_map.get(slot_id, f"Player {slot_id}")
+                        finished_players_by_user.setdefault(user_id, []).append(
+                            (slot_id, player_name) 
                         )
 
-            for user_id, names in players_to_untrack_by_user.items():
-                player_names_str = ", ".join(names)
-                alias = aliases_by_user.get(user_id, "Unknown Room")
-                notifications_by_user.setdefault(user_id, []).append({
-                    'title': f"🏁 Player(s) Finished!",
-                    'body': f"{player_names_str} finished in '{alias}'. Slot(s) untracked.",
-                    'type': 'player_finish',
-                    'details': (room_uuid, user_id, player_names_str)
-                })
+        for user_id, players_list in finished_players_by_user.items():
+            user_prefs = users_by_id.get(user_id)
+            if not user_prefs: continue 
 
-        deleted_count = 0
-        if finished_player_ids:
-            deleted_count = session.query(UserTrackedSlot).filter(
-                UserTrackedSlot.room_id == db_id,
-                UserTrackedSlot.slot_id.in_(finished_player_ids)
-            ).delete(synchronize_session=False)
-            if deleted_count > 0:
-                logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Automatically untracked {deleted_count} finished player(s).")
+            names_to_notify = [] 
+            for slot_id, player_name in players_list:
+                slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_id)
+                if not slot_prefs: continue 
+
+                if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=2):
+                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_id} added at {slot_prefs.added_at}. Suppressing 'Finished' notification.")
+                    continue 
+
+                names_to_notify.append(player_name)
+
+            if not names_to_notify:
+                continue
+
+            player_names_str = ", ".join(names_to_notify)
+            alias = aliases_by_user.get(user_id, "Unknown Room")
+            notifications_by_user.setdefault(user_id, []).append({
+                'title': f"🏁 Player(s) Finished!",
+                'body': f"{player_names_str} has finished in '{alias}'!",
+                'type': 'player_finish',
+                'details': (room_uuid, user_id, player_names_str)
+            })
+
 
         total_players = len(players)
         if total_players > 0 and len(finished_player_ids) >= total_players:
@@ -286,8 +309,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         
         items_skipped_backfill = 0
 
-        # REFACTOR: This block is no longer needed for hint processing,
-        # but we keep it for debugging/logging item processing.
         all_received_item_loc_pairs = set()
         for p_items in tracker_data.get('player_items_received', []):
             for item_tuple_data in p_items.get('items', []):
@@ -340,7 +361,8 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                     room_id=room_uuid,
                     receiving_slot_id=rid,
                     item_id=item_id,
-                    location_id=loc_id
+                    location_id=loc_id,
+                    item_flags=flags
                 ))
                 items_in_this_batch.add(item_key_batch)
                 items_added_count += 1
@@ -882,14 +904,24 @@ async def poller_supervisor(app, loop):
             for room in active_rooms_in_db:
                 room_info = {'db_id': room.id, 'hostname': room.hostname, 'room_uuid': room.room_id}
                 
+                is_missing_data = not room.tracker_id or not room.game_checksums_json or room.game_checksums_json == '{}'
+                needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data)
+
                 if room.id not in running_tasks:
-                    if not room.is_setup:
-                        logging.info(f"[SUPERVISOR] Queuing new room {room.id} ({room.room_id}) for setup.")
+                    if needs_setup:
+                        if room.is_setup: 
+                            logging.info(f"[SUPERVISOR] Queuing room {room.id} ({room.room_id}) for setup (missing data).")
+                        else:
+                            logging.info(f"[SUPERVISOR] Queuing new room {room.id} ({room.room_id}) for setup.")
                         await setup_queue.put(room_info)
                     else:
                         logging.info(f"[SUPERVISOR] Starting poller for already-setup room {room.id} ({room.room_id})")
-                        task = asyncio.create_task(poll_room_with_interval(room_info, loop)) # <-- Pass loop
+                        task = asyncio.create_task(poll_room_with_interval(room_info, loop))
                         running_tasks[room.id] = task
+                
+                elif needs_setup: 
+                     logging.info(f"[SUPERVISOR] Queuing *running* room {room.id} ({room.room_id}) for metadata refresh (missing data).")
+                     await setup_queue.put(room_info)
 
             inactive_room_ids = set(running_tasks.keys()) - current_active_room_ids
             for room_id in inactive_room_ids:

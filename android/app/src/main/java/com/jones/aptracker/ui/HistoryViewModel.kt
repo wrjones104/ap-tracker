@@ -11,10 +11,11 @@ import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.repository.HistoryRepository
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -36,6 +37,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     val showFoundHints: StateFlow<Boolean> = _showFoundHints
 
     private var currentRoomId: Int? = null
+
+    private val _selectedPlayerFilter = MutableStateFlow<String?>(null)
+    val selectedPlayerFilter: StateFlow<String?> = _selectedPlayerFilter
+
+    val availablePlayers: StateFlow<List<String>> = _itemHistory.map { history ->
+        history.map { it.playerName }.distinct().sorted()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         val db = AppDatabase.getInstance(application)
@@ -60,7 +68,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         Log.d("HintToggleDebug", "VM: setShowFoundHints NEW value: $show")
         _showFoundHints.value = show
 
-        // --- SIMPLIFIED: Just call refreshAllHistory with the new toggle value ---
         refreshAllHistory()
     }
 
@@ -71,11 +78,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
-                // 1. Refresh Item History (Network)
                 repository.refreshItemHistory()
 
-                // 2. Fetch fresh items from DB
-                // --- THIS IS THE FIX ---
                 val itemEntities = if (currentRoomId != null) {
                     repository.getHistoryForRoom(currentRoomId!!)
                 } else {
@@ -84,7 +88,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
                 _itemHistory.value = itemEntities.map { entity ->
                     HistoryItem(
-                        message = entity.message,
+                        id = entity.id,
+                        playerName = entity.playerName,
+                        itemName = entity.itemName,
+                        isPlayerFinished = entity.isPlayerFinished,
+                        itemFlags = entity.itemFlags,
                         timestamp = entity.timestamp,
                         tracker_id = entity.tracker_id,
                         slot_id = entity.slot_id,
@@ -125,5 +133,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
     fun clearErrorMessage() {
         errorMessage.value = null
+    }
+
+    fun onPlayerFilterSelected(player: String?) {
+        if (_selectedPlayerFilter.value == player) {
+            _selectedPlayerFilter.value = null
+        } else {
+            _selectedPlayerFilter.value = player
+        }
     }
 }

@@ -94,6 +94,7 @@ class NotifiedItem(Base):
     item_id = Column(BigInteger, nullable=False)
     location_id = Column(BigInteger, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
+    item_flags = Column(Integer, nullable=True)
     __table_args__ = (UniqueConstraint('room_id', 'receiving_slot_id', 'item_id', 'location_id', name='_item_event_uc'),)
 
 class NotifiedHint(Base):

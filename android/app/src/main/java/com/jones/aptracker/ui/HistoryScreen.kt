@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -30,6 +31,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +59,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.swiperefresh.SwipeRefresh
@@ -108,7 +115,7 @@ fun HistoryScreen(
             TopAppBar(
                 title = { Text(roomAlias ?: "Global History") },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) { // Add back button
+                    IconButton(onClick = onBackClick) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 }
@@ -131,7 +138,6 @@ fun HistoryScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 )
-
 
                 AnimatedVisibility(visible = pagerState.currentPage == 1) {
                     Row(
@@ -187,70 +193,149 @@ fun HistoryScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
     val fullHistory by historyViewModel.itemHistory.collectAsState()
+    val availablePlayers by historyViewModel.availablePlayers.collectAsState()
+    val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
+
     val context = LocalContext.current
     val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
             .withZone(ZoneId.systemDefault())
     }
 
-    val itemsToShow = remember(fullHistory, searchQuery) {
-        if (searchQuery.isBlank()) {
-            fullHistory
-        } else {
-            fullHistory.filter {
-                it.message.contains(searchQuery, ignoreCase = true)
-            }
+    val progressionColor = Color(0xFFFFA500)
+    val usefulColor = Color(0xFF007FFF)
+    val finishedColor = Color(0xFF0E8A0E)
+
+    val itemsToShow = remember(fullHistory, searchQuery, selectedPlayer) {
+        fullHistory.filter { item ->
+            val matchesSearch = searchQuery.isBlank() ||
+                    item.playerName.contains(searchQuery, ignoreCase = true) ||
+                    item.itemName.contains(searchQuery, ignoreCase = true)
+
+            val matchesPlayer = selectedPlayer == null || item.playerName == selectedPlayer
+
+            matchesSearch && matchesPlayer
         }
     }
 
-    if (itemsToShow.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No item history yet.")
-        }
-    } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(itemsToShow, key = { it.timestamp + it.message }) { item ->
-                val isClickable = item.tracker_id != null && item.slot_id != null
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = isClickable) {
-                            if (isClickable) {
-val cleanHost = (item.host?.takeIf { it.isNotBlank() } ?: "archipelago.gg").removePrefix("https://").removePrefix("http://")
-val url = "https://${cleanHost}/tracker/${item.tracker_id}/0/${item.slot_id}"
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                context.startActivity(intent)
-                            }
-                        },
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = getIconByName(item.icon_name),
-                            contentDescription = "Item received",
-                            tint = MaterialTheme.colorScheme.primary
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (availablePlayers.isNotEmpty()) {
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item {
+                    FilterChip(
+                        selected = selectedPlayer == null,
+                        onClick = { historyViewModel.onPlayerFilterSelected(null) },
+                        label = { Text("All") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                         )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = item.message,
-                                style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+                items(availablePlayers) { player ->
+                    FilterChip(
+                        selected = player == selectedPlayer,
+                        onClick = { historyViewModel.onPlayerFilterSelected(player) },
+                        label = { Text(player) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    )
+                }
+            }
+        }
+
+        if (itemsToShow.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
+            Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
+                Text("No item history matches.")
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(itemsToShow, key = { it.id }) { item ->
+                    val isClickable = item.tracker_id != null && item.slot_id != null
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = isClickable) {
+                                if (isClickable) {
+                                    val cleanHost = (item.host?.takeIf { it.isNotBlank() }
+                                        ?: "archipelago.gg").removePrefix("https://")
+                                        .removePrefix("http://")
+                                    val url =
+                                        "https://${cleanHost}/tracker/${item.tracker_id}/0/${item.slot_id}"
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                    context.startActivity(intent)
+                                }
+                            },
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = getIconByName(item.icon_name),
+                                contentDescription = "Item received",
+                                tint = MaterialTheme.colorScheme.primary
                             )
-                            Text(
-                                text = formatTimestamp(item.timestamp, formatter),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.Gray
-                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                val itemColor = when {
+                                    (item.itemFlags and 1) != 0 -> progressionColor
+                                    (item.itemFlags and 2) != 0 -> usefulColor
+                                    else -> Color.Unspecified
+                                }
+
+                                Text(
+                                    buildAnnotatedString {
+                                        if (item.isPlayerFinished) {
+                                            withStyle(
+                                                style = SpanStyle(
+                                                    color = finishedColor,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            ) {
+                                                append("🏁 ${item.playerName} ")
+                                            }
+                                        } else {
+                                            withStyle(style = SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                                                append("${item.playerName} ")
+                                            }
+                                        }
+
+                                        append("received: ")
+
+                                        withStyle(
+                                            style = SpanStyle(
+                                                color = itemColor,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        ) {
+                                            append(item.itemName)
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    text = formatTimestamp(item.timestamp, formatter),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                            }
                         }
                     }
                 }
@@ -263,7 +348,7 @@ val url = "https://${cleanHost}/tracker/${item.tracker_id}/0/${item.slot_id}"
 fun HintHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
     val hintsForYou by historyViewModel.hintsForYou.collectAsState()
     val hintsByYou by historyViewModel.hintsByYou.collectAsState()
-    val formatter = remember { // Remember formatter
+    val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
             .withZone(ZoneId.systemDefault())
     }
@@ -339,9 +424,6 @@ private fun filterHints(hints: List<HintEntity>, query: String): List<HintEntity
     }
 }
 
-/**
- * A reusable, clickable header for a collapsible list section.
- */
 @Composable
 fun SectionHeader(
     title: String,
@@ -367,7 +449,6 @@ fun SectionHeader(
         )
     }
 }
-
 
 @Composable
 fun HintCard(hint: HintEntity, formatter: DateTimeFormatter, type: String) {
@@ -428,7 +509,6 @@ fun HintCard(hint: HintEntity, formatter: DateTimeFormatter, type: String) {
         }
     }
 }
-
 
 private fun formatTimestamp(isoString: String, formatter: DateTimeFormatter): String {
     return try {
