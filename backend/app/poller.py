@@ -239,6 +239,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
         players_just_marked_finished = set()
         players_list_updated = False
+        finished_players_by_user = {}
         if finished_player_ids:
             for player in players:
                 if player.get('slot_id') in finished_player_ids and not player.get('is_finished'):
