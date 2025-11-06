@@ -113,6 +113,10 @@ def get_firebase_app():
 def create_app():
     """Creates and configures an instance of the Flask application."""
     app = Flask(__name__)
+    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-fallback-key-do-not-use-in-prod')
+    app.config['DISCORD_CLIENT_ID'] = os.getenv('DISCORD_CLIENT_ID')
+    app.config['DISCORD_CLIENT_SECRET'] = os.getenv('DISCORD_CLIENT_SECRET')
+    app.config['DISCORD_REDIRECT_URI'] = os.getenv('DISCORD_REDIRECT_URI')
     app.config.from_object(app_config)
     
     log_mode = 'DEBUG' if app.config.get('DEBUG') else 'PRODUCTION'
