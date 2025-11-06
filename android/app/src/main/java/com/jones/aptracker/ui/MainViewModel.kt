@@ -52,8 +52,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Handle network errors, etc.
                 // For UAT, let's allow the app to load if the check fails.
                 // In production, you might want a stricter AppVersionState.Error
-                _versionState.value = AppVersionState.Error("Failed to check for updates: ${e.message}. Allowing app to load.")
-                // _versionState.value = AppVersionState.UpToDate // Failsafe: Let them in if the check fails
+                _versionState.value = AppVersionState.UpToDate // Failsafe: Let them in if the check fails
             }
         }
     }
