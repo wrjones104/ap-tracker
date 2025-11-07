@@ -21,29 +21,75 @@ CHEESE_BASE_URL = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.thei
 
 def _sync_rooms_from_cheese_tracker_task(user_id):
     """
-    (V5) Runs the full sync.
-    Fixes the lock by *not* committing until the very end.
+    (V5 Refactored) Runs the full sync.
+    Fixes the lock by doing all network calls *before* the transaction.
     """
-    session = Session()
+    
+    # === 1. PRE-FLIGHT: Get User and Headers ===
+    # Use a *temporary* session just to get the API key and info.
+    # We do not hold this session or a lock.
+    temp_session = Session()
+    user_for_key = None
+    api_key = None
+    discord_username = None
+    
     try:
-        # --- LOCKING & COOLDOWN ---
-        now = datetime.utcnow()
-        
-        # Lock the user row for the duration of this *entire session*
-        user = session.query(User).filter_by(id=user_id).with_for_update().first()
-
-        if not user or not user.cheese_api_key:
+        user_for_key = temp_session.query(User).filter_by(id=user_id).first()
+        if not user_for_key or not user_for_key.cheese_api_key:
             logging.debug(f"[CHEESE_SYNC_BG] Aborting: No user or key for {user_id}")
-            session.commit() # Release lock
-            return
-        
-        # 1. Cooldown Check
-        if user.cheese_last_sync and (now - user.cheese_last_sync) < timedelta(minutes=5):
-            logging.debug(f"[CHEESE_SYNC_BG] Aborting: Sync for user {user_id} ran too recently.")
-            session.commit() # Release lock
             return
             
-        # 2. Concurrency Lock Check
+        api_key = user_for_key.cheese_api_key
+        discord_username = user_for_key.discord_username
+    finally:
+        Session.remove() # Close the temp session
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    
+    # === 2. NETWORK PHASE: No DB session open! ===
+    cheese_trackers = []
+    tracker_details_map = {}
+    try:
+        logging.debug(f"[CHEESE_SYNC_BG] User {user_id}: Starting network phase.")
+        # 1. Fetch Dashboard
+        resp = requests.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=headers, timeout=10)
+        resp.raise_for_status()
+        cheese_trackers = resp.json()
+        
+        # 2. Fetch ALL details
+        for ct_data in cheese_trackers:
+            tracker_id = ct_data.get('tracker_id')
+            if not tracker_id: continue
+            
+            try:
+                detail_resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=headers, timeout=15)
+                if detail_resp.ok:
+                    tracker_details_map[tracker_id] = detail_resp.json()
+            except requests.exceptions.ReadTimeout:
+                logging.error(f"[CHEESE_DEEP_SYNC] Timeout getting details for tracker {tracker_id}. Skipping.")
+            except Exception as e:
+                logging.error(f"[CHEESE_DEEP_SYNC] Failed to fetch details for {tracker_id}: {e}")
+                
+        logging.debug(f"[CHEESE_SYNC_BG] User {user_id}: Network phase complete. Fetched {len(tracker_details_map)} details.")
+
+    except Exception as e:
+        logging.error(f"[CHEESE_SYNC_BG] FULL sync failed for user {user_id} in network phase: {e}", exc_info=True)
+        return # Hard fail, can't proceed
+
+    # === 3. DATABASE PHASE: Now we open the session and lock ===
+    session = Session()
+    try:
+        now = datetime.utcnow()
+        
+        # Lock the user row
+        user = session.query(User).filter_by(id=user_id).with_for_update().first()
+
+        # Cooldown & Concurrency checks
+        if user.cheese_last_sync and (now - user.cheese_last_sync) < timedelta(minutes=5):
+             logging.debug(f"[CHEESE_SYNC_BG] Aborting: Sync for user {user_id} ran too recently.")
+             session.commit() # Release lock
+             return
+        
         if user.is_syncing_cheese:
             if user.cheese_sync_started_at and (now - user.cheese_sync_started_at) > timedelta(minutes=15):
                 logging.warning(f"[CHEESE_SYNC_BG] Found stale sync lock for user {user_id}. Taking over.")
@@ -51,80 +97,65 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
                 logging.debug(f"[CHEESE_SYNC_BG] Sync for user {user_id} already in progress. Skipping.")
                 session.commit() # Release lock
                 return
-        
-        # 3. Take the lock
+
+        # Take the lock
         user.is_syncing_cheese = True
         user.cheese_sync_started_at = now
         
-        # --- THIS LINE IS REMOVED ---
-        # session.commit()  <-- DO NOT COMMIT HERE. This holds the lock.
-        # --- END FIX ---
-
-        # The sync logic now runs *while the lock is held*
-        
-        headers = {"Authorization": f"Bearer {user.cheese_api_key}"}
-        
-        # 1. Fetch Dashboard
-        resp = requests.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=headers, timeout=10)
-        resp.raise_for_status()
-        
-        cheese_trackers = resp.json()
+        # This transaction is now FAST - no network calls
         stats = {'rooms_created': 0, 'subs_added': 0, 'slots_synced': 0}
-        
         found_cheese_id = (user.cheese_user_id is not None)
 
         for ct_data in cheese_trackers:
-            room_link = ct_data.get('room_link')
-            tracker_id = ct_data.get('tracker_id')
-            if not room_link or not tracker_id: continue
-
+            ap_room_id = None # Define here for error logging
             try:
-                parsed_url = urlparse(room_link)
-                ap_room_id = parsed_url.path.split('/')[-1]
-                hostname = parsed_url.hostname
-                if not ap_room_id or not hostname: continue
-            except Exception:
-                continue
+                room_link = ct_data.get('room_link')
+                tracker_id = ct_data.get('tracker_id')
+                if not room_link or not tracker_id: continue
 
-            # 2. Find/Create Room
-            local_room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
-            if not local_room:
-                local_room = TrackedRoom(
-                    room_id=ap_room_id, hostname=hostname, 
-                    cheese_tracker_id=tracker_id, cached_full_address=hostname
-                )
-                session.add(local_room)
-                session.flush()
-                stats['rooms_created'] += 1
+                try:
+                    parsed_url = urlparse(room_link)
+                    ap_room_id = parsed_url.path.split('/')[-1]
+                    hostname = parsed_url.hostname
+                    if not ap_room_id or not hostname: continue
+                except Exception:
+                    continue
 
-            if local_room.cheese_tracker_id != tracker_id:
-                 local_room.cheese_tracker_id = tracker_id
+                # 2. Find/Create Room
+                local_room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
+                if not local_room:
+                    local_room = TrackedRoom(
+                        room_id=ap_room_id, hostname=hostname, 
+                        cheese_tracker_id=tracker_id, cached_full_address=hostname
+                    )
+                    session.add(local_room)
+                    session.flush() # Need the ID for the subscription
+                    stats['rooms_created'] += 1
 
-            # 3. Ensure Subscription
-            sub = session.query(UserRoomSubscription).filter_by(user_id=user.id, room_id=local_room.id).first()
-            if not sub:
-                alias_name = ct_data.get('title') or "No Name"
-                session.add(UserRoomSubscription(
-                    user_id=user.id, room_id=local_room.id,
-                    alias=alias_name, icon_name='cheese'
-                ))
-                stats['subs_added'] += 1
+                if local_room.cheese_tracker_id != tracker_id:
+                     local_room.cheese_tracker_id = tracker_id
 
-            # 4. DEEP SLOT SYNC
-            try:
-                detail_resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=headers, timeout=15)
-                
-                if detail_resp.ok:
-                    details = detail_resp.json()
+                # 3. Ensure Subscription
+                sub = session.query(UserRoomSubscription).filter_by(user_id=user.id, room_id=local_room.id).first()
+                if not sub:
+                    alias_name = ct_data.get('title') or "No Name"
+                    session.add(UserRoomSubscription(
+                        user_id=user.id, room_id=local_room.id,
+                        alias=alias_name, icon_name='cheese'
+                    ))
+                    stats['subs_added'] += 1
+
+                # 4. DEEP SLOT SYNC (from in-memory data)
+                details = tracker_details_map.get(tracker_id)
+                if details:
                     games = details.get('games', []) 
-                    
                     slots_to_track_from_cheese = set()
+                    
                     for game in games:
                         cheese_discord = game.get('effective_discord_username')
-                        local_discord = user.discord_username
                         
-                        if cheese_discord and local_discord and \
-                           cheese_discord.lower() == local_discord.lower():
+                        if cheese_discord and discord_username and \
+                           cheese_discord.lower() == discord_username.lower():
                             
                             ap_slot_id = game.get('position')
                             if ap_slot_id:
@@ -147,49 +178,40 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
                         for new_slot_id in to_add:
                             session.add(UserTrackedSlot(user_id=user.id, room_id=local_room.id, slot_id=new_slot_id))
                             stats['slots_synced'] += 1
-                    
-                    existing_slots_in_db = session.query(UserTrackedSlot.slot_id).filter_by(
-                        user_id=user.id, room_id=local_room.id
-                    ).all()
-                    existing_set_in_db = {s[0] for s in existing_slots_in_db}
-                    
-                    to_remove = existing_set_in_db - slots_to_track_from_cheese
-                    if to_remove:
-                        session.query(UserTrackedSlot).filter(
-                            UserTrackedSlot.user_id == user.id,
-                            UserTrackedSlot.room_id == local_room.id,
-                            UserTrackedSlot.slot_id.in_(to_remove)
-                        ).delete(synchronize_session=False)
+                        
+                        to_remove = existing_set - slots_to_track_from_cheese
+                        if to_remove:
+                            session.query(UserTrackedSlot).filter(
+                                UserTrackedSlot.user_id == user.id,
+                                UserTrackedSlot.room_id == local_room.id,
+                                UserTrackedSlot.slot_id.in_(to_remove)
+                            ).delete(synchronize_session=False)
 
-            except requests.exceptions.ReadTimeout:
-                logging.error(f"[CHEESE_DEEP_SYNC] Timeout getting details for room {ap_room_id}. Skipping.")
             except Exception as e:
-                logging.error(f"[CHEESE_DEEP_SYNC] Failed to sync slots for room {ap_room_id}: {e}", exc_info=False)
-                session.rollback() # Rollback this one room's changes
-                # Re-establish the user lock state for the next loop iteration
-                user = session.query(User).filter_by(id=user_id).with_for_update().first()
-                user.is_syncing_cheese = True
+                # Log error for this specific room but continue the loop
+                logging.error(f"[CHEESE_SYNC_BG] Failed to process room {ap_room_id or 'Unknown'}: {e}", exc_info=False)
+                # We don't rollback, we just let the main transaction commit
+                # whatever succeeded before this room.
         
         # Commit all successful rooms/slots/ID changes
         user.cheese_last_sync = datetime.utcnow()
-        # We also need to manually release the lock fields *before* the final commit
         user.is_syncing_cheese = False
         user.cheese_sync_started_at = None
         session.commit()
         logging.info(f"[CHEESE_SYNC_BG] Sync for user {user_id} complete! {stats}")
 
     except Exception as e:
-        # This catches a major error, like the dashboard fetch failing
+        # This catches a major error, like the DB locking failing
         session.rollback()
-        logging.error(f"[CHEESE_SYNC_BG] FULL sync failed for user {user_id}: {e}", exc_info=True)
-        # We must still try to release the lock in the finally block
+        logging.error(f"[CHEESE_SYNC_BG] FULL sync failed for user {user_id} in database phase: {e}", exc_info=True)
     finally:
         # --- UNLOCKING ---
+        # We must release the lock, even if the sync failed
+        # Use a *new* session in case the old one is poisoned
         try:
-            # We must release the lock, even if the sync failed
-            # Use a *new* session in case the old one is poisoned
             lock_session = Session()
             lock_session.query(User).filter(User.id == user_id).update({
+                'is_syncing_cheese': False,
                 'is_syncing_cheese': False,
                 'cheese_sync_started_at': None
             })
@@ -199,6 +221,9 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
             if lock_session:
                 lock_session.rollback()
         finally:
+            if 'lock_session' in locals() and lock_session:
+                Session.remove()
+            # Also remove the main session
             Session.remove()
         # --- END UNLOCKING ---
 
