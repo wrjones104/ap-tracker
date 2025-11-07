@@ -1,6 +1,7 @@
 from sqlalchemy import (
     create_engine, Column, Integer, String, ForeignKey, DateTime, 
-    UniqueConstraint, Boolean, ForeignKeyConstraint, BigInteger
+    UniqueConstraint, Boolean, ForeignKeyConstraint, BigInteger,
+    Index
 )
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
@@ -102,7 +103,10 @@ class NotifiedItem(Base):
     location_id = Column(BigInteger, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
     item_flags = Column(Integer, nullable=True)
-    __table_args__ = (UniqueConstraint('room_id', 'receiving_slot_id', 'item_id', 'location_id', name='_item_event_uc'),)
+    __table_args__ = (
+        UniqueConstraint('room_id', 'receiving_slot_id', 'item_id', 'location_id', name='_item_event_uc'),
+        Index('ix_notifieditem_timestamp', 'timestamp'), # <-- ADDED THIS
+    )
 
 class NotifiedHint(Base):
     __tablename__ = 'notified_hints'
@@ -114,4 +118,7 @@ class NotifiedHint(Base):
     location_id = Column(BigInteger, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_found = Column(Boolean, default=False, nullable=False)
-    __table_args__ = (UniqueConstraint('room_id', 'item_id', 'location_id', 'item_owner_id', 'location_owner_id', name='_hint_event_uc'),)
+    __table_args__ = (
+        UniqueConstraint('room_id', 'item_id', 'location_id', 'item_owner_id', 'location_owner_id', name='_hint_event_uc'),
+        Index('ix_notifiedhint_timestamp', 'timestamp'), # <-- ADDED THIS
+    )
