@@ -17,6 +17,8 @@ class User(Base):
     cheese_api_key = Column(String, nullable=True)
     cheese_user_id = Column(Integer, nullable=True)
     cheese_last_sync = Column(DateTime, nullable=True)
+    is_syncing_cheese = Column(Boolean, nullable=False, default=False, server_default='f')
+    cheese_sync_started_at = Column(DateTime, nullable=True)
     subscriptions = relationship("UserRoomSubscription", back_populates="user", cascade="all, delete-orphan")
     devices = relationship("Device", back_populates="user", cascade="all, delete-orphan")
     notify_progression_default = Column(Boolean, default=True, nullable=False)
