@@ -25,7 +25,7 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column('cheese_tracker_id', sa.String(), nullable=True))
         # Explicitly add the unique constraint with a name
         batch_op.create_unique_constraint('uq_tracked_room_cheese_id', ['cheese_tracker_id'])
-def downgrade():
+def downgrade() -> None:
     with op.batch_alter_table('tracked_rooms', schema=None) as batch_op:
         # Drop it by name first
         batch_op.drop_constraint('uq_tracked_room_cheese_id', type_='unique')
