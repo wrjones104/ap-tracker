@@ -18,14 +18,13 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade():
-
+def upgrade() -> None:
+    """Upgrade schema."""
     # Don't use unique=True directly in add_column for standard SQLite batch operations
     with op.batch_alter_table('tracked_rooms', schema=None) as batch_op:
         batch_op.add_column(sa.Column('cheese_tracker_id', sa.String(), nullable=True))
         # Explicitly add the unique constraint with a name
         batch_op.create_unique_constraint('uq_tracked_room_cheese_id', ['cheese_tracker_id'])
-
 def downgrade():
     with op.batch_alter_table('tracked_rooms', schema=None) as batch_op:
         # Drop it by name first
