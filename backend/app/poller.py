@@ -272,7 +272,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_id)
                 if not slot_prefs: continue 
 
-                if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=2):
+                if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=5):
                     logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_id} added at {slot_prefs.added_at}. Suppressing 'Finished' notification.")
                     continue 
 
@@ -507,6 +507,23 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 logging.error(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Failed to bulk-fetch names: {e}")
 
         for item_data in new_items_for_notify:
+             # Create the exact keys we are about to look up
+             item_key = (item_data['receiver_game'], item_data['game_checksum'], 'item', item_data['item_id'])
+             loc_key = (item_data['sender_game'], item_data['sender_checksum'], 'location', item_data['location_id'])
+
+             # Check if they exist in the map we just built
+             if item_key not in name_lookup_map:
+                 logging.warning(f"[LOOKUP_FAIL] Item key missing from map: {item_key}")
+                 # If the checksum is None, that's our culprit:
+                 if not item_data['game_checksum']:
+                      logging.warning(f"[LOOKUP_FAIL] Reason: Receiver game '{item_data['receiver_game']}' has no checksum.")
+
+             if loc_key not in name_lookup_map:
+                  logging.warning(f"[LOOKUP_FAIL] Location key missing from map: {loc_key}")
+                  if not item_data['sender_checksum']:
+                       logging.warning(f"[LOOKUP_FAIL] Reason: Sender game '{item_data['sender_game']}' has no checksum.")
+
+        for item_data in new_items_for_notify:
             item_name = name_lookup_map.get(
                 (item_data['receiver_game'], item_data['game_checksum'], 'item', item_data['item_id']), 
                 f"ID {item_data['item_id']}"
@@ -535,7 +552,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
                         continue
 
-                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=2):
+                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=5):
                         logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {slot_prefs.added_at}. Suppressing notification for item {item_data['item_id']}.")
                         continue
 
@@ -597,7 +614,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
                         continue
 
-                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=2):
+                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=5):
                         logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_to_check} added at {slot_prefs.added_at}. Suppressing hint notification.")
                         continue
                     
