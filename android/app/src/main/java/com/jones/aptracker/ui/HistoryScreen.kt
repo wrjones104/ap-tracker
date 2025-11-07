@@ -206,7 +206,7 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
             .withZone(ZoneId.systemDefault())
     }
 
-    val progressionColor = Color(0xFFFFA500)
+    val progressionColor = Color(0xFF673AB7)
     val usefulColor = Color(0xFF007FFF)
     val finishedColor = Color(0xFF0E8A0E)
 
