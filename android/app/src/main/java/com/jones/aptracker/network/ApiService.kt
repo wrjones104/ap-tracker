@@ -79,6 +79,18 @@ interface ApiService {
 
     @GET("config")
     suspend fun getConfig(): ConfigResponse
+
+    // START CHEESE
+    @POST("integrations/cheese/auth")
+    suspend fun connectCheeseTracker(@Body request: CheeseAuthRequest): CheeseSyncResponse
+
+    @DELETE("integrations/cheese/auth")
+    suspend fun disconnectCheeseTracker(): Response<Unit>
+
+    @POST("integrations/cheese/sync")
+    suspend fun syncCheeseTracker(): CheeseSyncResponse
+    // END CHEESE
+
 }
 
 data class Room(
@@ -150,7 +162,8 @@ data class UserProfile(
     val avatar_url: String?,
     val notify_progression_default: Boolean,
     val notify_useful_default: Boolean,
-    val notify_hints_default: Boolean
+    val notify_hints_default: Boolean,
+    val is_cheese_connected: Boolean = false
 )
 
 data class UpdateGlobalPrefsRequest(
@@ -201,4 +214,11 @@ data class HintDetail(
 
 data class ConfigResponse(
     val min_app_version: Int
+)
+
+data class CheeseAuthRequest(val api_key: String)
+
+data class CheeseSyncResponse(
+    val message: String,
+    val is_connected: Boolean? = null
 )

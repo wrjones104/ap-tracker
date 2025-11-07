@@ -254,7 +254,7 @@ def add_room(current_user):
     current user to it.
     """
     data = request.json
-    room_url = data.get('room_url')
+    room_url = data.get('room_url') # This is the .../room/ID link
     alias = data.get('alias')
     icon_name = data.get('icon_name')
 
@@ -266,7 +266,7 @@ def add_room(current_user):
     try:
         parsed_url = urlparse(room_url)
         hostname = parsed_url.hostname
-        room_id = parsed_url.path.split('/')[-1]
+        room_id = parsed_url.path.split('/')[-1] # This is the ap_room_id
     except Exception as e:
         return jsonify({'error': f'Invalid room_url: {e}'}), 400
 
@@ -276,6 +276,8 @@ def add_room(current_user):
     session = Session()
     room = session.query(TrackedRoom).filter_by(room_id=room_id).first()
 
+    ap_tracker_id = None # We'll store the tracker ID here
+
     if not room:
         logging.info(f"[API] First time seeing room {room_id}. Creating global record.")
         try:
@@ -284,6 +286,8 @@ def add_room(current_user):
             response.raise_for_status()
             status_data = response.json()
             port = status_data.get('last_port', '')
+            
+            ap_tracker_id = status_data.get('tracker')
             
             players_raw = status_data.get('players', [])
             player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players_raw)]
@@ -295,7 +299,8 @@ def add_room(current_user):
                 hostname=hostname,
                 cached_full_address=f"{hostname}:{port}",
                 cached_players_json=players_json,
-                cached_total_slots=total_slots
+                cached_total_slots=total_slots,
+                tracker_id=ap_tracker_id
             )
             session.add(room)
             session.flush()
@@ -307,6 +312,9 @@ def add_room(current_user):
             session.rollback()
             logging.error(f"[API_ERROR] Failed to process room status for {room_id}: {e}", exc_info=True)
             return jsonify({'error': 'An internal server error occurred.'}), 500
+    
+    else:
+        ap_tracker_id = room.tracker_id
 
     subscription = session.query(UserRoomSubscription).filter_by(
         user_id=current_user.id,
@@ -324,11 +332,29 @@ def add_room(current_user):
     )
     session.add(subscription)
     
-    room.is_suspended = False # Wake up the room if it was suspended
+    room.is_suspended = False 
 
     logging.info(f"[API] User {current_user.id} subscribed to room {room.id} ('{alias}')")
 
     session.commit()
+
+    if current_user.cheese_api_key and ap_tracker_id:
+        try:
+            from .api_cheese import push_new_room_to_cheese
+            import threading
+            
+            tracker_url = f"https://{hostname}/tracker/{ap_tracker_id}"
+            
+            threading.Thread(target=push_new_room_to_cheese, args=(
+                current_user.id, 
+                tracker_url,  
+                room.room_id, 
+                room_url,   
+                alias         
+            )).start()
+        except Exception as e:
+            logging.error(f"[API_ERROR] Failed to start Cheese new room thread: {e}", exc_info=True)
+
     return jsonify({'message': f"Now tracking room '{alias}'."}), 201
 
 
@@ -485,6 +511,26 @@ def update_tracked_slots(current_user, room_db_id):
         logging.info(f"[API] User {current_user.id} tracked {len(objects_to_add)} new slots in room {room_db_id}.")
 
     session.commit()
+
+    # Hook for Cheese Tracker Integration
+    # We do this AFTER commit so the local app state is saved even if Cheese API fails.
+    # Ideally, for performance, you would offload this to a background task (like Celery or just a Thread),
+    # but for V1, calling it directly here is acceptable if the number of slots changing is small.
+    if current_user.cheese_api_key and (slots_to_add or slots_to_remove):
+        try:
+            # Assuming you might want to thread this to avoid blocking the response:
+            # import threading
+            # threading.Thread(target=push_slot_changes_to_cheese, args=(Session(), current_user, room_db_id, slots_to_add, slots_to_remove)).start()
+            
+            # Or just call it synchronously for now to test:
+            # Note: We pass a NEW session to the helper if it's threaded, or reuse current if sync.
+            # If using sync, just pass 'session' you already have open (but it's committed, so it's fine).
+            from .api_cheese import push_slot_changes_to_cheese
+            push_slot_changes_to_cheese(session, current_user, room_db_id, slots_to_add, slots_to_remove)
+        except Exception as e:
+            logging.error(f"[API_ERROR] Failed to trigger Cheese push: {e}", exc_info=True)
+            # Do not return an error to the user, standard sync succeeded.
+
     return jsonify({'message': 'Tracked slots updated.'})
 
 # =============================================================================
@@ -803,7 +849,8 @@ def get_current_user(current_user):
         'avatar_url': avatar_url,
         'notify_progression_default': current_user.notify_progression_default,
         'notify_useful_default': current_user.notify_useful_default,
-        'notify_hints_default': current_user.notify_hints_default
+        'notify_hints_default': current_user.notify_hints_default,
+        'is_cheese_connected': current_user.cheese_api_key is not None
     })
 
 @bp.route('/users/me/tracked-slots', methods=['GET'])
