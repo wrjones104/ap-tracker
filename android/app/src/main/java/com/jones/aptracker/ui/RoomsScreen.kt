@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.material3.HorizontalDivider
@@ -29,8 +30,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.google.accompanist.swiperefresh.SwipeRefresh
@@ -54,6 +58,16 @@ fun RoomsScreen(
 
     val errorMessage by roomsViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Refresh data every time this screen is shown
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        // This will re-run the block every time the lifecycle enters RESUMED state
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            roomsViewModel.fetchRooms()
+            userViewModel.fetchUserProfile() // <-- THIS IS THE FIX
+        }
+    }
 
     LaunchedEffect(snackbarHostState, roomsViewModel) {
         snapshotFlow { errorMessage }
@@ -136,7 +150,7 @@ fun RoomsScreen(
                                 .align(Alignment.TopCenter)
                                 .clip(RoundedCornerShape(8.dp)),
                             contentScale = ContentScale.FillWidth
-                            )
+                        )
                         Text(
                             text = "No rooms found. Tap the '+' to add a room.",
                             modifier = Modifier.align(Alignment.Center)
@@ -282,8 +296,6 @@ fun RoomsScreen(
     }
 }
 
-// ... (Rest of the file is identical) ...
-
 @Composable
 fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit) {
     var roomUrl by remember { mutableStateOf("") }
@@ -427,19 +439,41 @@ fun ProfileMenu(
     var menuExpanded by remember { mutableStateOf(false) }
 
     Box {
-        IconButton(onClick = { menuExpanded = true }) {
-            if (userProfile?.avatar_url != null) {
-                AsyncImage(
-                    model = userProfile?.avatar_url,
-                    contentDescription = "User Profile",
-                    modifier = Modifier.size(32.dp).clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                // Fallback icon if the image is loading or unavailable
-                Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { menuExpanded = true } // Make the whole row clickable
+        ) {
+            IconButton(onClick = { menuExpanded = true }) {
+                if (userProfile?.avatar_url != null) {
+                    AsyncImage(
+                        model = userProfile?.avatar_url,
+                        contentDescription = "User Profile",
+                        modifier = Modifier.size(32.dp).clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    // Fallback icon if the image is loading or unavailable
+                    Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                }
             }
+
+            // --- FLAIR ---
+            if (userProfile?.is_cheese_connected == true) {
+                Icon(
+                    imageVector = Icons.Default.Link,
+                    contentDescription = "Linked",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant // A more subtle color
+                )
+                Text(
+                    text = "🧀",
+                    modifier = Modifier
+                        .padding(start = 4.dp, end = 8.dp) // Add padding
+                )
+            }
+            // --- END FLAIR ---
         }
+
         DropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false }
@@ -450,7 +484,7 @@ fun ProfileMenu(
                     onClick = { },
                     enabled = false // Not clickable
                 )
-                Divider()
+                HorizontalDivider()
             }
             DropdownMenuItem(
                 text = { Text("Item History") },
@@ -462,7 +496,7 @@ fun ProfileMenu(
             DropdownMenuItem(
                 text = { Text("Settings") },
                 onClick = {
-                    onSettingsClick() // We'll add this parameter to the function
+                    onSettingsClick()
                     menuExpanded = false
                 }
             )

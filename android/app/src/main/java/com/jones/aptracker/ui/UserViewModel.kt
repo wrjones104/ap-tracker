@@ -2,6 +2,7 @@ package com.jones.aptracker.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.jones.aptracker.network.CheeseAuthRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.UpdateGlobalPrefsRequest
@@ -11,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import com.jones.aptracker.network.CheeseSyncResponse
+import android.util.Log
 
 class UserViewModel : ViewModel() {
     private val _userProfile = MutableStateFlow<UserProfile?>(null)
@@ -21,9 +24,13 @@ class UserViewModel : ViewModel() {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    private val _integrationMessage = MutableStateFlow<String?>(null)
+    val integrationMessage = _integrationMessage.asStateFlow()
+
     init {
         fetchUserProfile()
         fetchTrackedSlots()
+        triggerBackgroundSync()
     }
 
     fun fetchUserProfile() {
@@ -116,6 +123,64 @@ class UserViewModel : ViewModel() {
 
     fun clearErrorMessage() {
         _errorMessage.value = null
+    }
+
+    fun connectCheeseTracker(apiKey: String) {
+        viewModelScope.launch {
+            try {
+                val response = RetrofitClient.instance.connectCheeseTracker(CheeseAuthRequest(apiKey))
+                _integrationMessage.value = response.message
+                fetchUserProfile()
+                fetchTrackedSlots()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Failed to connect to Cheese Tracker. Check your key."
+            }
+        }
+    }
+    private fun triggerBackgroundSync() {
+        viewModelScope.launch {
+            try {
+                // Call the sync endpoint quietly
+                RetrofitClient.instance.syncCheeseTracker()
+                // When it's done, refresh the slots
+                fetchTrackedSlots()
+            } catch (e: Exception) {
+                // Don't show a user-facing snackbar, just log it
+                e.printStackTrace()
+                Log.w("UserViewModel", "Background sync failed: ${e.message}")
+            }
+        }
+    }
+
+    fun manualSyncCheese() {
+        viewModelScope.launch {
+            try {
+                val response = RetrofitClient.instance.syncCheeseTracker()
+                _integrationMessage.value = response.message
+                fetchTrackedSlots()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Sync failed. Are you connected?"
+            }
+        }
+    }
+
+    fun disconnectCheese() {
+        viewModelScope.launch {
+            try {
+                RetrofitClient.instance.disconnectCheeseTracker()
+                _integrationMessage.value = "Disconnected from Cheese Tracker."
+                fetchUserProfile()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Failed to disconnect."
+            }
+        }
+    }
+
+    fun clearIntegrationMessage() {
+        _integrationMessage.value = null
     }
 
 }

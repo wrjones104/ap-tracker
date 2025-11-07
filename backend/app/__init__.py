@@ -146,4 +146,7 @@ def create_app():
     from . import main
     app.register_blueprint(main.bp)
 
+    from .api_cheese import bp as cheese_bp
+    app.register_blueprint(cheese_bp, url_prefix='/integrations/cheese')
+
     return app
