@@ -72,6 +72,7 @@ class UserTrackedSlot(Base):
     room_id = Column(Integer, ForeignKey('tracked_rooms.id'), nullable=False)
     slot_id = Column(Integer, nullable=False)
     added_at = Column(DateTime, default=datetime.utcnow) 
+    needs_backfill = Column(Boolean, default=True, nullable=False)
     notify_progression = Column(Boolean, nullable=True, default=None)
     notify_useful = Column(Boolean, nullable=True, default=None)
     notify_hints = Column(Boolean, nullable=True, default=None)
