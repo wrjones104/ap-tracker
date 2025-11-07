@@ -485,27 +485,39 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         if cache_keys_to_fetch:
             logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Fetching {len(cache_keys_to_fetch)} names from DatapackageCache...")
             try:
-                results = session.query(
-                    DatapackageCache.game,
-                    DatapackageCache.checksum,
-                    DatapackageCache.entity_type,
-                    DatapackageCache.entity_id,
-                    DatapackageCache.entity_name
-                ).filter(
-                    tuple_(
+                # Convert set to list for slicing
+                keys_list = list(cache_keys_to_fetch)
+                chunk_size = 500  # Query 500 keys at a time
+                
+                total_chunks = (len(keys_list) // chunk_size) + 1
+                
+                for i in range(0, len(keys_list), chunk_size):
+                    chunk = keys_list[i:i + chunk_size]
+                    
+                    logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Fetching name chunk {i // chunk_size + 1}/{total_chunks}...")
+                    
+                    results = session.query(
                         DatapackageCache.game,
                         DatapackageCache.checksum,
                         DatapackageCache.entity_type,
-                        DatapackageCache.entity_id
-                    ).in_(cache_keys_to_fetch)
-                )
-                
-                for game, chk, etype, eid, name in results:
-                    name_lookup_map[(game, chk, etype, eid)] = name
-            
+                        DatapackageCache.entity_id,
+                        DatapackageCache.entity_name
+                    ).filter(
+                        tuple_(
+                            DatapackageCache.game,
+                            DatapackageCache.checksum,
+                            DatapackageCache.entity_type,
+                            DatapackageCache.entity_id
+                        ).in_(chunk)
+                    )
+                    
+                    for game, chk, etype, eid, name in results:
+                        name_lookup_map[(game, chk, etype, eid)] = name
+
             except Exception as e:
-                logging.error(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Failed to bulk-fetch names: {e}")
-                return None
+                # This catches a failure on any chunk
+                logging.error(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Failed to bulk-fetch names: {e}", exc_info=True)
+                return None # Keep the abort-on-failure logic
 
         for item_data in new_items_for_notify:
              # Create the exact keys we are about to look up
