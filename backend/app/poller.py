@@ -210,6 +210,17 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
              session.commit()
              return
 
+        # --- NEW BACKFILL LOGIC (Change 1) ---
+        # Get a list of the actual slot *objects* that need backfilling
+        slots_to_clear_backfill = [
+            slot for slot in all_tracked_slots_in_room if slot.needs_backfill
+        ]
+        # Get a set of (user_id, slot_id) tuples for quick suppression checks
+        backfill_check_set = {
+            (slot.user_id, slot.slot_id) for slot in slots_to_clear_backfill
+        }
+        # --- END NEW BACKFILL LOGIC ---
+
         tracked_slots_by_user = {}
         prefs_by_user_slot = {}
         all_user_ids_in_room = set()
@@ -272,9 +283,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_id)
                 if not slot_prefs: continue 
 
-                if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=5):
-                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_id} added at {slot_prefs.added_at}. Suppressing 'Finished' notification.")
+                # --- NEW BACKFILL LOGIC (Change 2a) ---
+                # Check for backfill flag instead of time
+                if (user_id, slot_id) in backfill_check_set:
+                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_id} is in 'needs_backfill' state. Suppressing 'Finished' notification.")
                     continue 
+                # --- END NEW BACKFILL LOGIC ---
 
                 names_to_notify.append(player_name)
 
@@ -481,6 +495,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
 
         
+        # --- NEW CHUNKING LOGIC ---
         name_lookup_map = {}
         if cache_keys_to_fetch:
             logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Fetching {len(cache_keys_to_fetch)} names from DatapackageCache...")
@@ -517,7 +532,8 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             except Exception as e:
                 # This catches a failure on any chunk
                 logging.error(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Failed to bulk-fetch names: {e}", exc_info=True)
-                return None # Keep the abort-on-failure logic
+                return None # Abort-on-failure logic
+        # --- END CHUNKING LOGIC ---
 
         for item_data in new_items_for_notify:
              # Create the exact keys we are about to look up
@@ -565,9 +581,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
                         continue
 
-                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=5):
-                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} is tracking Slot {rid}, but it was added at {slot_prefs.added_at}. Suppressing notification for item {item_data['item_id']}.")
+                    # --- NEW BACKFILL LOGIC (Change 2b) ---
+                    # Check for backfill flag instead of time
+                    if (user_id, rid) in backfill_check_set:
+                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {rid} is in 'needs_backfill' state. Suppressing notification for item {item_data['item_id']}.")
                         continue
+                    # --- END NEW BACKFILL LOGIC ---
 
                     is_progression = bool(item_data['flags'] & 1)
                     should_notify = False
@@ -627,9 +646,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
                         continue
 
-                    if slot_prefs.added_at and datetime.utcnow() - slot_prefs.added_at < timedelta(minutes=5):
-                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_to_check} added at {slot_prefs.added_at}. Suppressing hint notification.")
+                    # --- NEW BACKFILL LOGIC (Change 2c) ---
+                    # Check for backfill flag instead of time
+                    if (user_id, slot_to_check) in backfill_check_set:
+                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_to_check} is in 'needs_backfill' state. Suppressing hint notification.")
                         continue
+                    # --- END NEW BACKFILL LOGIC ---
                     
                     notify_override = slot_prefs.notify_hints
                     should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
@@ -668,6 +690,13 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             elif not notifications_by_user: 
                  logging.info(f"[POLLER][RoomDBID:{db_id}] Silently added {len(hints_to_add_to_db)} new hints.")
 
+        # --- NEW BACKFILL LOGIC (Change 3) ---
+        # Clear the backfill flag for all processed slots before we commit
+        if slots_to_clear_backfill:
+            logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Clearing 'needs_backfill' flag for {len(slots_to_clear_backfill)} slot(s).")
+            for slot in slots_to_clear_backfill:
+                slot.needs_backfill = False
+        # --- END NEW BACKFILL LOGIC ---
 
         notifications_to_send = {}
         if notifications_by_user:
