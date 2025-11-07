@@ -21,34 +21,51 @@ CHEESE_BASE_URL = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.thei
 
 def _sync_rooms_from_cheese_tracker_task(user_id):
     """
-    (V3) Runs the full sync.
-    NOW: Obeys a 5-minute cooldown.
+    (V4) Runs the full sync.
+    NOW: Includes a database lock to prevent concurrent syncs.
     """
     session = Session()
     try:
-        user = session.query(User).filter_by(id=user_id).first()
+        # --- LOCKING & COOLDOWN ---
+        now = datetime.utcnow()
+        
+        # Lock the user row for the duration of this check
+        user = session.query(User).filter_by(id=user_id).with_for_update().first()
+
         if not user or not user.cheese_api_key:
-            logging.warning(f"[CHEESE_SYNC_BG] Aborting: No user or key for {user_id}")
+            logging.debug(f"[CHEESE_SYNC_BG] Aborting: No user or key for {user_id}")
+            session.commit() # Release lock
             return
         
-        # --- COOLDOWN FIX ---
-        if user.cheese_last_sync and (datetime.utcnow() - user.cheese_last_sync) < timedelta(minutes=5):
+        # 1. Cooldown Check
+        if user.cheese_last_sync and (now - user.cheese_last_sync) < timedelta(minutes=5):
             logging.debug(f"[CHEESE_SYNC_BG] Aborting: Sync for user {user_id} ran too recently.")
+            session.commit() # Release lock
             return
-        # --- END FIX ---
             
-        if not user.discord_username:
-             logging.warning(f"[CHEESE_SYNC_BG] Aborting: User {user_id} has no Discord username set.")
-             return
+        # 2. Concurrency Lock Check
+        if user.is_syncing_cheese:
+            # Check for a stale lock (e.g., > 15 minutes)
+            if user.cheese_sync_started_at and (now - user.cheese_sync_started_at) > timedelta(minutes=15):
+                logging.warning(f"[CHEESE_SYNC_BG] Found stale sync lock for user {user_id}. Taking over.")
+            else:
+                logging.debug(f"[CHEESE_SYNC_BG] Sync for user {user_id} already in progress. Skipping.")
+                session.commit() # Release lock
+                return
+        
+        # 3. Take the lock
+        user.is_syncing_cheese = True
+        user.cheese_sync_started_at = now
+        session.commit()
+        # --- END LOCKING ---
 
+        # The sync logic now runs *after* the lock is committed and released
+        
         headers = {"Authorization": f"Bearer {user.cheese_api_key}"}
         
         # 1. Fetch Dashboard
         resp = requests.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=headers, timeout=10)
-        if resp.status_code in [401, 403]:
-            logging.error(f"[CHEESE_SYNC_BG] Invalid Cheese Key for user {user_id}")
-            return
-        resp.raise_for_status()
+        resp.raise_for_status() # Let outer try/except handle HTTP errors
         
         cheese_trackers = resp.json()
         stats = {'rooms_created': 0, 'subs_added': 0, 'slots_synced': 0}
@@ -56,7 +73,6 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
         found_cheese_id = (user.cheese_user_id is not None)
 
         for ct_data in cheese_trackers:
-            # ... (all room_link, tracker_id, ap_room_id parsing) ...
             room_link = ct_data.get('room_link')
             tracker_id = ct_data.get('tracker_id')
             if not room_link or not tracker_id: continue
@@ -69,7 +85,7 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
             except Exception:
                 continue
 
-            # ... (all room creation/linking logic) ...
+            # 2. Find/Create Room
             local_room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
             if not local_room:
                 local_room = TrackedRoom(
@@ -93,7 +109,7 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
                 ))
                 stats['subs_added'] += 1
 
-            # 4. DEEP SLOT SYNC (WITH ID DISCOVERY)
+            # 4. DEEP SLOT SYNC
             try:
                 detail_resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=headers, timeout=15)
                 
@@ -120,7 +136,6 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
                                     user.cheese_user_id = ct_id # Save it!
                                     found_cheese_id = True
                     
-                    # ... (all slot adding/removing logic) ...
                     if slots_to_track_from_cheese:
                         existing_slots = session.query(UserTrackedSlot.slot_id).filter_by(
                             user_id=user.id, room_id=local_room.id
@@ -148,20 +163,37 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
             except requests.exceptions.ReadTimeout:
                 logging.error(f"[CHEESE_DEEP_SYNC] Timeout getting details for room {ap_room_id}. Skipping.")
             except Exception as e:
-                logging.error(f"[CHEESE_DEEP_SYNC] Failed to sync slots for room {ap_room_id}: {e}", exc_info=True)
+                # --- INNER EXCEPTION FIX ---
+                # This catches the UniqueViolation, rolls back this *one room*,
+                # and allows the sync to continue with the next room.
+                logging.error(f"[CHEESE_DEEP_SYNC] Failed to sync slots for room {ap_room_id}: {e}", exc_info=False)
+                session.rollback()
+                # --- END FIX ---
         
-        # --- UPDATE SYNC TIMESTAMP ---
+        # Commit all successful rooms/slots/ID changes
         user.cheese_last_sync = datetime.utcnow()
-        # --- END UPDATE ---
-        
         session.commit()
         logging.info(f"[CHEESE_SYNC_BG] Sync for user {user_id} complete! {stats}")
 
     except Exception as e:
+        # This catches a major error, like the dashboard fetch failing
         session.rollback()
         logging.error(f"[CHEESE_SYNC_BG] FULL sync failed for user {user_id}: {e}", exc_info=True)
     finally:
-        Session.remove()
+        # --- UNLOCKING ---
+        try:
+            # We must release the lock, even if the sync failed
+            session.query(User).filter(User.id == user_id).update({
+                'is_syncing_cheese': False,
+                'cheese_sync_started_at': None
+            })
+            session.commit()
+        except Exception as e:
+            logging.error(f"Failed to release sync lock for user {user_id}: {e}")
+            session.rollback()
+        finally:
+            Session.remove()
+        # --- END UNLOCKING ---
 
 
 @bp.route('/auth', methods=['POST'])
