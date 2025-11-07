@@ -21,15 +21,15 @@ CHEESE_BASE_URL = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.thei
 
 def _sync_rooms_from_cheese_tracker_task(user_id):
     """
-    (V4) Runs the full sync.
-    NOW: Includes a database lock to prevent concurrent syncs.
+    (V5) Runs the full sync.
+    Fixes the lock by *not* committing until the very end.
     """
     session = Session()
     try:
         # --- LOCKING & COOLDOWN ---
         now = datetime.utcnow()
         
-        # Lock the user row for the duration of this check
+        # Lock the user row for the duration of this *entire session*
         user = session.query(User).filter_by(id=user_id).with_for_update().first()
 
         if not user or not user.cheese_api_key:
@@ -45,7 +45,6 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
             
         # 2. Concurrency Lock Check
         if user.is_syncing_cheese:
-            # Check for a stale lock (e.g., > 15 minutes)
             if user.cheese_sync_started_at and (now - user.cheese_sync_started_at) > timedelta(minutes=15):
                 logging.warning(f"[CHEESE_SYNC_BG] Found stale sync lock for user {user_id}. Taking over.")
             else:
@@ -56,16 +55,18 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
         # 3. Take the lock
         user.is_syncing_cheese = True
         user.cheese_sync_started_at = now
-        session.commit()
-        # --- END LOCKING ---
+        
+        # --- THIS LINE IS REMOVED ---
+        # session.commit()  <-- DO NOT COMMIT HERE. This holds the lock.
+        # --- END FIX ---
 
-        # The sync logic now runs *after* the lock is committed and released
+        # The sync logic now runs *while the lock is held*
         
         headers = {"Authorization": f"Bearer {user.cheese_api_key}"}
         
         # 1. Fetch Dashboard
         resp = requests.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=headers, timeout=10)
-        resp.raise_for_status() # Let outer try/except handle HTTP errors
+        resp.raise_for_status()
         
         cheese_trackers = resp.json()
         stats = {'rooms_created': 0, 'subs_added': 0, 'slots_synced': 0}
@@ -93,7 +94,7 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
                     cheese_tracker_id=tracker_id, cached_full_address=hostname
                 )
                 session.add(local_room)
-                session.flush() # Get ID
+                session.flush()
                 stats['rooms_created'] += 1
 
             if local_room.cheese_tracker_id != tracker_id:
@@ -163,15 +164,17 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
             except requests.exceptions.ReadTimeout:
                 logging.error(f"[CHEESE_DEEP_SYNC] Timeout getting details for room {ap_room_id}. Skipping.")
             except Exception as e:
-                # --- INNER EXCEPTION FIX ---
-                # This catches the UniqueViolation, rolls back this *one room*,
-                # and allows the sync to continue with the next room.
                 logging.error(f"[CHEESE_DEEP_SYNC] Failed to sync slots for room {ap_room_id}: {e}", exc_info=False)
-                session.rollback()
-                # --- END FIX ---
+                session.rollback() # Rollback this one room's changes
+                # Re-establish the user lock state for the next loop iteration
+                user = session.query(User).filter_by(id=user_id).with_for_update().first()
+                user.is_syncing_cheese = True
         
         # Commit all successful rooms/slots/ID changes
         user.cheese_last_sync = datetime.utcnow()
+        # We also need to manually release the lock fields *before* the final commit
+        user.is_syncing_cheese = False
+        user.cheese_sync_started_at = None
         session.commit()
         logging.info(f"[CHEESE_SYNC_BG] Sync for user {user_id} complete! {stats}")
 
@@ -179,18 +182,22 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
         # This catches a major error, like the dashboard fetch failing
         session.rollback()
         logging.error(f"[CHEESE_SYNC_BG] FULL sync failed for user {user_id}: {e}", exc_info=True)
+        # We must still try to release the lock in the finally block
     finally:
         # --- UNLOCKING ---
         try:
             # We must release the lock, even if the sync failed
-            session.query(User).filter(User.id == user_id).update({
+            # Use a *new* session in case the old one is poisoned
+            lock_session = Session()
+            lock_session.query(User).filter(User.id == user_id).update({
                 'is_syncing_cheese': False,
                 'cheese_sync_started_at': None
             })
-            session.commit()
+            lock_session.commit()
         except Exception as e:
             logging.error(f"Failed to release sync lock for user {user_id}: {e}")
-            session.rollback()
+            if lock_session:
+                lock_session.rollback()
         finally:
             Session.remove()
         # --- END UNLOCKING ---
