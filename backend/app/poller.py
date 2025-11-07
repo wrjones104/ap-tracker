@@ -505,6 +505,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             
             except Exception as e:
                 logging.error(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Failed to bulk-fetch names: {e}")
+                return None
 
         for item_data in new_items_for_notify:
              # Create the exact keys we are about to look up
