@@ -1,7 +1,5 @@
 package com.jones.aptracker.ui
 
-// --- NEW IMPORTS ---
-// ---------------------
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,18 +16,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -55,6 +56,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jones.aptracker.network.TrackedSlotDetail
 import com.jones.aptracker.network.UserProfile
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,6 +73,9 @@ fun ProfileScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
+    // --- NEW: Collect integration message state ---
+    val integrationMessage by userViewModel.integrationMessage.collectAsState()
+
     LaunchedEffect(errorMessage) {
         if (errorMessage != null) {
             snackbarHostState.showSnackbar(
@@ -77,6 +83,17 @@ fun ProfileScreen(
                 duration = SnackbarDuration.Short
             )
             userViewModel.clearErrorMessage()
+        }
+    }
+
+    // --- NEW: LaunchedEffect for integration messages ---
+    LaunchedEffect(integrationMessage) {
+        if (integrationMessage != null) {
+            snackbarHostState.showSnackbar(
+                message = integrationMessage!!,
+                duration = SnackbarDuration.Short
+            )
+            userViewModel.clearIntegrationMessage()
         }
     }
 
@@ -167,8 +184,25 @@ fun ProfileScreen(
                     }
                 }
             }
+
+            // --- NEW: Integrations section moved here ---
             item {
-                Divider(modifier = Modifier.padding(vertical = 16.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+                Text(
+                    text = "Integrations",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                CheeseIntegrationCard(
+                    isConnected = userProfile?.is_cheese_connected ?: false,
+                    onConnect = { key -> userViewModel.connectCheeseTracker(key) },
+                    onSync = { userViewModel.manualSyncCheese() },
+                    onDisconnect = { userViewModel.disconnectCheese() }
+                )
+            }
+
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
             }
 
             item {
@@ -214,7 +248,7 @@ fun ProfileScreen(
                 Spacer(Modifier.height(16.dp))
             }
             item {
-                Divider(modifier = Modifier.padding(vertical = 16.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
                 Button(
                     onClick = { showDeleteDialog = true },
                     colors = ButtonDefaults.buttonColors(
@@ -291,7 +325,7 @@ fun RoomHeader(alias: String) {
             .fillMaxWidth()
             .padding(vertical = 8.dp)
     )
-    Divider()
+    HorizontalDivider()
 }
 
 @Composable
@@ -302,7 +336,7 @@ fun SlotPreferenceItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick) // clickable import added
+            .clickable(onClick = onClick)
             .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -313,7 +347,7 @@ fun SlotPreferenceItem(
             modifier = Modifier.weight(1f)
         )
         Icon(
-            Icons.Default.Settings, // Settings import added
+            Icons.Default.Settings,
             contentDescription = "Edit Slot ${slot.slot_id}",
             tint = MaterialTheme.colorScheme.primary
         )
@@ -350,11 +384,10 @@ fun SlotSettingsSheet(
         )
 
         Text("Progression Items", style = MaterialTheme.typography.titleMedium)
-        // Using corrected PreferenceToggle below
         PreferenceToggle(
             selectedValue = progression,
             globalDefault = globalProfile.notify_progression_default,
-            onValueChanged = { progression = it } // 'it' is valid here
+            onValueChanged = { progression = it }
         )
         Spacer(Modifier.height(16.dp))
 
@@ -424,5 +457,127 @@ fun PreferenceToggle(
             }
         }
     }
+}
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CheeseIntegrationCard(
+    isConnected: Boolean, // <-- Parameter added
+    onConnect: (String) -> Unit,
+    onSync: () -> Unit,
+    onDisconnect: () -> Unit
+) {
+    var apiKey by remember { mutableStateOf("") }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Cheese Tracker",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // --- UI NOW CHANGES BASED ON STATE ---
+            if (isConnected) {
+                // --- CONNECTED STATE ---
+                Text(
+                    text = "Sync is active. Your rooms and slots will sync on app load.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Connected",
+                            tint = MaterialTheme.colorScheme.primary // Use a success color
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Connected",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    TextButton(
+                        onClick = onDisconnect,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("Disconnect")
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                Button(
+                    onClick = { onSync() },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors()
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Sync")
+                    Spacer(Modifier.width(8.dp))
+                    Text("Sync Now")
+                }
+
+            } else {
+                // --- DISCONNECTED STATE (Original UI) ---
+                Text(
+                    text = "Sync your rooms and tracked slots with cheesetracker.gg",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    label = { Text("API Key") },
+                    placeholder = { Text("Paste key from Cheese Tracker") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = { onConnect(apiKey) },
+                        enabled = apiKey.isNotBlank()
+                    ) {
+                        Text("Connect & Sync")
+                    }
+                }
+            }
+        }
+    }
 }
