@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from . import Session
 from .models import User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
 from .api import token_required, log_api_call, handle_db_errors
+from .encryption import encrypt_api_key, decrypt_api_key
 
 load_dotenv()
 
@@ -39,7 +40,10 @@ def _sync_rooms_from_cheese_tracker_task(user_id):
             logging.debug(f"[CHEESE_SYNC_BG] Aborting: No user or key for {user_id}")
             return
             
-        api_key = user_for_key.cheese_api_key
+        api_key = decrypt_api_key(user_for_key.cheese_api_key)
+        if not api_key:
+            logging.error(f"[CHEESE_SYNC_BG] Failed to decrypt API key for user {user_id}. Aborting sync.")
+            return
         discord_username = user_for_key.discord_username
     finally:
         Session.remove() # Close the temp session
@@ -238,13 +242,20 @@ def connect_cheese_account(current_user):
     """
     data = request.json
     api_key = data.get('api_key')
-    if not api_key: return jsonify({'error': 'Missing api_key'}), 400
+
+    if not api_key or not isinstance(api_key, str) or len(api_key.strip()) == 0 or len(api_key) > 256:
+        return jsonify({'error': 'Invalid or missing api_key.'}), 400
+
+    api_key = api_key.strip()
 
     session = Session()
     user = session.merge(current_user)
     
-    # Just save the key. We'll test it in the background.
-    user.cheese_api_key = api_key
+    encrypted_key = encrypt_api_key(api_key)
+    if not encrypted_key:
+        return jsonify({'error': 'Failed to secure API key.'}), 500
+
+    user.cheese_api_key = encrypted_key
     session.commit()
 
     # --- RUN SYNC IN BACKGROUND ---
@@ -312,7 +323,12 @@ def push_new_room_to_cheese(user_id, tracker_url, ap_room_id, room_url, alias):
             logging.warning(f"[CHEESE_PUSH_NEW] Aborting push for {tracker_url}: No API key.")
             return
 
-        headers = {"Authorization": f"Bearer {user.cheese_api_key}", "Content-Type": "application/json"}
+        api_key = decrypt_api_key(user.cheese_api_key)
+        if not api_key:
+            logging.error(f"[CHEESE_PUSH_NEW] Failed to decrypt API key for user {user_id}. Aborting push.")
+            return
+
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
         # Step 1: POST to create/get the tracker
         payload = {"url": tracker_url}
@@ -393,8 +409,9 @@ def push_slot_changes_to_cheese(session, user, room_db_id, added_slots, removed_
     (FIXED V12) Pushes changes to Cheese Tracker.
     Learns the cheese_user_id on the first push if unknown.
     """
-    if not user.cheese_api_key:
-        logging.warning("[CHEESE_PUSH] Aborting: Missing API key.")
+    api_key = decrypt_api_key(user.cheese_api_key)
+    if not api_key:
+        logging.warning("[CHEESE_PUSH] Aborting: Could not decrypt API key.")
         return
 
     local_room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
@@ -402,7 +419,7 @@ def push_slot_changes_to_cheese(session, user, room_db_id, added_slots, removed_
         return
 
     base_headers = {
-        "Authorization": f"Bearer {user.cheese_api_key}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     tracker_id = local_room.cheese_tracker_id
