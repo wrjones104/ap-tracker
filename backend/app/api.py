@@ -1077,10 +1077,11 @@ def delete_current_user(current_user):
         try:
             data = jwt.decode(token, secret, algorithms=['HS256'], options={"verify_exp": False})
             jti = data.get('jti')
-            expires_at = datetime.fromtimestamp(data.get('exp'), tz=timezone.utc)
-            if jti:
+            exp = data.get('exp')
+            if jti and exp:
+                expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
                 session.add(JWTBlocklist(jti=jti, expires_at=expires_at))
-        except (jwt.InvalidTokenError, KeyError) as e:
+        except (jwt.InvalidTokenError, KeyError, TypeError) as e:
             logging.warning(f"Could not blocklist token during account deletion for user {current_user.id}: {e}")
 
         # 2. Delete the user record
