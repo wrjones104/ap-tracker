@@ -157,10 +157,12 @@ def logout(current_user):
         return jsonify({'error': 'Invalid token'}), 401
 
     jti = data.get('jti')
-    expires_at = datetime.fromtimestamp(data.get('exp'), tz=timezone.utc)
+    exp = data.get('exp')
 
-    if not jti:
-        return jsonify({'error': 'Token is missing JTI claim'}), 400
+    if not jti or not exp:
+        return jsonify({'error': 'Token is missing JTI or EXP claim'}), 400
+
+    expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
 
     session = Session()
     try:
