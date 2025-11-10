@@ -73,7 +73,6 @@ fun ProfileScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    // --- NEW: Collect integration message state ---
     val integrationMessage by userViewModel.integrationMessage.collectAsState()
 
     LaunchedEffect(errorMessage) {
@@ -86,7 +85,6 @@ fun ProfileScreen(
         }
     }
 
-    // --- NEW: LaunchedEffect for integration messages ---
     LaunchedEffect(integrationMessage) {
         if (integrationMessage != null) {
             snackbarHostState.showSnackbar(
@@ -185,7 +183,6 @@ fun ProfileScreen(
                 }
             }
 
-            // --- NEW: Integrations section moved here ---
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
                 Text(

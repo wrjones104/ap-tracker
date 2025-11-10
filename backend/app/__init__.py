@@ -117,6 +117,9 @@ def create_app():
     app.config['DISCORD_CLIENT_ID'] = os.getenv('DISCORD_CLIENT_ID')
     app.config['DISCORD_CLIENT_SECRET'] = os.getenv('DISCORD_CLIENT_SECRET')
     app.config['DISCORD_REDIRECT_URI'] = os.getenv('DISCORD_REDIRECT_URI')
+    app.config['ENCRYPTION_KEY'] = os.getenv('ENCRYPTION_KEY')
+    allowed_hostnames_str = os.getenv('ALLOWED_HOSTNAMES', '')
+    app.config['ALLOWED_HOSTNAMES'] = [h.strip() for h in allowed_hostnames_str.split(',') if h]
     app.config.from_object(app_config)
     
     log_mode = 'DEBUG' if app.config.get('DEBUG') else 'PRODUCTION'

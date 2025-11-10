@@ -70,6 +70,7 @@ def callback():
     discord_avatar_hash = user_info.get('avatar')
 
     session = Session()
+    user_id_for_jwt = None
     try:
         user = session.query(User).filter_by(discord_id=discord_id).with_for_update().first()
 
@@ -83,6 +84,7 @@ def callback():
             logging.info(f"[AUTH] Existing user logged in: {discord_username} ({discord_id})")
 
         session.commit()
+        user_id_for_jwt = user.id
     except Exception as e:
         session.rollback()
         logging.error(f"[AUTH_ERROR] Database error during user upsert: {e}", exc_info=True)
@@ -97,7 +99,7 @@ def callback():
     expires_at = issued_at + timedelta(days=30)
 
     payload = {
-        'user_id': user.id,
+        'user_id': user_id_for_jwt,
         'iat': issued_at,
         'exp': expires_at,
         'jti': jwt_id,
