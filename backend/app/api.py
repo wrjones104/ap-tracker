@@ -17,7 +17,7 @@ from sqlalchemy import or_, desc, tuple_
 from . import Session
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
-    DatapackageCache, NotifiedItem, NotifiedHint
+    DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist
 )
 
 bp = Blueprint('api', __name__)
@@ -332,7 +332,7 @@ def add_room(current_user):
         return jsonify({'error': 'Could not parse hostname or room_id from URL'}), 400
 
     try:
-        ip_address = ip_address(hostname)
+        parsed_ip = ip_address(hostname)
         logging.warning(f"[API_WARN] User {current_user.id} tried to add a room using an IP address: {hostname}")
         return jsonify({'error': 'Adding rooms by IP address is not permitted.'}), 403
     except ValueError:
@@ -416,8 +416,10 @@ def add_room(current_user):
             import threading
             
             tracker_url = f"https://{hostname}/tracker/{ap_tracker_id}"
+            app_context = current_app._get_current_object()
             
             threading.Thread(target=push_new_room_to_cheese, args=(
+                app_context,
                 current_user.id, 
                 tracker_url,  
                 room.room_id, 
@@ -603,7 +605,14 @@ def update_tracked_slots(current_user, room_db_id):
             # Note: We pass a NEW session to the helper if it's threaded, or reuse current if sync.
             # If using sync, just pass 'session' you already have open (but it's committed, so it's fine).
             from .api_cheese import push_slot_changes_to_cheese
-            push_slot_changes_to_cheese(session, current_user, room_db_id, slots_to_add, slots_to_remove)
+            app_context = current_app._get_current_object()
+            push_slot_changes_to_cheese(
+                app_context, 
+                current_user.id,  # Pass user_id
+                room_db_id, 
+                slots_to_add, 
+                slots_to_remove
+            )
         except Exception as e:
             logging.error(f"[API_ERROR] Failed to trigger Cheese push: {e}", exc_info=True)
             # Do not return an error to the user, standard sync succeeded.
