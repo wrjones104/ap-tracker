@@ -192,6 +192,8 @@ fun ProfileScreen(
                 )
                 CheeseIntegrationCard(
                     isConnected = userProfile?.is_cheese_connected ?: false,
+                    isAutoSyncEnabled = userViewModel.isAutoSyncEnabled.collectAsState().value,
+                    onAutoSyncChanged = { userViewModel.setAutoSync(it) },
                     onConnect = { key -> userViewModel.connectCheeseTracker(key) },
                     onSync = { userViewModel.manualSyncCheese() },
                     onDisconnect = { userViewModel.disconnectCheese() }
@@ -459,7 +461,9 @@ fun PreferenceToggle(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CheeseIntegrationCard(
-    isConnected: Boolean, // <-- Parameter added
+    isConnected: Boolean,
+    isAutoSyncEnabled: Boolean,
+    onAutoSyncChanged: (Boolean) -> Unit,
     onConnect: (String) -> Unit,
     onSync: () -> Unit,
     onDisconnect: () -> Unit
@@ -492,9 +496,7 @@ fun CheeseIntegrationCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // --- UI NOW CHANGES BASED ON STATE ---
             if (isConnected) {
-                // --- CONNECTED STATE ---
                 Text(
                     text = "Sync is active. Your rooms and slots will sync on app load.",
                     style = MaterialTheme.typography.bodySmall,
@@ -511,7 +513,7 @@ fun CheeseIntegrationCard(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = "Connected",
-                            tint = MaterialTheme.colorScheme.primary // Use a success color
+                            tint = MaterialTheme.colorScheme.primary
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
@@ -529,6 +531,36 @@ fun CheeseIntegrationCard(
                     ) {
                         Text("Disconnect")
                     }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onAutoSyncChanged(!isAutoSyncEnabled) } // Make the whole row clickable
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Auto-sync",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        Text(
+                            "Sync when opening the settings screen",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isAutoSyncEnabled,
+                        onCheckedChange = onAutoSyncChanged,
+                        modifier = Modifier.padding(start = 16.dp)
+                    )
                 }
 
                 Spacer(Modifier.height(8.dp))

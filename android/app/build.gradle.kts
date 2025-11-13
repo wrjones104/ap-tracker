@@ -16,7 +16,7 @@ plugins {
 }
 
 android {
-    flavorDimensions("environment")
+    flavorDimensions += listOf("environment")
     namespace = "com.jones.aptracker"
     compileSdk = 36
 
@@ -129,4 +129,5 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("io.coil-kt:coil-compose:2.6.0")
     implementation(libs.androidx.compose.foundation)
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
 }
