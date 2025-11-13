@@ -498,7 +498,7 @@ fun CheeseIntegrationCard(
 
             if (isConnected) {
                 Text(
-                    text = "Sync is active. Your rooms and slots will sync on app load.",
+                    text = "You are connected to your Cheese Tracker!",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -551,7 +551,7 @@ fun CheeseIntegrationCard(
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Text(
-                            "Sync when opening the settings screen",
+                            "Sync when opening the app or refreshing your rooms",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

@@ -54,7 +54,7 @@ fun RoomsScreen(
     onManageSlotsClick: (Int, String) -> Unit
 ) {
     val rooms by roomsViewModel.rooms.collectAsState()
-    val isRefreshing by roomsViewModel.isRefreshing.collectAsState()
+    val isLoading by roomsViewModel.isLoading.collectAsState()
 
     val errorMessage by roomsViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -118,10 +118,9 @@ fun RoomsScreen(
         }
     ) { innerPadding ->
         SwipeRefresh(
-            state = rememberSwipeRefreshState(isRefreshing = isRefreshing),
+            state = rememberSwipeRefreshState(isRefreshing = isLoading),
             onRefresh = {
-                roomsViewModel.fetchRooms()
-                roomsViewModel.triggerBackgroundSync()
+                roomsViewModel.refreshAll()
             },
             modifier = Modifier.padding(innerPadding)
         ) {
@@ -129,7 +128,7 @@ fun RoomsScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                if (isRefreshing && rooms.isEmpty()) {
+                if (isLoading && rooms.isEmpty()) {
                     CircularProgressIndicator()
                 } else if (rooms.isEmpty()) {
                     Box(
@@ -513,11 +512,12 @@ fun ProfileMenu(
                     menuExpanded = false
                 }
             )
+// Inside ProfileMenu...
             if (userProfile?.is_cheese_connected == true && !isAutoSyncEnabled) {
                 DropdownMenuItem(
                     text = { Text("Sync Cheese Now") },
                     onClick = {
-                        roomsViewModel.manualSyncCheese() //
+                        roomsViewModel.refreshAll(forceCheeseSync = true)
                         menuExpanded = false
                     }
                 )
