@@ -35,7 +35,7 @@ class AuthViewModel : ViewModel() {
         _isLoggedIn.value = true
     }
 
-    fun onLogout(context: Context) {
+    fun onLogout() {
         viewModelScope.launch {
             val fcmToken = try {
                 FirebaseMessaging.getInstance().token.await()
