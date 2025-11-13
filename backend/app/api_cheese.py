@@ -192,7 +192,7 @@ def connect_cheese_account(current_user):
         app_context = current_app._get_current_object()
         threading.Thread(
             target=_sync_rooms_from_cheese_tracker_task, 
-            args=(app.context, user.id,)
+            args=(app_context, user.id,)
         ).start()
     except Exception as e:
         logging.error(f"Failed to start sync thread for user {user.id}: {e}")
