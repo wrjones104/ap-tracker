@@ -1,4 +1,4 @@
-"""add new scurity fields
+"""add new security fields
 
 Revision ID: 19d6add4ee1e
 Revises: 7cf0fa8c221d
