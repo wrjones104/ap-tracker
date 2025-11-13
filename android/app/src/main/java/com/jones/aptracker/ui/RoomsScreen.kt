@@ -512,7 +512,6 @@ fun ProfileMenu(
                     menuExpanded = false
                 }
             )
-// Inside ProfileMenu...
             if (userProfile?.is_cheese_connected == true && !isAutoSyncEnabled) {
                 DropdownMenuItem(
                     text = { Text("Sync Cheese Now") },
