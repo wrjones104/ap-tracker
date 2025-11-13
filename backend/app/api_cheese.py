@@ -90,7 +90,7 @@ def _sync_rooms_from_cheese_tracker_task(app, user_id):
             user = session.query(User).filter_by(id=user_id).with_for_update().first()
 
             # Cooldown & Concurrency checks
-            if user.cheese_last_sync and (now - user.cheese_last_sync) < timedelta(minutes=5):
+            if user.cheese_last_sync and (now - user.cheese_last_sync) < timedelta(seconds=10):
                 logging.debug(f"[CHEESE_SYNC_BG] Aborting: Sync for user {user_id} ran too recently.")
                 session.commit() # Release lock
                 return
