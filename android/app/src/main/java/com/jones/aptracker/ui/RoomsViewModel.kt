@@ -1,31 +1,30 @@
 package com.jones.aptracker.ui
 
-import android.util.Log
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.AddRoomRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.Room
-import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.network.UpdateRoomRequest
 import com.jones.aptracker.repository.RoomsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.delay
 
 class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: RoomsRepository
-
     private val settingsManager = SettingsManager(application)
 
     private val _isSyncingCheese = MutableStateFlow(false)
@@ -40,21 +39,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private val _rooms = MutableStateFlow<List<Room>>(emptyList())
     val rooms: StateFlow<List<Room>> = _rooms
 
-    private val _isLoading = MutableStateFlow(true)
+    private val _isLoadingRooms = MutableStateFlow(true)
+
+    // Combined loading state for SwipeRefresh
+    val isLoading = MutableStateFlow(true)
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
-
-    val isRefreshing: StateFlow<Boolean> = combine(
-        _isLoading,
-        _isSyncingCheese
-    ) { roomsLoading, cheeseSyncing ->
-        roomsLoading || cheeseSyncing
-    }.stateIn(
-        viewModelScope,
-        SharingStarted.Eagerly,
-        true
-    )
 
     init {
         val roomDao = AppDatabase.getInstance(application).roomDao()
@@ -81,22 +72,24 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 .collect { roomList ->
                     _rooms.value = roomList
-                    if (roomList.isNotEmpty()) {
-                        _isLoading.value = false
-                    }
                 }
         }
         fetchRooms()
 
         viewModelScope.launch {
-            if (isAutoSyncEnabled.first()) {
+            if (settingsManager.isAutoSyncEnabled.first()) {
                 triggerBackgroundSync()
             }
         }
     }
 
+    private fun updateCombinedLoadingState() {
+        isLoading.value = _isLoadingRooms.value || _isSyncingCheese.value
+    }
+
     fun fetchRooms() {
-        _isLoading.value = true
+        _isLoadingRooms.value = true
+        updateCombinedLoadingState()
         viewModelScope.launch {
             try {
                 repository.refreshRooms()
@@ -104,11 +97,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 _errorMessage.value = "Failed to refresh rooms. Check connection."
                 e.printStackTrace()
             } finally {
-                _isLoading.value = false
+                _isLoadingRooms.value = false
+                updateCombinedLoadingState()
             }
         }
     }
-
 
     fun addRoom(
         roomUrl: String,
@@ -128,7 +121,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     _errorMessage.value = "Failed to add room. Check URL or connection."
                 }
-
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to add room. Check connection."
                 e.printStackTrace()
@@ -165,37 +157,53 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         _errorMessage.value = null
     }
 
-    fun manualSyncCheese() {
-        if (_isSyncingCheese.value) return
-
-        _isSyncingCheese.value = true
-        viewModelScope.launch {
-            try {
-                val response = RetrofitClient.instance.syncCheeseTracker()
-                repository.refreshRooms()
-                _errorMessage.value = response.message
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _errorMessage.value = "Sync failed. Are you connected?"
-            } finally {
-                _isSyncingCheese.value = false
-            }
-        }
-    }
-
     fun triggerBackgroundSync() {
         if (_isSyncingCheese.value) return
-
         _isSyncingCheese.value = true
+        updateCombinedLoadingState()
         viewModelScope.launch {
             try {
                 RetrofitClient.instance.syncCheeseTracker()
-                repository.refreshRooms()
+                _isSyncingCheese.value = false
+                updateCombinedLoadingState()
+                fetchRooms()
             } catch (e: Exception) {
                 e.printStackTrace()
                 Log.w("RoomsViewModel", "Background sync failed: ${e.message}")
                 _errorMessage.value = "Background sync failed."
+                _isSyncingCheese.value = false
+                updateCombinedLoadingState()
+            }
+        }
+    }
+
+    fun refreshAll(forceCheeseSync: Boolean = false) {
+        val shouldSyncCheese = forceCheeseSync || isAutoSyncEnabled.value
+
+        if (shouldSyncCheese && _isSyncingCheese.value) return
+
+        if (shouldSyncCheese) {
+            _isSyncingCheese.value = true
+            isLoading.value = false
+        } else {
+            isLoading.value = true
+        }
+
+        viewModelScope.launch {
+            try {
+                if (shouldSyncCheese) {
+                    RetrofitClient.instance.syncCheeseTracker()
+                    delay(5000)
+                }
+
+                repository.refreshRooms()
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Log.w("RoomsViewModel", "Refresh failed: ${e.message}")
+                _errorMessage.value = "Sync failed. Check connection."
             } finally {
+                isLoading.value = false
                 _isSyncingCheese.value = false
             }
         }
