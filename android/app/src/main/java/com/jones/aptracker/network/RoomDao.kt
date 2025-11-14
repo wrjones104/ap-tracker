@@ -18,7 +18,6 @@ interface RoomDao {
 
     @Query("DELETE FROM rooms WHERE id NOT IN (:validIds)")
     suspend fun deleteObsoleteRooms(validIds: List<Int>)
-    // ---------------------------------------------
 
     @Transaction
     suspend fun syncRooms(rooms: List<RoomEntity>) {

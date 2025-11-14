@@ -86,9 +86,9 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
 
         composable("history/global/All Rooms") {
             HistoryScreen(
-                roomId = null, // Explicitly null for global
-                roomAlias = "Global History", // Set a title
-                onBackClick = { navController.popBackStack() } // Add back navigation
+                roomId = null,
+                roomAlias = "Global History",
+                onBackClick = { navController.popBackStack() }
             )
         }
 

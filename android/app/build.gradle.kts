@@ -40,9 +40,6 @@ android {
         create("dev") {
             dimension = "environment"
             applicationIdSuffix = ".dev"
-            // This reads the URL from localProperties
-            // The fallback "http://10.0.2.2:5000/" is the special IP for your computer
-            // when running inside the Android emulator.
             val devUrl = localProperties.getProperty("DEV_API_BASE_URL") ?: "http://10.0.2.2:5000/"
             buildConfigField("String", "API_BASE_URL", "\"$devUrl\"")
         }
@@ -61,16 +58,13 @@ android {
         }
     }
 
-    // FIX 4: We are EDITING your existing buildTypes block
     buildTypes {
 
-        // We add this block to configure the default 'debug' type
         getByName("debug") {
             applicationIdSuffix = ".debug"
-            isDebuggable = true // This is the correct property
+            isDebuggable = true
         }
 
-        // This is your existing 'release' configuration
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -78,7 +72,6 @@ android {
         }
     }
 
-    // The rest of your file is perfect
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11

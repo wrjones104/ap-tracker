@@ -41,7 +41,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isLoadingRooms = MutableStateFlow(true)
 
-    // Combined loading state for SwipeRefresh
     val isLoading = MutableStateFlow(true)
 
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -193,7 +192,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 if (shouldSyncCheese) {
                     RetrofitClient.instance.syncCheeseTracker()
-                    delay(5000)
                 }
 
                 repository.refreshRooms()
