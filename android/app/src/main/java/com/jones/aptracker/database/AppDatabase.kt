@@ -1,4 +1,3 @@
-// In AppDatabase.kt
 package com.jones.aptracker.database
 
 import android.content.Context

@@ -95,7 +95,7 @@ class MainActivity : ComponentActivity() {
                     val errorDetails = ex?.errorDescription ?: "Authorization cancelled or unknown error"
                     Log.e("LOGIN_FAILED", "Auth failed: $errorDetails")
                     Toast.makeText(this, "Login Failed: $errorDetails", Toast.LENGTH_LONG).show()
-                    authViewModel.setLoading(false) // Make sure to stop loading
+                    authViewModel.setLoading(false)
                 }
             }
         }
@@ -205,21 +205,17 @@ fun VersionGate(
 ) {
     val versionState by mainViewModel.versionState.collectAsState()
 
-    // Observe the state from the ViewModel
     when (val state = versionState) {
         is AppVersionState.Checking -> {
-            // Show a simple loading screen
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
         }
         is AppVersionState.UpToDate -> {
-            // --- THIS IS YOUR EXISTING LOGIC ---
-            // The app is good! Load your real app.
             val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
             val isLoading by authViewModel.isLoading.collectAsState()
             val context = LocalContext.current
-            val onLogout = { authViewModel.onLogout(context) }
+            val onLogout = { authViewModel.onLogout() }
 
             LaunchedEffect(isLoggedIn) {
                 if (isLoggedIn) {
@@ -234,14 +230,11 @@ fun VersionGate(
                 onLoginClick = onStartAuth,
                 onLogoutClick = onLogout
             )
-            // --- END OF YOUR EXISTING LOGIC ---
         }
         is AppVersionState.Outdated -> {
-            // Show the "blocking" dialog with your GitHub URL
             UpdateRequiredScreen(storeUrl = state.storeUrl)
         }
         is AppVersionState.Error -> {
-            // Show a "retry" screen
             ErrorScreen(message = state.message, onRetry = { mainViewModel.checkAppVersion() })
         }
     }
@@ -252,14 +245,12 @@ fun UpdateRequiredScreen(storeUrl: String) {
     val context = LocalContext.current
     val githubReleasesUrl = "https://github.com/wrjones104/ap-tracker/releases"
 
-    // This is a non-dismissible screen
     AlertDialog(
         onDismissRequest = { /* Do nothing, cannot be dismissed */ },
         title = { Text("Update Required") },
         text = { Text("This version of AP Tracker is no longer supported. Please update to the latest version to continue.") },
         confirmButton = {
             Button(onClick = {
-                // Open the GitHub Releases page
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(githubReleasesUrl))
                 context.startActivity(intent)
             }) {

@@ -73,7 +73,6 @@ fun ProfileScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    // --- NEW: Collect integration message state ---
     val integrationMessage by userViewModel.integrationMessage.collectAsState()
 
     LaunchedEffect(errorMessage) {
@@ -86,7 +85,6 @@ fun ProfileScreen(
         }
     }
 
-    // --- NEW: LaunchedEffect for integration messages ---
     LaunchedEffect(integrationMessage) {
         if (integrationMessage != null) {
             snackbarHostState.showSnackbar(
@@ -185,7 +183,6 @@ fun ProfileScreen(
                 }
             }
 
-            // --- NEW: Integrations section moved here ---
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
                 Text(
@@ -195,6 +192,8 @@ fun ProfileScreen(
                 )
                 CheeseIntegrationCard(
                     isConnected = userProfile?.is_cheese_connected ?: false,
+                    isAutoSyncEnabled = userViewModel.isAutoSyncEnabled.collectAsState().value,
+                    onAutoSyncChanged = { userViewModel.setAutoSync(it) },
                     onConnect = { key -> userViewModel.connectCheeseTracker(key) },
                     onSync = { userViewModel.manualSyncCheese() },
                     onDisconnect = { userViewModel.disconnectCheese() }
@@ -462,7 +461,9 @@ fun PreferenceToggle(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CheeseIntegrationCard(
-    isConnected: Boolean, // <-- Parameter added
+    isConnected: Boolean,
+    isAutoSyncEnabled: Boolean,
+    onAutoSyncChanged: (Boolean) -> Unit,
     onConnect: (String) -> Unit,
     onSync: () -> Unit,
     onDisconnect: () -> Unit
@@ -495,11 +496,9 @@ fun CheeseIntegrationCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // --- UI NOW CHANGES BASED ON STATE ---
             if (isConnected) {
-                // --- CONNECTED STATE ---
                 Text(
-                    text = "Sync is active. Your rooms and slots will sync on app load.",
+                    text = "You are connected to your Cheese Tracker!",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -514,7 +513,7 @@ fun CheeseIntegrationCard(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = "Connected",
-                            tint = MaterialTheme.colorScheme.primary // Use a success color
+                            tint = MaterialTheme.colorScheme.primary
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
@@ -534,6 +533,36 @@ fun CheeseIntegrationCard(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onAutoSyncChanged(!isAutoSyncEnabled) }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Auto-sync",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        Text(
+                            "Sync when opening the app or refreshing your rooms",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isAutoSyncEnabled,
+                        onCheckedChange = onAutoSyncChanged,
+                        modifier = Modifier.padding(start = 16.dp)
+                    )
+                }
+
                 Spacer(Modifier.height(8.dp))
 
                 Button(
@@ -547,7 +576,6 @@ fun CheeseIntegrationCard(
                 }
 
             } else {
-                // --- DISCONNECTED STATE (Original UI) ---
                 Text(
                     text = "Sync your rooms and tracked slots with cheesetracker.gg",
                     style = MaterialTheme.typography.bodySmall,

@@ -21,7 +21,7 @@ class HistoryRepository(
     }
 
     suspend fun getGlobalHistory(): List<HistoryItemEntity> {
-        return historyDao.getGlobalHistory() //
+        return historyDao.getGlobalHistory()
     }
 
     suspend fun refreshItemHistory() {
@@ -144,7 +144,6 @@ class HistoryRepository(
         }
     }
 
-    // --- (mapHintDetailToEntity function is unchanged) ---
     private fun mapHintDetailToEntity(detail: HintDetail, type: String): HintEntity {
         return HintEntity(
             hint_db_id = detail.id,

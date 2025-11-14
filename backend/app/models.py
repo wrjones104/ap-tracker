@@ -122,3 +122,9 @@ class NotifiedHint(Base):
         UniqueConstraint('room_id', 'item_id', 'location_id', 'item_owner_id', 'location_owner_id', name='_hint_event_uc'),
         Index('ix_notifiedhint_timestamp', 'timestamp'), # <-- ADDED THIS
     )
+
+class JWTBlocklist(Base):
+    __tablename__ = 'jwt_blocklist'
+    id = Column(Integer, primary_key=True)
+    jti = Column(String, nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)

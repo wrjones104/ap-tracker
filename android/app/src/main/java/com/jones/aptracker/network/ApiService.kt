@@ -80,7 +80,6 @@ interface ApiService {
     @GET("config")
     suspend fun getConfig(): ConfigResponse
 
-    // START CHEESE
     @POST("integrations/cheese/auth")
     suspend fun connectCheeseTracker(@Body request: CheeseAuthRequest): CheeseSyncResponse
 
@@ -89,8 +88,9 @@ interface ApiService {
 
     @POST("integrations/cheese/sync")
     suspend fun syncCheeseTracker(): CheeseSyncResponse
-    // END CHEESE
 
+    @POST("auth/logout")
+    suspend fun logout(): Response<Unit>
 }
 
 data class Room(

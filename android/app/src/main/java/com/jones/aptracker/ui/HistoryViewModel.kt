@@ -101,14 +101,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         host = entity.host
                     )
                 }
-                // --- END FIX ---
 
-                // 3. Refresh Hint History (Network)
                 val includeFound = _showFoundHints.value
                 Log.d("HintToggleDebug", "VM: refreshAllHistory calling refreshHintHistory, includeFound = $includeFound")
                 repository.refreshHintHistory(currentRoomId, includeFound)
 
-                // 4. Fetch fresh hints from DB
                 val (forYou, byYou) = if (currentRoomId != null) {
                     repository.getHintsForRoom(currentRoomId!!, includeFound)
                 } else {
