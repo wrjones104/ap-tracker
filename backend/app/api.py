@@ -930,7 +930,7 @@ def get_current_user(current_user):
     if current_user.is_guest:
         return jsonify({
             'discord_id': None,
-            'discord_username': 'Guest', 
+            'discord_username': 'Guest',
             'avatar_url': None,
             'notify_progression_default': current_user.notify_progression_default,
             'notify_useful_default': current_user.notify_useful_default,
