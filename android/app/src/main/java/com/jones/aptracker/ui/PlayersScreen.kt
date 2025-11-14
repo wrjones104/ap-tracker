@@ -10,23 +10,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items // <-- IMPORT ADDED
-import kotlinx.coroutines.launch
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Card
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration // <-- IMPORT ADDED
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -39,9 +34,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,10 +53,8 @@ fun PlayersScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // --- NEW: Collect error message from StateFlow ---
     val errorMessage by playersViewModel.errorMessage.collectAsState()
 
-    // --- NEW: Show error Snackbar ---
     LaunchedEffect(errorMessage) {
         if (errorMessage != null) {
             snackbarHostState.showSnackbar(
@@ -73,12 +67,10 @@ fun PlayersScreen(
 
     LaunchedEffect(playersViewModel.showSaveConfirmation.value) {
         if (playersViewModel.showSaveConfirmation.value) {
-            // Show the snackbar, but don't wait for it
             launch { snackbarHostState.showSnackbar("Selections Saved!") }
 
-            // Immediately reset the state and navigate
             playersViewModel.showSaveConfirmation.value = false
-            onSave() // This will now navigate right away
+            onSave()
         }
     }
 

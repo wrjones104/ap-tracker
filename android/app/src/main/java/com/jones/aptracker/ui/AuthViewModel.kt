@@ -35,33 +35,34 @@ class AuthViewModel : ViewModel() {
         _isLoggedIn.value = true
     }
 
-    fun onLogout(context: Context) {
+    fun onLogout() {
         viewModelScope.launch {
-            // 1. Try to unregister the device from the server first.
-            try {
-                // Get the current FCM token
-                val fcmToken = FirebaseMessaging.getInstance().token.await()
-
-                // Create the request
-                val request = RegisterDeviceRequest(fcm_token = fcmToken)
-
-                // Call the API (this will be authenticated)
-                RetrofitClient.instance.unregisterDevice(request)
-                Log.d("AuthViewModel", "Device unregistered from server.")
-
-            } catch (e: CancellationException) {
-                throw e // Re-throw cancellation
+            val fcmToken = try {
+                FirebaseMessaging.getInstance().token.await()
             } catch (e: Exception) {
-                // This is not a fatal error. The user might be offline.
-                // We'll log it and proceed with the local logout.
-                Log.e("AuthViewModel", "Failed to unregister device. Proceeding with local logout.", e)
+                Log.e("AuthViewModel", "Failed to get FCM token.", e)
+                null
             }
 
-            // 2. Tell the SessionManager to wipe local data and force UI refresh.
-            SessionManager.logout()
+            try {
+                if (fcmToken != null) {
+                    val request = RegisterDeviceRequest(fcm_token = fcmToken)
+                    RetrofitClient.instance.unregisterDevice(request)
+                    Log.d("AuthViewModel", "Device unregistered from server.")
+                }
 
-            // 3. Update the local UI state.
-            _isLoggedIn.value = false
+                RetrofitClient.instance.logout()
+                Log.d("AuthViewModel", "Token blocklisted on server.")
+
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("AuthViewModel", "Failed to clear session on server. Proceeding with local logout.", e)
+            } finally {
+                SessionManager.logout()
+
+                _isLoggedIn.value = false
+            }
         }
     }
 

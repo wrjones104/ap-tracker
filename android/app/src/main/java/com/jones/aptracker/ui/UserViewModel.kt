@@ -1,7 +1,10 @@
 package com.jones.aptracker.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import android.util.Log
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.network.CheeseAuthRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
@@ -9,13 +12,14 @@ import com.jones.aptracker.network.UpdateGlobalPrefsRequest
 import com.jones.aptracker.network.UpdateSlotPrefsRequest
 import com.jones.aptracker.network.UserProfile
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import com.jones.aptracker.network.CheeseSyncResponse
-import android.util.Log
 
-class UserViewModel : ViewModel() {
+class UserViewModel(application: Application) : AndroidViewModel(application) {
+    private val settingsManager = SettingsManager(application)
     private val _userProfile = MutableStateFlow<UserProfile?>(null)
     val userProfile = _userProfile.asStateFlow()
     private val _trackedSlotsByRoom = MutableStateFlow<List<RoomWithTrackedSlots>>(emptyList())
@@ -26,11 +30,21 @@ class UserViewModel : ViewModel() {
 
     private val _integrationMessage = MutableStateFlow<String?>(null)
     val integrationMessage = _integrationMessage.asStateFlow()
+    val isAutoSyncEnabled = settingsManager.isAutoSyncEnabled.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        true
+    )
+
+    fun setAutoSync(isEnabled: Boolean) {
+        viewModelScope.launch {
+            settingsManager.setAutoSync(isEnabled)
+        }
+    }
 
     init {
         fetchUserProfile()
         fetchTrackedSlots()
-        triggerBackgroundSync()
     }
 
     fun fetchUserProfile() {
@@ -105,16 +119,13 @@ class UserViewModel : ViewModel() {
 
     fun deleteAccount(onAccountDeleted: () -> Unit) {
         viewModelScope.launch {
-            _errorMessage.value = null // Clear any previous errors
+            _errorMessage.value = null
             try {
-                // Call the new API endpoint
                 RetrofitClient.instance.deleteAccount()
 
-                // On success, trigger the callback
                 onAccountDeleted()
 
             } catch (e: Exception) {
-                // On failure, show an error
                 _errorMessage.value = "Failed to delete account. Please try again."
                 e.printStackTrace()
             }
@@ -141,12 +152,9 @@ class UserViewModel : ViewModel() {
     private fun triggerBackgroundSync() {
         viewModelScope.launch {
             try {
-                // Call the sync endpoint quietly
                 RetrofitClient.instance.syncCheeseTracker()
-                // When it's done, refresh the slots
                 fetchTrackedSlots()
             } catch (e: Exception) {
-                // Don't show a user-facing snackbar, just log it
                 e.printStackTrace()
                 Log.w("UserViewModel", "Background sync failed: ${e.message}")
             }

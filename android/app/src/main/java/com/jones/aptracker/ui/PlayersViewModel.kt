@@ -88,7 +88,6 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                     repository.pruneSlotData(roomId, slotsToPrune)
                 }
 
-                // Now, call the API as normal
                 val request = UpdateSlotsRequest(tracked_slot_ids = newTrackedSlots.toList())
                 RetrofitClient.instance.updateTrackedSlots(roomId, request)
                 showSaveConfirmation.value = true

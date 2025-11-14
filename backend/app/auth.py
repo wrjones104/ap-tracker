@@ -1,5 +1,7 @@
 import jwt
 import requests
+import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify, current_app, url_for
 # from oauthlib.oauth2 import WebApplicationClient
@@ -20,8 +22,13 @@ def callback():
     redirect_uri = data.get('redirect_uri')
     code_verifier = data.get('code_verifier')
 
-    if not code:
-        return jsonify({'error': 'Missing authorization code'}), 400
+    if not all([code, redirect_uri, code_verifier]):
+        return jsonify({'error': 'Malformed request. Missing required fields.'}), 400
+
+    expected_redirect_uri = current_app.config.get('DISCORD_REDIRECT_URI')
+    if redirect_uri != expected_redirect_uri:
+        logging.warning(f"[AUTH_WARN] Redirect URI mismatch. Expected '{expected_redirect_uri}', got '{redirect_uri}'.")
+        return jsonify({'error': 'Redirect URI mismatch.'}), 400
 
     token_url = current_app.config['DISCORD_TOKEN_URL']
     client_id = current_app.config['DISCORD_CLIENT_ID']
@@ -43,7 +50,8 @@ def callback():
     token_response = requests.post(url=token_url, data=payload, headers=headers)
 
     if not token_response.ok:
-        print(f"[AUTH_ERROR] Discord responded with: {token_response.json()}")
+        error_message = token_response.json().get('error_description', 'No description provided.')
+        logging.error(f"[AUTH_ERROR] Discord token exchange failed. Status: {token_response.status_code}. Error: {error_message}")
         return jsonify({"error": "Failed to fetch token from Discord"}), 502
 
     token_data = token_response.json()
@@ -62,26 +70,46 @@ def callback():
     discord_avatar_hash = user_info.get('avatar')
 
     session = Session()
-    user = session.query(User).filter_by(discord_id=discord_id).first()
-    if not user:
-        user = User(discord_id=discord_id, discord_username=discord_username, discord_avatar_hash=discord_avatar_hash)
-        session.add(user)
+    user_id_for_jwt = None
+    try:
+        user = session.query(User).filter_by(discord_id=discord_id).with_for_update().first()
+
+        if not user:
+            user = User(discord_id=discord_id, discord_username=discord_username, discord_avatar_hash=discord_avatar_hash)
+            session.add(user)
+            logging.info(f"[AUTH] New user created: {discord_username} ({discord_id})")
+        else:
+            user.discord_username = discord_username
+            user.discord_avatar_hash = discord_avatar_hash
+            logging.info(f"[AUTH] Existing user logged in: {discord_username} ({discord_id})")
+
         session.commit()
-        print(f"[AUTH] New user created: {discord_username} ({discord_id})")
-    else:
-        user.discord_username = discord_username
-        user.discord_avatar_hash = discord_avatar_hash
-        session.commit()
-        print(f"[AUTH] Existing user logged in: {discord_username} ({discord_id})")
+        user_id_for_jwt = user.id
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[AUTH_ERROR] Database error during user upsert: {e}", exc_info=True)
+        return jsonify({"error": "Could not process user data."}), 500
+    finally:
+        Session.remove()
+
+    # (V2) We now add the jti claim for better token tracking / blocklisting
+    # And the 'iat' claim to know when it was issued
+    jwt_id = str(uuid.uuid4())
+    issued_at = datetime.now(timezone.utc)
+    expires_at = issued_at + timedelta(days=30)
 
     payload = {
-        'user_id': user.id,
-        'exp': datetime.now(timezone.utc) + timedelta(days=30)
+        'user_id': user_id_for_jwt,
+        'iat': issued_at,
+        'exp': expires_at,
+        'jti': jwt_id,
+        'type': 'access' # V3: Differentiate from refresh tokens
     }
     secret = current_app.config['SECRET_KEY']
     app_token = jwt.encode(payload, secret, algorithm='HS256')
 
     return jsonify({
         'message': 'Login successful!',
-        'token': app_token
+        'token': app_token,
+        'is_unlimited_pin': False
     })

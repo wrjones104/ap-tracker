@@ -7,6 +7,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from urllib.parse import urlparse
+from ipaddress import ip_address
 
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import OperationalError, IntegrityError
@@ -16,7 +17,7 @@ from sqlalchemy import or_, desc, tuple_
 from . import Session
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
-    DatapackageCache, NotifiedItem, NotifiedHint
+    DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist
 )
 
 bp = Blueprint('api', __name__)
@@ -77,7 +78,18 @@ def token_required(f):
             secret = current_app.config['SECRET_KEY']
             data = jwt.decode(token, secret, algorithms=['HS256'])
 
+            jti = data.get('jti')
+            if not jti:
+                logging.warning(f"Auth failure: Token is missing 'jti' claim.")
+                return jsonify({'error': 'Invalid token format'}), 401
+
             session = Session()
+
+            is_blocked = session.query(JWTBlocklist).filter_by(jti=jti).first()
+            if is_blocked:
+                logging.warning(f"Auth failure: Blocked token used by user {data.get('user_id')}.")
+                return jsonify({'error': 'Token has been revoked'}), 401
+
             current_user = session.query(User).filter_by(id=data['user_id']).first()
             if not current_user:
                 logging.warning(f"Auth success, but user {data['user_id']} not found in DB.")
@@ -123,6 +135,52 @@ def handle_db_errors(f):
         finally:
             Session.remove()
     return decorated_function
+
+# =============================================================================
+# LOGOUT ENDPOINT
+# =============================================================================
+
+@bp.route('/logout', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def logout(current_user):
+    """
+    (V2) Logs the user out by adding their token's JTI to the blocklist.
+    """
+    token = request.headers['Authorization'].split(" ")[1]
+    secret = current_app.config['SECRET_KEY']
+
+    try:
+        data = jwt.decode(token, secret, algorithms=['HS256'], options={"verify_exp": False})
+    except jwt.InvalidTokenError:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    jti = data.get('jti')
+    exp = data.get('exp')
+
+    if not jti or not exp:
+        return jsonify({'error': 'Token is missing JTI or EXP claim'}), 400
+
+    expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+
+    session = Session()
+    try:
+        session.add(JWTBlocklist(jti=jti, expires_at=expires_at))
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        # JTI is already in the blocklist, which is fine.
+        logging.info(f"JTI {jti} for user {current_user.id} was already blocklisted.")
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Failed to add JTI to blocklist for user {current_user.id}: {e}", exc_info=True)
+        return jsonify({'error': 'Logout failed.'}), 500
+    finally:
+        Session.remove()
+
+    logging.info(f"User {current_user.id} logged out successfully.")
+    return jsonify({'message': 'Successfully logged out.'}), 200
 
 # =============================================================================
 # PUBLIC CONFIG ENDPOINT
@@ -254,14 +312,14 @@ def add_room(current_user):
     current user to it.
     """
     data = request.json
-    room_url = data.get('room_url') # This is the .../room/ID link
-    alias = data.get('alias')
+    room_url = data.get('room_url', '').strip()
+    alias = data.get('alias', '').strip()
     icon_name = data.get('icon_name')
 
-    if not room_url:
-        return jsonify({'error': 'Missing room_url'}), 400
-    if not alias:
-        return jsonify({'error': 'Missing alias'}), 400
+    if not room_url or len(room_url) > 512:
+        return jsonify({'error': 'Invalid or missing room_url.'}), 400
+    if not alias or len(alias) > 128:
+        return jsonify({'error': 'Invalid or missing alias.'}), 400
 
     try:
         parsed_url = urlparse(room_url)
@@ -272,6 +330,18 @@ def add_room(current_user):
 
     if not hostname or not room_id:
         return jsonify({'error': 'Could not parse hostname or room_id from URL'}), 400
+
+    try:
+        parsed_ip = ip_address(hostname)
+        logging.warning(f"[API_WARN] User {current_user.id} tried to add a room using an IP address: {hostname}")
+        return jsonify({'error': 'Adding rooms by IP address is not permitted.'}), 403
+    except ValueError:
+        pass # It's not an IP, so it's a valid hostname
+
+    ALLOWED_HOSTNAMES = current_app.config.get('ALLOWED_HOSTNAMES', [])
+    if hostname not in ALLOWED_HOSTNAMES:
+        logging.warning(f"[API_WARN] User {current_user.id} tried to add a room with a disallowed hostname: {hostname}")
+        return jsonify({'error': f"Hostname '{hostname}' is not in the list of allowed servers."}), 403
 
     session = Session()
     room = session.query(TrackedRoom).filter_by(room_id=room_id).first()
@@ -285,6 +355,8 @@ def add_room(current_user):
             response = requests.get(status_url, timeout=10)
             response.raise_for_status()
             status_data = response.json()
+            if not isinstance(status_data, dict):
+                raise ValueError("Unexpected response format from room status API.")
             port = status_data.get('last_port', '')
             
             ap_tracker_id = status_data.get('tracker')
@@ -344,8 +416,10 @@ def add_room(current_user):
             import threading
             
             tracker_url = f"https://{hostname}/tracker/{ap_tracker_id}"
+            app_context = current_app._get_current_object()
             
             threading.Thread(target=push_new_room_to_cheese, args=(
+                app_context,
                 current_user.id, 
                 tracker_url,  
                 room.room_id, 
@@ -434,7 +508,12 @@ def get_room_players(current_user, room_db_id):
         if not room:
             return jsonify({'error': 'Room not found'}), 404
 
-        players_list = json.loads(room.cached_players_json or '[]')
+        try:
+            players_list = json.loads(room.cached_players_json or '[]')
+            if not isinstance(players_list, list):
+                players_list = []
+        except (json.JSONDecodeError, TypeError):
+            players_list = []
 
         tracked_slots_query = session.query(UserTrackedSlot).filter_by(
             user_id=current_user.id,
@@ -526,7 +605,14 @@ def update_tracked_slots(current_user, room_db_id):
             # Note: We pass a NEW session to the helper if it's threaded, or reuse current if sync.
             # If using sync, just pass 'session' you already have open (but it's committed, so it's fine).
             from .api_cheese import push_slot_changes_to_cheese
-            push_slot_changes_to_cheese(session, current_user, room_db_id, slots_to_add, slots_to_remove)
+            app_context = current_app._get_current_object()
+            push_slot_changes_to_cheese(
+                app_context, 
+                current_user.id,  # Pass user_id
+                room_db_id, 
+                slots_to_add, 
+                slots_to_remove
+            )
         except Exception as e:
             logging.error(f"[API_ERROR] Failed to trigger Cheese push: {e}", exc_info=True)
             # Do not return an error to the user, standard sync succeeded.
@@ -577,8 +663,11 @@ def get_item_history(current_user, room_db_id):
 
     try:
         game_checksums = json.loads(room.game_checksums_json or '{}')
+        if not isinstance(game_checksums, dict): game_checksums = {}
+
         players = json.loads(room.cached_players_json or '[]')
-    except json.JSONDecodeError:
+        if not isinstance(players, list): players = []
+    except (json.JSONDecodeError, TypeError):
         logging.error(f"[API_ERROR] Room data for {room_db_id} is corrupt.", exc_info=True)
         return jsonify({'error': 'Room data is corrupt or missing.'}), 500
         
@@ -739,8 +828,11 @@ def get_global_item_history(current_user):
         
         try:
             players = json.loads(room_data.cached_players_json or '[]')
+            if not isinstance(players, list): players = []
+
             game_checksums = json.loads(room_data.game_checksums_json or '{}')
-        except json.JSONDecodeError:
+            if not isinstance(game_checksums, dict): game_checksums = {}
+        except (json.JSONDecodeError, TypeError):
             continue
 
         name_map = {p['slot_id']: p['name'] for p in players}
@@ -873,10 +965,16 @@ def get_user_tracked_slots(current_user):
         response_data = []
         for sub in subscriptions:
             room_data = sub.room
-            if not room_data: continue # Skip if room somehow doesn't exist
+            if not room_data: continue
 
-            # Get player names from the cached JSON for this room
-            players_map = {p['slot_id']: p['name'] for p in json.loads(room_data.cached_players_json or '[]')}
+            try:
+                players_json = json.loads(room_data.cached_players_json or '[]')
+                if not isinstance(players_json, list):
+                    players_json = []
+            except (json.JSONDecodeError, TypeError):
+                players_json = []
+
+            players_map = {p['slot_id']: p['name'] for p in players_json}
 
             tracked_slots_list = []
             for slot in sorted(sub.tracked_slots, key=lambda s: s.slot_id):
@@ -978,9 +1076,24 @@ def delete_current_user(current_user):
     """
     Deletes the currently authenticated user and all their associated data
     (devices, subscriptions, tracked slots) from the database.
+    Also invalidates the token used to make the request.
     """
     session = Session()
     try:
+        # 1. Invalidate the current token
+        token = request.headers['Authorization'].split(" ")[1]
+        secret = current_app.config['SECRET_KEY']
+        try:
+            data = jwt.decode(token, secret, algorithms=['HS256'], options={"verify_exp": False})
+            jti = data.get('jti')
+            exp = data.get('exp')
+            if jti and exp:
+                expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+                session.add(JWTBlocklist(jti=jti, expires_at=expires_at))
+        except (jwt.InvalidTokenError, KeyError, TypeError) as e:
+            logging.warning(f"Could not blocklist token during account deletion for user {current_user.id}: {e}")
+
+        # 2. Delete the user record
         session.delete(current_user)
         session.commit()
         logging.info(f"[API] User {current_user.id} ({current_user.discord_username}) has deleted their account.")
@@ -1055,10 +1168,26 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
 
     all_rooms_full = session.query(TrackedRoom).filter(TrackedRoom.id.in_(all_room_db_ids)).all()
     
-    player_map_by_room = {r.id: {p['slot_id']: p['name'] for p in json.loads(r.cached_players_json or '[]')} for r in all_rooms_full}
-    game_map_by_room = {r.id: {p['slot_id']: p.get('game') for p in json.loads(r.cached_players_json or '[]')} for r in all_rooms_full}
-    
-    checksum_map_by_room = {r.id: json.loads(r.game_checksums_json or '{}') for r in all_rooms_full}
+    player_map_by_room = {}
+    game_map_by_room = {}
+    checksum_map_by_room = {}
+
+    for r in all_rooms_full:
+        try:
+            players_json = json.loads(r.cached_players_json or '[]')
+            if not isinstance(players_json, list): raise ValueError()
+        except (json.JSONDecodeError, ValueError):
+            players_json = []
+
+        try:
+            checksum_json = json.loads(r.game_checksums_json or '{}')
+            if not isinstance(checksum_json, dict): raise ValueError()
+        except (json.JSONDecodeError, ValueError):
+            checksum_json = {}
+
+        player_map_by_room[r.id] = {p['slot_id']: p['name'] for p in players_json}
+        game_map_by_room[r.id] = {p['slot_id']: p.get('game') for p in players_json}
+        checksum_map_by_room[r.id] = checksum_json
     uuid_to_db_id = {v: k for k, v in room_id_to_uuid.items()}
 
 

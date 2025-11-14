@@ -59,13 +59,11 @@ fun RoomsScreen(
     val errorMessage by roomsViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Refresh data every time this screen is shown
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
-        // This will re-run the block every time the lifecycle enters RESUMED state
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             roomsViewModel.fetchRooms()
-            userViewModel.fetchUserProfile() // <-- THIS IS THE FIX
+            userViewModel.fetchUserProfile()
         }
     }
 
@@ -105,6 +103,7 @@ fun RoomsScreen(
                 actions = {
                     ProfileMenu(
                         userViewModel = userViewModel,
+                        roomsViewModel = roomsViewModel,
                         onHistoryClick = onHistoryClick,
                         onLogoutClick = onLogoutClick,
                         onSettingsClick = onSettingsClick
@@ -120,7 +119,9 @@ fun RoomsScreen(
     ) { innerPadding ->
         SwipeRefresh(
             state = rememberSwipeRefreshState(isRefreshing = isLoading),
-            onRefresh = { roomsViewModel.fetchRooms() },
+            onRefresh = {
+                roomsViewModel.refreshAll()
+            },
             modifier = Modifier.padding(innerPadding)
         ) {
             Box(
@@ -268,7 +269,7 @@ fun RoomsScreen(
                 },
                 onManageSlotsClick = {
                     onManageSlotsClick(room.id, room.alias)
-                    roomToEdit = null // Dismiss the dialog
+                    roomToEdit = null
                 }
             )
         }
@@ -431,17 +432,20 @@ fun EditRoomDialog(
 @Composable
 fun ProfileMenu(
     userViewModel: UserViewModel,
+    roomsViewModel: RoomsViewModel,
     onHistoryClick: () -> Unit,
     onLogoutClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
     val userProfile by userViewModel.userProfile.collectAsState()
     var menuExpanded by remember { mutableStateOf(false) }
+    val isSyncingCheese by roomsViewModel.isSyncingCheese.collectAsState()
+    val isAutoSyncEnabled by roomsViewModel.isAutoSyncEnabled.collectAsState(initial = true)
 
     Box {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.clickable { menuExpanded = true } // Make the whole row clickable
+            modifier = Modifier.clickable { menuExpanded = true }
         ) {
             IconButton(onClick = { menuExpanded = true }) {
                 if (userProfile?.avatar_url != null) {
@@ -452,26 +456,34 @@ fun ProfileMenu(
                         contentScale = ContentScale.Crop
                     )
                 } else {
-                    // Fallback icon if the image is loading or unavailable
                     Icon(Icons.Default.MoreVert, contentDescription = "Menu")
                 }
             }
 
-            // --- FLAIR ---
-            if (userProfile?.is_cheese_connected == true) {
+            if (isSyncingCheese) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .padding(start = 2.dp, end = 2.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else if (userProfile?.is_cheese_connected == true) {
                 Icon(
                     imageVector = Icons.Default.Link,
                     contentDescription = "Linked",
                     modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant // A more subtle color
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            if (userProfile?.is_cheese_connected == true) {
                 Text(
                     text = "🧀",
                     modifier = Modifier
-                        .padding(start = 4.dp, end = 8.dp) // Add padding
+                        .padding(start = 4.dp, end = 8.dp)
                 )
             }
-            // --- END FLAIR ---
         }
 
         DropdownMenu(
@@ -482,7 +494,7 @@ fun ProfileMenu(
                 DropdownMenuItem(
                     text = { Text("Logged in as $it", style = MaterialTheme.typography.labelMedium) },
                     onClick = { },
-                    enabled = false // Not clickable
+                    enabled = false
                 )
                 HorizontalDivider()
             }
@@ -500,6 +512,15 @@ fun ProfileMenu(
                     menuExpanded = false
                 }
             )
+            if (userProfile?.is_cheese_connected == true && !isAutoSyncEnabled) {
+                DropdownMenuItem(
+                    text = { Text("Sync Cheese Now") },
+                    onClick = {
+                        roomsViewModel.refreshAll(forceCheeseSync = true)
+                        menuExpanded = false
+                    }
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Log Out") },
                 onClick = {
