@@ -410,7 +410,7 @@ def add_room(current_user):
 
     session.commit()
 
-    if current_user.cheese_api_key and (slots_to_add or slots_to_remove) and not current_user.is_guest:
+    if current_user.cheese_api_key and ap_tracker_id and not current_user.is_guest:
         try:
             from .api_cheese import push_new_room_to_cheese
             import threading
