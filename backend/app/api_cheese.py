@@ -22,8 +22,9 @@ CHEESE_BASE_URL = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.thei
 
 def _sync_rooms_from_cheese_tracker_task(app, user_id):
     """
-    (V7 Refactored) Runs the full sync.
-    Includes "Pre-Flight" cooldown check to save bandwidth.
+    (V8 Refactored) Runs the full sync.
+    Includes pre-flight cooldown, whitespace-robust name matching,
+    and pruning of stale rooms.
     """
     
     with app.app_context():
@@ -39,34 +40,34 @@ def _sync_rooms_from_cheese_tracker_task(app, user_id):
                 logging.debug(f"[CHEESE_SYNC_BG] Aborting: No user or key for {user_id}")
                 return
 
-            # --- NEW: EARLY COOLDOWN CHECK ---
             now = datetime.utcnow()
             
-            # 1. Check timestamp
-            if user_for_key.cheese_last_sync and (now - user_for_key.cheese_last_sync) < timedelta(minutes=5):
+            if user_for_key.cheese_last_sync and (now - user_for_key.cheese_last_sync) < timedelta(minutes=1):
                  logging.debug(f"[CHEESE_SYNC_BG] Aborting (Pre-flight): Sync for user {user_id} ran too recently.")
                  return
 
-            # 2. Check if already syncing (basic check without lock)
             if user_for_key.is_syncing_cheese:
-                # Only ignore the lock if it's stale (>15 mins)
                 if user_for_key.cheese_sync_started_at and (now - user_for_key.cheese_sync_started_at) < timedelta(minutes=15):
                     logging.debug(f"[CHEESE_SYNC_BG] Aborting (Pre-flight): Sync already in progress for user {user_id}.")
                     return
-            # ---------------------------------
-
+            
             api_key = decrypt_api_key(user_for_key.cheese_api_key)
             if not api_key:
                 logging.error(f"[CHEESE_SYNC_BG] Failed to decrypt API key for user {user_id}. Aborting sync.")
                 return
-            discord_username = user_for_key.discord_username
+                
+            discord_username = user_for_key.discord_username.strip() if user_for_key.discord_username else None
+
         finally:
             Session.remove() 
+
+        if not api_key or not discord_username:
+             logging.error(f"[CHEESE_SYNC_BG] Aborting: Missing API key or Discord username for user {user_id}.")
+             return
 
         headers = {"Authorization": f"Bearer {api_key}"}
         
         # === 2. NETWORK PHASE: No DB session open! ===
-        # (This part runs only if we passed the checks above)
         cheese_trackers = []
         tracker_details_map = {}
         try:
@@ -100,12 +101,9 @@ def _sync_rooms_from_cheese_tracker_task(app, user_id):
         try:
             now = datetime.utcnow()
             
-            # Lock the user row
             user = session.query(User).filter_by(id=user_id).with_for_update().first()
 
-            # We keep this check here as a "Final Guard" against race conditions,
-            # but the pre-flight check will catch 99% of cases.
-            if user.cheese_last_sync and (now - user.cheese_last_sync) < timedelta(minutes=5):
+            if user.cheese_last_sync and (now - user.cheese_last_sync) < timedelta(minutes=1):
                  logging.debug(f"[CHEESE_SYNC_BG] Aborting (DB Phase): Sync for user {user_id} ran too recently.")
                  session.commit()
                  return
@@ -126,16 +124,109 @@ def _sync_rooms_from_cheese_tracker_task(app, user_id):
             
             active_cheese_tracker_ids = set()
 
-            # ... (The rest of the DB logic, cleanup logic, and commit remains exactly the same) ...
-            
-            # (For brevity, assume the existing loop logic follows here)
             for ct_data in cheese_trackers:
-                 # ... existing loop logic ...
-                 pass 
+                ap_room_id = None 
+                try:
+                    room_link = ct_data.get('room_link')
+                    tracker_id = ct_data.get('tracker_id')
+                    
+                    if not room_link or not tracker_id: 
+                        logging.debug(f"Skipping tracker {tracker_id} (title: {ct_data.get('title')}), missing room_link.")
+                        continue
 
-            # ... existing cleanup logic ...
+                    try:
+                        parsed_url = urlparse(room_link)
+                        ap_room_id = parsed_url.path.split('/')[-1]
+                        hostname = parsed_url.hostname
+                        if not ap_room_id or not hostname: continue
+                    except Exception:
+                        logging.warning(f"Failed to parse room_link: {room_link}")
+                        continue
+                    
+                    active_cheese_tracker_ids.add(tracker_id)
+
+                    local_room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
+                    if not local_room:
+                        local_room = TrackedRoom(
+                            room_id=ap_room_id, hostname=hostname, 
+                            cheese_tracker_id=tracker_id, cached_full_address=hostname
+                        )
+                        session.add(local_room)
+                        session.flush() 
+                        stats['rooms_created'] += 1
+
+                    if local_room.cheese_tracker_id != tracker_id:
+                         local_room.cheese_tracker_id = tracker_id
+
+                    sub = session.query(UserRoomSubscription).filter_by(user_id=user.id, room_id=local_room.id).first()
+                    if not sub:
+                        alias_name = ct_data.get('title') or "No Name"
+                        session.add(UserRoomSubscription(
+                            user_id=user.id, room_id=local_room.id,
+                            alias=alias_name, icon_name='cheese'
+                        ))
+                        stats['subs_added'] += 1
+
+                    details = tracker_details_map.get(tracker_id)
+                    if details:
+                        games = details.get('games', []) 
+                        slots_to_track_from_cheese = set()
+                        
+                        for game in games:
+                            cheese_discord = game.get('effective_discord_username')
+                            
+                            if cheese_discord and discord_username and \
+                               cheese_discord.strip().lower() == discord_username.strip().lower():
+                                
+                                ap_slot_id = game.get('position')
+                                if ap_slot_id:
+                                    slots_to_track_from_cheese.add(ap_slot_id)
+                                
+                                if not found_cheese_id:
+                                    ct_id = game.get('claimed_by_ct_user_id')
+                                    if ct_id:
+                                        logging.info(f"[CHEESE_SYNC_BG] Discovered Cheese User ID: {ct_id}")
+                                        user.cheese_user_id = ct_id 
+                                        found_cheese_id = True
+                        
+                        if slots_to_track_from_cheese:
+                            existing_slots = session.query(UserTrackedSlot.slot_id).filter_by(
+                                user_id=user.id, room_id=local_room.id
+                            ).all()
+                            existing_set = {s[0] for s in existing_slots}
+
+                            to_add = slots_to_track_from_cheese - existing_set
+                            for new_slot_id in to_add:
+                                session.add(UserTrackedSlot(user_id=user.id, room_id=local_room.id, slot_id=new_slot_id))
+                                stats['slots_synced'] += 1
+                            
+                            to_remove = existing_set - slots_to_track_from_cheese
+                            if to_remove:
+                                session.query(UserTrackedSlot).filter(
+                                    UserTrackedSlot.user_id == user.id,
+                                    UserTrackedSlot.room_id == local_room.id,
+                                    UserTrackedSlot.slot_id.in_(to_remove)
+                                ).delete(synchronize_session=False)
+
+                except Exception as e:
+                    logging.error(f"[CHEESE_SYNC_BG] Failed to process room {ap_room_id or 'Unknown'}: {e}", exc_info=False)
             
-            # Commit
+            # === 4. CLEANUP PHASE ===
+            if active_cheese_tracker_ids:
+                stale_subs = session.query(UserRoomSubscription)\
+                    .join(TrackedRoom)\
+                    .filter(UserRoomSubscription.user_id == user.id)\
+                    .filter(TrackedRoom.cheese_tracker_id.isnot(None))\
+                    .filter(TrackedRoom.cheese_tracker_id.notin_(active_cheese_tracker_ids))\
+                    .all()
+
+                for sub in stale_subs:
+                    session.delete(sub)
+                    stats['subs_removed'] += 1
+                
+                if stats['subs_removed'] > 0:
+                    logging.info(f"[CHEESE_SYNC_BG] Removed {stats['subs_removed']} stale/done rooms for user {user_id}.")
+
             user.cheese_last_sync = datetime.utcnow()
             user.is_syncing_cheese = False
             user.cheese_sync_started_at = None
@@ -146,7 +237,6 @@ def _sync_rooms_from_cheese_tracker_task(app, user_id):
             session.rollback()
             logging.error(f"[CHEESE_SYNC_BG] FULL sync failed for user {user_id} in database phase: {e}", exc_info=True)
         finally:
-            # Unlock logic (Same as before)
             try:
                 lock_session = Session()
                 lock_session.query(User).filter(User.id == user_id).update({
@@ -167,7 +257,9 @@ def _sync_rooms_from_cheese_tracker_task(app, user_id):
 @token_required
 def connect_cheese_account(current_user):
     """
-    Sets the Cheese API key and triggers an *asynchronous* pull-sync.
+    (V2 Refactored) Sets the Cheese API key.
+    This is now a *validating* endpoint. It makes a test call
+    to Cheese Tracker to verify the key before saving it.
     """
     data = request.json
     api_key = data.get('api_key')
@@ -176,6 +268,23 @@ def connect_cheese_account(current_user):
         return jsonify({'error': 'Invalid or missing api_key.'}), 400
 
     api_key = api_key.strip()
+
+    try:
+        test_headers = {"Authorization": f"Bearer {api_key}"}
+        test_resp = requests.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=test_headers, timeout=10)
+        
+        if test_resp.status_code == 401:
+            logging.warning(f"[CHEESE_AUTH] User {current_user.id} failed to connect with an invalid API key.")
+            return jsonify({'error': 'Invalid API Key. Please check the key and try again.'}), 400
+        
+        test_resp.raise_for_status() 
+
+    except requests.exceptions.HTTPError as e:
+        logging.error(f"[CHEESE_AUTH] HTTP error testing key for user {current_user.id}: {e}")
+        return jsonify({'error': 'Could not verify key with Cheese Tracker. The server may be down.'}), 502
+    except requests.exceptions.RequestException as e:
+        logging.error(f"[CHEESE_AUTH] Network error testing key for user {current_user.id}: {e}")
+        return jsonify({'error': 'A network error occurred while trying to verify the API key.'}), 500
 
     session = Session()
     user = session.merge(current_user)
@@ -187,7 +296,6 @@ def connect_cheese_account(current_user):
     user.cheese_api_key = encrypted_key
     session.commit()
 
-    # --- RUN SYNC IN BACKGROUND ---
     try:
         app_context = current_app._get_current_object()
         threading.Thread(
@@ -222,22 +330,17 @@ def disconnect_cheese_account(current_user):
 @token_required
 def trigger_manual_sync(current_user):
     """
-    Manually triggers an *asynchronous* pull-sync from Cheese Tracker.
+    Manually triggers a synchronous pull-sync from Cheese Tracker.
+    The response will wait until the sync is complete.
     """
     if not current_user.cheese_api_key:
         return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
 
-    try:
-        app_context = current_app._get_current_object()
-        threading.Thread(
-            target=_sync_rooms_from_cheese_tracker_task, 
-            args=(app_context,current_user.id,)
-        ).start()
-    except Exception as e:
-        logging.error(f"Failed to start manual sync thread for user {current_user.id}: {e}")
-        return jsonify({'error': 'Failed to start sync process.'}), 500
+    app_context = current_app._get_current_object()
+
+    _sync_rooms_from_cheese_tracker_task(app_context, current_user.id)
         
-    return jsonify({'message': 'Sync started! Your rooms will update shortly.'})
+    return jsonify({'message': 'Sync complete!'})
 
 
 def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, alias):

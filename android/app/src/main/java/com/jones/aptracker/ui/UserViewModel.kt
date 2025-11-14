@@ -119,16 +119,13 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteAccount(onAccountDeleted: () -> Unit) {
         viewModelScope.launch {
-            _errorMessage.value = null // Clear any previous errors
+            _errorMessage.value = null
             try {
-                // Call the new API endpoint
                 RetrofitClient.instance.deleteAccount()
 
-                // On success, trigger the callback
                 onAccountDeleted()
 
             } catch (e: Exception) {
-                // On failure, show an error
                 _errorMessage.value = "Failed to delete account. Please try again."
                 e.printStackTrace()
             }

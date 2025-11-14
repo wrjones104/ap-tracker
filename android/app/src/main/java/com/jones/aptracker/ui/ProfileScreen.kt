@@ -540,7 +540,7 @@ fun CheeseIntegrationCard(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onAutoSyncChanged(!isAutoSyncEnabled) } // Make the whole row clickable
+                        .clickable { onAutoSyncChanged(!isAutoSyncEnabled) }
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -576,7 +576,6 @@ fun CheeseIntegrationCard(
                 }
 
             } else {
-                // --- DISCONNECTED STATE (Original UI) ---
                 Text(
                     text = "Sync your rooms and tracked slots with cheesetracker.gg",
                     style = MaterialTheme.typography.bodySmall,

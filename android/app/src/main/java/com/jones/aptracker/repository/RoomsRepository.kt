@@ -27,7 +27,7 @@ class RoomsRepository(
                 host = networkRoom.host,
                 tracked_slots_count = networkRoom.tracked_slots_count,
                 total_slots_count = networkRoom.total_slots_count,
-                icon_name = networkRoom.icon_name // <-- ADD THIS
+                icon_name = networkRoom.icon_name
             )
         }
         roomDao.syncRooms(roomEntities)    }

@@ -9,7 +9,7 @@ class TokenManager(context: Context) {
     private val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
 
     private val sharedPreferences = EncryptedSharedPreferences.create(
-        "secret_user_prefs", // A unique name for the encrypted file
+        "secret_user_prefs",
         masterKeyAlias,
         context,
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,

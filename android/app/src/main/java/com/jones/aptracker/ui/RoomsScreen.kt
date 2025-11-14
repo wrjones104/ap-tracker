@@ -269,7 +269,7 @@ fun RoomsScreen(
                 },
                 onManageSlotsClick = {
                     onManageSlotsClick(room.id, room.alias)
-                    roomToEdit = null // Dismiss the dialog
+                    roomToEdit = null
                 }
             )
         }
@@ -494,7 +494,7 @@ fun ProfileMenu(
                 DropdownMenuItem(
                     text = { Text("Logged in as $it", style = MaterialTheme.typography.labelMedium) },
                     onClick = { },
-                    enabled = false // Not clickable
+                    enabled = false
                 )
                 HorizontalDivider()
             }
