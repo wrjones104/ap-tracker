@@ -9,6 +9,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import com.jones.aptracker.network.RegisterDeviceRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.SessionManager
+import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.network.TokenManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,7 +36,7 @@ class AuthViewModel : ViewModel() {
         _isLoggedIn.value = true
     }
 
-    fun onLogout() {
+    fun onLogout(context: Context) {
         viewModelScope.launch {
             val fcmToken = try {
                 FirebaseMessaging.getInstance().token.await()
@@ -59,7 +60,20 @@ class AuthViewModel : ViewModel() {
             } catch (e: Exception) {
                 Log.e("AuthViewModel", "Failed to clear session on server. Proceeding with local logout.", e)
             } finally {
-                SessionManager.logout()
+
+                try {
+                    val settingsManager = SettingsManager(context)
+                    settingsManager.setAutoSync(false)
+                    Log.d("AuthViewModel", "Cleared local auto-sync setting.")
+                } catch (e: Exception) {
+                    Log.e("AuthViewModel", "Failed to clear SettingsManager.", e)
+                }
+
+                try {
+                    SessionManager.logout()
+                } catch (e: Exception) {
+                    Log.e("AuthViewModel", "Failed to clear SessionManager.", e)
+                }
 
                 _isLoggedIn.value = false
             }

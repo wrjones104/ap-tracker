@@ -106,7 +106,8 @@ class MainActivity : ComponentActivity() {
             APTrackerTheme {
                 VersionGate(
                     authViewModel = authViewModel,
-                    onStartAuth = { startAuthentication(authLauncher) },
+                    onStartDiscordAuth = { startAuthentication(authLauncher) },
+                    onStartGuestAuth = { startGuestAuthentication() },
                     onCheckNotificationPermission = { checkAndRequestNotificationPermission() }
                 )
             }
@@ -188,6 +189,30 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    private fun startGuestAuthentication() {
+        authViewModel.setLoading(true)
+        lifecycleScope.launch {
+            try {
+                val response = RetrofitClient.instance.loginAsGuest()
+
+                tokenManager.saveToken(response.token)
+
+                authViewModel.onLoginSuccess()
+                Toast.makeText(this@MainActivity, "Logged in as Guest!", Toast.LENGTH_SHORT).show()
+
+                val intent = Intent(this@MainActivity, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+                startActivity(intent)
+
+            } catch (e: Exception) {
+                val errorDetails = e.toString()
+                Log.e("GUEST_LOGIN_ERROR", "Failed to login as guest", e)
+                Toast.makeText(this@MainActivity, "Guest Login Failed: $errorDetails", Toast.LENGTH_LONG).show()
+                authViewModel.setLoading(false)
+            }
+        }
+    }
 
 
     override fun onDestroy() {
@@ -200,7 +225,8 @@ class MainActivity : ComponentActivity() {
 fun VersionGate(
     authViewModel: AuthViewModel,
     mainViewModel: MainViewModel = viewModel(),
-    onStartAuth: () -> Unit,
+    onStartDiscordAuth: () -> Unit,
+    onStartGuestAuth: () -> Unit,
     onCheckNotificationPermission: () -> Unit
 ) {
     val versionState by mainViewModel.versionState.collectAsState()
@@ -215,7 +241,7 @@ fun VersionGate(
             val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
             val isLoading by authViewModel.isLoading.collectAsState()
             val context = LocalContext.current
-            val onLogout = { authViewModel.onLogout() }
+            val onLogout = { authViewModel.onLogout(context) }
 
             LaunchedEffect(isLoggedIn) {
                 if (isLoggedIn) {
@@ -227,7 +253,8 @@ fun VersionGate(
             AppNavigation(
                 isLoggedIn = isLoggedIn,
                 isLoading = isLoading,
-                onLoginClick = onStartAuth,
+                onDiscordLoginClick = onStartDiscordAuth,
+                onGuestLoginClick = onStartGuestAuth,
                 onLogoutClick = onLogout
             )
         }
