@@ -4,12 +4,62 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify, current_app, url_for
-# from oauthlib.oauth2 import WebApplicationClient
 
 from .models import User
 from . import Session
 
 bp = Blueprint('auth', __name__, url_prefix='/auth')
+
+@bp.route('/guest', methods=['POST'])
+def create_guest_user():
+    """
+    Creates a new anonymous "guest" user and returns a standard JWT.
+    """
+    session = Session()
+    user_id_for_jwt = None
+    try:
+        guest_uuid = str(uuid.uuid4())
+        
+        new_user = User(
+            discord_id=None,
+            discord_username=None,
+            discord_avatar_hash=None,
+            is_guest=True,
+            guest_uuid=guest_uuid
+        )
+        
+        session.add(new_user)
+        session.commit()
+        
+        user_id_for_jwt = new_user.id
+        logging.info(f"[AUTH] New guest user created: {new_user.id} (UUID: {guest_uuid})")
+        
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[AUTH_ERROR] Database error during guest user creation: {e}", exc_info=True)
+        return jsonify({"error": "Could not create guest account."}), 500
+    finally:
+        Session.remove()
+
+    jwt_id = str(uuid.uuid4())
+    issued_at = datetime.now(timezone.utc)
+    expires_at = issued_at + timedelta(days=30) 
+
+    payload = {
+        'user_id': user_id_for_jwt,
+        'iat': issued_at,
+        'exp': expires_at,
+        'jti': jwt_id,
+        'type': 'access'
+    }
+    secret = current_app.config['SECRET_KEY']
+    app_token = jwt.encode(payload, secret, algorithm='HS256')
+
+    return jsonify({
+        'message': 'Guest access granted!',
+        'token': app_token,
+        'is_unlimited_pin': False 
+    })
 
 @bp.route('/callback', methods=['POST'])
 def callback():
@@ -75,12 +125,18 @@ def callback():
         user = session.query(User).filter_by(discord_id=discord_id).with_for_update().first()
 
         if not user:
-            user = User(discord_id=discord_id, discord_username=discord_username, discord_avatar_hash=discord_avatar_hash)
+            user = User(
+                discord_id=discord_id, 
+                discord_username=discord_username, 
+                discord_avatar_hash=discord_avatar_hash,
+                is_guest=False
+            )
             session.add(user)
             logging.info(f"[AUTH] New user created: {discord_username} ({discord_id})")
         else:
             user.discord_username = discord_username
             user.discord_avatar_hash = discord_avatar_hash
+            user.is_guest = False
             logging.info(f"[AUTH] Existing user logged in: {discord_username} ({discord_id})")
 
         session.commit()

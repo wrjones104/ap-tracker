@@ -91,6 +91,9 @@ interface ApiService {
 
     @POST("auth/logout")
     suspend fun logout(): Response<Unit>
+
+    @POST("auth/guest")
+    suspend fun loginAsGuest(): AuthResponse
 }
 
 data class Room(
@@ -157,9 +160,10 @@ data class AuthRequest(
 data class AuthResponse(val token: String)
 
 data class UserProfile(
-    val discord_id: String,
-    val discord_username: String,
+    val discord_id: String?,
+    val discord_username: String?,
     val avatar_url: String?,
+    val is_guest: Boolean,
     val notify_progression_default: Boolean,
     val notify_useful_default: Boolean,
     val notify_hints_default: Boolean,

@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy import (
     create_engine, Column, Integer, String, ForeignKey, DateTime, 
     UniqueConstraint, Boolean, ForeignKeyConstraint, BigInteger,
@@ -11,8 +13,8 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
-    discord_id = Column(String, nullable=False, unique=True, index=True)
-    discord_username = Column(String, nullable=False)
+    discord_id = Column(String, nullable=True, unique=True, index=True)
+    discord_username = Column(String, nullable=True)
     discord_avatar_hash = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     cheese_api_key = Column(String, nullable=True)
@@ -20,6 +22,8 @@ class User(Base):
     cheese_last_sync = Column(DateTime, nullable=True)
     is_syncing_cheese = Column(Boolean, nullable=False, default=False, server_default='f')
     cheese_sync_started_at = Column(DateTime, nullable=True)
+    is_guest = Column(Boolean, nullable=False, default=True, server_default='t')
+    guest_uuid = Column(String, nullable=True, unique=True, index=True)
     subscriptions = relationship("UserRoomSubscription", back_populates="user", cascade="all, delete-orphan")
     devices = relationship("Device", back_populates="user", cascade="all, delete-orphan")
     notify_progression_default = Column(Boolean, default=True, nullable=False)
