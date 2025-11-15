@@ -9,6 +9,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import com.jones.aptracker.network.RegisterDeviceRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.SessionManager
+import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.network.TokenManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +24,43 @@ class AuthViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
 
+    private val _failedAuthAttempt = MutableStateFlow<Pair<String, String>?>(null)
+    val failedAuthAttempt = _failedAuthAttempt.asStateFlow()
+
+    private val _showMergeConflictDialog = MutableStateFlow(false)
+    val showMergeConflictDialog = _showMergeConflictDialog.asStateFlow()
+
+    fun startGuestUpgrade(context: Context, onAuth: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                val tokenManager = TokenManager(context)
+                tokenManager.saveToken("")
+            } catch (e: Exception) {
+                Log.e("AuthViewModel", "Failed to clear token", e)
+            }
+
+            try {
+                val settingsManager = SettingsManager(context)
+                settingsManager.setAutoSync(false)
+            } catch (e: Exception) {
+                Log.e("AuthViewModel", "Failed to clear settings", e)
+            }
+
+            onAuth()
+
+            _isLoggedIn.value = false
+        }
+    }
+    fun onMergeConflict(code: String, codeVerifier: String) {
+        _failedAuthAttempt.value = code to codeVerifier
+        _showMergeConflictDialog.value = true
+    }
+
+    fun clearMergeConflict() {
+        _showMergeConflictDialog.value = false
+        _failedAuthAttempt.value = null
+    }
+
     fun setLoading(isLoading: Boolean) {
         _isLoading.value = isLoading
     }
@@ -35,7 +73,7 @@ class AuthViewModel : ViewModel() {
         _isLoggedIn.value = true
     }
 
-    fun onLogout() {
+    fun onLogout(context: Context) {
         viewModelScope.launch {
             val fcmToken = try {
                 FirebaseMessaging.getInstance().token.await()
@@ -59,7 +97,20 @@ class AuthViewModel : ViewModel() {
             } catch (e: Exception) {
                 Log.e("AuthViewModel", "Failed to clear session on server. Proceeding with local logout.", e)
             } finally {
-                SessionManager.logout()
+
+                try {
+                    val settingsManager = SettingsManager(context)
+                    settingsManager.setAutoSync(false)
+                    Log.d("AuthViewModel", "Cleared local auto-sync setting.")
+                } catch (e: Exception) {
+                    Log.e("AuthViewModel", "Failed to clear SettingsManager.", e)
+                }
+
+                try {
+                    SessionManager.logout()
+                } catch (e: Exception) {
+                    Log.e("AuthViewModel", "Failed to clear SessionManager.", e)
+                }
 
                 _isLoggedIn.value = false
             }

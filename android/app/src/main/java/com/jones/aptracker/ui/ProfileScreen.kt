@@ -15,7 +15,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -52,19 +54,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jones.aptracker.network.TrackedSlotDetail
 import com.jones.aptracker.network.UserProfile
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
     userViewModel: UserViewModel = viewModel(),
     onBackClick: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onLoginClick: () -> Unit
 ) {
     val userProfile by userViewModel.userProfile.collectAsState()
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
@@ -140,6 +142,13 @@ fun ProfileScreen(
                 .padding(horizontal = 16.dp)
         ) {
             item {
+                userProfile?.let {
+                    if (it.is_guest) {
+                        GuestLoginPrompt(onLoginClick = onLoginClick)
+                    }
+                }
+            }
+            item {
                 Text(
                     text = "Global Notification Defaults",
                     style = MaterialTheme.typography.titleMedium,
@@ -184,22 +193,23 @@ fun ProfileScreen(
             }
 
             item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-                Text(
-                    text = "Integrations",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-                CheeseIntegrationCard(
-                    isConnected = userProfile?.is_cheese_connected ?: false,
-                    isAutoSyncEnabled = userViewModel.isAutoSyncEnabled.collectAsState().value,
-                    onAutoSyncChanged = { userViewModel.setAutoSync(it) },
-                    onConnect = { key -> userViewModel.connectCheeseTracker(key) },
-                    onSync = { userViewModel.manualSyncCheese() },
-                    onDisconnect = { userViewModel.disconnectCheese() }
-                )
+                if (userProfile?.is_guest == false) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+                    Text(
+                        text = "Integrations",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    CheeseIntegrationCard(
+                        isConnected = userProfile?.is_cheese_connected ?: false,
+                        isAutoSyncEnabled = userViewModel.isAutoSyncEnabled.collectAsState().value,
+                        onAutoSyncChanged = { userViewModel.setAutoSync(it) },
+                        onConnect = { key -> userViewModel.connectCheeseTracker(key) },
+                        onSync = { userViewModel.manualSyncCheese() },
+                        onDisconnect = { userViewModel.disconnectCheese() }
+                    )
+                }
             }
-
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
             }
@@ -291,6 +301,79 @@ fun ProfileScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+fun GuestLoginPrompt(onLoginClick: () -> Unit) {
+
+    var showConfirmDialog by remember { mutableStateOf(false) }
+
+    if (showConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showConfirmDialog = false },
+            title = { Text("Log In?") },
+            text = { Text("Logging in will discard your current guest session. Your tracked rooms and slots will be lost. Do you want to continue?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showConfirmDialog = false
+                        onLoginClick()
+                    }
+                ) {
+                    Text("Continue & Log Out")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = Icons.Default.AccountCircle,
+                contentDescription = "Guest User",
+                modifier = Modifier.height(48.dp),
+                tint = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "You are browsing as a Guest",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Log in with Discord to sync your rooms and settings across devices.",
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = { showConfirmDialog = true },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
+            ) {
+                Text("Log In with Discord")
+            }
+        }
     }
 }
 

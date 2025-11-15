@@ -14,3 +14,4 @@ android/app/src/uat/google-services.json
 backend/get_datapackages.py
 backend/get_room_status
 backend/tracker_data.json
+.idea/
