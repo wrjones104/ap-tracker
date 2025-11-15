@@ -243,7 +243,7 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 val errorDetails = e.toString()
                 Log.e("GUEST_LOGIN_ERROR", "Failed to login as guest", e)
-                Toast.makeText(this@MainActivity, "Guest Login Failed: $errorDetails", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, "Guest Login Failed. Please try again.", Toast.LENGTH_LONG).show()
                 authViewModel.setLoading(false)
             }
         }
