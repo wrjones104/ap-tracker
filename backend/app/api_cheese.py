@@ -172,22 +172,29 @@ def _sync_rooms_from_cheese_tracker_task(app, user_id):
                         games = details.get('games', []) 
                         slots_to_track_from_cheese = set()
                         
+                        my_ct_id = user.cheese_user_id 
+
                         for game in games:
-                            cheese_discord = game.get('effective_discord_username')
-                            
-                            if cheese_discord and discord_username and \
-                               cheese_discord.strip().lower() == discord_username.strip().lower():
-                                
+                            current_slot_owner_id = game.get('claimed_by_ct_user_id')
+                            if current_slot_owner_id and current_slot_owner_id == my_ct_id:
                                 ap_slot_id = game.get('position')
                                 if ap_slot_id:
                                     slots_to_track_from_cheese.add(ap_slot_id)
-                                
-                                if not found_cheese_id:
+                            
+                            else:
+                                cheese_discord = game.get('effective_discord_username')
+                                if cheese_discord and discord_username and \
+                                   cheese_discord.strip().lower() == discord_username.strip().lower():
+                                    
+                                    ap_slot_id = game.get('position')
+                                    if ap_slot_id:
+                                        slots_to_track_from_cheese.add(ap_slot_id)
+                                    
                                     ct_id = game.get('claimed_by_ct_user_id')
                                     if ct_id:
-                                        logging.info(f"[CHEESE_SYNC_BG] Discovered Cheese User ID: {ct_id}")
-                                        user.cheese_user_id = ct_id 
-                                        found_cheese_id = True
+                                        logging.info(f"[CHEESE_SYNC_BG] Discovered Cheese User ID via Discord: {ct_id}")
+                                        user.cheese_user_id = ct_id
+                                        my_ct_id = ct_id 
                         
                         if slots_to_track_from_cheese:
                             existing_slots = session.query(UserTrackedSlot.slot_id).filter_by(
@@ -261,6 +268,9 @@ def connect_cheese_account(current_user):
     This is now a *validating* endpoint. It makes a test call
     to Cheese Tracker to verify the key before saving it.
     """
+
+    if current_user.is_guest:
+        return jsonify({'error': 'Guests cannot use integrations. Please log in.'}), 403
     data = request.json
     api_key = data.get('api_key')
 
@@ -306,7 +316,7 @@ def connect_cheese_account(current_user):
         logging.error(f"Failed to start sync thread for user {user.id}: {e}")
         
     return jsonify({
-        'message': 'Connected! Syncing your rooms in the background. This may take a minute.', 
+        'message': 'Connected! To sync, please go into a room and manually track one of your slots.', 
         'is_connected': True
     })
 
@@ -318,6 +328,8 @@ def disconnect_cheese_account(current_user):
     """
     Removes the Cheese API key, effectively disconnecting the integration.
     """
+    if current_user.is_guest:
+        return jsonify({'error': 'Guests cannot use integrations. Please log in.'}), 403
     session = Session()
     user = session.merge(current_user)
     user.cheese_api_key = None
@@ -333,6 +345,8 @@ def trigger_manual_sync(current_user):
     Manually triggers a synchronous pull-sync from Cheese Tracker.
     The response will wait until the sync is complete.
     """
+    if current_user.is_guest:
+        return jsonify({'error': 'Guests cannot use integrations. Please log in.'}), 403
     if not current_user.cheese_api_key:
         return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
 

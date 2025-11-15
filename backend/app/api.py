@@ -195,7 +195,7 @@ def get_public_config():
     unauthenticated so the app can check it on launch.
     """
     try:
-        min_version = 8 
+        min_version = 9
         
         return jsonify({
             'min_app_version': min_version
@@ -410,7 +410,7 @@ def add_room(current_user):
 
     session.commit()
 
-    if current_user.cheese_api_key and ap_tracker_id:
+    if current_user.cheese_api_key and ap_tracker_id and not current_user.is_guest:
         try:
             from .api_cheese import push_new_room_to_cheese
             import threading
@@ -924,26 +924,43 @@ def get_global_item_history(current_user):
 def get_current_user(current_user):
     """
     Returns the profile information for the currently authenticated user.
+    Handles both guest and authenticated (Discord) users.
     """
-    base_url = "https://cdn.discordapp.com"
-    if current_user.discord_avatar_hash:
-        avatar_url = f"{base_url}/avatars/{current_user.discord_id}/{current_user.discord_avatar_hash}.png"
+
+    if current_user.is_guest:
+        return jsonify({
+            'discord_id': None,
+            'discord_username': 'Guest',
+            'avatar_url': None,
+            'notify_progression_default': current_user.notify_progression_default,
+            'notify_useful_default': current_user.notify_useful_default,
+            'notify_hints_default': current_user.notify_hints_default,
+            'is_cheese_connected': current_user.cheese_api_key is not None,
+            'is_guest': True
+        })
+
     else:
-        try:
-            discriminator_int = int(current_user.discord_username.split('#')[-1]) % 5
-        except (ValueError, IndexError):
-            discriminator_int = 0
-        avatar_url = f"{base_url}/embed/avatars/{discriminator_int}.png"
-        
-    return jsonify({
-        'discord_id': current_user.discord_id,
-        'username': current_user.discord_username,
-        'avatar_url': avatar_url,
-        'notify_progression_default': current_user.notify_progression_default,
-        'notify_useful_default': current_user.notify_useful_default,
-        'notify_hints_default': current_user.notify_hints_default,
-        'is_cheese_connected': current_user.cheese_api_key is not None
-    })
+        base_url = "https://cdn.discordapp.com"
+        avatar_url = None
+        if current_user.discord_avatar_hash:
+            avatar_url = f"{base_url}/avatars/{current_user.discord_id}/{current_user.discord_avatar_hash}.png"
+        else:
+            try:
+                discriminator_int = int(current_user.discord_username.split('#')[-1]) % 5
+            except (ValueError, IndexError):
+                discriminator_int = 0
+            avatar_url = f"{base_url}/embed/avatars/{discriminator_int}.png"
+
+        return jsonify({
+            'discord_id': current_user.discord_id,
+            'discord_username': current_user.discord_username, 
+            'avatar_url': avatar_url,
+            'notify_progression_default': current_user.notify_progression_default,
+            'notify_useful_default': current_user.notify_useful_default,
+            'notify_hints_default': current_user.notify_hints_default,
+            'is_cheese_connected': current_user.cheese_api_key is not None,
+            'is_guest': False
+        })
 
 @bp.route('/users/me/tracked-slots', methods=['GET'])
 @handle_db_errors
@@ -956,7 +973,6 @@ def get_user_tracked_slots(current_user):
     """
     session = Session()
     try:
-        # Fetch all subscriptions for the user, eagerly loading related rooms and slots
         subscriptions = session.query(UserRoomSubscription).filter_by(user_id=current_user.id).options(
             selectinload(UserRoomSubscription.room),
             selectinload(UserRoomSubscription.tracked_slots)
@@ -1041,7 +1057,6 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
     data = request.json
     session = Session()
     try:
-        # Find the specific slot the user is tracking
         tracked_slot = session.query(UserTrackedSlot).filter_by(
             user_id=current_user.id,
             room_id=room_db_id,

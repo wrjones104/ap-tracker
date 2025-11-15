@@ -13,6 +13,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,19 +34,33 @@ import com.jones.aptracker.R
 fun AppNavigation(
     isLoggedIn: Boolean,
     isLoading: Boolean,
-    onLoginClick: () -> Unit,
-    onLogoutClick: () -> Unit
+    onDiscordLoginClick: () -> Unit,
+    onGuestLoginClick: () -> Unit,
+    onLogoutClick: () -> Unit,
+    onGuestUpgradeClick: () -> Unit
 ) {
     if (isLoggedIn) {
         val navController = rememberNavController()
-        MainNavHost(navController = navController, onLogoutClick = onLogoutClick)
+        MainNavHost(
+            navController = navController,
+            onLogoutClick = onLogoutClick,
+            onGuestUpgradeClick = onGuestUpgradeClick
+        )
     } else {
-        LoginScreen(isLoading = isLoading, onLoginClick = onLoginClick)
+        LoginScreen(
+            isLoading = isLoading,
+            onDiscordLoginClick = onDiscordLoginClick,
+            onGuestLoginClick = onGuestLoginClick
+        )
     }
 }
 
 @Composable
-fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
+fun MainNavHost(
+    navController: NavHostController,
+    onLogoutClick: () -> Unit,
+    onGuestUpgradeClick: () -> Unit
+) {
     NavHost(navController = navController, startDestination = "rooms") {
         composable("rooms") {
             RoomsScreen(
@@ -65,7 +80,8 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
         composable("profile") {
             ProfileScreen(
                 onBackClick = { navController.popBackStack() },
-                onLogout = onLogoutClick
+                onLogout = onLogoutClick,
+                onLoginClick = onGuestUpgradeClick
             )
         }
         composable(
@@ -112,7 +128,11 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
 
 
 @Composable
-fun LoginScreen(isLoading: Boolean, onLoginClick: () -> Unit) {
+fun LoginScreen(
+    isLoading: Boolean,
+    onDiscordLoginClick: () -> Unit,
+    onGuestLoginClick: () -> Unit
+) {
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -135,8 +155,12 @@ fun LoginScreen(isLoading: Boolean, onLoginClick: () -> Unit) {
             if (isLoading) {
                 CircularProgressIndicator()
             } else {
-                Button(onClick = onLoginClick) {
+                Button(onClick = onDiscordLoginClick) {
                     Text("Login with Discord")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = onGuestLoginClick) {
+                    Text("Continue as Guest")
                 }
             }
         }
