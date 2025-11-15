@@ -192,8 +192,8 @@ fun ProfileScreen(
                 }
             }
 
-            if (userProfile?.is_guest == false) {
-                item {
+            item {
+                if (userProfile?.is_guest == false) {
                     HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
                     Text(
                         text = "Integrations",
