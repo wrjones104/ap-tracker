@@ -36,11 +36,16 @@ fun AppNavigation(
     isLoading: Boolean,
     onDiscordLoginClick: () -> Unit,
     onGuestLoginClick: () -> Unit,
-    onLogoutClick: () -> Unit
+    onLogoutClick: () -> Unit,
+    onGuestUpgradeClick: () -> Unit
 ) {
     if (isLoggedIn) {
         val navController = rememberNavController()
-        MainNavHost(navController = navController, onLogoutClick = onLogoutClick)
+        MainNavHost(
+            navController = navController,
+            onLogoutClick = onLogoutClick,
+            onGuestUpgradeClick = onGuestUpgradeClick
+        )
     } else {
         LoginScreen(
             isLoading = isLoading,
@@ -51,7 +56,11 @@ fun AppNavigation(
 }
 
 @Composable
-fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
+fun MainNavHost(
+    navController: NavHostController,
+    onLogoutClick: () -> Unit,
+    onGuestUpgradeClick: () -> Unit
+) {
     NavHost(navController = navController, startDestination = "rooms") {
         composable("rooms") {
             RoomsScreen(
@@ -72,7 +81,7 @@ fun MainNavHost(navController: NavHostController, onLogoutClick: () -> Unit) {
             ProfileScreen(
                 onBackClick = { navController.popBackStack() },
                 onLogout = onLogoutClick,
-                onLoginClick = onLogoutClick
+                onLoginClick = onGuestUpgradeClick
             )
         }
         composable(
