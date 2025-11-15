@@ -51,11 +51,15 @@ import net.openid.appauth.AuthorizationResponse
 import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.ResponseTypeValues
+import com.google.gson.Gson
+import com.jones.aptracker.network.AuthErrorResponse
+import retrofit2.HttpException
+import androidx.compose.material3.TextButton
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var authService: AuthorizationService
-    private lateinit var tokenManager: TokenManager
+    lateinit var tokenManager: TokenManager // Made public for composables
     private val authViewModel: AuthViewModel by viewModels()
     private var currentCodeVerifier: String? = null
     private val requestPermissionLauncher = registerForActivityResult(
@@ -73,7 +77,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         authService = AuthorizationService(this)
-        tokenManager = TokenManager(applicationContext)
+        tokenManager = TokenManager(applicationContext) // Initialize class property
 
         authViewModel.checkAuthStatus(tokenManager)
 
@@ -104,11 +108,18 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             APTrackerTheme {
+                val onGuestUpgradeClick = {
+                    authViewModel.startGuestUpgrade(
+                        context = this@MainActivity,
+                        onAuth = { startAuthentication(authLauncher) }
+                    )
+                }
                 VersionGate(
                     authViewModel = authViewModel,
                     onStartDiscordAuth = { startAuthentication(authLauncher) },
                     onStartGuestAuth = { startGuestAuthentication() },
-                    onCheckNotificationPermission = { checkAndRequestNotificationPermission() }
+                    onCheckNotificationPermission = { checkAndRequestNotificationPermission() },
+                    onGuestUpgradeClick = onGuestUpgradeClick
                 )
             }
         }
@@ -163,7 +174,8 @@ class MainActivity : ComponentActivity() {
         launcher.launch(authService.getAuthorizationRequestIntent(request))
     }
 
-    private fun exchangeCodeForToken(code: String, codeVerifier: String) {
+    // Made public (removed private) so composable can call it
+    fun exchangeCodeForToken(code: String, codeVerifier: String) {
         authViewModel.setLoading(true)
         lifecycleScope.launch {
             try {
@@ -181,14 +193,37 @@ class MainActivity : ComponentActivity() {
                 startActivity(intent)
 
             } catch (e: Exception) {
-                val errorDetails = e.toString()
-                Log.e("LOGIN_ERROR", "Failed to exchange token", e)
-                Toast.makeText(this@MainActivity, "Exchange Failed: $errorDetails", Toast.LENGTH_LONG).show()
+                var errorDetails = e.toString()
+
+                if (e is HttpException) {
+                    if (e.code() == 409) {
+                        try {
+                            val errorJson = e.response()?.errorBody()?.string()
+                            val errorResponse = Gson().fromJson(errorJson, AuthErrorResponse::class.java)
+                            if (errorResponse.error == "account_conflict") {
+                                authViewModel.onMergeConflict(code, codeVerifier)
+                            } else {
+                                errorDetails = "An unknown conflict occurred."
+                                Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                            }
+                        } catch (parseError: Exception) {
+                            errorDetails = "This Discord account is already in use by another user."
+                            Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        errorDetails = "Exchange Failed: ${e.code()} ${e.message()}"
+                        Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    Log.e("LOGIN_ERROR", "Failed to exchange token", e)
+                    Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                }
             } finally {
                 authViewModel.setLoading(false)
             }
         }
     }
+
     private fun startGuestAuthentication() {
         authViewModel.setLoading(true)
         lifecycleScope.launch {
@@ -227,9 +262,12 @@ fun VersionGate(
     mainViewModel: MainViewModel = viewModel(),
     onStartDiscordAuth: () -> Unit,
     onStartGuestAuth: () -> Unit,
-    onCheckNotificationPermission: () -> Unit
+    onCheckNotificationPermission: () -> Unit,
+    onGuestUpgradeClick: () -> Unit
 ) {
     val versionState by mainViewModel.versionState.collectAsState()
+    val showMergeConflict by authViewModel.showMergeConflictDialog.collectAsState()
+    val activity = (LocalContext.current as? MainActivity)
 
     when (val state = versionState) {
         is AppVersionState.Checking -> {
@@ -250,12 +288,14 @@ fun VersionGate(
                 }
             }
 
+
             AppNavigation(
                 isLoggedIn = isLoggedIn,
                 isLoading = isLoading,
                 onDiscordLoginClick = onStartDiscordAuth,
                 onGuestLoginClick = onStartGuestAuth,
-                onLogoutClick = onLogout
+                onLogoutClick = onLogout,
+                onGuestUpgradeClick = onGuestUpgradeClick
             )
         }
         is AppVersionState.Outdated -> {
@@ -266,6 +306,7 @@ fun VersionGate(
         }
     }
 }
+
 
 @Composable
 fun UpdateRequiredScreen(storeUrl: String) {

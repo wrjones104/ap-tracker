@@ -306,6 +306,31 @@ fun ProfileScreen(
 
 @Composable
 fun GuestLoginPrompt(onLoginClick: () -> Unit) {
+
+    var showConfirmDialog by remember { mutableStateOf(false) }
+
+    if (showConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showConfirmDialog = false },
+            title = { Text("Log In?") },
+            text = { Text("Logging in will discard your current guest session. Your tracked rooms and slots will be lost. Do you want to continue?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showConfirmDialog = false
+                        onLoginClick()
+                    }
+                ) {
+                    Text("Continue & Log Out")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -340,7 +365,7 @@ fun GuestLoginPrompt(onLoginClick: () -> Unit) {
             )
             Spacer(Modifier.height(16.dp))
             Button(
-                onClick = onLoginClick,
+                onClick = { showConfirmDialog = true },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary

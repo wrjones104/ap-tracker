@@ -159,6 +159,11 @@ data class AuthRequest(
 
 data class AuthResponse(val token: String)
 
+data class AuthErrorResponse(
+    val error: String,
+    val message: String
+)
+
 data class UserProfile(
     val discord_id: String?,
     val discord_username: String?,

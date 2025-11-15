@@ -195,7 +195,7 @@ def get_public_config():
     unauthenticated so the app can check it on launch.
     """
     try:
-        min_version = 8 
+        min_version = 9
         
         return jsonify({
             'min_app_version': min_version

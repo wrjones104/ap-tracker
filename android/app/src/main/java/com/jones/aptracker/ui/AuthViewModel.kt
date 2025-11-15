@@ -24,6 +24,43 @@ class AuthViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
 
+    private val _failedAuthAttempt = MutableStateFlow<Pair<String, String>?>(null)
+    val failedAuthAttempt = _failedAuthAttempt.asStateFlow()
+
+    private val _showMergeConflictDialog = MutableStateFlow(false)
+    val showMergeConflictDialog = _showMergeConflictDialog.asStateFlow()
+
+    fun startGuestUpgrade(context: Context, onAuth: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                val tokenManager = TokenManager(context)
+                tokenManager.saveToken("")
+            } catch (e: Exception) {
+                Log.e("AuthViewModel", "Failed to clear token", e)
+            }
+
+            try {
+                val settingsManager = SettingsManager(context)
+                settingsManager.setAutoSync(false)
+            } catch (e: Exception) {
+                Log.e("AuthViewModel", "Failed to clear settings", e)
+            }
+
+            onAuth()
+
+            _isLoggedIn.value = false
+        }
+    }
+    fun onMergeConflict(code: String, codeVerifier: String) {
+        _failedAuthAttempt.value = code to codeVerifier
+        _showMergeConflictDialog.value = true
+    }
+
+    fun clearMergeConflict() {
+        _showMergeConflictDialog.value = false
+        _failedAuthAttempt.value = null
+    }
+
     fun setLoading(isLoading: Boolean) {
         _isLoading.value = isLoading
     }

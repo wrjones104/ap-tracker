@@ -174,9 +174,6 @@ def _sync_rooms_from_cheese_tracker_task(app, user_id):
                         
                         my_ct_id = user.cheese_user_id 
 
-                        if not my_ct_id:
-                            continue
-
                         for game in games:
                             current_slot_owner_id = game.get('claimed_by_ct_user_id')
                             if current_slot_owner_id and current_slot_owner_id == my_ct_id:
