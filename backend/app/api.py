@@ -583,7 +583,12 @@ def update_tracked_slots(current_user, room_db_id):
 
     if slots_to_add:
         objects_to_add = [
-            UserTrackedSlot(user_id=current_user.id, room_id=room_db_id, slot_id=slot_id)
+            UserTrackedSlot(
+                user_id=current_user.id, 
+                room_id=room_db_id, 
+                slot_id=slot_id,
+                notify_finished=current_user.notify_finished_default
+            )
             for slot_id in slots_to_add if isinstance(slot_id, int) and slot_id > 0
         ]
         session.bulk_save_objects(objects_to_add)
