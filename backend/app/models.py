@@ -29,6 +29,7 @@ class User(Base):
     notify_progression_default = Column(Boolean, default=True, nullable=False)
     notify_useful_default = Column(Boolean, default=True, nullable=False)
     notify_hints_default = Column(Boolean, default=True, nullable=False)
+    notify_finished_default = Column(Boolean, default=False, nullable=False)
 
 class Device(Base):
     __tablename__ = 'devices'
@@ -81,6 +82,7 @@ class UserTrackedSlot(Base):
     notify_progression = Column(Boolean, nullable=True, default=None)
     notify_useful = Column(Boolean, nullable=True, default=None)
     notify_hints = Column(Boolean, nullable=True, default=None)
+    notify_finished = Column(Boolean, nullable=False, default=None)
     
     __table_args__ = (
         ForeignKeyConstraint(['user_id', 'room_id'], ['user_room_subscriptions.user_id', 'user_room_subscriptions.room_id']),
