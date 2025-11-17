@@ -74,14 +74,16 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun updateGlobalPreferences(
         progression: Boolean? = null,
         useful: Boolean? = null,
-        hints: Boolean? = null
+        hints: Boolean? = null,
+        finished: Boolean? = null
     ) {
         viewModelScope.launch {
             try {
                 val request = UpdateGlobalPrefsRequest(
                     notify_progression = progression,
                     notify_useful = useful,
-                    notify_hints = hints
+                    notify_hints = hints,
+                    notify_finished = finished
                 )
                 RetrofitClient.instance.updateUserPreferences(request)
 
@@ -99,14 +101,16 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         slotId: Int,
         progression: Boolean?,
         useful: Boolean?,
-        hints: Boolean?
+        hints: Boolean?,
+        finished: Boolean?
     ) {
         viewModelScope.launch {
             try {
                 val request = UpdateSlotPrefsRequest(
                     notify_progression = progression,
                     notify_useful = useful,
-                    notify_hints = hints
+                    notify_hints = hints,
+                    notify_finished = finished
                 )
                 RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
                 fetchTrackedSlots()

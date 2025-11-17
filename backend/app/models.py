@@ -82,7 +82,7 @@ class UserTrackedSlot(Base):
     notify_progression = Column(Boolean, nullable=True, default=None)
     notify_useful = Column(Boolean, nullable=True, default=None)
     notify_hints = Column(Boolean, nullable=True, default=None)
-    notify_finished = Column(Boolean, nullable=False, default=None)
+    notify_finished = Column(Boolean, nullable=True, default=None)
     
     __table_args__ = (
         ForeignKeyConstraint(['user_id', 'room_id'], ['user_room_subscriptions.user_id', 'user_room_subscriptions.room_id']),
