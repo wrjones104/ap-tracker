@@ -15,3 +15,5 @@ backend/get_datapackages.py
 backend/get_room_status
 backend/tracker_data.json
 .idea/
+android/app/prod/release/app-prod-release.aab
+android/app/src/prod/google-services.json
