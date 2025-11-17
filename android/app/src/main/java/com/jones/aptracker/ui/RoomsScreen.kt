@@ -41,6 +41,7 @@ import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.R
 import com.jones.aptracker.network.Room
+import com.jones.aptracker.network.UserProfile
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +57,9 @@ fun RoomsScreen(
     val rooms by roomsViewModel.rooms.collectAsState()
     val isLoading by roomsViewModel.isLoading.collectAsState()
 
+    val userProfile by userViewModel.userProfile.collectAsState()
+    val isAutoSyncEnabled by roomsViewModel.isAutoSyncEnabled.collectAsState(initial = true)
+
     val errorMessage by roomsViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -64,6 +68,12 @@ fun RoomsScreen(
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             roomsViewModel.fetchRooms()
             userViewModel.fetchUserProfile()
+        }
+    }
+
+    LaunchedEffect(userProfile, isAutoSyncEnabled) {
+        if (userProfile?.is_cheese_connected == true && isAutoSyncEnabled) {
+            roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = false)
         }
     }
 
@@ -106,7 +116,8 @@ fun RoomsScreen(
                         roomsViewModel = roomsViewModel,
                         onHistoryClick = onHistoryClick,
                         onLogoutClick = onLogoutClick,
-                        onSettingsClick = onSettingsClick
+                        onSettingsClick = onSettingsClick,
+                        userProfile = userProfile
                     )
                 }
             )
@@ -120,7 +131,9 @@ fun RoomsScreen(
         SwipeRefresh(
             state = rememberSwipeRefreshState(isRefreshing = isLoading),
             onRefresh = {
-                roomsViewModel.refreshAll()
+                roomsViewModel.refreshAll(
+                    isCheeseConnected = userProfile?.is_cheese_connected == true
+                )
             },
             modifier = Modifier.padding(innerPadding)
         ) {
@@ -435,9 +448,9 @@ fun ProfileMenu(
     roomsViewModel: RoomsViewModel,
     onHistoryClick: () -> Unit,
     onLogoutClick: () -> Unit,
-    onSettingsClick: () -> Unit
+    onSettingsClick: () -> Unit,
+    userProfile: UserProfile?
 ) {
-    val userProfile by userViewModel.userProfile.collectAsState()
     var menuExpanded by remember { mutableStateOf(false) }
     val isSyncingCheese by roomsViewModel.isSyncingCheese.collectAsState()
     val isAutoSyncEnabled by roomsViewModel.isAutoSyncEnabled.collectAsState(initial = true)
@@ -516,7 +529,10 @@ fun ProfileMenu(
                 DropdownMenuItem(
                     text = { Text("Sync Cheese Now") },
                     onClick = {
-                        roomsViewModel.refreshAll(forceCheeseSync = true)
+                        roomsViewModel.refreshAll(
+                            isCheeseConnected = true,
+                            forceCheeseSync = true
+                        )
                         menuExpanded = false
                     }
                 )
