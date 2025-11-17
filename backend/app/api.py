@@ -951,13 +951,14 @@ def get_current_user(current_user):
                 discriminator_int = 0
             avatar_url = f"{base_url}/embed/avatars/{discriminator_int}.png"
 
-        return jsonify({
+    return jsonify({
             'discord_id': current_user.discord_id,
             'discord_username': current_user.discord_username, 
             'avatar_url': avatar_url,
             'notify_progression_default': current_user.notify_progression_default,
             'notify_useful_default': current_user.notify_useful_default,
             'notify_hints_default': current_user.notify_hints_default,
+            'notify_finished_default': current_user.notify_finished_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'is_guest': False
         })
@@ -999,7 +1000,8 @@ def get_user_tracked_slots(current_user):
                     'player_name': players_map.get(slot.slot_id, f"Player {slot.slot_id}"),
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,
-                    'notify_hints': slot.notify_hints
+                    'notify_hints': slot.notify_hints,
+                    'notify_finished': slot.notify_finished
                 })
 
             response_data.append({
@@ -1034,6 +1036,8 @@ def update_user_preferences(current_user):
             user.notify_useful_default = bool(data['notify_useful'])
         if 'notify_hints' in data:
             user.notify_hints_default = bool(data['notify_hints'])
+        if 'notify_finished' in data:
+            user.notify_finished_default = bool(data['notify_finished'])
 
         session.commit()
         return jsonify({'message': 'Preferences updated successfully'}), 200
@@ -1072,6 +1076,8 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
             tracked_slot.notify_useful = data['notify_useful']
         if 'notify_hints' in data:
             tracked_slot.notify_hints = data['notify_hints']
+        if 'notify_finished' in data:
+            tracked_slot.notify_finished = data['notify_finished']
 
         session.commit()
         return jsonify({'message': 'Slot preferences updated successfully'}), 200
@@ -1233,12 +1239,9 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
         item_checksum = checksum_map.get(item_owner_game) if item_owner_game else None
         location_checksum = checksum_map.get(location_owner_game) if location_owner_game else None
 
-        # === THIS IS THE OTHER FIX ===
-        # Create keys as None initially
         item_name_key = None
         location_name_key = None
 
-        # Only add to cache_keys_to_find if we have valid data
         if item_owner_game and item_checksum:
             item_name_key = (item_owner_game, item_checksum, 'item', hint.item_id)
             cache_keys_to_find.add(item_name_key)
@@ -1246,7 +1249,6 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
         if location_owner_game and location_checksum:
             location_name_key = (location_owner_game, location_checksum, 'location', hint.location_id)
             cache_keys_to_find.add(location_name_key)
-        # === END FIX ===
 
         temp_hint_data.append({
             "hint_obj": hint,
@@ -1258,7 +1260,6 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             "location_name_key": location_name_key
         })
 
-    # 2. Run ONE query to get all names
     name_cache_map = {}
     if cache_keys_to_find:
         cache_query = session.query(
@@ -1280,11 +1281,9 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             for c in cache_query.all()
         }
 
-    # 3. Build the final hint lists using the name map
     for temp_data in temp_hint_data:
         hint = temp_data["hint_obj"]
         
-        # Look up the name, falling back to ID if the key was None or not found
         item_name = name_cache_map.get(temp_data["item_name_key"]) or f"Item ID {hint.item_id}"
         location_name = name_cache_map.get(temp_data["location_name_key"]) or f"Location ID {hint.location_id}"
 
@@ -1304,7 +1303,7 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
         
         if temp_data["is_item_owner_tracked"]:
             hints_for_you.append(hint_data)
-        else: # is_location_owner_tracked must be true
+        else:
             hints_by_you.append(hint_data)
 
     hints_for_you.sort(key=lambda h: h.get('timestamp', '0'), reverse=True)
