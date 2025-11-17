@@ -5,7 +5,7 @@ import json
 import websockets
 from datetime import datetime, timezone, timedelta
 from threading import local
-from sqlalchemy import or_, exc, tuple_  # <-- Added tuple_
+from sqlalchemy import or_, exc, tuple_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
 
@@ -18,6 +18,10 @@ from .models import (
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
 thread_local_data = local()
+
+# =============================================================================
+# CORE HELPERS & SETUP
+# =============================================================================
 
 async def close_aiohttp_session():
     session = getattr(thread_local_data, "aiohttp_session", None)
@@ -103,72 +107,410 @@ async def fetch_json(url):
     except Exception as e:
         return None
 
-async def run_room_poll(room_info, loop):
+# =============================================================================
+# POLL LOGIC & SUBROUTINES
+# =============================================================================
+
+def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id, prefs_by_user_slot, tracked_slots_by_user, backfill_check_set, name_map, aliases_by_user):
     """
-    Runs a single lightweight poll cycle for an *already set up* room.
-    All DB logic is deferred to an executor.
+    Checks both AP status AND location counts to determine if players are finished.
+    Returns: (notifications_dict, finished_player_ids_set, players_list_updated_bool)
     """
-    db_id = room_info['db_id']
-    hostname = room_info['hostname']
-    
-    room_data = await loop.run_in_executor(None, db_read_room_poll_state, db_id)
-    if not room_data:
-        logging.warning(f"[POLLER][RoomDBID:{db_id}] Room not found during poll read.")
-        return
+    finished_player_ids = set()
+    notifications_by_user = {}
+
+    # 1. Parse Status from 'player_status'
+    player_statuses_raw = tracker_data.get('player_status', {})
+    if isinstance(player_statuses_raw, dict): 
+        finished_player_ids.update({int(p) for p, s in player_statuses_raw.items() if s == 30})
+    elif isinstance(player_statuses_raw, list):
+            for status_info in player_statuses_raw:
+                if isinstance(status_info, dict) and status_info.get('status') == 30 and 'player' in status_info:
+                    finished_player_ids.add(status_info.get('player'))
+
+    # 2. Parse 'player_checks_done'
+    checks_done_map = {} 
+    player_checks_data = tracker_data.get('player_checks_done', [])
+    if isinstance(player_checks_data, list):
+        for entry in player_checks_data:
+            if 'player' in entry and 'locations' in entry:
+                    checks_done_map[entry['player']] = len(entry['locations'])
+
+    # 3. Mathematical Check (Total Locations vs Checks Done)
+    for player in players_list:
+        pid = player.get('slot_id')
+        total = player.get('total_locations', 0)
+        done = checks_done_map.get(pid, 0)
         
-    tracker_id = room_data['tracker_id']
-    room_uuid = room_data['room_uuid']
+        if total > 0 and done >= total:
+            finished_player_ids.add(pid)
 
-    if not tracker_id:
-        logging.warning(f"[POLLER_WARN][RoomDBID:{db_id}] No tracker_id, cannot poll. Setup may be needed.")
-        return
+    # 4. Determine newly finished players
+    players_just_marked_finished = set()
+    players_list_updated = False
 
-    tracker_data = await fetch_json(f"https://{hostname}/api/tracker/{tracker_id}")
+    for player in players_list:
+        if player.get('slot_id') in finished_player_ids and not player.get('is_finished'):
+            player['is_finished'] = True
+            players_list_updated = True
+            players_just_marked_finished.add(player.get('slot_id'))
 
-    try:
-        notifications_to_send = await loop.run_in_executor(
-            None, 
-            db_process_poll_data, 
-            db_id, 
-            room_uuid, 
-            tracker_data, 
-            room_data 
+    if players_list_updated:
+        logging.info(f"[POLLER_ACTION][RoomDBID:{room_db_id}] {len(players_just_marked_finished)} player(s) just finished.")
+
+    # 5. Generate Notifications
+    if players_just_marked_finished:
+        finished_players_by_user = {} 
+        for user_id, tracked_slots in tracked_slots_by_user.items():
+            for slot_id in players_just_marked_finished:
+                if slot_id in tracked_slots:
+                    player_name = name_map.get(slot_id, f"Player {slot_id}")
+                    finished_players_by_user.setdefault(user_id, []).append((slot_id, player_name))
+
+        for user_id, finished_list in finished_players_by_user.items():
+            user_prefs = users_by_id.get(user_id)
+            if not user_prefs: continue 
+
+            names_to_notify = [] 
+            for slot_id, player_name in finished_list:
+                slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_id)
+                if not slot_prefs: continue 
+
+                if (user_id, slot_id) in backfill_check_set:
+                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {slot_id} is backfilling. Suppressing 'Finished' notification.")
+                    continue 
+                
+                # Check new notify_finished preference
+                notify_override = slot_prefs.notify_finished
+                should_notify = notify_override if notify_override is not None else user_prefs.notify_finished_default
+                
+                if should_notify:
+                    names_to_notify.append(player_name)
+                else:
+                    logging.info(f"[NOTIFY_SKIP] User {user_id} has disabled finished notifications for {player_name}.")
+
+            if not names_to_notify:
+                continue
+
+            player_names_str = ", ".join(names_to_notify)
+            alias = aliases_by_user.get(user_id, "Unknown Room")
+            notifications_by_user.setdefault(user_id, []).append({
+                'title': f"🏁 Player(s) Finished!",
+                'body': f"{player_names_str} has finished in '{alias}'!",
+                'type': 'player_finish',
+                'details': (room_db_id, user_id, player_names_str)
+            })
+            
+    return notifications_by_user, finished_player_ids, players_list_updated
+
+def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_in_db, tracked_slots_by_user, game_map, game_checksums, has_item_history):
+    """
+    Iterates player_items_received, dedupes against DB, creates objects, and preps notifications.
+    """
+    items_to_add = []
+    new_items_for_notify = []
+    cache_keys_to_fetch = set()
+    items_in_this_batch = set()
+    
+    items_processed_count = 0
+    items_skipped_classification = 0
+    items_skipped_duplicate = 0
+    items_added_count = 0
+    items_skipped_backfill = 0
+    added_items_details = []
+
+    for p_items in tracker_data.get('player_items_received', []):
+        rid = p_items.get('player')
+        if not isinstance(rid, int): continue
+
+        is_tracked_by_anyone = False
+        for tracked_slots in tracked_slots_by_user.values():
+            if rid in tracked_slots:
+                is_tracked_by_anyone = True
+                break
+        if not is_tracked_by_anyone:
+            continue
+
+        for item_tuple_data in p_items.get('items', []):
+            items_processed_count += 1
+            try:
+                if len(item_tuple_data) < 4: continue
+                item_id, loc_id, send_id, flags = item_tuple_data
+                item_id, loc_id, send_id = int(item_id), int(loc_id), int(send_id)
+            except (ValueError, TypeError, IndexError) as e:
+                continue 
+
+            item_key_db = (rid, item_id, loc_id)
+            item_key_batch = (room_uuid, rid, item_id, loc_id) 
+
+            if (item_key_db in existing_items_in_db) or (item_key_batch in items_in_this_batch):
+                items_skipped_duplicate += 1
+                continue
+
+            if not (flags & 1 or flags & 2):
+                items_skipped_classification += 1
+                continue
+
+            items_to_add.append(NotifiedItem(
+                room_id=room_uuid,
+                receiving_slot_id=rid,
+                item_id=item_id,
+                location_id=loc_id,
+                item_flags=flags
+            ))
+            items_in_this_batch.add(item_key_batch)
+            items_added_count += 1
+            added_items_details.append(f"(Slot:{rid}, Item:{item_id}, Loc:{loc_id})")
+
+            if has_item_history: 
+                receiver_game = game_map.get(rid, "Unknown")
+                game_checksum = game_checksums.get(receiver_game)
+                if game_checksum:
+                    cache_keys_to_fetch.add((receiver_game, game_checksum, 'item', item_id))
+
+                sender_game = game_map.get(send_id, "Unknown")
+                sender_checksum = game_checksums.get(sender_game)
+                if sender_checksum:
+                    cache_keys_to_fetch.add((sender_game, sender_checksum, 'location', loc_id))
+                
+                new_items_for_notify.append({
+                    'item_key_batch': item_key_batch,
+                    'receiving_slot_id': rid,
+                    'sending_slot_id': send_id,
+                    'item_id': item_id,
+                    'location_id': loc_id,
+                    'flags': flags,
+                    'receiver_game': receiver_game,
+                    'game_checksum': game_checksum,
+                    'sender_game': sender_game,
+                    'sender_checksum': sender_checksum
+                })
+            else:
+                items_skipped_backfill += 1
+
+    if items_processed_count > 0: 
+        added_str = ", ".join(added_items_details) if added_items_details else "None"
+        logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Items: Proc={items_processed_count}, SkipClass={items_skipped_classification}, SkipDupe={items_skipped_duplicate}, Added={items_added_count}")
+    
+    if items_skipped_backfill > 0:
+        logging.info(f"[POLLER_INFO][RoomDBID:{room_db_id}] Suppressed {items_skipped_backfill} item notifications (backfill).")
+
+    return items_to_add, new_items_for_notify, cache_keys_to_fetch, items_added_count
+
+def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game_map, game_checksums, has_hint_history):
+    """
+    Iterates hints, dedupes, creates objects, detects found hints, preps notifications.
+    """
+    hints_to_add = []
+    new_hints_for_notify = []
+    cache_keys_to_fetch = set()
+    just_found_hint_item_loc_pairs = set()
+    hints_in_this_batch = set()
+
+    hints_processed_count = 0
+    hints_added_count = 0
+    hints_skipped_backfill = 0
+
+    for p_hints in tracker_data.get('hints', []):
+         for hint_data in p_hints.get('hints', []):
+            hints_processed_count += 1
+            try:
+                if len(hint_data) < 5: continue 
+                io_id, lo_id, loc_id, item_id, is_found_from_tracker, *_ = hint_data
+                io_id, lo_id, loc_id, item_id = int(io_id), int(lo_id), int(loc_id), int(item_id)
+                is_found_from_tracker = bool(is_found_from_tracker) 
+            except (ValueError, IndexError):
+                continue
+
+            hint_key_db = (io_id, lo_id, item_id, loc_id)
+            hint_key_batch = (room_uuid, io_id, lo_id, item_id, loc_id)
+
+            existing_hint_obj = existing_hints_map.get(hint_key_db)
+
+            if not existing_hint_obj:
+                if hint_key_batch in hints_in_this_batch: continue
+                
+                hints_to_add.append(NotifiedHint(
+                    room_id=room_uuid,
+                    item_owner_id=io_id,
+                    location_owner_id=lo_id,
+                    item_id=item_id,
+                    location_id=loc_id,
+                    is_found=is_found_from_tracker
+                ))
+                hints_in_this_batch.add(hint_key_batch)
+                hints_added_count += 1
+
+                if has_hint_history:
+                    io_game = game_map.get(io_id, "Unknown")
+                    lo_game = game_map.get(lo_id, "Unknown")
+                    io_checksum = game_checksums.get(io_game)
+                    lo_checksum = game_checksums.get(lo_game)
+
+                    if io_checksum:
+                        cache_keys_to_fetch.add((io_game, io_checksum, 'item', item_id))
+                    if lo_checksum:
+                        cache_keys_to_fetch.add((lo_game, lo_checksum, 'location', loc_id))
+                    
+                    new_hints_for_notify.append({
+                        'hint_key_batch': hint_key_batch,
+                        'io_id': io_id, 'lo_id': lo_id, 'item_id': item_id, 'loc_id': loc_id,
+                        'io_game': io_game, 'lo_game': lo_game,
+                        'io_checksum': io_checksum, 'lo_checksum': lo_checksum
+                    })
+                    
+                    if is_found_from_tracker:
+                        just_found_hint_item_loc_pairs.add((loc_id, item_id))
+                else:
+                    hints_skipped_backfill += 1
+            
+            else:
+                if is_found_from_tracker and not existing_hint_obj.is_found:
+                    existing_hint_obj.is_found = True 
+                    just_found_hint_item_loc_pairs.add((loc_id, item_id))
+    
+    if hints_processed_count > 0:
+         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Hints: Proc={hints_processed_count}, Added={hints_added_count}")
+    if hints_skipped_backfill > 0:
+        logging.info(f"[POLLER_INFO][RoomDBID:{room_db_id}] Suppressed {hints_skipped_backfill} hint notifications (backfill).")
+
+    return hints_to_add, new_hints_for_notify, cache_keys_to_fetch, just_found_hint_item_loc_pairs
+
+def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, name_map, backfill_check_set, just_found_hint_item_loc_pairs):
+    """
+    Fetches names from DB in chunks and constructs final notification payloads.
+    """
+    notifications_by_user = {}
+    name_lookup_map = {}
+
+    # 1. Fetch Names
+    if cache_keys_to_fetch:
+        logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Fetching {len(cache_keys_to_fetch)} names...")
+        try:
+            keys_list = list(cache_keys_to_fetch)
+            chunk_size = 500
+            for i in range(0, len(keys_list), chunk_size):
+                chunk = keys_list[i:i + chunk_size]
+                results = session.query(
+                    DatapackageCache.game, DatapackageCache.checksum,
+                    DatapackageCache.entity_type, DatapackageCache.entity_id,
+                    DatapackageCache.entity_name
+                ).filter(tuple_(
+                    DatapackageCache.game, DatapackageCache.checksum,
+                    DatapackageCache.entity_type, DatapackageCache.entity_id
+                ).in_(chunk))
+                for game, chk, etype, eid, name in results:
+                    name_lookup_map[(game, chk, etype, eid)] = name
+        except Exception as e:
+            logging.error(f"[POLLER_DB_ERROR][RoomDBID:{room_db_id}] Failed to bulk-fetch names: {e}", exc_info=True)
+            return {}
+
+    # 2. Notify Items
+    for item_data in new_items_for_notify:
+        item_name = name_lookup_map.get(
+            (item_data['receiver_game'], item_data['game_checksum'], 'item', item_data['item_id']), 
+            f"ID {item_data['item_id']}"
+        )
+        loc_name = name_lookup_map.get(
+            (item_data['sender_game'], item_data['sender_checksum'], 'location', item_data['location_id']),
+            f"ID {item_data['location_id']}"
         )
         
-        if notifications_to_send:
-            for user_id, data in notifications_to_send.items():
-                logging.info(f"[NOTIFY] Sending {len(data['notifications'])} notification(s) to user {user_id} for room '{data['alias']}'")
-                await send_push_notifications(data['notifications'], data['tokens'], loop)
+        item_id = item_data['item_id']
+        loc_id = item_data['location_id']
+        rid = item_data['receiving_slot_id']
+        send_id = item_data['sending_slot_id']
+        is_a_found_hint = (loc_id, item_id) in just_found_hint_item_loc_pairs
 
-    except Exception as e:
-        logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] An unhandled exception occurred in run_room_poll!", exc_info=True)
+        for user_id, tracked_slots in tracked_slots_by_user.items():
+            if rid in tracked_slots:
+                alias = aliases_by_user.get(user_id, "Unknown Room")
+                user_prefs = users_by_id.get(user_id)
+                slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
 
-def db_read_room_poll_state(db_id):
-    """Synchronously fetches the minimal data needed to run a poll."""
-    session = Session()
-    try:
-        room = session.query(TrackedRoom).filter_by(id=db_id).first()
-        if not room:
-            return None
-            
-        return {
-            'room_uuid': room.room_id,
-            'tracker_id': room.tracker_id,
-            'cached_players_json_str': room.cached_players_json,
-            'game_checksums_json_str': room.game_checksums_json,
-            'is_complete_status': room.is_complete
-        }
-    except Exception as e:
-        logging.error(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Failed to read poll state: {e}", exc_info=True)
-        return None
-    finally:
-        Session.remove()
+                if not user_prefs or not slot_prefs: continue
+
+                if (user_id, rid) in backfill_check_set:
+                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
+                    continue
+
+                is_progression = bool(item_data['flags'] & 1)
+                should_notify = False
+                title_prefix = ""
+                item_type = ""
+                
+                if is_progression:
+                    title_prefix = f"🏆 {item_name}"
+                    item_type = "item_progression"
+                    notify_override = slot_prefs.notify_progression
+                    should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
+                else:
+                    title_prefix = f"✅ {item_name}"
+                    item_type = "item_useful"
+                    notify_override = slot_prefs.notify_useful
+                    should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
+                
+                if is_a_found_hint:
+                    title_prefix = "💡 " + title_prefix
+                
+                title = f"{title_prefix} - [{alias}]"
+                sender_name = name_map.get(send_id, f'P{send_id}')
+                receiver_name = name_map.get(rid, f'P{rid}')
+                body = f"{sender_name} sent {item_name} to {receiver_name} ({loc_name})"
+                
+                if should_notify:
+                    notifications_by_user.setdefault(user_id, []).append({
+                        'title': title, 'body': body, 'type': item_type, 'details': item_data['item_key_batch']
+                    })
+
+    # 3. Notify Hints
+    for hint_data in new_hints_for_notify:
+        item_name = name_lookup_map.get(
+            (hint_data['io_game'], hint_data['io_checksum'], 'item', hint_data['item_id']),
+            f"ID {hint_data['item_id']}"
+        )
+        loc_name = name_lookup_map.get(
+            (hint_data['lo_game'], hint_data['lo_checksum'], 'location', hint_data['loc_id']),
+            f"ID {hint_data['loc_id']}"
+        )
+        io_id, lo_id = hint_data['io_id'], hint_data['lo_id']
+
+        for user_id, tracked_slots in tracked_slots_by_user.items():
+            is_for_us = io_id in tracked_slots
+            is_at_our_location = lo_id in tracked_slots
+
+            if is_for_us or is_at_our_location:
+                slot_to_check = io_id if is_for_us else lo_id
+                user_prefs = users_by_id.get(user_id)
+                slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_to_check)
+
+                if not user_prefs or not slot_prefs: continue
+
+                if (user_id, slot_to_check) in backfill_check_set:
+                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {slot_to_check} is backfilling. Suppressing hint.")
+                    continue
+                
+                notify_override = slot_prefs.notify_hints
+                # Default hints to the Progression default setting if no hint specific setting
+                should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
+                
+                if should_notify:
+                    alias = aliases_by_user.get(user_id, "Unknown Room")
+                    title = f"💡 New Hint! - [{alias}]"
+                    item_owner_name = name_map.get(io_id, f'P{io_id}')
+                    location_owner_name = name_map.get(lo_id, f'P{lo_id}')
+                    body = f"{item_owner_name}'s {item_name} is at {loc_name} in {location_owner_name}'s World."
+                    notifications_by_user.setdefault(user_id, []).append({
+                        'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']
+                    })
+    
+    return notifications_by_user
+
 
 def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
     """
     Synchronously processes tracker data and updates the database.
-    This contains the main polling logic from the old function.
-    Returns a dict of notifications to send.
+    Refactored to orchestrate logic via helper functions.
     """
     session = Session()
     try:
@@ -199,7 +541,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         has_hint_history = session.query(NotifiedHint.id).filter_by(room_id=room_uuid).limit(1).scalar() is not None
 
         existing_items_in_db = set(session.query(NotifiedItem.receiving_slot_id, NotifiedItem.item_id, NotifiedItem.location_id).filter_by(room_id=room_uuid))
-        
         existing_hints_map = {
             (h.item_owner_id, h.location_owner_id, h.item_id, h.location_id): h
             for h in session.query(NotifiedHint).filter_by(room_id=room_uuid)
@@ -210,119 +551,28 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
              session.commit()
              return
 
-        slots_to_clear_backfill = [
-            slot for slot in all_tracked_slots_in_room if slot.needs_backfill
-        ]
-        backfill_check_set = {
-            (slot.user_id, slot.slot_id) for slot in slots_to_clear_backfill
-        }
+        slots_to_clear_backfill = [slot for slot in all_tracked_slots_in_room if slot.needs_backfill]
+        backfill_check_set = {(slot.user_id, slot.slot_id) for slot in slots_to_clear_backfill}
 
         tracked_slots_by_user = {}
         prefs_by_user_slot = {}
         all_user_ids_in_room = set()
-        
         for slot in all_tracked_slots_in_room:
             tracked_slots_by_user.setdefault(slot.user_id, set()).add(slot.slot_id)
             prefs_by_user_slot.setdefault(slot.user_id, {})[slot.slot_id] = slot
             all_user_ids_in_room.add(slot.user_id)
 
         users_by_id = {u.id: u for u in session.query(User).filter(User.id.in_(all_user_ids_in_room))}
-        aliases_by_user = { sub.user_id: sub.alias for sub in session.query(UserRoomSubscription).filter(UserRoomSubscription.user_id.in_(all_user_ids_in_room), UserRoomSubscription.room_id == db_id) }
+        aliases_by_user = {sub.user_id: sub.alias for sub in session.query(UserRoomSubscription).filter(UserRoomSubscription.user_id.in_(all_user_ids_in_room), UserRoomSubscription.room_id == db_id)}
 
-        notifications_by_user = {} 
-
-        cache_keys_to_fetch = set()
-        new_items_for_notify = []
-        new_hints_for_notify = []
-        just_found_hint_item_loc_pairs = set()
-
-        player_statuses_raw = tracker_data.get('player_status', {})
-        checks_done_map = {}
-        player_checks_data = tracker_data.get('player_checks_done', [])
-        if isinstance(player_checks_data, list):
-            for entry in player_checks_data:
-                if 'player' in entry and 'locations' in entry:
-                     checks_done_map[entry['player']] = len(entry['locations'])
-
-
-        finished_player_ids = set()
-        if isinstance(player_statuses_raw, dict): 
-            finished_player_ids.update({int(p) for p, s in player_statuses_raw.items() if s == 30})
-        elif isinstance(player_statuses_raw, list):
-             for status_info in player_statuses_raw:
-                 if isinstance(status_info, dict) and status_info.get('status') == 30 and 'player' in status_info:
-                     finished_player_ids.add(status_info.get('player'))
+        # --- LOGIC STEP 1: Check Player Completions ---
+        finish_notifs, finished_player_ids, players_updated = _check_player_completion(
+            tracker_data, players, db_id, users_by_id, prefs_by_user_slot, 
+            tracked_slots_by_user, backfill_check_set, name_map, aliases_by_user
+        )
         
-        for player in players:
-            pid = player.get('slot_id')
-            total = player.get('total_locations', 0)
-            done = checks_done_map.get(pid, 0)
-            
-            if total > 0 and done >= total:
-                finished_player_ids.add(pid)
-                            
-        players_just_marked_finished = set()
-        players_list_updated = False
-        finished_players_by_user = {}
-
-        if finished_player_ids:
-            for player in players:
-                if player.get('slot_id') in finished_player_ids and not player.get('is_finished'):
-                    player['is_finished'] = True
-                    players_list_updated = True
-                    players_just_marked_finished.add(player.get('slot_id'))
-            
-            if players_list_updated:
-                room.cached_players_json = json.dumps(players)
-                logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Updated cached_players_json for {len(finished_player_ids)} finished player(s).")
-
-        if finished_player_ids:
-            finished_players_by_user = {} 
-            for user_id, tracked_slots in tracked_slots_by_user.items():
-                for slot_id in finished_player_ids:
-                    if slot_id not in players_just_marked_finished:
-                        continue
-                    if slot_id in tracked_slots:
-                        player_name = name_map.get(slot_id, f"Player {slot_id}")
-                        finished_players_by_user.setdefault(user_id, []).append(
-                            (slot_id, player_name) 
-                        )
-
-        for user_id, players_list in finished_players_by_user.items():
-            user_prefs = users_by_id.get(user_id)
-            if not user_prefs: continue 
-
-            names_to_notify = [] 
-            for slot_id, player_name in players_list:
-                slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_id)
-                if not slot_prefs: continue 
-
-                if (user_id, slot_id) in backfill_check_set:
-                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_id} is in 'needs_backfill' state. Suppressing 'Finished' notification.")
-                    continue
-
-                notify_override = slot_prefs.notify_finished
-                should_notify = notify_override if notify_override is not None else user_prefs.notify_finished_default
-                
-                if should_notify:
-                    names_to_notify.append(player_name)
-                else:
-                    logging.info(f"[NOTIFY_SKIP] User {user_id} has disabled finished notifications for {player_name}.")
-
-                names_to_notify.append(player_name)
-
-            if not names_to_notify:
-                continue
-
-            player_names_str = ", ".join(names_to_notify)
-            alias = aliases_by_user.get(user_id, "Unknown Room")
-            notifications_by_user.setdefault(user_id, []).append({
-                'title': f"🏁 Player(s) Finished!",
-                'body': f"{player_names_str} has finished in '{alias}'!",
-                'type': 'player_finish',
-                'details': (room_uuid, user_id, player_names_str)
-            })
-
+        if players_updated:
+             room.cached_players_json = json.dumps(players)
 
         total_players = len(players)
         if total_players > 0 and len(finished_player_ids) >= total_players:
@@ -330,410 +580,137 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 room.is_complete = True
                 logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Room marked as complete.")
 
-        items_to_add_to_db = []
-        items_in_this_batch = set()
+        # --- LOGIC STEP 2: Process Items ---
+        items_to_add, new_items_notif, item_cache_keys, items_added_count = _process_received_items(
+            tracker_data, room_uuid, db_id, existing_items_in_db, tracked_slots_by_user, 
+            game_map, game_checksums, has_item_history
+        )
 
-        items_processed_count = 0
-        items_skipped_classification = 0
-        items_skipped_duplicate = 0
-        items_added_count = 0
-        added_items_details = [] 
+        # --- LOGIC STEP 3: Process Hints ---
+        hints_to_add, new_hints_notif, hint_cache_keys, just_found_hints = _process_hints(
+            tracker_data, room_uuid, db_id, existing_hints_map, game_map, game_checksums, has_hint_history
+        )
+
+        # --- LOGIC STEP 4: Resolve Names & Build Notifications ---
+        all_cache_keys = item_cache_keys | hint_cache_keys
+        data_notifs = _resolve_names_and_notify(
+            session, db_id, all_cache_keys, new_items_notif, new_hints_notif,
+            users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, name_map,
+            backfill_check_set, just_found_hints
+        )
+
+        # Combine notifications (Finished + Items + Hints)
+        notifications_to_send = {}
         
-        items_skipped_backfill = 0
+        # Merge dicts helper
+        def merge_notifs(source, dest):
+            for uid, notif_list in source.items():
+                dest.setdefault(uid, []).extend(notif_list)
 
-        all_received_item_loc_pairs = set()
-        for p_items in tracker_data.get('player_items_received', []):
-            for item_tuple_data in p_items.get('items', []):
-                try:
-                    if len(item_tuple_data) < 4: continue
-                    item_id, loc_id, _, _ = item_tuple_data 
-                    all_received_item_loc_pairs.add((loc_id, item_id))
-                except (ValueError, TypeError, IndexError):
-                    continue
-        
-        if all_received_item_loc_pairs:
-             logging.debug(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] Found {len(all_received_item_loc_pairs)} total (loc_id, item_id) pairs in 'player_items_received'.")
+        merge_notifs(finish_notifs, notifications_to_send)
+        merge_notifs(data_notifs, notifications_to_send)
 
-        for p_items in tracker_data.get('player_items_received', []):
-            rid = p_items.get('player')
-            if not isinstance(rid, int): continue
-
-            is_tracked_by_anyone = False
-            for tracked_slots in tracked_slots_by_user.values():
-                if rid in tracked_slots:
-                    is_tracked_by_anyone = True
-                    break
-            if not is_tracked_by_anyone:
-                continue
-
-            for item_tuple_data in p_items.get('items', []):
-                items_processed_count += 1
-                try:
-                    if len(item_tuple_data) < 4: continue
-                    item_id, loc_id, send_id, flags = item_tuple_data
-                    item_id = int(item_id)
-                    loc_id = int(loc_id)
-                    send_id = int(send_id)
-                except (ValueError, TypeError, IndexError) as e:
-                    logging.warning(f"[POLLER_WARN][RoomDBID:{db_id}] Error unpacking item tuple: {item_tuple_data} | Error: {e}")
-                    continue 
-
-                item_key_db = (rid, item_id, loc_id)
-                item_key_batch = (room_uuid, rid, item_id, loc_id) 
-
-                if (item_key_db in existing_items_in_db) or (item_key_batch in items_in_this_batch):
-                    items_skipped_duplicate += 1
-                    continue
-
-                if not (flags & 1 or flags & 2):
-                    items_skipped_classification += 1
-                    continue
-
-                items_to_add_to_db.append(NotifiedItem(
-                    room_id=room_uuid,
-                    receiving_slot_id=rid,
-                    item_id=item_id,
-                    location_id=loc_id,
-                    item_flags=flags
-                ))
-                items_in_this_batch.add(item_key_batch)
-                items_added_count += 1
-                added_items_details.append(f"(Slot:{rid}, Item:{item_id}, Loc:{loc_id})")
-
-                if has_item_history: 
-                    receiver_game = game_map.get(rid, "Unknown")
-                    game_checksum = game_checksums.get(receiver_game)
-
-                    if game_checksum:
-                        cache_keys_to_fetch.add((receiver_game, game_checksum, 'item', item_id))
-
-                    sender_game = game_map.get(send_id, "Unknown")
-                    sender_checksum = game_checksums.get(sender_game)
-                    if sender_checksum:
-                        cache_keys_to_fetch.add((sender_game, sender_checksum, 'location', loc_id))
-                    
-                    new_items_for_notify.append({
-                        'item_key_batch': item_key_batch,
-                        'receiving_slot_id': rid,
-                        'sending_slot_id': send_id,
-                        'item_id': item_id,
-                        'location_id': loc_id,
-                        'flags': flags,
-                        'receiver_game': receiver_game,
-                        'game_checksum': game_checksum,
-                        'sender_game': sender_game,
-                        'sender_checksum': sender_checksum
-                    })
-                else:
-                    items_skipped_backfill += 1
-
-        if items_processed_count > 0: 
-             added_items_log_str = ", ".join(added_items_details) if added_items_details else "None"
-             logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Item Stats: Processed={items_processed_count}, Skipped (Class)={items_skipped_classification}, Skipped (Dupe)={items_skipped_duplicate}, Added={items_added_count} | New Items: [{added_items_log_str}]")
-
-        if items_skipped_backfill > 0:
-            logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {items_skipped_backfill} item notifications during initial backfill.")
-
-        hints_processed_count = 0
-        hints_added_count = 0
-        hints_skipped_backfill = 0
-        
-        for p_hints in tracker_data.get('hints', []):
-             for hint_data in p_hints.get('hints', []):
-                hints_processed_count += 1
-                try:
-                    if len(hint_data) < 5: continue 
-                    io_id, lo_id, loc_id, item_id, is_found_from_tracker, *_ = hint_data
-                    io_id = int(io_id)
-                    lo_id = int(lo_id)
-                    loc_id = int(loc_id)
-                    item_id = int(item_id)
-                    is_found_from_tracker = bool(is_found_from_tracker) 
-                except (ValueError, IndexError):
-                    logging.warning(f"[POLLER_WARN][RoomDBID:{db_id}] Error unpacking hint tuple: {hint_data}")
-                    continue
-
-                hint_key_db = (io_id, lo_id, item_id, loc_id)
-                hint_key_batch = (room_uuid, io_id, lo_id, item_id, loc_id)
-
-                existing_hint_obj = existing_hints_map.get(hint_key_db)
-
-                if not existing_hint_obj:
-                    if hint_key_batch in hints_in_this_batch: continue
-                    
-                    hints_to_add_to_db.append(NotifiedHint(
-                        room_id=room_uuid,
-                        item_owner_id=io_id,
-                        location_owner_id=lo_id,
-                        item_id=item_id,
-                        location_id=loc_id,
-                        is_found=is_found_from_tracker
-                    ))
-                    hints_in_this_batch.add(hint_key_batch)
-                    hints_added_count += 1
-
-                    if has_hint_history:
-                        io_game, lo_game = game_map.get(io_id, "Unknown"), game_map.get(lo_id, "Unknown")
-                        io_checksum = game_checksums.get(io_game)
-                        lo_checksum = game_checksums.get(lo_game)
-
-                        if io_checksum:
-                            cache_keys_to_fetch.add((io_game, io_checksum, 'item', item_id))
-                        if lo_checksum:
-                            cache_keys_to_fetch.add((lo_game, lo_checksum, 'location', loc_id))
-                        
-                        new_hints_for_notify.append({
-                            'hint_key_batch': hint_key_batch,
-                            'io_id': io_id, 'lo_id': lo_id, 'item_id': item_id, 'loc_id': loc_id,
-                            'io_game': io_game, 'lo_game': lo_game,
-                            'io_checksum': io_checksum, 'lo_checksum': lo_checksum
-                        })
-                        
-                        if is_found_from_tracker:
-                            logging.debug(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] New hint {hint_key_db} is already found.")
-                            just_found_hint_item_loc_pairs.add((loc_id, item_id))
-                    else:
-                        hints_skipped_backfill += 1
-                
-                else:
-                    if is_found_from_tracker and not existing_hint_obj.is_found:
-                        logging.debug(f"[POLLER_HINT_DEBUG][RoomDBID:{db_id}] Existing hint {hint_key_db} marked as found.")
-                        existing_hint_obj.is_found = True # Mark for update in the session
-                        just_found_hint_item_loc_pairs.add((loc_id, item_id))
-        
-        if hints_processed_count > 0:
-             logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Hint Stats: Processed={hints_processed_count}, Added={hints_added_count}")
-             if just_found_hint_item_loc_pairs:
-                 logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Detected {len(just_found_hint_item_loc_pairs)} hints that were just found.")
-
-
-        if hints_skipped_backfill > 0:
-            logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {hints_skipped_backfill} hint notifications during initial backfill.")
-
-        name_lookup_map = {}
-        if cache_keys_to_fetch:
-            logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Fetching {len(cache_keys_to_fetch)} names from DatapackageCache...")
-            try:
-                keys_list = list(cache_keys_to_fetch)
-                chunk_size = 500 
-                
-                total_chunks = (len(keys_list) // chunk_size) + 1
-                
-                for i in range(0, len(keys_list), chunk_size):
-                    chunk = keys_list[i:i + chunk_size]
-                    
-                    logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Fetching name chunk {i // chunk_size + 1}/{total_chunks}...")
-                    
-                    results = session.query(
-                        DatapackageCache.game,
-                        DatapackageCache.checksum,
-                        DatapackageCache.entity_type,
-                        DatapackageCache.entity_id,
-                        DatapackageCache.entity_name
-                    ).filter(
-                        tuple_(
-                            DatapackageCache.game,
-                            DatapackageCache.checksum,
-                            DatapackageCache.entity_type,
-                            DatapackageCache.entity_id
-                        ).in_(chunk)
-                    )
-                    
-                    for game, chk, etype, eid, name in results:
-                        name_lookup_map[(game, chk, etype, eid)] = name
-
-            except Exception as e:
-                logging.error(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Failed to bulk-fetch names: {e}", exc_info=True)
-                return None 
-
-        for item_data in new_items_for_notify:
-             item_key = (item_data['receiver_game'], item_data['game_checksum'], 'item', item_data['item_id'])
-             loc_key = (item_data['sender_game'], item_data['sender_checksum'], 'location', item_data['location_id'])
-
-             if item_key not in name_lookup_map:
-                 logging.warning(f"[LOOKUP_FAIL] Item key missing from map: {item_key}")
-                 if not item_data['game_checksum']:
-                      logging.warning(f"[LOOKUP_FAIL] Reason: Receiver game '{item_data['receiver_game']}' has no checksum.")
-
-             if loc_key not in name_lookup_map:
-                  logging.warning(f"[LOOKUP_FAIL] Location key missing from map: {loc_key}")
-                  if not item_data['sender_checksum']:
-                       logging.warning(f"[LOOKUP_FAIL] Reason: Sender game '{item_data['sender_game']}' has no checksum.")
-
-        for item_data in new_items_for_notify:
-            item_name = name_lookup_map.get(
-                (item_data['receiver_game'], item_data['game_checksum'], 'item', item_data['item_id']), 
-                f"ID {item_data['item_id']}"
-            )
-            
-            loc_name = name_lookup_map.get(
-                (item_data['sender_game'], item_data['sender_checksum'], 'location', item_data['location_id']),
-                f"ID {item_data['location_id']}"
-            )
-            
-            item_id = item_data['item_id']
-            loc_id = item_data['location_id']
-            is_a_found_hint = (loc_id, item_id) in just_found_hint_item_loc_pairs
-            
-            rid = item_data['receiving_slot_id']
-            send_id = item_data['sending_slot_id']
-
-            for user_id, tracked_slots in tracked_slots_by_user.items():
-                if rid in tracked_slots:
-                    alias = aliases_by_user.get(user_id, "Unknown Room")
-                    
-                    user_prefs = users_by_id.get(user_id)
-                    slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
-
-                    if not user_prefs or not slot_prefs:
-                        logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
-                        continue
-
-                    if (user_id, rid) in backfill_check_set:
-                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {rid} is in 'needs_backfill' state. Suppressing notification for item {item_data['item_id']}.")
-                        continue
-
-                    is_progression = bool(item_data['flags'] & 1)
-                    should_notify = False
-                    title_prefix = ""
-                    item_type = ""
-                    
-                    if is_progression:
-                        title_prefix = f"🏆 {item_name}"
-                        item_type = "item_progression"
-                        notify_override = slot_prefs.notify_progression
-                        should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
-                    else:
-                        title_prefix = f"✅ {item_name}"
-                        item_type = "item_useful"
-                        notify_override = slot_prefs.notify_useful
-                        should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
-                    
-                    if is_a_found_hint:
-                        title_prefix = "💡 " + title_prefix
-                    
-                    title = f"{title_prefix} - [{alias}]"
-                    
-                    sender_name = name_map.get(send_id, f'P{send_id}')
-                    receiver_name = name_map.get(rid, f'P{rid}')
-                    
-                    body = f"{sender_name} sent {item_name} to {receiver_name} ({loc_name})"
-                    
-                    if should_notify:
-                        notifications_by_user.setdefault(user_id, []).append({
-                            'title': title,
-                            'body': body,
-                            'type': item_type,
-                            'details': item_data['item_key_batch']
-                        })
-
-        for hint_data in new_hints_for_notify:
-            item_name = name_lookup_map.get(
-                (hint_data['io_game'], hint_data['io_checksum'], 'item', hint_data['item_id']),
-                f"ID {hint_data['item_id']}"
-            )
-            loc_name = name_lookup_map.get(
-                (hint_data['lo_game'], hint_data['lo_checksum'], 'location', hint_data['loc_id']),
-                f"ID {hint_data['loc_id']}"
-            )
-            
-            io_id, lo_id = hint_data['io_id'], hint_data['lo_id']
-            for user_id, tracked_slots in tracked_slots_by_user.items():
-                is_for_us, is_at_our_location = io_id in tracked_slots, lo_id in tracked_slots
-                if is_for_us or is_at_our_location:
-                    
-                    slot_to_check = io_id if is_for_us else lo_id
-                    
-                    user_prefs = users_by_id.get(user_id)
-                    slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_to_check)
-
-                    if not user_prefs or not slot_prefs:
-                        logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
-                        continue
-
-                    if (user_id, slot_to_check) in backfill_check_set:
-                        logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_to_check} is in 'needs_backfill' state. Suppressing hint notification.")
-                        continue
-                    
-                    notify_override = slot_prefs.notify_hints
-                    should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
-                    
-                    if not should_notify:
-                        continue
-
-                    alias = aliases_by_user.get(user_id, "Unknown Room")
-                    
-                    title = f"💡 New Hint! - [{alias}]"
-
-                    item_owner_name = name_map.get(io_id, f'P{io_id}')
-                    location_owner_name = name_map.get(lo_id, f'P{lo_id}')
-
-                    body = f"{item_owner_name}'s {item_name} is at {loc_name} in {location_owner_name}'s World."
-
-                    notifications_by_user.setdefault(user_id, []).append({'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']})
-    
-        if hints_skipped_backfill > 0:
-            logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {hints_skipped_backfill} hint notifications during initial backfill.")
-       
-        elif items_added_count > 0:
-            logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Added {items_added_count} new items, but no notifications were queued (e.g., all suppressed or no users tracking).")
-
-        if items_to_add_to_db:
-            session.bulk_save_objects(items_to_add_to_db)
+        if items_to_add:
+            session.bulk_save_objects(items_to_add)
             if not has_item_history:
-                logging.info(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(items_to_add_to_db)} historical items (Progression/Useful).")
-            elif not notifications_by_user: 
-                logging.info(f"[POLLER][RoomDBID:{db_id}] Silently added {len(items_to_add_to_db)} new items (Progression/Useful).")
+                logging.info(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(items_to_add)} historical items.")
+            elif not new_items_notif: 
+                logging.info(f"[POLLER][RoomDBID:{db_id}] Silently added {len(items_to_add)} new items (Suppressed/Untracked).")
 
-        if hints_to_add_to_db:
-            session.bulk_save_objects(hints_to_add_to_db)
+        if hints_to_add:
+            session.bulk_save_objects(hints_to_add)
             if not has_hint_history:
-                logging.info(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(hints_to_add_to_db)} historical hints.")
-            elif not notifications_by_user: 
-                 logging.info(f"[POLLER][RoomDBID:{db_id}] Silently added {len(hints_to_add_to_db)} new hints.")
+                logging.info(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(hints_to_add)} historical hints.")
 
         if slots_to_clear_backfill:
-            logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Clearing 'needs_backfill' flag for {len(slots_to_clear_backfill)} slot(s).")
+            logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Clearing 'needs_backfill' for {len(slots_to_clear_backfill)} slots.")
             for slot in slots_to_clear_backfill:
                 slot.needs_backfill = False
 
-        notifications_to_send = {}
-        if notifications_by_user:
-            all_user_ids = notifications_by_user.keys()
-            devices_to_notify = session.query(Device).filter(Device.user_id.in_(all_user_ids)).all()
+        final_payloads = {}
+        if notifications_to_send:
+            devices_to_notify = session.query(Device).filter(Device.user_id.in_(notifications_to_send.keys())).all()
             tokens_by_user = {}
-            for device in devices_to_notify: tokens_by_user.setdefault(device.user_id, []).append(device.fcm_token)
+            for device in devices_to_notify: 
+                tokens_by_user.setdefault(device.user_id, []).append(device.fcm_token)
 
-            for user_id, notifications in notifications_by_user.items():
+            for user_id, notifications in notifications_to_send.items():
                 user_tokens = tokens_by_user.get(user_id)
                 if user_tokens:
+                    # Dedupe
                     unique_notifications = list({json.dumps(d): d for d in notifications}.values())
-                    notifications_to_send[user_id] = {
+                    final_payloads[user_id] = {
                         'notifications': unique_notifications,
                         'tokens': user_tokens,
                         'alias': aliases_by_user.get(user_id)
                     }
-                else:
-                    logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} had {len(notifications)} notifications queued, but has NO registered device tokens.")
 
         session.commit()
-        return notifications_to_send
+        return final_payloads
 
     except OperationalError as oe: 
-        logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Database was locked during main poll. Skipping cycle. Error: {oe}")
+        logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Database locked. Skipping. Error: {oe}")
         session.rollback()
     except Exception as e:
-        logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] An unhandled exception occurred in db_process_poll_data!", exc_info=True)
+        logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Unhandled exception in db_process_poll_data!", exc_info=True)
         session.rollback()
     finally:
         Session.remove()
     return None
 
+async def run_room_poll(room_info, loop):
+    """Runs a single lightweight poll cycle for an already set up room."""
+    db_id = room_info['db_id']
+    hostname = room_info['hostname']
+    
+    room_data = await loop.run_in_executor(None, db_read_room_poll_state, db_id)
+    if not room_data: return
+        
+    tracker_id = room_data['tracker_id']
+    room_uuid = room_data['room_uuid']
+
+    if not tracker_id: return
+
+    tracker_data = await fetch_json(f"https://{hostname}/api/tracker/{tracker_id}")
+
+    try:
+        notifications_to_send = await loop.run_in_executor(
+            None, db_process_poll_data, db_id, room_uuid, tracker_data, room_data 
+        )
+        
+        if notifications_to_send:
+            for user_id, data in notifications_to_send.items():
+                logging.info(f"[NOTIFY] Sending {len(data['notifications'])} notification(s) to user {user_id}")
+                await send_push_notifications(data['notifications'], data['tokens'], loop)
+
+    except Exception as e:
+        logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Error in run_room_poll!", exc_info=True)
+
+def db_read_room_poll_state(db_id):
+    session = Session()
+    try:
+        room = session.query(TrackedRoom).filter_by(id=db_id).first()
+        if not room: return None
+        return {
+            'room_uuid': room.room_id,
+            'tracker_id': room.tracker_id,
+            'cached_players_json_str': room.cached_players_json,
+            'game_checksums_json_str': room.game_checksums_json,
+            'is_complete_status': room.is_complete
+        }
+    except Exception as e:
+        return None
+    finally:
+        Session.remove()
+
+# =============================================================================
+# SETUP LOGIC
+# =============================================================================
 
 async def run_room_setup(room_info, loop):
     """
-    Performs the heavy, memory-intensive setup for a single new room.
-    All DB logic is deferred to an executor.
+    Performs setup for a new room, including fetching static tracker data
+    for total check counts.
     """
     db_id = room_info['db_id']
     hostname = room_info['hostname']
@@ -749,9 +726,20 @@ async def run_room_setup(room_info, loop):
             logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to fetch room status.")
             return
         
-        static_tracker_url = f"https://{hostname}/api/static_tracker/{room_uuid}"
+        new_tracker_id = room_status.get('tracker')
+        if not new_tracker_id:
+            logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] No tracker ID found in status. Cannot fetch static data.")
+            return
+        
+        setup_data['tracker_id'] = new_tracker_id
+
+        static_tracker_url = f"https://{hostname}/api/static_tracker/{new_tracker_id}"
         static_data = await fetch_json(static_tracker_url)
 
+        if not static_data:
+             logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch static tracker data. Aborting setup to avoid saving 0s.")
+             return
+        
         totals_map = {}
         if static_data and 'player_locations_total' in static_data:
             for entry in static_data['player_locations_total']:
@@ -759,7 +747,6 @@ async def run_room_setup(room_info, loop):
                     totals_map[entry['player']] = entry['total_locations']
 
         players_raw = room_status.get('players', [])
-
         player_list = []
         for i, p in enumerate(players_raw):
             slot_id = i + 1
@@ -767,19 +754,14 @@ async def run_room_setup(room_info, loop):
                 'slot_id': slot_id, 
                 'name': p[0], 
                 'game': p[1],
-                'total_locations': totals_map.get(slot_id, 0), 
-                'is_finished': False 
+                'total_locations': totals_map.get(slot_id, 0),
+                'is_finished': False
             })
         
+        setup_data['cached_players_json'] = json.dumps(player_list)
         setup_data['cached_total_slots'] = len(player_list)
         setup_data['cached_full_address'] = f"{hostname}:{room_status.get('last_port', '')}"
         setup_data['last_api_check'] = datetime.utcnow()
-
-        new_tracker_id = room_status.get('tracker')
-        if not new_tracker_id:
-            logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] No tracker ID found in status. Will retry.")
-        else:
-            setup_data['tracker_id'] = new_tracker_id
 
         port = room_status.get('last_port')
         checksums = {}
@@ -801,16 +783,9 @@ async def run_room_setup(room_info, loop):
         datapackage_entries_by_game = {}
 
         if checksums:
-            logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] New/updated checksums found. Fetching datapackages...")
-            
+            logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Fetching datapackages...")
             checksums_to_check = set(checksums.values())
-            
-            existing_in_db = await loop.run_in_executor(
-                None, 
-                db_check_existing_checksums, 
-                checksums_to_check
-            )
-            
+            existing_in_db = await loop.run_in_executor(None, db_check_existing_checksums, checksums_to_check)
             new_checksums_to_fetch = checksums_to_check - existing_in_db
 
             for game, checksum in checksums.items():
@@ -834,100 +809,71 @@ async def run_room_setup(room_info, loop):
             setup_data['game_checksums_json'] = new_checksums_json_str
 
         setup_data['is_setup'] = True 
-        logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup network fetch complete.")
+        logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup complete.")
 
     except Exception as e:
-        logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Unhandled setup network error: {e}", exc_info=True)
+        logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Setup error: {e}", exc_info=True)
         return 
 
     try:
         await loop.run_in_executor(None, db_commit_setup_data, db_id, setup_data)
-        logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup data committed to DB.")
     except Exception as e:
         logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to commit setup data: {e}", exc_info=True)
 
 def db_check_existing_checksums(checksums_to_check):
-    """Synchronously checks which of the given checksums are already in the cache."""
     session = Session()
     try:
-        existing = set(
-            c[0] for c in session.query(DatapackageCache.checksum)
-            .filter(DatapackageCache.checksum.in_(checksums_to_check))
-            .distinct()
-        )
+        existing = set(c[0] for c in session.query(DatapackageCache.checksum).filter(DatapackageCache.checksum.in_(checksums_to_check)).distinct())
         return existing
-    except Exception as e:
-        logging.error(f"[POLLER_DB_ERROR] Failed to check existing checksums: {e}")
+    except Exception:
         return set()
     finally:
         Session.remove()
 
 def db_commit_setup_data(db_id, setup_data):
-    """
-    Synchronously commits all setup data to the database in a single transaction block.
-    """
     session = Session()
     try:
         room = session.query(TrackedRoom).filter_by(id=db_id).first()
-        if not room: 
-            logging.warning(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Room vanished before setup commit.")
-            return
+        if not room: return
 
-        if 'cached_players_json' in setup_data:
-            room.cached_players_json = setup_data['cached_players_json']
-        if 'cached_total_slots' in setup_data:
-            room.cached_total_slots = setup_data['cached_total_slots']
-        if 'cached_full_address' in setup_data:
-            room.cached_full_address = setup_data['cached_full_address']
-        if 'last_api_check' in setup_data:
-            room.last_api_check = setup_data['last_api_check']
-        if 'tracker_id' in setup_data:
-            room.tracker_id = setup_data['tracker_id']
-        if 'game_checksums_json' in setup_data:
-            room.game_checksums_json = setup_data['game_checksums_json']
-        
-        if setup_data.get('is_setup'):
-            room.is_setup = True
+        if 'cached_players_json' in setup_data: room.cached_players_json = setup_data['cached_players_json']
+        if 'cached_total_slots' in setup_data: room.cached_total_slots = setup_data['cached_total_slots']
+        if 'cached_full_address' in setup_data: room.cached_full_address = setup_data['cached_full_address']
+        if 'last_api_check' in setup_data: room.last_api_check = setup_data['last_api_check']
+        if 'tracker_id' in setup_data: room.tracker_id = setup_data['tracker_id']
+        if 'game_checksums_json' in setup_data: room.game_checksums_json = setup_data['game_checksums_json']
+        if setup_data.get('is_setup'): room.is_setup = True
 
         session.commit()
-        logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Room metadata committed to DB.")
         
         if setup_data.get('datapackage_entries_by_game'):
-            logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Saving new datapackage entries for {len(setup_data['datapackage_entries_by_game'])} game(s)...")
             for game, entries in setup_data['datapackage_entries_by_game'].items():
                 try:
                     session.bulk_save_objects(entries)
                     session.commit()
-                    logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Saved {len(entries)} entries for game '{game}'.")
                 except IntegrityError:
                     session.rollback() 
-                    logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Datapackage race condition for game '{game}'. Another poller saved it first. Safe to ignore.")
-                except Exception as e:
+                except Exception:
                     session.rollback()
-                    logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Error saving datapackage for game '{game}': {e}")
-    
-    except OperationalError as oe: 
-        logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Database was locked during setup commit. Error: {oe}")
-        session.rollback()
     except Exception as e:
-        logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] An unhandled exception occurred in db_commit_setup_data!", exc_info=True)
         session.rollback()
+        raise e
     finally:
         Session.remove()
 
 
+# =============================================================================
+# SUPERVISOR & WORKERS
+# =============================================================================
+
 async def poll_room_with_interval(room_info, loop):
-    """
-    Wrapper that calls the lightweight polling logic at a regular interval.
-    """
     while True:
         try:
             await run_room_poll(room_info, loop)
         except asyncio.CancelledError:
             break
         except Exception as e:
-            db_id = room_info.get('db_id', 'Unknown')
-            logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Unhandled error in poll_room_with_interval: {e}", exc_info=True)
+            logging.error(f"[POLLER_ERROR] Interval error: {e}", exc_info=True)
         
         try:
             await asyncio.sleep(POLLING_INTERVAL_SECONDS)
@@ -935,27 +881,16 @@ async def poll_room_with_interval(room_info, loop):
             break
 
 async def setup_worker(setup_queue, setup_semaphore, loop):
-    """A worker that processes the room setup queue one by one."""
     while True:
         try:
             room_info = await setup_queue.get()
-            
             async with setup_semaphore:
-                logging.info(f"[SETUP_WORKER] Starting setup for room {room_info['db_id']}")
                 await run_room_setup(room_info, loop)
-                logging.info(f"[SETUP_WORKER] Finished setup for room {room_info['db_id']}")
-                
             setup_queue.task_done()
         except Exception as e:
             logging.error(f"[SETUP_WORKER_ERROR] Unhandled error: {e}", exc_info=True)
 
 async def poller_supervisor(app, loop):
-    """
-    The main supervisor loop for the background poller.
-    - Manages which rooms are actively being polled.
-    - Queues new rooms for a throttled setup process.
-    - Starts/stops polling tasks based on room status.
-    """
     logging.info("[POLLER] Background polling service starting...")
     running_tasks = {}
     last_cleanup_time = datetime.utcnow()
@@ -963,17 +898,15 @@ async def poller_supervisor(app, loop):
     setup_queue = asyncio.Queue()
     setup_semaphore = asyncio.Semaphore(2) 
     
-    logging.info(f"[SUPERVISOR] Starting 2 setup workers...")
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, loop))
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, loop))
     
     while True:
         try:
             log_resource_usage(app)
-
             active_rooms_in_db = await loop.run_in_executor(None, db_get_active_rooms)
+            
             if active_rooms_in_db is None:
-                logging.error("[SUPERVISOR_ERROR] Failed to fetch active rooms. Retrying...")
                 await asyncio.sleep(SUPERVISOR_INTERVAL_SECONDS)
                 continue
                 
@@ -981,66 +914,57 @@ async def poller_supervisor(app, loop):
             
             for room in active_rooms_in_db:
                 room_info = {'db_id': room.id, 'hostname': room.hostname, 'room_uuid': room.room_id}
-                
                 is_missing_data = not room.tracker_id or not room.game_checksums_json or room.game_checksums_json == '{}'
-                needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data)
+                has_total_locations = '"total_locations":' in (room.cached_players_json or "")
+                has_bad_zeros = '"total_locations": 0' in (room.cached_players_json or "")
+                
+                needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations) or has_bad_zeros
 
                 if room.id not in running_tasks:
                     if needs_setup:
-                        if room.is_setup: 
-                            logging.info(f"[SUPERVISOR] Queuing room {room.id} ({room.room_id}) for setup (missing data).")
-                        else:
-                            logging.info(f"[SUPERVISOR] Queuing new room {room.id} ({room.room_id}) for setup.")
+                        logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup.")
                         await setup_queue.put(room_info)
                     else:
-                        logging.info(f"[SUPERVISOR] Starting poller for already-setup room {room.id} ({room.room_id})")
+                        logging.info(f"[SUPERVISOR] Starting poller for room {room.id}")
                         task = asyncio.create_task(poll_room_with_interval(room_info, loop))
                         running_tasks[room.id] = task
-                
                 elif needs_setup: 
-                     logging.info(f"[SUPERVISOR] Queuing *running* room {room.id} ({room.room_id}) for metadata refresh (missing data).")
+                     logging.info(f"[SUPERVISOR] Queuing running room {room.id} for metadata refresh.")
                      await setup_queue.put(room_info)
 
             inactive_room_ids = set(running_tasks.keys()) - current_active_room_ids
             for room_id in inactive_room_ids:
-                logging.info(f"[SUPERVISOR] Room ID {room_id} is no longer active. Stopping poller.")
+                logging.info(f"[SUPERVISOR] Stopping poller for room {room_id}.")
                 task_to_stop = running_tasks.pop(room_id, None)
                 if task_to_stop:
                     task_to_stop.cancel()
 
             if datetime.utcnow() - last_cleanup_time > timedelta(hours=24):
-                logging.info("[JANITOR] Running daily cleanup of old, un-subscribed rooms...")
                 await loop.run_in_executor(None, db_run_cleanup)
                 last_cleanup_time = datetime.utcnow()
 
         except Exception as e:
             logging.error(f"[SUPERVISOR] An unhandled error occurred: {e}", exc_info=True)
-        finally:
-            pass
 
         await asyncio.sleep(SUPERVISOR_INTERVAL_SECONDS)
 
 def db_get_active_rooms():
-    """Synchronously queries for all rooms that should be active."""
     session = Session()
     try:
         return session.query(TrackedRoom).filter(
             TrackedRoom.is_complete == False,
             TrackedRoom.is_suspended == False
         ).all()
-    except Exception as e:
-        logging.error(f"[SUPERVISOR_DB_ERROR] Failed to get active rooms: {e}", exc_info=True)
+    except Exception:
         session.rollback()
         return None
     finally:
         Session.remove()
 
 def db_run_cleanup():
-    """Synchronously runs the daily cleanup logic."""
     session = Session()
     try:
         thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-        
         rooms_to_delete = session.query(TrackedRoom).filter(
             TrackedRoom.subscriptions.any() == False,
             or_(
@@ -1048,33 +972,22 @@ def db_run_cleanup():
                 TrackedRoom.last_successful_poll < thirty_days_ago
             )
         ).all()
-
-        if rooms_to_delete:
-            for room in rooms_to_delete:
-                logging.info(f"[JANITOR] Deleting abandoned room {room.room_id}")
-                session.delete(room)
-            session.commit()
-        else:
-            logging.info("[JANITOR] No abandoned rooms to delete.")
-    except Exception as e:
-        logging.error(f"[JANITOR_DB_ERROR] Failed to run cleanup: {e}", exc_info=True)
+        for room in rooms_to_delete:
+            session.delete(room)
+        session.commit()
+    except Exception:
         session.rollback()
     finally:
         Session.remove()
 
 def run_poller(app):
-    """The entry point for the poller thread."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
     main_task = loop.create_task(poller_supervisor(app, loop))
-    
     try:
         loop.run_until_complete(main_task)
     except Exception as e:
         logging.critical(f"[POLLER_CRITICAL] asyncio.run() failed: {e}", exc_info=True)
     finally:
-        logging.info("[POLLER] Poller is shutting down. Cleaning up session.")
         loop.run_until_complete(close_aiohttp_session())
         loop.close()
-        logging.info("[POLLER] Shutdown complete.")

@@ -172,19 +172,22 @@ data class UserProfile(
     val notify_progression_default: Boolean,
     val notify_useful_default: Boolean,
     val notify_hints_default: Boolean,
+    val notify_finished_default: Boolean,
     val is_cheese_connected: Boolean = false
 )
 
 data class UpdateGlobalPrefsRequest(
     val notify_progression: Boolean? = null,
     val notify_useful: Boolean? = null,
-    val notify_hints: Boolean? = null
+    val notify_hints: Boolean? = null,
+    val notify_finished: Boolean? = null
 )
 
 data class UpdateSlotPrefsRequest(
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
-    val notify_hints: Boolean?
+    val notify_hints: Boolean?,
+    val notify_finished: Boolean? = null
 )
 
 data class RoomWithTrackedSlots(
@@ -199,7 +202,8 @@ data class TrackedSlotDetail(
     val player_name: String,
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
-    val notify_hints: Boolean?
+    val notify_hints: Boolean?,
+    val notify_finished: Boolean?
 )
 
 data class HintHistoryResponse(
