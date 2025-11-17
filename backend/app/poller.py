@@ -210,16 +210,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
              session.commit()
              return
 
-        # --- NEW BACKFILL LOGIC (Change 1) ---
-        # Get a list of the actual slot *objects* that need backfilling
         slots_to_clear_backfill = [
             slot for slot in all_tracked_slots_in_room if slot.needs_backfill
         ]
-        # Get a set of (user_id, slot_id) tuples for quick suppression checks
         backfill_check_set = {
             (slot.user_id, slot.slot_id) for slot in slots_to_clear_backfill
         }
-        # --- END NEW BACKFILL LOGIC ---
 
         tracked_slots_by_user = {}
         prefs_by_user_slot = {}
@@ -241,16 +237,34 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         just_found_hint_item_loc_pairs = set()
 
         player_statuses_raw = tracker_data.get('player_status', {})
+        checks_done_map = {}
+        player_checks_data = tracker_data.get('player_checks_done', [])
+        if isinstance(player_checks_data, list):
+            for entry in player_checks_data:
+                if 'player' in entry and 'locations' in entry:
+                     checks_done_map[entry['player']] = len(entry['locations'])
+
+
         finished_player_ids = set()
-        if isinstance(player_statuses_raw, dict): finished_player_ids = {int(p) for p, s in player_statuses_raw.items() if s == 30}
+        if isinstance(player_statuses_raw, dict): 
+            finished_player_ids.update({int(p) for p, s in player_statuses_raw.items() if s == 30})
         elif isinstance(player_statuses_raw, list):
              for status_info in player_statuses_raw:
                  if isinstance(status_info, dict) and status_info.get('status') == 30 and 'player' in status_info:
                      finished_player_ids.add(status_info.get('player'))
-
+        
+        for player in players:
+            pid = player.get('slot_id')
+            total = player.get('total_locations', 0)
+            done = checks_done_map.get(pid, 0)
+            
+            if total > 0 and done >= total:
+                finished_player_ids.add(pid)
+                            
         players_just_marked_finished = set()
         players_list_updated = False
         finished_players_by_user = {}
+
         if finished_player_ids:
             for player in players:
                 if player.get('slot_id') in finished_player_ids and not player.get('is_finished'):
@@ -283,12 +297,17 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_id)
                 if not slot_prefs: continue 
 
-                # --- NEW BACKFILL LOGIC (Change 2a) ---
-                # Check for backfill flag instead of time
                 if (user_id, slot_id) in backfill_check_set:
                     logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_id} is in 'needs_backfill' state. Suppressing 'Finished' notification.")
-                    continue 
-                # --- END NEW BACKFILL LOGIC ---
+                    continue
+
+                notify_override = slot_prefs.notify_finished
+                should_notify = notify_override if notify_override is not None else user_prefs.notify_finished_default
+                
+                if should_notify:
+                    names_to_notify.append(player_name)
+                else:
+                    logging.info(f"[NOTIFY_SKIP] User {user_id} has disabled finished notifications for {player_name}.")
 
                 names_to_notify.append(player_name)
 
@@ -312,9 +331,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Room marked as complete.")
 
         items_to_add_to_db = []
-        hints_to_add_to_db = []
         items_in_this_batch = set()
-        hints_in_this_batch = set()
 
         items_processed_count = 0
         items_skipped_classification = 0
@@ -493,16 +510,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         if hints_skipped_backfill > 0:
             logging.info(f"[POLLER_INFO][RoomDBID:{db_id}] Suppressed {hints_skipped_backfill} hint notifications during initial backfill.")
 
-
-        
-        # --- NEW CHUNKING LOGIC ---
         name_lookup_map = {}
         if cache_keys_to_fetch:
             logging.debug(f"[POLLER_DEBUG][RoomDBID:{db_id}] Fetching {len(cache_keys_to_fetch)} names from DatapackageCache...")
             try:
-                # Convert set to list for slicing
                 keys_list = list(cache_keys_to_fetch)
-                chunk_size = 500  # Query 500 keys at a time
+                chunk_size = 500 
                 
                 total_chunks = (len(keys_list) // chunk_size) + 1
                 
@@ -530,20 +543,15 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         name_lookup_map[(game, chk, etype, eid)] = name
 
             except Exception as e:
-                # This catches a failure on any chunk
                 logging.error(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Failed to bulk-fetch names: {e}", exc_info=True)
-                return None # Abort-on-failure logic
-        # --- END CHUNKING LOGIC ---
+                return None 
 
         for item_data in new_items_for_notify:
-             # Create the exact keys we are about to look up
              item_key = (item_data['receiver_game'], item_data['game_checksum'], 'item', item_data['item_id'])
              loc_key = (item_data['sender_game'], item_data['sender_checksum'], 'location', item_data['location_id'])
 
-             # Check if they exist in the map we just built
              if item_key not in name_lookup_map:
                  logging.warning(f"[LOOKUP_FAIL] Item key missing from map: {item_key}")
-                 # If the checksum is None, that's our culprit:
                  if not item_data['game_checksum']:
                       logging.warning(f"[LOOKUP_FAIL] Reason: Receiver game '{item_data['receiver_game']}' has no checksum.")
 
@@ -581,12 +589,9 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for user {user_id}, slot {rid}.")
                         continue
 
-                    # --- NEW BACKFILL LOGIC (Change 2b) ---
-                    # Check for backfill flag instead of time
                     if (user_id, rid) in backfill_check_set:
                         logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {rid} is in 'needs_backfill' state. Suppressing notification for item {item_data['item_id']}.")
                         continue
-                    # --- END NEW BACKFILL LOGIC ---
 
                     is_progression = bool(item_data['flags'] & 1)
                     should_notify = False
@@ -646,12 +651,9 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                         logging.warning(f"[NOTIFY_SKIP][RoomDBID:{db_id}] Could not find user/slot prefs for hint, user {user_id}, slot {slot_to_check}.")
                         continue
 
-                    # --- NEW BACKFILL LOGIC (Change 2c) ---
-                    # Check for backfill flag instead of time
                     if (user_id, slot_to_check) in backfill_check_set:
                         logging.info(f"[NOTIFY_SKIP][RoomDBID:{db_id}] User {user_id} tracking Slot {slot_to_check} is in 'needs_backfill' state. Suppressing hint notification.")
                         continue
-                    # --- END NEW BACKFILL LOGIC ---
                     
                     notify_override = slot_prefs.notify_hints
                     should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
@@ -690,13 +692,10 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             elif not notifications_by_user: 
                  logging.info(f"[POLLER][RoomDBID:{db_id}] Silently added {len(hints_to_add_to_db)} new hints.")
 
-        # --- NEW BACKFILL LOGIC (Change 3) ---
-        # Clear the backfill flag for all processed slots before we commit
         if slots_to_clear_backfill:
             logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Clearing 'needs_backfill' flag for {len(slots_to_clear_backfill)} slot(s).")
             for slot in slots_to_clear_backfill:
                 slot.needs_backfill = False
-        # --- END NEW BACKFILL LOGIC ---
 
         notifications_to_send = {}
         if notifications_by_user:
@@ -749,10 +748,29 @@ async def run_room_setup(room_info, loop):
         if not room_status:
             logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to fetch room status.")
             return
+        
+        static_tracker_url = f"https://{hostname}/api/static_tracker/{room_uuid}"
+        static_data = await fetch_json(static_tracker_url)
+
+        totals_map = {}
+        if static_data and 'player_locations_total' in static_data:
+            for entry in static_data['player_locations_total']:
+                if 'player' in entry and 'total_locations' in entry:
+                    totals_map[entry['player']] = entry['total_locations']
 
         players_raw = room_status.get('players', [])
-        player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players_raw)]
-        setup_data['cached_players_json'] = json.dumps(player_list)
+
+        player_list = []
+        for i, p in enumerate(players_raw):
+            slot_id = i + 1
+            player_list.append({
+                'slot_id': slot_id, 
+                'name': p[0], 
+                'game': p[1],
+                'total_locations': totals_map.get(slot_id, 0), 
+                'is_finished': False 
+            })
+        
         setup_data['cached_total_slots'] = len(player_list)
         setup_data['cached_full_address'] = f"{hostname}:{room_status.get('last_port', '')}"
         setup_data['last_api_check'] = datetime.utcnow()
