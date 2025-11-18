@@ -101,6 +101,7 @@ async def fetch_json(url):
             response.raise_for_status()
             return await response.json()
     except Exception as e:
+        logging.warning(f"[HTTP_ERROR] Failed to fetch {url}: {e}")
         return None
 
 async def run_room_poll(room_info, loop):
@@ -748,6 +749,7 @@ async def run_room_setup(room_info, loop):
         room_status = await fetch_json(f"https://{hostname}/api/room_status/{room_uuid}")
         if not room_status:
             logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to fetch room status.")
+            await loop.run_in_executor(None, db_handle_setup_failure, db_id)
             return
 
         players_raw = room_status.get('players', [])
@@ -854,6 +856,8 @@ def db_commit_setup_data(db_id, setup_data):
         if not room: 
             logging.warning(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Room vanished before setup commit.")
             return
+        
+        room.failed_poll_count = 0
 
         if 'cached_players_json' in setup_data:
             room.cached_players_json = setup_data['cached_players_json']
@@ -893,6 +897,30 @@ def db_commit_setup_data(db_id, setup_data):
         session.rollback()
     except Exception as e:
         logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] An unhandled exception occurred in db_commit_setup_data!", exc_info=True)
+        session.rollback()
+    finally:
+        Session.remove()
+
+def db_handle_setup_failure(db_id):
+    """
+    Synchronously increments the failure count for a room during setup.
+    If it exceeds the limit, suspends the room to stop the error loop.
+    """
+    session = Session()
+    try:
+        room = session.query(TrackedRoom).filter_by(id=db_id).first()
+        if not room:
+            return
+
+        room.failed_poll_count += 1
+        
+        if room.failed_poll_count >= 10:
+            room.is_suspended = True
+            logging.warning(f"[POLLER_ACTION][RoomDBID:{db_id}] Suspended room after repeated setup failures.")
+        
+        session.commit()
+    except Exception as e:
+        logging.error(f"[POLLER_DB_ERROR] Failed to handle setup failure: {e}")
         session.rollback()
     finally:
         Session.remove()
