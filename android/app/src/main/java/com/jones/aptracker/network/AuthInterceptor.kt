@@ -14,6 +14,12 @@ class AuthInterceptor(private val tokenManager: TokenManager) : Interceptor {
         }
 
         val request = requestBuilder.build()
-        return chain.proceed(request)
+        val response = chain.proceed(request)
+
+        if (response.code == 401) {
+            SessionManager.logout(SessionManager.LogoutReason.SESSION_EXPIRED)
+        }
+
+        return response
     }
 }

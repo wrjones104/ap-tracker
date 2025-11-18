@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,6 +69,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.network.HintEntity
+import com.jones.aptracker.ui.theme.APTheme // Import your new custom theme
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -206,9 +208,8 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
             .withZone(ZoneId.systemDefault())
     }
 
-    val progressionColor = Color(0xFF673AB7)
-    val usefulColor = Color(0xFF007FFF)
-    val finishedColor = Color(0xFF0E8A0E)
+    val isDark = isSystemInDarkTheme()
+    val finishedColor = if (isDark) Color(0xFF81C784) else Color(0xFF0E8A0E)
 
     val itemsToShow = remember(fullHistory, searchQuery, selectedPlayer) {
         fullHistory.filter { item ->
@@ -294,9 +295,11 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
                             )
                             Spacer(modifier = Modifier.width(16.dp))
                             Column(modifier = Modifier.weight(1f)) {
+
                                 val itemColor = when {
-                                    (item.itemFlags and 1) != 0 -> progressionColor
-                                    (item.itemFlags and 2) != 0 -> usefulColor
+                                    (item.itemFlags and 1) != 0 -> APTheme.colors.progression
+                                    (item.itemFlags and 2) != 0 -> APTheme.colors.useful
+                                    (item.itemFlags and 4) != 0 -> APTheme.colors.trap
                                     else -> Color.Unspecified
                                 }
 
