@@ -828,6 +828,7 @@ def db_check_existing_checksums(checksums_to_check):
         existing = set(c[0] for c in session.query(DatapackageCache.checksum).filter(DatapackageCache.checksum.in_(checksums_to_check)).distinct())
         return existing
     except Exception:
+        logging.error(f"[POLLER_DB_ERROR] Failed to check existing checksums: {e}")
         return set()
     finally:
         Session.remove()
@@ -986,7 +987,8 @@ def db_get_active_rooms():
             TrackedRoom.is_complete == False,
             TrackedRoom.is_suspended == False
         ).all()
-    except Exception:
+    except Exception as e:
+        logging.error(f"[SUPERVISOR_DB_ERROR] Failed to get active rooms: {e}", exc_info=True)
         session.rollback()
         return None
     finally:
@@ -1006,7 +1008,8 @@ def db_run_cleanup():
         for room in rooms_to_delete:
             session.delete(room)
         session.commit()
-    except Exception:
+    except Exception as e:
+        logging.error(f"[JANITOR_DB_ERROR] Failed to run cleanup: {e}", exc_info=True)
         session.rollback()
     finally:
         Session.remove()
