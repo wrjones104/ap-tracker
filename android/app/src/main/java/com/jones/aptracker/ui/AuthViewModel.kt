@@ -107,7 +107,7 @@ class AuthViewModel : ViewModel() {
                 }
 
                 try {
-                    SessionManager.logout()
+                    SessionManager.logout(SessionManager.LogoutReason.USER_REQUEST)
                 } catch (e: Exception) {
                     Log.e("AuthViewModel", "Failed to clear SessionManager.", e)
                 }
