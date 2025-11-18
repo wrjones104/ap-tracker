@@ -888,9 +888,14 @@ def db_handle_setup_failure(db_id):
     except Exception as e:
         logging.error(f"[POLLER_DB_ERROR] Failed to handle setup failure: {e}")
         session.rollback()
+        raise e
     finally:
         Session.remove()
 
+
+# =============================================================================
+# SUPERVISOR & WORKERS
+# =============================================================================
 
 async def poll_room_with_interval(room_info, loop):
     while True:
