@@ -493,7 +493,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 
                 notify_override = slot_prefs.notify_hints
                 # Default hints to the Progression default setting if no hint specific setting
-                should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
+                should_notify = notify_override if notify_override is not None else user_prefs.notify_hints_default
                 
                 if should_notify:
                     alias = aliases_by_user.get(user_id, "Unknown Room")
