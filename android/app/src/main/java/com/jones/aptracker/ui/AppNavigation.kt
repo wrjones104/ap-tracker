@@ -74,7 +74,7 @@ fun MainNavHost(
                 onSettingsClick = { navController.navigate("profile") },
                 onManageSlotsClick = { roomId, roomAlias ->
                     navController.navigate("players/$roomId/${Uri.encode(roomAlias)}")
-                }
+                },
             )
         }
         composable("profile") {

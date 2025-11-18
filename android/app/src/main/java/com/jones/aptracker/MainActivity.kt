@@ -127,12 +127,15 @@ class MainActivity : ComponentActivity() {
 
     private fun observeLogoutEvents() {
         SessionManager.logoutEvent
-            .onEach {
-                Toast.makeText(
-                    this,
-                    "Your session has expired. Please log in again.",
-                    Toast.LENGTH_LONG
-                ).show()
+            .onEach { reason ->
+
+                if (reason == SessionManager.LogoutReason.SESSION_EXPIRED) {
+                    Toast.makeText(
+                        this,
+                        "Your session has expired. Please log in again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
 
                 val intent = Intent(this, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
