@@ -36,6 +36,15 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _showFoundHints = MutableStateFlow(false)
     val showFoundHints: StateFlow<Boolean> = _showFoundHints
 
+    private val _showFinished = MutableStateFlow(true)
+    val showFinished: StateFlow<Boolean> = _showFinished
+
+    val finishedPlayerKeys: StateFlow<Set<Pair<Int, String>>> = _itemHistory.map { history ->
+        history.filter { it.isPlayerFinished && it.db_id != null }
+            .map { it.db_id!! to it.playerName }
+            .toSet()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
     private var currentRoomId: Int? = null
 
     private val _selectedPlayerFilter = MutableStateFlow<String?>(null)
@@ -59,7 +68,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         refreshAllHistory()
     }
 
-
     fun setShowFoundHints(show: Boolean) {
         if (show == _showFoundHints.value) {
             Log.d("HintToggleDebug", "VM: setShowFoundHints called with same value: $show. Skipping.")
@@ -69,6 +77,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         _showFoundHints.value = show
 
         refreshAllHistory()
+    }
+
+    fun setShowFinished(show: Boolean) {
+        _showFinished.value = show
     }
 
     fun refreshAllHistory() {

@@ -106,6 +106,7 @@ fun HistoryScreen(
     }
 
     val showFoundHints by historyViewModel.showFoundHints.collectAsState()
+    val showFinished by historyViewModel.showFinished.collectAsState()
 
     val tabTitles = listOf("Items", "Hints")
 
@@ -140,6 +141,24 @@ fun HistoryScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { historyViewModel.setShowFinished(!showFinished) }
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Show Finished Slots",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Switch(
+                        checked = showFinished,
+                        onCheckedChange = { historyViewModel.setShowFinished(it) }
+                    )
+                }
 
                 AnimatedVisibility(visible = pagerState.currentPage == 1) {
                     Row(
@@ -201,6 +220,8 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
     val fullHistory by historyViewModel.itemHistory.collectAsState()
     val availablePlayers by historyViewModel.availablePlayers.collectAsState()
     val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
+    val showFinished by historyViewModel.showFinished.collectAsState()
+    val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
 
     val context = LocalContext.current
     val formatter = remember {
@@ -211,7 +232,7 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
     val isDark = isSystemInDarkTheme()
     val finishedColor = if (isDark) Color(0xFF81C784) else Color(0xFF0E8A0E)
 
-    val itemsToShow = remember(fullHistory, searchQuery, selectedPlayer) {
+    val itemsToShow = remember(fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys) {
         fullHistory.filter { item ->
             val matchesSearch = searchQuery.isBlank() ||
                     item.playerName.contains(searchQuery, ignoreCase = true) ||
@@ -219,7 +240,14 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
 
             val matchesPlayer = selectedPlayer == null || item.playerName == selectedPlayer
 
-            matchesSearch && matchesPlayer
+            val isFinished = if (item.db_id != null) {
+                finishedKeys.contains(item.db_id to item.playerName)
+            } else {
+                false
+            }
+            val matchesFinished = showFinished || !isFinished
+
+            matchesSearch && matchesPlayer && matchesFinished
         }
     }
 
@@ -351,6 +379,9 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
 fun HintHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
     val hintsForYou by historyViewModel.hintsForYou.collectAsState()
     val hintsByYou by historyViewModel.hintsByYou.collectAsState()
+    val showFinished by historyViewModel.showFinished.collectAsState()
+    val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
+
     val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
             .withZone(ZoneId.systemDefault())
@@ -359,11 +390,11 @@ fun HintHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
     var isForYouExpanded by rememberSaveable { mutableStateOf(true) }
     var isByYouExpanded by rememberSaveable { mutableStateOf(true) }
 
-    val filteredHintsForYou = remember(hintsForYou, searchQuery) {
-        filterHints(hintsForYou, searchQuery)
+    val filteredHintsForYou = remember(hintsForYou, searchQuery, showFinished, finishedKeys) {
+        filterHints(hintsForYou, searchQuery, showFinished, finishedKeys)
     }
-    val filteredHintsByYou = remember(hintsByYou, searchQuery) {
-        filterHints(hintsByYou, searchQuery)
+    val filteredHintsByYou = remember(hintsByYou, searchQuery, showFinished, finishedKeys) {
+        filterHints(hintsByYou, searchQuery, showFinished, finishedKeys)
     }
 
     if (filteredHintsForYou.isEmpty() && filteredHintsByYou.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
@@ -416,14 +447,25 @@ fun HintHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
     }
 }
 
-private fun filterHints(hints: List<HintEntity>, query: String): List<HintEntity> {
-    if (query.isBlank()) return hints
-    return hints.filter {
-        it.itemName.contains(query, ignoreCase = true) ||
-                it.locationName.contains(query, ignoreCase = true) ||
-                it.itemOwnerName.contains(query, ignoreCase = true) ||
-                it.locationOwnerName.contains(query, ignoreCase = true) ||
-                it.roomAlias.contains(query, ignoreCase = true)
+private fun filterHints(
+    hints: List<HintEntity>,
+    query: String,
+    showFinished: Boolean,
+    finishedKeys: Set<Pair<Int, String>>
+): List<HintEntity> {
+    return hints.filter { hint ->
+        val matchesQuery = if (query.isBlank()) true else {
+            hint.itemName.contains(query, ignoreCase = true) ||
+                    hint.locationName.contains(query, ignoreCase = true) ||
+                    hint.itemOwnerName.contains(query, ignoreCase = true) ||
+                    hint.locationOwnerName.contains(query, ignoreCase = true) ||
+                    hint.roomAlias.contains(query, ignoreCase = true)
+        }
+
+        val isItemOwnerFinished = finishedKeys.contains(hint.roomDbId to hint.itemOwnerName)
+        val matchesFinished = showFinished || !isItemOwnerFinished
+
+        matchesQuery && matchesFinished
     }
 }
 
