@@ -9,7 +9,7 @@ class UnauthorizedAuthenticator : Authenticator {
 
     override fun authenticate(route: Route?, response: Response): Request? {
         if (response.code == 401) {
-            SessionManager.logout()
+            SessionManager.logout(SessionManager.LogoutReason.SESSION_EXPIRED)
         }
 
         return null

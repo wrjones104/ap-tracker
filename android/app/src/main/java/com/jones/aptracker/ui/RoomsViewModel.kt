@@ -20,8 +20,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-// Removed unused delay import
-
 class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: RoomsRepository
@@ -41,7 +39,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isLoadingRooms = MutableStateFlow(true)
 
-    val isLoading = MutableStateFlow(true)
+    val isLoading = _isLoadingRooms.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
@@ -77,13 +75,8 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         fetchRooms()
     }
 
-    private fun updateCombinedLoadingState() {
-        isLoading.value = _isLoadingRooms.value || _isSyncingCheese.value
-    }
-
     fun fetchRooms() {
         _isLoadingRooms.value = true
-        updateCombinedLoadingState()
         viewModelScope.launch {
             try {
                 repository.refreshRooms()
@@ -92,7 +85,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 e.printStackTrace()
             } finally {
                 _isLoadingRooms.value = false
-                updateCombinedLoadingState()
             }
         }
     }
@@ -154,19 +146,17 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private fun triggerBackgroundSync() {
         if (_isSyncingCheese.value) return
         _isSyncingCheese.value = true
-        updateCombinedLoadingState()
+
         viewModelScope.launch {
             try {
                 RetrofitClient.instance.syncCheeseTracker()
                 _isSyncingCheese.value = false
-                updateCombinedLoadingState()
                 fetchRooms()
             } catch (e: Exception) {
                 e.printStackTrace()
                 Log.w("RoomsViewModel", "Background sync failed: ${e.message}")
                 _errorMessage.value = "Background sync failed."
                 _isSyncingCheese.value = false
-                updateCombinedLoadingState()
             }
         }
     }
