@@ -112,9 +112,10 @@ fun ProfileScreen(
                 currentProgression = slotDetail.notify_progression,
                 currentUseful = slotDetail.notify_useful,
                 currentHints = slotDetail.notify_hints,
+                currentFinished = slotDetail.notify_finished,
                 globalProfile = userProfile!!,
-                onSave = { prog, use, hint ->
-                    userViewModel.updateSlotPreferences(roomId, slotDetail.slot_id, prog, use, hint)
+                onSave = { prog, use, hint, finished ->
+                    userViewModel.updateSlotPreferences(roomId, slotDetail.slot_id, prog, use, hint, finished)
                     editingSlot = null
                 },
                 onDismiss = { editingSlot = null }
@@ -177,6 +178,13 @@ fun ProfileScreen(
                             checked = profile.notify_hints_default,
                             onCheckedChange = {
                                 userViewModel.updateGlobalPreferences(hints = it)
+                            }
+                        )
+                        NotificationToggle(
+                            text = "Finished Slots",
+                            checked = profile.notify_finished_default,
+                            onCheckedChange = {
+                                userViewModel.updateGlobalPreferences(finished = it)
                             }
                         )
                     }
@@ -445,13 +453,15 @@ fun SlotSettingsSheet(
     currentProgression: Boolean?,
     currentUseful: Boolean?,
     currentHints: Boolean?,
+    currentFinished: Boolean?,
     globalProfile: UserProfile,
-    onSave: (prog: Boolean?, use: Boolean?, hint: Boolean?) -> Unit,
+    onSave: (prog: Boolean?, use: Boolean?, hint: Boolean?, finished: Boolean?) -> Unit,
     onDismiss: () -> Unit
 ) {
     var progression by remember(playerSlotId) { mutableStateOf(currentProgression) }
     var useful by remember(playerSlotId) { mutableStateOf(currentUseful) }
     var hints by remember(playerSlotId) { mutableStateOf(currentHints) }
+    var finished by remember(playerSlotId) { mutableStateOf(currentFinished) }
 
     Column(
         modifier = Modifier
@@ -487,6 +497,13 @@ fun SlotSettingsSheet(
             globalDefault = globalProfile.notify_hints_default,
             onValueChanged = { hints = it }
         )
+
+        Text("Finished", style = MaterialTheme.typography.titleMedium)
+        PreferenceToggle(
+            selectedValue = finished,
+            globalDefault = globalProfile.notify_finished_default,
+            onValueChanged = { finished = it }
+        )
         Spacer(Modifier.height(24.dp))
 
         Row(
@@ -497,7 +514,7 @@ fun SlotSettingsSheet(
                 Text("Cancel")
             }
             Spacer(Modifier.width(8.dp))
-            Button(onClick = { onSave(progression, useful, hints) }) {
+            Button(onClick = { onSave(progression, useful, hints, finished) }) {
                 Text("Save")
             }
         }

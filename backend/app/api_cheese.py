@@ -204,7 +204,12 @@ def _sync_rooms_from_cheese_tracker_task(app, user_id):
 
                             to_add = slots_to_track_from_cheese - existing_set
                             for new_slot_id in to_add:
-                                session.add(UserTrackedSlot(user_id=user.id, room_id=local_room.id, slot_id=new_slot_id))
+                                session.add(UserTrackedSlot(
+                                    user_id=user.id, 
+                                    room_id=local_room.id, 
+                                    slot_id=new_slot_id,
+                                    notify_finished=user.notify_finished_default
+                                ))
                                 stats['slots_synced'] += 1
                             
                             to_remove = existing_set - slots_to_track_from_cheese
