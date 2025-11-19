@@ -497,6 +497,7 @@ fun SlotSettingsSheet(
             globalDefault = globalProfile.notify_hints_default,
             onValueChanged = { hints = it }
         )
+        Spacer(Modifier.height(16.dp))
 
         Text("Finished", style = MaterialTheme.typography.titleMedium)
         PreferenceToggle(
