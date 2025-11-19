@@ -948,9 +948,8 @@ async def poller_supervisor(app, loop):
                 room_info = {'db_id': room.id, 'hostname': room.hostname, 'room_uuid': room.room_id}
                 is_missing_data = not room.tracker_id or not room.game_checksums_json or room.game_checksums_json == '{}'
                 has_total_locations = '"total_locations":' in (room.cached_players_json or "")
-                has_bad_zeros = '"total_locations": 0' in (room.cached_players_json or "")
                 
-                needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations) or has_bad_zeros
+                needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations)
 
                 if room.id not in running_tasks:
                     if needs_setup:
