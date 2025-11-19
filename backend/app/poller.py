@@ -271,6 +271,7 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
             items_to_add.append(NotifiedItem(
                 room_id=room_uuid,
                 receiving_slot_id=rid,
+                sending_slot_id=send_id,
                 item_id=item_id,
                 location_id=loc_id,
                 item_flags=flags
@@ -451,6 +452,31 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
                     continue
 
+                # --- IGNORE LIST CHECK START ---
+                # Normalize incoming item name for comparison
+                normalized_item_name = item_name.lower().strip()
+                should_ignore = False
+                
+                if user_prefs.ignore_items:
+                    # Check against user's ignore list
+                    for ignore_rule in user_prefs.ignore_items:
+                        # 1. Check Item Name Match (Case insensitive, Exact match)
+                        if ignore_rule.item_name.lower().strip() == normalized_item_name:
+                            # 2. Check Game Scope
+                            # If rule.game_name is None -> It is Global -> IGNORE
+                            # If rule.game_name is Set -> Must match current item's game -> IGNORE
+                            if not ignore_rule.game_name:
+                                should_ignore = True
+                                break
+                            elif ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                should_ignore = True
+                                break
+                
+                if should_ignore:
+                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' for game '{item_data['receiver_game']}'.")
+                    continue
+                # --- IGNORE LIST CHECK END ---
+
                 is_progression = bool(item_data['flags'] & 1)
                 should_notify = False
                 title_prefix = ""
@@ -579,7 +605,11 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             prefs_by_user_slot.setdefault(slot.user_id, {})[slot.slot_id] = slot
             all_user_ids_in_room.add(slot.user_id)
 
-        users_by_id = {u.id: u for u in session.query(User).filter(User.id.in_(all_user_ids_in_room))}
+        users_by_id = {
+            u.id: u for u in session.query(User)
+            .options(selectinload(User.ignore_items))
+            .filter(User.id.in_(all_user_ids_in_room))
+        }
         aliases_by_user = {sub.user_id: sub.alias for sub in session.query(UserRoomSubscription).filter(UserRoomSubscription.user_id.in_(all_user_ids_in_room), UserRoomSubscription.room_id == db_id)}
 
         # --- LOGIC STEP 1: Check Player Completions ---

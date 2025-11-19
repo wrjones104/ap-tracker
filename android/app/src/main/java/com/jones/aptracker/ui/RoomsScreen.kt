@@ -52,6 +52,7 @@ fun RoomsScreen(
     onHistoryClick: () -> Unit,
     onLogoutClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onIgnoreListClick: () -> Unit,
     onManageSlotsClick: (Int, String) -> Unit
 ) {
     val rooms by roomsViewModel.rooms.collectAsState()
@@ -117,6 +118,7 @@ fun RoomsScreen(
                         onHistoryClick = onHistoryClick,
                         onLogoutClick = onLogoutClick,
                         onSettingsClick = onSettingsClick,
+                        onIgnoreListClick = onIgnoreListClick,
                         userProfile = userProfile
                     )
                 }
@@ -449,6 +451,7 @@ fun ProfileMenu(
     onHistoryClick: () -> Unit,
     onLogoutClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onIgnoreListClick: () -> Unit,
     userProfile: UserProfile?
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -522,6 +525,13 @@ fun ProfileMenu(
                 text = { Text("Settings") },
                 onClick = {
                     onSettingsClick()
+                    menuExpanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Ignore List") },
+                onClick = {
+                    onIgnoreListClick()
                     menuExpanded = false
                 }
             )

@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -27,7 +29,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
@@ -37,6 +43,8 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -47,6 +55,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -63,13 +72,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.network.HintEntity
-import com.jones.aptracker.ui.theme.APTheme // Import your new custom theme
+import com.jones.aptracker.network.HistoryItem
+import com.jones.aptracker.ui.theme.APTheme
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -90,10 +101,23 @@ fun HistoryScreen(
 
     val isLoading by historyViewModel.isLoading.collectAsState()
     val errorMessage by historyViewModel.errorMessage
+    val actionMessage by historyViewModel.actionMessage.collectAsState()
     val searchQuery by historyViewModel.searchQuery
+
+    var selectedItem by remember { mutableStateOf<HistoryItem?>(null) }
+    val sheetState = rememberModalBottomSheetState()
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Handle Action Feedback (e.g. "Ignored Power Star")
+    LaunchedEffect(actionMessage) {
+        if (actionMessage != null) {
+            snackbarHostState.showSnackbar(actionMessage!!)
+            historyViewModel.clearActionMessage()
+        }
+    }
 
     LaunchedEffect(errorMessage) {
         if (errorMessage != null) {
@@ -109,7 +133,6 @@ fun HistoryScreen(
     val showFinished by historyViewModel.showFinished.collectAsState()
 
     val tabTitles = listOf("Items", "Hints")
-
     val pagerState = rememberPagerState(pageCount = { tabTitles.size })
 
     Scaffold(
@@ -165,7 +188,6 @@ fun HistoryScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                Log.d("HintToggleDebug", "Row TAPPED, setting showFoundHints to ${!showFoundHints}")
                                 historyViewModel.setShowFoundHints(!showFoundHints)
                             }
                             .padding(horizontal = 16.dp, vertical = 4.dp),
@@ -179,7 +201,6 @@ fun HistoryScreen(
                         Switch(
                             checked = showFoundHints,
                             onCheckedChange = {
-                                Log.d("HintToggleDebug", "Switch CHANGED, setting showFoundHints to $it")
                                 historyViewModel.setShowFoundHints(it)
                             }
                         )
@@ -205,25 +226,157 @@ fun HistoryScreen(
                         .weight(1f)
                 ) { page ->
                     when (page) {
-                        0 -> ItemHistoryTab(historyViewModel = historyViewModel, searchQuery = searchQuery)
-                        1 -> HintHistoryTab(historyViewModel = historyViewModel, searchQuery = searchQuery)
+                        0 -> ItemHistoryTab(
+                            historyViewModel = historyViewModel,
+                            searchQuery = searchQuery,
+                            onItemClick = { item -> selectedItem = item }
+                        )
+                        1 -> HintHistoryTab(
+                            historyViewModel = historyViewModel,
+                            searchQuery = searchQuery
+                        )
                     }
                 }
             }
         }
     }
+
+    if (selectedItem != null) {
+        ModalBottomSheet(
+            onDismissRequest = { selectedItem = null },
+            sheetState = sheetState
+        ) {
+            HistoryDetailSheet(
+                item = selectedItem!!,
+                onOpenTracker = {
+                    val cleanHost = (selectedItem!!.host?.takeIf { it.isNotBlank() }
+                        ?: "archipelago.gg").removePrefix("https://")
+                        .removePrefix("http://")
+                    val url = "https://${cleanHost}/tracker/${selectedItem!!.tracker_id}/0/${selectedItem!!.slot_id}"
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    context.startActivity(intent)
+                    selectedItem = null
+                },
+                onIgnoreItem = { gameName ->
+                    // gameName null = Global, otherwise specific game
+                    historyViewModel.ignoreItem(selectedItem!!.itemName, gameName)
+                    selectedItem = null
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun HistoryDetailSheet(
+    item: HistoryItem,
+    onOpenTracker: () -> Unit,
+    onIgnoreItem: (String?) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(24.dp)
+            .navigationBarsPadding()
+    ) {
+        // Header
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = getIconByName(item.icon_name),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(Modifier.width(16.dp))
+            Column {
+                Text(
+                    text = item.itemName,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Received by ${item.playerName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (!item.receivingGame.isNullOrBlank()) {
+                    Text(
+                        text = "Game: ${item.receivingGame}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        // Action 1: Open Tracker
+        Button(
+            onClick = onOpenTracker,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Open in Web Tracker")
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Action 2: Ignore Item (Game Specific)
+        if (!item.receivingGame.isNullOrBlank()) {
+            OutlinedButton(
+                onClick = { onIgnoreItem(item.receivingGame) },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Ignore '${item.itemName}' in ${item.receivingGame}")
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Action 3: Ignore Item (Global)
+        OutlinedButton(
+            onClick = { onIgnoreItem(null) },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.error
+            )
+        ) {
+            Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Ignore '${item.itemName}' Globally (All Games)")
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            text = "Ignoring this will stop future push notifications for this item name.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
+fun ItemHistoryTab(
+    historyViewModel: HistoryViewModel,
+    searchQuery: String,
+    onItemClick: (HistoryItem) -> Unit
+) {
     val fullHistory by historyViewModel.itemHistory.collectAsState()
     val availablePlayers by historyViewModel.availablePlayers.collectAsState()
     val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
     val showFinished by historyViewModel.showFinished.collectAsState()
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
 
-    val context = LocalContext.current
     val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
             .withZone(ZoneId.systemDefault())
@@ -301,13 +454,7 @@ fun ItemHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
                             .fillMaxWidth()
                             .clickable(enabled = isClickable) {
                                 if (isClickable) {
-                                    val cleanHost = (item.host?.takeIf { it.isNotBlank() }
-                                        ?: "archipelago.gg").removePrefix("https://")
-                                        .removePrefix("http://")
-                                    val url =
-                                        "https://${cleanHost}/tracker/${item.tracker_id}/0/${item.slot_id}"
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                    context.startActivity(intent)
+                                    onItemClick(item)
                                 }
                             },
                         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
