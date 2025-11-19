@@ -274,15 +274,25 @@ def register_device(current_user):
 @token_required
 def get_rooms(current_user):
     """
-    Gets the list of rooms the current user is subscribed to,
-    along with their tracking status.
+    Gets the list of rooms the current user is subscribed to.
+    Filters out 'PENDING_DISCOVERY' rooms so they don't appear as zombies in the app.
     """
     session = Session()
-    subscriptions = session.query(UserRoomSubscription).filter_by(user_id=current_user.id).all()
+    subscriptions = session.query(UserRoomSubscription).join(TrackedRoom).filter(
+        UserRoomSubscription.user_id == current_user.id,
+        ~TrackedRoom.room_id.startswith("PENDING_DISCOVERY") 
+    ).all()
     
     rooms_list = []
     for sub in subscriptions:
         room = sub.room
+        
+        # --- FILTER: Hide Pending Discovery Rooms ---
+        # These exist in DB for polling/healing but shouldn't be visible to the user yet
+        if room.room_id.startswith("PENDING_DISCOVERY"):
+            continue
+        # --------------------------------------------
+
         tracked_count = session.query(UserTrackedSlot).filter_by(
             user_id=current_user.id, 
             room_id=room.id
@@ -293,7 +303,7 @@ def get_rooms(current_user):
             'room_id': room.room_id,
             'alias': sub.alias,
             'icon_name': sub.icon_name,
-            'host': room.cached_full_address, # Corrected
+            'host': room.cached_full_address, 
             'is_complete': room.is_complete,
             'is_suspended': room.is_suspended,
             'total_slots_count': room.cached_total_slots,
@@ -975,12 +985,15 @@ def get_current_user(current_user):
 @token_required
 def get_user_tracked_slots(current_user):
     """
-    Returns a list of all rooms and slots the authenticated user is tracking,
-    including their notification preferences for each slot.
+    Returns a list of all rooms and slots the authenticated user is tracking.
+    Also filters out 'PENDING_DISCOVERY' rooms.
     """
     session = Session()
     try:
-        subscriptions = session.query(UserRoomSubscription).filter_by(user_id=current_user.id).options(
+        subscriptions = session.query(UserRoomSubscription).join(TrackedRoom).filter(
+            UserRoomSubscription.user_id == current_user.id,
+            ~TrackedRoom.room_id.startswith("PENDING_DISCOVERY")
+        ).options(
             selectinload(UserRoomSubscription.room),
             selectinload(UserRoomSubscription.tracked_slots)
         ).order_by(UserRoomSubscription.alias).all()
@@ -989,6 +1002,11 @@ def get_user_tracked_slots(current_user):
         for sub in subscriptions:
             room_data = sub.room
             if not room_data: continue
+
+            # --- FILTER: Hide Pending Discovery Rooms ---
+            if room_data.room_id.startswith("PENDING_DISCOVERY"):
+                continue
+            # --------------------------------------------
 
             try:
                 players_json = json.loads(room_data.cached_players_json or '[]')

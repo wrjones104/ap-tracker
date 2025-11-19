@@ -49,6 +49,8 @@ class TrackedRoom(Base):
     hostname = Column(String, default="archipelago.gg")
     tracker_id = Column(String)
     cheese_tracker_id = Column(String, unique=True, nullable=True)
+    cached_cheese_json = Column(String, nullable=True)
+    cheese_updated_at = Column(DateTime, nullable=True)
     game_checksums_json = Column(String, default='{}')
     is_complete = Column(Boolean, default=False, nullable=False)
     is_suspended = Column(Boolean, default=False, nullable=False)
@@ -83,6 +85,7 @@ class UserTrackedSlot(Base):
     notify_useful = Column(Boolean, nullable=True, default=None)
     notify_hints = Column(Boolean, nullable=True, default=None)
     notify_finished = Column(Boolean, nullable=True, default=None)
+    user = relationship("User")
     
     __table_args__ = (
         ForeignKeyConstraint(['user_id', 'room_id'], ['user_room_subscriptions.user_id', 'user_room_subscriptions.room_id']),
