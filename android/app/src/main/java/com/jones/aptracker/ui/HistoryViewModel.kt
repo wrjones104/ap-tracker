@@ -9,6 +9,7 @@ import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
+import com.jones.aptracker.repository.UserRepository
 import com.jones.aptracker.repository.HistoryRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -16,10 +17,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import retrofit2.HttpException
 
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: HistoryRepository
+    private val userRepository: UserRepository
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
     val itemHistory: StateFlow<List<HistoryItem>> = _itemHistory
 
@@ -54,11 +57,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         history.map { it.playerName }.distinct().sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val _actionMessage = MutableStateFlow<String?>(null)
+    val actionMessage: StateFlow<String?> = _actionMessage
+
     init {
         val db = AppDatabase.getInstance(application)
         val historyDao = db.historyDao()
         val hintDao = db.hintDao()
-        repository = HistoryRepository(RetrofitClient.instance, historyDao, hintDao)
+
+        val apiService = RetrofitClient.instance
+        repository = HistoryRepository(apiService, historyDao, hintDao)
+        userRepository = UserRepository(apiService)
     }
 
     fun loadHistoryFor(roomId: Int?) {
@@ -110,7 +119,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         slot_id = entity.slot_id,
                         icon_name = entity.icon_name,
                         db_id = entity.roomId,
-                        host = entity.host
+                        host = entity.host,
+                        receivingGame = entity.receivingGame,
+                        senderName = entity.senderName,
+                        senderGame = entity.senderGame,
+                        locationName = entity.locationName
                     )
                 }
 
@@ -150,5 +163,27 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         } else {
             _selectedPlayerFilter.value = player
         }
+    }
+
+    fun ignoreItem(itemName: String, gameName: String?) {
+        viewModelScope.launch {
+            try {
+                userRepository.addIgnoreItem(itemName, gameName)
+                _actionMessage.value = "Ignored '$itemName'"
+            } catch (e: HttpException) {
+                if (e.code() == 409) {
+                    errorMessage.value = "'$itemName' is already on your ignore list."
+                } else {
+                    Log.e("HistoryViewModel", "Failed to ignore item (HTTP ${e.code()})", e)
+                    errorMessage.value = "Failed to ignore item."
+                }
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to ignore item", e)
+                errorMessage.value = "Failed to ignore item. Check connection."
+            }
+        }
+    }
+    fun clearActionMessage() {
+        _actionMessage.value = null
     }
 }

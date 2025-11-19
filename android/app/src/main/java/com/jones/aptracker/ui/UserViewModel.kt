@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.jones.aptracker.network.IgnoreItem
+import com.jones.aptracker.repository.UserRepository
+import retrofit2.HttpException
 
 class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsManager = SettingsManager(application)
@@ -35,6 +38,16 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         SharingStarted.Eagerly,
         true
     )
+    private val userRepository = UserRepository(RetrofitClient.instance)
+
+    private val _ignoreList = MutableStateFlow<List<IgnoreItem>>(emptyList())
+    val ignoreList = _ignoreList.asStateFlow()
+
+    init {
+        fetchUserProfile()
+        fetchTrackedSlots()
+        fetchIgnoreList()
+    }
 
     fun setAutoSync(isEnabled: Boolean) {
         viewModelScope.launch {
@@ -193,6 +206,51 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearIntegrationMessage() {
         _integrationMessage.value = null
+    }
+
+    fun fetchIgnoreList() {
+        viewModelScope.launch {
+            try {
+                _ignoreList.value = userRepository.getIgnoreList()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun addIgnoreItem(itemName: String, gameName: String?) {
+        viewModelScope.launch {
+            try {
+                userRepository.addIgnoreItem(itemName, gameName)
+                fetchIgnoreList()
+                _integrationMessage.value = "Item ignored."
+            } catch (e: HttpException) {
+                if (e.code() == 409) {
+                    _errorMessage.value = "'$itemName' is already on your ignore list."
+                } else {
+                    e.printStackTrace()
+                    _errorMessage.value = "Failed to add ignore rule (HTTP ${e.code()})."
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Failed to add ignore rule. Check connection."
+            }
+        }
+    }
+
+    fun deleteIgnoreItem(itemId: Int) {
+        viewModelScope.launch {
+            try {
+                val currentList = _ignoreList.value
+                _ignoreList.value = currentList.filter { it.id != itemId }
+
+                userRepository.deleteIgnoreItem(itemId)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Failed to remove rule."
+                fetchIgnoreList()
+            }
+        }
     }
 
 }

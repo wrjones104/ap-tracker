@@ -5,11 +5,13 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.HTTP
-import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
+import com.jones.aptracker.network.IgnoreItem
+import com.jones.aptracker.network.AddIgnoreItemRequest
+import com.jones.aptracker.network.AddIgnoreItemResponse
 
 interface ApiService {
     @GET("rooms")
@@ -94,6 +96,16 @@ interface ApiService {
 
     @POST("auth/guest")
     suspend fun loginAsGuest(): AuthResponse
+
+    @GET("users/me/ignore-list")
+    suspend fun getIgnoreList(): List<IgnoreItem>
+
+    @POST("users/me/ignore-list")
+    suspend fun addIgnoreItem(@Body request: AddIgnoreItemRequest): AddIgnoreItemResponse
+
+    @DELETE("users/me/ignore-list/{id}")
+    suspend fun deleteIgnoreItem(@Path("id") itemId: Int): Response<Unit>
+
 }
 
 data class Room(
@@ -135,7 +147,11 @@ data class UpdateSlotsRequest(
 data class HistoryItem(
     val id: Long,
     val playerName: String,
+    val receivingGame: String?,
     val itemName: String,
+    val senderName: String?,
+    val senderGame: String?,
+    val locationName: String?,
     val isPlayerFinished: Boolean,
     val itemFlags: Int,
     val timestamp: String,

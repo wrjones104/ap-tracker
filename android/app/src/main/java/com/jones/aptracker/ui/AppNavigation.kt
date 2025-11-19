@@ -72,6 +72,7 @@ fun MainNavHost(
                 },
                 onLogoutClick = onLogoutClick,
                 onSettingsClick = { navController.navigate("profile") },
+                onIgnoreListClick = { navController.navigate("ignore_list") },
                 onManageSlotsClick = { roomId, roomAlias ->
                     navController.navigate("players/$roomId/${Uri.encode(roomAlias)}")
                 },
@@ -81,7 +82,13 @@ fun MainNavHost(
             ProfileScreen(
                 onBackClick = { navController.popBackStack() },
                 onLogout = onLogoutClick,
-                onLoginClick = onGuestUpgradeClick
+                onLoginClick = onGuestUpgradeClick,
+                onIgnoreListClick = { navController.navigate("ignore_list") }
+            )
+        }
+        composable("ignore_list") {
+            IgnoreListScreen(
+                onBackClick = { navController.popBackStack() }
             )
         }
         composable(

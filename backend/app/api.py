@@ -17,7 +17,7 @@ from sqlalchemy import or_, desc, tuple_
 from . import Session
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
-    DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist
+    DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist, UserIgnoreItem
 )
 
 bp = Blueprint('api', __name__)
@@ -645,13 +645,15 @@ def update_tracked_slots(current_user, room_db_id):
 def get_item_history(current_user, room_db_id):
     """
     Gets the item history for a specific room, filtered for the slots the
-    current user is tracking. (Refactored to send structured data)
+    current user is tracking. Returns rich metadata including sender info
+    and location names.
     """
     session = Session()
     room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
     if not room:
         return jsonify({'error': 'Room not found'}), 404
 
+    # 1. Identify which slots this user is tracking in this room
     user_tracked_slots = session.query(UserTrackedSlot.slot_id).filter_by(
         user_id=current_user.id,
         room_id=room.id
@@ -661,6 +663,7 @@ def get_item_history(current_user, room_db_id):
     if not tracked_slot_ids:
         return jsonify([]) 
 
+    # 2. Query the history log for these slots
     query = session.query(NotifiedItem).filter(
         NotifiedItem.room_id == room.room_id,
         NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
@@ -676,6 +679,7 @@ def get_item_history(current_user, room_db_id):
 
     items = query.order_by(NotifiedItem.id.desc()).all()
 
+    # 3. Load metadata (Players and Game Checksums)
     try:
         game_checksums = json.loads(room.game_checksums_json or '{}')
         if not isinstance(game_checksums, dict): game_checksums = {}
@@ -687,37 +691,62 @@ def get_item_history(current_user, room_db_id):
         return jsonify({'error': 'Room data is corrupt or missing.'}), 500
         
     player_map = {p['slot_id']: p for p in players}
-    game_map = {p['slot_id']: p.get('game') for p in players} # We removed original_game logic
+    game_map = {p['slot_id']: p.get('game') for p in players} 
 
     history_pre_cache = []
     cache_keys_to_find = set()
     
+    # 4. First Pass: Iterate items to gather info and identify missing names
     for item in items:
         receiver_id = item.receiving_slot_id
-        player_obj = player_map.get(receiver_id)
+        sender_id = getattr(item, 'sending_slot_id', 0) 
         
-        receiver_name = player_obj.get('name', f"Player {receiver_id}") if player_obj else f"Player {receiver_id}"
+        receiver_obj = player_map.get(receiver_id)
+        sender_obj = player_map.get(sender_id)
+        
+        receiver_name = receiver_obj.get('name', f"Player {receiver_id}") if receiver_obj else f"Player {receiver_id}"
+        sender_name = sender_obj.get('name', f"Player {sender_id}") if sender_obj else f"Player {sender_id}"
+        
         receiver_game = game_map.get(receiver_id, "Unknown")
-        is_finished = player_obj.get('is_finished', False) if player_obj else False
-        game_checksum = game_checksums.get(receiver_game)
+        sender_game = game_map.get(sender_id, "Unknown")
+        
+        is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
+        
+        # Determine Checksums for cache lookup
+        rec_checksum = game_checksums.get(receiver_game)
+        snd_checksum = game_checksums.get(sender_game)
 
         item_name_key = None
-        if receiver_game and game_checksum:
-            item_name_key = (receiver_game, game_checksum, 'item', item.item_id)
+        location_name_key = None
+
+        # A. Resolve Item Name (Uses Receiver's Game)
+        if receiver_game and rec_checksum:
+            item_name_key = (receiver_game, rec_checksum, 'item', item.item_id)
             cache_keys_to_find.add(item_name_key)
+            
+        # B. Resolve Location Name (Uses Sender's Game)
+        if sender_game and snd_checksum:
+            location_name_key = (sender_game, snd_checksum, 'location', item.location_id)
+            cache_keys_to_find.add(location_name_key)
 
         history_pre_cache.append({
             "playerName": receiver_name,
+            "receivingGame": receiver_game, 
+            "senderName": sender_name,     
+            "senderGame": sender_game,   
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": room.tracker_id,
             "slot_id": receiver_id,
             "host": room.hostname,
             "isPlayerFinished": is_finished,
             "itemFlags": item.item_flags or 0,
-            "_name_key": item_name_key,
-            "_raw_item_id": item.item_id
+            "_item_name_key": item_name_key,
+            "_loc_name_key": location_name_key,
+            "_raw_item_id": item.item_id,
+            "_raw_loc_id": item.location_id
         })
 
+    # 5. Bulk Fetch Names from Cache
     name_cache_map = {}
     if cache_keys_to_find:
         cache_query = session.query(
@@ -739,13 +768,19 @@ def get_item_history(current_user, room_db_id):
             for c in cache_query.all()
         }
 
+    # 6. Second Pass: Build Final Response
     history = []
     for temp_item in history_pre_cache:
-        item_name = name_cache_map.get(temp_item["_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
+        item_name = name_cache_map.get(temp_item["_item_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
+        location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
         
         history.append({
             "playerName": temp_item["playerName"],
+            "receivingGame": temp_item["receivingGame"], 
             "itemName": item_name,
+            "senderName": temp_item["senderName"],       
+            "senderGame": temp_item["senderGame"],       
+            "locationName": location_name,               
             "isPlayerFinished": temp_item["isPlayerFinished"],
             "itemFlags": temp_item["itemFlags"],
             "timestamp": temp_item["timestamp"],
@@ -764,11 +799,12 @@ def get_item_history(current_user, room_db_id):
 def get_global_item_history(current_user):
     """
     Gets a global, aggregated item history feed for the current user,
-    containing all relevant events from all rooms they track.
+    containing all relevant events from all rooms they track, including
+    rich sender and location metadata.
     """
     session = Session()
 
-    # Query 1: Get all (room_id, slot_id) tuples the user tracks.
+    # 1. Get all (room_id, slot_id) tuples the user tracks.
     user_tracked_slots = session.query(UserTrackedSlot.room_id, UserTrackedSlot.slot_id).filter_by(
         user_id=current_user.id
     ).all()
@@ -782,7 +818,7 @@ def get_global_item_history(current_user):
             slots_by_room_db_id[room_db_id] = set()
         slots_by_room_db_id[room_db_id].add(slot_id)
 
-    # Query 2: Get a map of {room_db_id: room_uuid}.
+    # 2. Get a map of {room_db_id: room_uuid}.
     room_map = {
         room.id: room.room_id for room in
         session.query(TrackedRoom).filter(TrackedRoom.id.in_(slots_by_room_db_id.keys()))
@@ -800,7 +836,7 @@ def get_global_item_history(current_user):
     if not filters:
         return jsonify([])
 
-    # Query 3: Get all NotifiedItem objects that match the filters.
+    # 3. Get all NotifiedItem objects that match the filters.
     query = session.query(NotifiedItem).filter(or_(*filters))
 
     since_timestamp = request.args.get('since')
@@ -815,7 +851,7 @@ def get_global_item_history(current_user):
     if not items:
         return jsonify([])
 
-    # Query 4: Get ALL room data for all items found. (This part was already optimized)
+    # 4. Get ALL room data for all items found to resolve metadata
     all_room_data = {
         r.room_id: r for r in
         session.query(TrackedRoom).filter(TrackedRoom.room_id.in_({i.room_id for i in items}))
@@ -832,6 +868,7 @@ def get_global_item_history(current_user):
     history_pre_cache = []
     cache_keys_to_find = set()
 
+    # 5. First Pass: Gather info across multiple rooms
     for item in items:
         room_data = all_room_data.get(item.room_id)
         if not room_data:
@@ -850,37 +887,62 @@ def get_global_item_history(current_user):
         except (json.JSONDecodeError, TypeError):
             continue
 
-        name_map = {p['slot_id']: p['name'] for p in players}
-        game_map = {p['slot_id']: p['game'] for p in players}
-
+        # Metadata Maps
         player_map = {p['slot_id']: p for p in players}
-        player_obj = player_map.get(item.receiving_slot_id)
-        is_finished = player_obj.get('is_finished', False) if player_obj else False
+        game_map = {p['slot_id']: p['game'] for p in players}
+        
+        # Resolve Entities
+        receiver_id = item.receiving_slot_id
+        sender_id = getattr(item, 'sending_slot_id', 0)
 
-        receiver_name = name_map.get(item.receiving_slot_id, f"Player {item.receiving_slot_id}")
-        receiver_game = game_map.get(item.receiving_slot_id, "Unknown")
-        game_checksum = game_checksums.get(receiver_game)
+        receiver_obj = player_map.get(receiver_id)
+        sender_obj = player_map.get(sender_id)
+        
+        receiver_name = receiver_obj.get('name', f"Player {receiver_id}") if receiver_obj else f"Player {receiver_id}"
+        sender_name = sender_obj.get('name', f"Player {sender_id}") if sender_obj else f"Player {sender_id}"
+        
+        receiver_game = game_map.get(receiver_id, "Unknown")
+        sender_game = game_map.get(sender_id, "Unknown")
+        
+        is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
+
+        rec_checksum = game_checksums.get(receiver_game)
+        snd_checksum = game_checksums.get(sender_game)
 
         item_name_key = None
-        if receiver_game and game_checksum:
-            item_name_key = (receiver_game, game_checksum, 'item', item.item_id)
+        location_name_key = None
+
+        # A. Resolve Item Name (Receiver Game)
+        if receiver_game and rec_checksum:
+            item_name_key = (receiver_game, rec_checksum, 'item', item.item_id)
             cache_keys_to_find.add(item_name_key)
+
+        # B. Resolve Location Name (Sender Game)
+        if sender_game and snd_checksum:
+            location_name_key = (sender_game, snd_checksum, 'location', item.location_id)
+            cache_keys_to_find.add(location_name_key)
 
         history_pre_cache.append({
             "db_id": room_data.id, 
             "alias": sub.alias, 
             "icon_name": sub.icon_name,
-            "receiver_name": receiver_name,
+            "playerName": receiver_name,
+            "receivingGame": receiver_game, 
+            "senderName": sender_name,    
+            "senderGame": sender_game,    
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": room_data.tracker_id,
-            "slot_id": item.receiving_slot_id,
+            "slot_id": receiver_id,
             "host": room_data.hostname,
-            "_name_key": item_name_key,
+            "_item_name_key": item_name_key,
+            "_loc_name_key": location_name_key,
             "_raw_item_id": item.item_id,
+            "_raw_loc_id": item.location_id,
             "is_player_finished": is_finished,
             "item_flags": item.item_flags or 0
         })
 
+    # 6. Bulk Fetch from Cache
     name_cache_map = {}
     if cache_keys_to_find:
         cache_query = session.query(
@@ -903,20 +965,22 @@ def get_global_item_history(current_user):
             for c in cache_query.all()
         }
 
-    # Now, build the final history list by populating the names
-    # This loop is fast and in-memory
+    # 7. Second Pass: Build Final Response
     history = []
     for temp_item in history_pre_cache:
-        # Look up the name in our map
-        item_name = name_cache_map.get(temp_item["_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
-        
-        # Build the final object for the API
+        item_name = name_cache_map.get(temp_item["_item_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
+        location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
+
         history.append({
             "db_id": temp_item["db_id"], 
             "alias": temp_item["alias"], 
             "icon_name": temp_item["icon_name"],
-            "playerName": temp_item['receiver_name'],
+            "playerName": temp_item['playerName'],
+            "receivingGame": temp_item['receivingGame'],
             "itemName": item_name,
+            "senderName": temp_item['senderName'],     
+            "senderGame": temp_item['senderGame'],      
+            "locationName": location_name,              
             "isPlayerFinished": temp_item['is_player_finished'],
             "itemFlags": temp_item['item_flags'],
             "timestamp": temp_item["timestamp"],
@@ -1428,5 +1492,116 @@ def unregister_device(current_user):
         session.rollback()
         logging.error(f"Failed to unregister device for user {current_user.id}: {e}", exc_info=True)
         return jsonify({'error': 'An internal server error occurred.'}), 500
+    finally:
+        Session.remove()
+
+MAX_IGNORE_ITEMS = 100
+
+@bp.route('/users/me/ignore-list', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_ignore_list(current_user):
+    """
+    Returns the user's list of ignored items.
+    """
+    session = Session()
+    try:
+        ignore_items = session.query(UserIgnoreItem).filter_by(user_id=current_user.id).all()
+        
+        items = []
+        for item in ignore_items:
+            items.append({
+                'id': item.id,
+                'item_name': item.item_name,
+                'game_name': item.game_name,
+                'created_at': item.created_at.isoformat()
+            })
+        return jsonify(items)
+    finally:
+        Session.remove()
+
+@bp.route('/users/me/ignore-list', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def add_ignore_item(current_user):
+    """
+    Adds a new item to the ignore list.
+    payload: { "item_name": "Power Star", "game_name": "Super Mario 64" (optional) }
+    """
+    data = request.json
+    item_name = data.get('item_name', '').strip()
+    game_name = data.get('game_name')
+    
+    if game_name:
+        game_name = game_name.strip()
+
+    if not item_name:
+        return jsonify({'error': 'item_name is required'}), 400
+
+    session = Session()
+    try:
+        # SECURITY: Prevent list bloating
+        count = session.query(UserIgnoreItem).filter_by(user_id=current_user.id).count()
+        if count >= MAX_IGNORE_ITEMS:
+            return jsonify({'error': f'Limit reached. You cannot have more than {MAX_IGNORE_ITEMS} ignored items.'}), 400
+
+        # Check for duplicates (though DB constraint handles this, it's nicer to return 409 explicitly)
+        existing = session.query(UserIgnoreItem).filter_by(
+            user_id=current_user.id,
+            item_name=item_name,
+            game_name=game_name
+        ).first()
+
+        if existing:
+            return jsonify({'error': 'This item is already in your ignore list.'}), 409
+
+        new_item = UserIgnoreItem(
+            user_id=current_user.id,
+            item_name=item_name,
+            game_name=game_name
+        )
+        session.add(new_item)
+        session.commit()
+        
+        logging.info(f"[API] User {current_user.id} ignored '{item_name}' (Game: {game_name or 'Global'})")
+        
+        return jsonify({
+            'message': 'Item added to ignore list.',
+            'id': new_item.id
+        }), 201
+    except Exception as e:
+        session.rollback()
+        raise e
+    finally:
+        Session.remove()
+
+@bp.route('/users/me/ignore-list/<int:item_id>', methods=['DELETE'])
+@handle_db_errors
+@log_api_call
+@token_required
+def remove_ignore_item(current_user, item_id):
+    """
+    Removes an item from the ignore list by ID.
+    """
+    session = Session()
+    try:
+        item = session.query(UserIgnoreItem).filter_by(
+            id=item_id, 
+            user_id=current_user.id
+        ).first()
+
+        if not item:
+            return jsonify({'error': 'Item not found'}), 404
+
+        session.delete(item)
+        session.commit()
+        
+        logging.info(f"[API] User {current_user.id} removed ignore rule {item_id}")
+        return jsonify({'message': 'Item removed from ignore list.'})
+    except Exception as e:
+        session.rollback()
+        raise e
     finally:
         Session.remove()
