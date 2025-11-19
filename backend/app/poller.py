@@ -769,14 +769,15 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         # We join subscription -> user so we can check the cheese_user_id
         
         # Fetch all local tracking rows for this room
-        current_tracked_slots = session.query(UserTrackedSlot).filter_by(room_id=room.id).all()
+        current_tracked_slots = session.query(UserTrackedSlot).options(
+            selectinload(UserTrackedSlot.user) 
+        ).filter_by(room_id=room.id).all()
 
         for ts in current_tracked_slots:
-            user = session.query(User).get(ts.user_id)
+            user = ts.user 
             
-            # Safety check: If we don't know their Cheese ID, we can't verify ownership safely
             if not user or not user.cheese_user_id:
-                continue 
+                continue
 
             game_data = new_games_map.get(ts.slot_id)
             
@@ -1177,6 +1178,9 @@ async def poller_supervisor(app, loop):
                     if needs_setup:
                         if room.id not in running_tasks:
                             logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup.")
+                            await setup_queue.put(room_info)
+                        else:
+                            logging.info(f"[SUPERVISOR] Re-queuing running room {room.id} for metadata repair.")
                             await setup_queue.put(room_info)
                     else:
                         if room.id not in running_tasks:
