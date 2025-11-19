@@ -229,11 +229,11 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 if (e.code() == 409) {
                     _errorMessage.value = "'$itemName' is already on your ignore list."
                 } else {
-                    e.printStackTrace()
+                    Log.e("UserViewModel", "Failed to add ignore rule (HTTP ${e.code()})", e)
                     _errorMessage.value = "Failed to add ignore rule (HTTP ${e.code()})."
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("UserViewModel", "Failed to add ignore rule", e)
                 _errorMessage.value = "Failed to add ignore rule. Check connection."
             }
         }
