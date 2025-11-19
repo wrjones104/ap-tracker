@@ -247,11 +247,10 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
                 userRepository.deleteIgnoreItem(itemId)
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("UserViewModel", "Failed to remove rule", e)
                 _errorMessage.value = "Failed to remove rule."
                 fetchIgnoreList()
             }
         }
     }
-
 }
