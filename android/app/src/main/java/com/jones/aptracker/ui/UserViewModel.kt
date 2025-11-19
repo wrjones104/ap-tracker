@@ -213,7 +213,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 _ignoreList.value = userRepository.getIgnoreList()
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("UserViewModel", "Failed to fetch ignore list", e)
+                _errorMessage.value = "Failed to load ignore list."
             }
         }
     }
