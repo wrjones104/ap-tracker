@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import Session
 from .models import User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
