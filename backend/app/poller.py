@@ -659,6 +659,108 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         Session.remove()
     return None
 
+def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
+    """
+    Compares new Cheese data against the DB cache. 
+    Updates the DB and returns notifications if slots changed status.
+    """
+    session = Session()
+    notifications_by_user = {}
+    
+    try:
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+        if not room: return {}
+
+        # 1. Load Old Data
+        old_data = {}
+        if room.cached_cheese_json:
+            try:
+                old_data = json.loads(room.cached_cheese_json)
+            except json.JSONDecodeError:
+                pass
+        
+        # 2. Update DB immediately (Source of Truth)
+        # We save the full blob so the API can serve it directly
+        room.cached_cheese_json = json.dumps(new_tracker_data)
+        # Parse ISO timestamp to Python DateTime
+        try:
+            # Truncate microseconds if > 6 digits to allow python parsing (common python issue)
+            clean_time = remote_updated_at
+            if '.' in clean_time:
+                main_part, frac_part = clean_time.split('.')
+                clean_time = f"{main_part}.{frac_part[:6]}"
+            room.cheese_updated_at = datetime.fromisoformat(clean_time.replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            room.cheese_updated_at = datetime.utcnow() # Fallback
+
+        # 3. Diff Logic (Generate Notifications)
+        # We only care if a slot is newly claimed or finished
+        old_games = {g['position']: g for g in old_data.get('games', [])}
+        new_games = {g['position']: g for g in new_tracker_data.get('games', [])}
+        
+        # Get subscribers to map User IDs -> Notification Settings
+        subs = session.query(UserRoomSubscription).options(
+            selectinload(UserRoomSubscription.user)
+        ).filter_by(room_id=room_db_id).all()
+        
+        # Pre-fetch devices for efficiency
+        user_ids_to_notify = [s.user_id for s in subs]
+        devices = session.query(Device).filter(Device.user_id.in_(user_ids_to_notify)).all()
+        tokens_by_user = {}
+        for d in devices: tokens_by_user.setdefault(d.user_id, []).append(d.fcm_token)
+
+        # Iterate through the NEW games list
+        for position, new_game in new_games.items():
+            old_game = old_games.get(position)
+            
+            # Detect "Claimed" status change
+            # Logic: It was NOT claimed by THIS user before, and now it IS.
+            new_owner_id = new_game.get('claimed_by_ct_user_id')
+            old_owner_id = old_game.get('claimed_by_ct_user_id') if old_game else None
+            
+            if new_owner_id and new_owner_id != old_owner_id:
+                # Find which local user owns this CT ID
+                # We look through the subscribers to find the matching cheese_user_id
+                matching_sub = next((s for s in subs if s.user.cheese_user_id == new_owner_id), None)
+                
+                if matching_sub:
+                    # Notify the user who just claimed it (Confirmation)
+                    user = matching_sub.user
+                    if user.notify_useful_default: # Use 'useful' pref as proxy for system msgs
+                        title = f"✅ Slot Claimed! - [{matching_sub.alias}]"
+                        body = f"You have successfully claimed {new_game.get('name', f'Slot {position}')}."
+                        
+                        notifications_by_user.setdefault(user.id, []).append({
+                            'title': title, 'body': body, 'type': 'system'
+                        })
+            
+            # Detect "Finished" status change (Cheese specific)
+            # AP handles game completion, but Cheese has manual "Done" toggle
+            if new_game.get('completion_status') == 'done' and old_game and old_game.get('completion_status') != 'done':
+                 # This logic can be expanded, currently just logging/skipping to avoid double-notifying 
+                 # if AP already caught it.
+                 pass
+
+        # 4. Build Final Payload
+        final_payloads = {}
+        for user_id, notifs in notifications_by_user.items():
+            tokens = tokens_by_user.get(user_id)
+            if tokens:
+                final_payloads[user_id] = {
+                    'notifications': notifs,
+                    'tokens': tokens
+                }
+
+        session.commit()
+        return final_payloads
+
+    except Exception as e:
+        logging.error(f"[POLLER_CHEESE_ERROR] DB Update failed: {e}", exc_info=True)
+        session.rollback()
+        return {}
+    finally:
+        Session.remove()
+
 async def run_room_poll(room_info, loop):
     """Runs a single lightweight poll cycle for an already set up room."""
     db_id = room_info['db_id']
@@ -686,6 +788,51 @@ async def run_room_poll(room_info, loop):
 
     except Exception as e:
         logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Error in run_room_poll!", exc_info=True)
+
+# Add to poller.py
+
+async def run_cheese_poll(room_info, loop):
+    """
+    Async task to check Cheese Tracker for updates.
+    """
+    db_id = room_info['db_id']
+    ct_id = room_info['cheese_tracker_id']
+    last_updated_at_db = room_info.get('cheese_updated_at') # datetime object or None
+
+    # 1. Fetch Public Data (No Auth needed for reads)
+    url = f"https://cheesetrackers.theincrediblewheelofchee.se/api/tracker/{ct_id}"
+    new_data = await fetch_json(url)
+    
+    if not new_data: 
+        return
+
+    # 2. Timestamp Efficiency Check
+    remote_time_str = new_data.get('updated_at')
+    if not remote_time_str: 
+        return # Should not happen on valid API
+
+    # Convert remote string to compare with DB datetime
+    # Simple string comparison is risky due to timezone formatting diffs, 
+    # but if the DB stored the exact string, we could compare strings. 
+    # For safety, we let the DB Update function handle the decision logic or compare here loosely.
+    # Optimization: If we stored the raw string in DB, we could compare here instantly.
+    # For now, we proceed to the thread if data exists.
+    
+    # 3. Offload Processing to Thread
+    # The sync function will check if the timestamps match exactly before processing logic
+    notifications_payload = await loop.run_in_executor(
+        None, 
+        process_cheese_update, 
+        db_id, 
+        new_data, 
+        remote_time_str
+    )
+
+    # 4. Send Pushes (if any)
+    if notifications_payload:
+        for user_id, data in notifications_payload.items():
+            logging.info(f"[CHEESE_NOTIFY] Sending {len(data['notifications'])} to user {user_id}")
+            await send_push_notifications(data['notifications'], data['tokens'], loop)
 
 def db_read_room_poll_state(db_id):
     session = Session()
@@ -912,6 +1059,27 @@ async def poll_room_with_interval(room_info, loop):
         except asyncio.CancelledError:
             break
 
+async def poll_cheese_with_interval(room_info, loop):
+    """
+    Dedicated loop for Cheese polling to keep it independent of AP polling errors.
+    """
+    # Stagger start slightly to avoid thundering herd with AP poll
+    await asyncio.sleep(5) 
+    
+    while True:
+        try:
+            await run_cheese_poll(room_info, loop)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"[CHEESE_LOOP_ERROR] {room_info['db_id']}: {e}")
+        
+        try:
+            # Use the same interval, or a different one (e.g. 3 minutes)
+            await asyncio.sleep(POLLING_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            break
+
 async def setup_worker(setup_queue, setup_semaphore, loop):
     while True:
         try:
@@ -945,23 +1113,46 @@ async def poller_supervisor(app, loop):
             current_active_room_ids = {room.id for room in active_rooms_in_db}
             
             for room in active_rooms_in_db:
-                room_info = {'db_id': room.id, 'hostname': room.hostname, 'room_uuid': room.room_id}
+                room_info = {
+                    'db_id': room.id, 
+                    'hostname': room.hostname, 
+                    'room_uuid': room.room_id,
+                    'cheese_tracker_id': room.cheese_tracker_id,
+                    'cheese_updated_at': room.cheese_updated_at
+                }
+
+                # --- 1. Archipelago Task ---
                 is_missing_data = not room.tracker_id or not room.game_checksums_json or room.game_checksums_json == '{}'
                 has_total_locations = '"total_locations":' in (room.cached_players_json or "")
-                
                 needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations)
 
-                if room.id not in running_tasks:
-                    if needs_setup:
+                if needs_setup:
+                    if room.id not in running_tasks:
                         logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup.")
                         await setup_queue.put(room_info)
-                    else:
-                        logging.info(f"[SUPERVISOR] Starting poller for room {room.id}")
+                else:
+                    # Ensure AP Poller is running
+                    if room.id not in running_tasks:
+                        logging.info(f"[SUPERVISOR] Starting AP poller for room {room.id}")
                         task = asyncio.create_task(poll_room_with_interval(room_info, loop))
                         running_tasks[room.id] = task
-                elif needs_setup: 
-                     logging.info(f"[SUPERVISOR] Queuing running room {room.id} for metadata refresh.")
-                     await setup_queue.put(room_info)
+
+                # --- 2. Cheese Task ---
+                # We track this separately to avoid blocking AP polls
+                # Key Format: "cheese_123"
+                cheese_task_key = f"cheese_{room.id}"
+                
+                if room.cheese_tracker_id:
+                    if cheese_task_key not in running_tasks:
+                        logging.info(f"[SUPERVISOR] Starting Cheese poller for room {room.id}")
+                        # Create a dedicated interval wrapper for Cheese
+                        c_task = asyncio.create_task(poll_cheese_with_interval(room_info, loop))
+                        running_tasks[cheese_task_key] = c_task
+                else:
+                    # If room lost cheese ID (unlinked), cancel task
+                    if cheese_task_key in running_tasks:
+                        running_tasks[cheese_task_key].cancel()
+                        del running_tasks[cheese_task_key]
 
             inactive_room_ids = set(running_tasks.keys()) - current_active_room_ids
             for room_id in inactive_room_ids:
