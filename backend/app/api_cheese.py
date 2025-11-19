@@ -38,11 +38,13 @@ def _extract_ap_room_id(url_string):
 
 def setup_cheese_user_task(app, user_id):
     """
-    The 'First-Time Setup' task.
-    1. Fetches all trackers for this user from Cheese.
-    2. Finds or Creates the corresponding TrackedRoom in our DB.
-    3. Subscribes the user to that room.
-    4. UPDATED: Syncs the specific slots the user owns in those rooms.
+    The 'First-Time Setup' & 'Manual Sync' task.
+    1. Locks the user to prevent concurrent syncs.
+    2. Fetches all trackers for this user from Cheese.
+    3. Finds or Creates the corresponding TrackedRoom in our DB.
+    4. Subscribes the user to that room.
+    5. Syncs the specific slots the user owns in those rooms.
+    6. Prunes subscriptions to rooms the user is no longer part of on Cheese.
     """
     with app.app_context():
         session = Session()
@@ -52,9 +54,24 @@ def setup_cheese_user_task(app, user_id):
                 logging.warning(f"[CHEESE_SETUP] User {user_id} has no API key. Aborting.")
                 return
 
+            # --- 1. CONCURRENCY LOCK ---
+            if user.is_syncing_cheese:
+                # Timeout check: If locked for > 15 mins, assume stale lock and proceed
+                if user.cheese_sync_started_at and (datetime.utcnow() - user.cheese_sync_started_at) < timedelta(minutes=15):
+                    logging.warning(f"[CHEESE_SETUP] Sync already in progress for user {user_id}. Aborting.")
+                    return
+            
+            user.is_syncing_cheese = True
+            user.cheese_sync_started_at = datetime.utcnow()
+            session.commit() # Commit lock immediately
+            # ---------------------------
+
             api_key = decrypt_api_key(user.cheese_api_key)
             if not api_key:
                 logging.error(f"[CHEESE_SETUP] Failed to decrypt key for user {user_id}.")
+                # Unlock before returning
+                user.is_syncing_cheese = False
+                session.commit()
                 return
 
             discord_username = user.discord_username.strip().lower() if user.discord_username else None
@@ -62,7 +79,7 @@ def setup_cheese_user_task(app, user_id):
 
             logging.info(f"[CHEESE_SETUP] Starting discovery for user {user_id}...")
 
-            # 1. Fetch User's Trackers List
+            # 2. Fetch User's Trackers List
             headers = {"Authorization": f"Bearer {api_key}"}
             try:
                 resp = requests.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=headers, timeout=15)
@@ -70,17 +87,23 @@ def setup_cheese_user_task(app, user_id):
                 trackers_list = resp.json()
             except Exception as e:
                 logging.error(f"[CHEESE_SETUP] Network error fetching dashboard: {e}")
+                # Unlock before returning
+                user.is_syncing_cheese = False
+                session.commit()
                 return
 
-            stats = {'linked': 0, 'created': 0, 'slots_synced': 0}
+            stats = {'linked': 0, 'created': 0, 'slots_synced': 0, 'pruned': 0}
+            found_cheese_tracker_ids = set()
 
-            # 2. Iterate and Link
+            # 3. Iterate and Link
             for tracker_meta in trackers_list:
                 ct_id = tracker_meta.get('tracker_id')
                 room_link = tracker_meta.get('room_link')
                 title = tracker_meta.get('title') or "Unknown Room"
                 
                 if not ct_id: continue
+                
+                found_cheese_tracker_ids.add(ct_id)
 
                 room = None
                 full_data = None
@@ -97,16 +120,13 @@ def setup_cheese_user_task(app, user_id):
                             room.cheese_tracker_id = ct_id
                             logging.info(f"[CHEESE_SETUP] Linked existing AP room {ap_room_id} to Cheese ID {ct_id}")
 
-                # Fetch details needed for Slot Syncing?
-                # If we just found the room (A or B), we likely don't have the LATEST JSON in memory
-                # or strictly need it to find slots.
+                # Fetch details needed for Slot Syncing
                 try:
                     detail_resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{ct_id}", headers=headers, timeout=10)
                     if detail_resp.ok:
                         full_data = detail_resp.json()
                 except Exception as e:
                     logging.error(f"[CHEESE_SETUP] Failed to fetch details for {ct_id}: {e}")
-                    # If we can't get details, we can't sync slots or create the room properly. Skip.
                     continue
 
                 # C. If still no room, Create it
@@ -144,8 +164,7 @@ def setup_cheese_user_task(app, user_id):
                             room.cheese_updated_at = datetime.fromisoformat(full_data.get('updated_at').replace('Z', '+00:00'))
                         except ValueError: pass
 
-
-                # 3. Subscribe User & Sync Slots
+                # 4. Subscribe User & Sync Slots
                 if room and full_data:
                     # Ensure subscription
                     sub = session.query(UserRoomSubscription).filter_by(user_id=user.id, room_id=room.id).first()
@@ -154,7 +173,7 @@ def setup_cheese_user_task(app, user_id):
                             user_id=user.id, room_id=room.id, alias=title, icon_name='cheese'
                         ))
                         stats['linked'] += 1
-                        session.flush() # Ensure sub exists before adding slots
+                        session.flush() 
 
                     # --- SLOT SYNC LOGIC ---
                     games = full_data.get('games', [])
@@ -179,7 +198,6 @@ def setup_cheese_user_task(app, user_id):
                                     my_cheese_id = found_ct_id
 
                     if slots_found:
-                        # Get existing slots to avoid constraint errors
                         existing_slots = session.query(UserTrackedSlot.slot_id).filter_by(
                             user_id=user.id, room_id=room.id
                         ).all()
@@ -194,17 +212,41 @@ def setup_cheese_user_task(app, user_id):
                                     notify_finished=user.notify_finished_default
                                 ))
                                 stats['slots_synced'] += 1
+
+            # --- 5. PRUNING LOGIC ---
+            # Remove subscriptions to Cheese rooms that are NOT in the found_cheese_tracker_ids list
+            if found_cheese_tracker_ids:
+                stale_subs = session.query(UserRoomSubscription)\
+                    .join(TrackedRoom)\
+                    .filter(UserRoomSubscription.user_id == user.id)\
+                    .filter(TrackedRoom.cheese_tracker_id.isnot(None))\
+                    .filter(TrackedRoom.cheese_tracker_id.notin_(found_cheese_tracker_ids))\
+                    .all()
+
+                for sub in stale_subs:
+                    logging.info(f"[CHEESE_SETUP] Pruning stale subscription for user {user.id}: Room {sub.room_id}")
+                    session.delete(sub)
+                    stats['pruned'] += 1
+            # ------------------------
             
+            # Unlock and Complete
+            user.is_syncing_cheese = False
             user.cheese_last_sync = datetime.utcnow()
             session.commit()
             logging.info(f"[CHEESE_SETUP] User {user_id} setup complete. {stats}")
 
         except Exception as e:
             session.rollback()
+            # Attempt to release lock on failure
+            try:
+                user = session.query(User).get(user_id)
+                if user:
+                    user.is_syncing_cheese = False
+                    session.commit()
+            except: pass
             logging.error(f"[CHEESE_SETUP] Critical failure for user {user_id}: {e}", exc_info=True)
         finally:
             Session.remove()
-
 
 @bp.route('/auth', methods=['POST'])
 @handle_db_errors
@@ -265,6 +307,25 @@ def connect_cheese_account(current_user):
         'message': 'Connected! We are finding your rooms now...', 
         'is_connected': True
     })
+
+@bp.route('/auth', methods=['DELETE'])
+@handle_db_errors
+@log_api_call
+@token_required
+def disconnect_cheese_account(current_user):
+    """
+    Removes the Cheese API key and ID.
+    """
+    if current_user.is_guest:
+        return jsonify({'error': 'Guests cannot use integrations.'}), 403
+    
+    session = Session()
+    user = session.merge(current_user)
+    user.cheese_api_key = None
+    user.cheese_user_id = None # Clear the ID too so we don't auto-sync later
+    session.commit()
+    
+    return jsonify({'message': 'Disconnected from Cheese Tracker.'})
 
 @bp.route('/sync', methods=['POST'])
 @handle_db_errors

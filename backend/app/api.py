@@ -278,7 +278,10 @@ def get_rooms(current_user):
     Filters out 'PENDING_DISCOVERY' rooms so they don't appear as zombies in the app.
     """
     session = Session()
-    subscriptions = session.query(UserRoomSubscription).filter_by(user_id=current_user.id).all()
+    subscriptions = session.query(UserRoomSubscription).join(TrackedRoom).filter(
+        UserRoomSubscription.user_id == current_user.id,
+        ~TrackedRoom.room_id.startswith("PENDING_DISCOVERY") 
+    ).all()
     
     rooms_list = []
     for sub in subscriptions:
@@ -987,7 +990,10 @@ def get_user_tracked_slots(current_user):
     """
     session = Session()
     try:
-        subscriptions = session.query(UserRoomSubscription).filter_by(user_id=current_user.id).options(
+        subscriptions = session.query(UserRoomSubscription).join(TrackedRoom).filter(
+            UserRoomSubscription.user_id == current_user.id,
+            ~TrackedRoom.room_id.startswith("PENDING_DISCOVERY")
+        ).options(
             selectinload(UserRoomSubscription.room),
             selectinload(UserRoomSubscription.tracked_slots)
         ).order_by(UserRoomSubscription.alias).all()
