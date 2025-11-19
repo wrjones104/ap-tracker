@@ -940,6 +940,7 @@ def get_current_user(current_user):
             'notify_progression_default': current_user.notify_progression_default,
             'notify_useful_default': current_user.notify_useful_default,
             'notify_hints_default': current_user.notify_hints_default,
+            'notify_finished_default': current_user.notify_finished_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'is_guest': True
         })
