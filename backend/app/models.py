@@ -30,6 +30,7 @@ class User(Base):
     notify_useful_default = Column(Boolean, default=True, nullable=False)
     notify_hints_default = Column(Boolean, default=True, nullable=False)
     notify_finished_default = Column(Boolean, default=False, nullable=False)
+    ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
 
 class Device(Base):
     __tablename__ = 'devices'
@@ -93,6 +94,20 @@ class UserTrackedSlot(Base):
     )
     subscription = relationship("UserRoomSubscription", back_populates="tracked_slots")
 
+class UserIgnoreItem(Base):
+    __tablename__ = 'user_ignore_items'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    item_name = Column(String(255), nullable=False)
+    game_name = Column(String(255), nullable=True) 
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    user = relationship("User", back_populates="ignore_items")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'item_name', 'game_name', name='_user_ignore_item_uc'),
+    )
+
 class DatapackageCache(Base):
     __tablename__ = 'datapackage_cache'
     id = Column(Integer, primary_key=True)
@@ -108,13 +123,14 @@ class NotifiedItem(Base):
     id = Column(Integer, primary_key=True)
     room_id = Column(String, nullable=False, index=True) 
     receiving_slot_id = Column(Integer, nullable=False)
+    sending_slot_id = Column(Integer, nullable=True) 
     item_id = Column(BigInteger, nullable=False)
     location_id = Column(BigInteger, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
     item_flags = Column(Integer, nullable=True)
     __table_args__ = (
         UniqueConstraint('room_id', 'receiving_slot_id', 'item_id', 'location_id', name='_item_event_uc'),
-        Index('ix_notifieditem_timestamp', 'timestamp'), # <-- ADDED THIS
+        Index('ix_notifieditem_timestamp', 'timestamp'),
     )
 
 class NotifiedHint(Base):

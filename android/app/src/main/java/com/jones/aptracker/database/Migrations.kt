@@ -95,3 +95,12 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         db.execSQL("ALTER TABLE history_items_new RENAME TO history_items")
     }
 }
+
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE history_items ADD COLUMN receivingGame TEXT")
+        db.execSQL("ALTER TABLE history_items ADD COLUMN senderName TEXT")
+        db.execSQL("ALTER TABLE history_items ADD COLUMN senderGame TEXT")
+        db.execSQL("ALTER TABLE history_items ADD COLUMN locationName TEXT")
+    }
+}
