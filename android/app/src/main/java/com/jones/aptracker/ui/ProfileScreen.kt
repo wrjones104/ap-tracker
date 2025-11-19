@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -66,7 +67,8 @@ fun ProfileScreen(
     userViewModel: UserViewModel = viewModel(),
     onBackClick: () -> Unit,
     onLogout: () -> Unit,
-    onLoginClick: () -> Unit
+    onLoginClick: () -> Unit,
+    onIgnoreListClick: () -> Unit
 ) {
     val userProfile by userViewModel.userProfile.collectAsState()
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
@@ -216,6 +218,29 @@ fun ProfileScreen(
                         onSync = { userViewModel.manualSyncCheese() },
                         onDisconnect = { userViewModel.disconnectCheese() }
                     )
+                }
+            }
+
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onIgnoreListClick)
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text("Manage Ignore List", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Mute notifications for specific items",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
                 }
             }
             item {

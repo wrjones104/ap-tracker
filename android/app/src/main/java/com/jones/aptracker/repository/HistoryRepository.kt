@@ -36,7 +36,11 @@ class HistoryRepository(
                         val entity = HistoryItemEntity(
                             roomId = item.db_id,
                             playerName = item.playerName,
+                            receivingGame = item.receivingGame,
                             itemName = item.itemName,
+                            senderName = item.senderName,
+                            senderGame = item.senderGame,
+                            locationName = item.locationName,
                             isPlayerFinished = item.isPlayerFinished,
                             itemFlags = item.itemFlags,
                             timestamp = item.timestamp,
