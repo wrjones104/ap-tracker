@@ -12,8 +12,8 @@ class UserRepository(private val apiService: ApiService) {
 
     suspend fun addIgnoreItem(itemName: String, gameName: String?): Int {
         val request = AddIgnoreItemRequest(
-            item_name = itemName,
-            game_name = gameName?.takeIf { it.isNotBlank() }
+            itemName = itemName,
+            gameName = gameName?.takeIf { it.isNotBlank() }
         )
         val response = apiService.addIgnoreItem(request)
         return response.id

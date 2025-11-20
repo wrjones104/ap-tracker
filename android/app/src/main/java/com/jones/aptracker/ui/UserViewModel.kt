@@ -55,11 +55,6 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    init {
-        fetchUserProfile()
-        fetchTrackedSlots()
-    }
-
     fun fetchUserProfile() {
         viewModelScope.launch {
             try {
