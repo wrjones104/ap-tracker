@@ -515,16 +515,16 @@ fun ProfileMenu(
                 HorizontalDivider()
             }
             DropdownMenuItem(
-                text = { Text("Item History") },
+                text = { Text("Settings") },
                 onClick = {
-                    onHistoryClick()
+                    onSettingsClick()
                     menuExpanded = false
                 }
             )
             DropdownMenuItem(
-                text = { Text("Settings") },
+                text = { Text("Item History") },
                 onClick = {
-                    onSettingsClick()
+                    onHistoryClick()
                     menuExpanded = false
                 }
             )

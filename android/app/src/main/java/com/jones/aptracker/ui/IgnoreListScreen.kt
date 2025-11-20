@@ -114,17 +114,17 @@ fun IgnoreItemCard(item: IgnoreItem, onDelete: () -> Unit) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = item.item_name,
+                    text = item.itemName,
                     style = MaterialTheme.typography.titleMedium
                 )
                 Spacer(Modifier.height(4.dp))
-                if (item.game_name != null) {
+                if (item.gameName != null) {
                     Surface(
                         color = MaterialTheme.colorScheme.primaryContainer,
                         shape = MaterialTheme.shapes.small
                     ) {
                         Text(
-                            text = item.game_name,
+                            text = item.gameName,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
