@@ -1,4 +1,4 @@
-"""add notifiy_hints_remote_items_default
+"""add notify_hints_remote_items_default
 
 Revision ID: 619cd95819b6
 Revises: b6bc740dccb8
