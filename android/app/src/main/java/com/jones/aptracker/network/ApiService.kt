@@ -205,6 +205,7 @@ data class UpdateSlotPrefsRequest(
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,
+    val notify_hints_remote_items: Boolean?,
     val notify_finished: Boolean? = null
 )
 
@@ -221,6 +222,7 @@ data class TrackedSlotDetail(
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,
+    val notify_hints_remote_items: Boolean?,
     val notify_finished: Boolean?
 )
 
