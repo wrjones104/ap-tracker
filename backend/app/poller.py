@@ -598,10 +598,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 item_owner_name = name_map.get(io_id, f'P{io_id}')
                 location_owner_name = name_map.get(lo_id, f'P{lo_id}')
                 
-                if is_for_us:
-                    body = f"Your {item_name} is at {loc_name} ({location_owner_name})"
-                else:
-                    body = f"{item_owner_name}'s {item_name} is at your {loc_name}"
+                body = f"{item_owner_name}'s {item_name} is at {loc_name} in {location_owner_name}'s World"
                 
                 notifications_by_user.setdefault(user_id, []).append({
                     'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']
