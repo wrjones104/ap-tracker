@@ -1,19 +1,56 @@
-.venv/
+# --- SECRETS & CONFIGURATION (Most Important) ---
+# Python Environment Variables
 .env
+.env.*
+# Firebase Admin SDK (Backend)
+service-account-key.json
+# Firebase Configs (Android - covering all variants)
+**/google-services.json
+
+# --- ANDROID ---
+# Standard Android Build folders (Reduces repo size significantly)
+build/
+.gradle/
+app/build/
+# Local configuration file (contains SDK path, often strictly local)
+local.properties
+# Android Studio IDE files
+*.iml
+.idea/
+.navigation/
+captures/
+*.jks
+*.keystore
+*.p12
+*.pem
+
+# --- PYTHON / BACKEND ---
+# Virtual Environments
+.venv/
+venv/
+env/
+# Bytecode and Cache
 __pycache__/
 *.pyc
+.pytest_cache/
+# Distribution / Packaging
+*.egg-info/
+dist/
+
+# --- DATABASE ---
+# SQLite (Dev)
 backend/ap_tracker.db
-service-account-key.json
 backend/ap_tracker.db-shm
 backend/ap_tracker.db-wal
-venv/
-android/app/src/dev/google-services.json
-.gitignore
 backend/datapackage.json
-android/app/src/uat/google-services.json
 backend/get_datapackages.py
 backend/get_room_status
 backend/tracker_data.json
-.idea/
-android/app/prod/release/app-prod-release.aab
-android/app/src/prod/google-services.json
+
+# --- OS JUNK ---
+.DS_Store
+Thumbs.db
+
+# --- RELEASE ARTIFACTS ---
+*.apk
+*.aab
