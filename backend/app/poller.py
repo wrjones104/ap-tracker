@@ -551,22 +551,30 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 should_send_notification = False
 
                 # Rule 1: Hints for MY Items (is_for_us)
-                # Controlled by: notify_hints_remote_items_default
+                # Controlled by: notify_hints_remote_items_default (Global) OR Slot Override
                 if is_for_us:
-                    # Note: We treat this as a global user preference (no specific slot override for "my items anywhere")
-                    if getattr(user_prefs, 'notify_hints_remote_items_default', True):
+                    # 1. Start with Global Default
+                    wants_remote = getattr(user_prefs, 'notify_hints_remote_items_default', True)
+                    
+                    # 2. Check Slot Override
+                    if slot_prefs and slot_prefs.notify_hints_remote_items is not None:
+                        wants_remote = slot_prefs.notify_hints_remote_items
+
+                    if wants_remote:
                         should_send_notification = True
 
                 # Rule 2: Hints for Items in MY World (is_at_our_location)
-                # Controlled by: notify_hints_default (AND per-slot overrides)
+                # Controlled by: notify_hints_default (Global) OR Slot Override
                 if is_at_our_location and not should_send_notification:
-                    # Check slot specific override for the location owner
-                    slot_prefs = prefs_by_user_slot.get(user_id, {}).get(lo_id)
+                    # 1. Start with Global Default
+                    wants_local = user_prefs.notify_hints_default
                     
-                    # 1. Slot Override takes precedence
+                    # 2. Check Slot Override
                     if slot_prefs and slot_prefs.notify_hints is not None:
-                         if slot_prefs.notify_hints:
-                             should_send_notification = True
+                         wants_local = slot_prefs.notify_hints
+                    
+                    if wants_local:
+                        should_send_notification = True
                     
                     # 2. Fallback to Global Default for "Local World"
                     elif user_prefs.notify_hints_default:
