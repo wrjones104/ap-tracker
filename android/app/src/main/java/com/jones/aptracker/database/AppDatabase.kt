@@ -11,7 +11,7 @@ import com.jones.aptracker.network.HistoryItemEntity
 import com.jones.aptracker.network.RoomDao
 import com.jones.aptracker.network.RoomEntity
 
-@Database(entities = [RoomEntity::class, HistoryItemEntity::class, HintEntity::class], version = 9)
+@Database(entities = [RoomEntity::class, HistoryItemEntity::class, HintEntity::class], version = 11)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun roomDao(): RoomDao
@@ -29,7 +29,10 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ap_tracker_database"
                 )
-                    .addMigrations(MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(
+                        MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                        MIGRATION_9_10, MIGRATION_10_11
+                    )
                     .build()
                 INSTANCE = instance
                 instance
