@@ -104,15 +104,33 @@ class HistoryRepository(
     }
 
     suspend fun refreshHintHistory(roomId: Int? = null, includeFound: Boolean) {
-        Log.d("HintToggleDebug", "Repo: refreshHintHistory (API Fetch) | includeFound: $includeFound")
-        val latestTimestamp = if (roomId != null) {
-            hintDao.getLatestTimestampForRoom(roomId)
+
+        var performFullRefresh = false
+
+        if (includeFound) {
+            val foundCount = if (roomId != null) {
+                hintDao.countFoundHints(roomId)
+            } else {
+                hintDao.countGlobalFoundHints()
+            }
+
+            if (foundCount == 0) {
+                performFullRefresh = true
+                Log.d("HINT_SYNC", "Cold Start detected: 'Show Found' enabled but 0 found hints in DB. Forcing full refresh.")
+            }
+        }
+
+        val latestTimestamp = if (performFullRefresh) {
+            null
         } else {
-            hintDao.getLatestGlobalTimestamp()
+            if (roomId != null) {
+                hintDao.getLatestTimestampForRoom(roomId)
+            } else {
+                hintDao.getLatestGlobalTimestamp()
+            }
         }
 
         Log.d("HintToggleDebug", "Repo: API 'since' param will be: $latestTimestamp")
-
         try {
             val response = if (roomId != null) {
                 apiService.getRoomHintHistory(roomId, since = latestTimestamp, includeFound = includeFound)
@@ -156,10 +174,13 @@ class HistoryRepository(
             hintType = type,
             itemOwnerName = detail.item_owner_name,
             locationOwnerName = detail.location_owner_name,
+            itemOwnerId = detail.item_owner_id,
+            locationOwnerId = detail.location_owner_id,
             itemName = detail.item_name,
             locationName = detail.location_name,
             isFound = detail.is_found,
-            timestamp = detail.timestamp
+            timestamp = detail.timestamp,
+            itemFlags = detail.item_flags
         )
     }
     suspend fun pruneSlotData(roomId: Int, slotIds: Set<Int>) {
@@ -167,7 +188,7 @@ class HistoryRepository(
         Log.d("PRUNING", "Pruning data for room $roomId, slots: $slotIds")
         try {
             historyDao.deleteHistoryForSlots(roomId, slotIds)
-
+            hintDao.deleteHintsForSlots(roomId, slotIds)
         } catch (e: Exception) {
             Log.e("PRUNING", "Failed to prune slot data: ${e.message}", e)
         }

@@ -14,6 +14,7 @@ import com.jones.aptracker.repository.HistoryRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -57,8 +58,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         history.map { it.playerName }.distinct().sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val availableHintPlayers: StateFlow<List<String>> = combine(_hintsForYou, _hintsByYou) { forYou, byYou ->
+        val names = mutableSetOf<String>()
+        names.addAll(forYou.map { it.itemOwnerName })
+        names.addAll(byYou.map { it.locationOwnerName })
+        names.toList().sorted()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage
+    private var validTrackedSlots: Set<Pair<Int, Int>> = emptySet()
 
     init {
         val db = AppDatabase.getInstance(application)
@@ -99,15 +108,28 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
+                val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
+
+                validTrackedSlots = trackedRooms.flatMap { room ->
+                    room.tracked_slots.map { slot ->
+                        room.room_db_id to slot.slot_id
+                    }
+                }.toSet()
+
                 repository.refreshItemHistory()
 
-                val itemEntities = if (currentRoomId != null) {
+                val rawItemEntities = if (currentRoomId != null) {
                     repository.getHistoryForRoom(currentRoomId!!)
                 } else {
                     repository.getGlobalHistory()
                 }
+                _itemHistory.value = rawItemEntities.mapNotNull { entity ->
+                    if (entity.roomId != null && entity.slot_id != null) {
+                        if (!validTrackedSlots.contains(entity.roomId to entity.slot_id)) {
+                            return@mapNotNull null
+                        }
+                    }
 
-                _itemHistory.value = itemEntities.map { entity ->
                     HistoryItem(
                         id = entity.id,
                         playerName = entity.playerName,
@@ -128,24 +150,26 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 val includeFound = _showFoundHints.value
-                Log.d("HintToggleDebug", "VM: refreshAllHistory calling refreshHintHistory, includeFound = $includeFound")
                 repository.refreshHintHistory(currentRoomId, includeFound)
 
-                val (forYou, byYou) = if (currentRoomId != null) {
+                val (rawForYou, rawByYou) = if (currentRoomId != null) {
                     repository.getHintsForRoom(currentRoomId!!, includeFound)
                 } else {
                     repository.getGlobalHints(includeFound)
                 }
-                _hintsForYou.value = forYou
-                _hintsByYou.value = byYou
-                Log.d("HistoryViewModel", "Loaded ${forYou.size} hints for you, ${byYou.size} hints by you.")
+                _hintsForYou.value = rawForYou.filter { hint ->
+                    validTrackedSlots.contains(hint.roomDbId to hint.itemOwnerId)
+                }
+
+                _hintsByYou.value = rawByYou.filter { hint ->
+                    validTrackedSlots.contains(hint.roomDbId to hint.locationOwnerId)
+                }
 
             } catch (e: Exception) {
                 errorMessage.value = "History Refresh failed: ${e.message}"
                 Log.e("HistoryViewModel", "Error during full history refresh", e)
             } finally {
                 isLoading.value = false
-                Log.d("HistoryViewModel", "Full refresh complete.")
             }
         }
     }

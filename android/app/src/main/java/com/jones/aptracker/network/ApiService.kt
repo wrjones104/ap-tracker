@@ -188,6 +188,7 @@ data class UserProfile(
     val notify_progression_default: Boolean,
     val notify_useful_default: Boolean,
     val notify_hints_default: Boolean,
+    val notify_hints_remote_items_default: Boolean,
     val notify_finished_default: Boolean,
     val is_cheese_connected: Boolean = false
 )
@@ -196,6 +197,7 @@ data class UpdateGlobalPrefsRequest(
     val notify_progression: Boolean? = null,
     val notify_useful: Boolean? = null,
     val notify_hints: Boolean? = null,
+    val notify_hints_remote_items: Boolean? = null,
     val notify_finished: Boolean? = null
 )
 
@@ -238,7 +240,8 @@ data class HintDetail(
     val item_name: String,
     val location_name: String,
     val is_found: Boolean,
-    val timestamp: String
+    val timestamp: String,
+    val item_flags: Int = 0
 )
 
 data class ConfigResponse(

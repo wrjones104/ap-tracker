@@ -1015,6 +1015,7 @@ def get_current_user(current_user):
             'notify_useful_default': current_user.notify_useful_default,
             'notify_hints_default': current_user.notify_hints_default,
             'notify_finished_default': current_user.notify_finished_default,
+            'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'is_guest': True
         })
@@ -1039,6 +1040,7 @@ def get_current_user(current_user):
             'notify_useful_default': current_user.notify_useful_default,
             'notify_hints_default': current_user.notify_hints_default,
             'notify_finished_default': current_user.notify_finished_default,
+            'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'is_guest': False
         })
@@ -1126,6 +1128,9 @@ def update_user_preferences(current_user):
             user.notify_hints_default = bool(data['notify_hints'])
         if 'notify_finished' in data:
             user.notify_finished_default = bool(data['notify_finished'])
+        if 'notify_hints_remote_items' in data:
+            user.notify_hints_remote_items_default = bool(data['notify_hints_remote_items'])
+        # -------------------
 
         session.commit()
         return jsonify({'message': 'Preferences updated successfully'}), 200
