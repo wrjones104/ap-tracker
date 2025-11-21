@@ -176,10 +176,20 @@ fun ProfileScreen(
                             }
                         )
                         NotificationToggle(
-                            text = "Hints",
+                            text = "Hints in my World",
+                            description = "Notify when any item is found in your tracked world.",
                             checked = profile.notify_hints_default,
                             onCheckedChange = {
                                 userViewModel.updateGlobalPreferences(hints = it)
+                            }
+                        )
+
+                        NotificationToggle(
+                            text = "Hints for my Items",
+                            description = "Notify when your items are found in any world.",
+                            checked = profile.notify_hints_remote_items_default,
+                            onCheckedChange = {
+                                userViewModel.updateGlobalPreferences(remoteHints = it)
                             }
                         )
                         NotificationToggle(
@@ -413,6 +423,7 @@ fun GuestLoginPrompt(onLoginClick: () -> Unit) {
 @Composable
 private fun NotificationToggle(
     text: String,
+    description: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
@@ -423,10 +434,20 @@ private fun NotificationToggle(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text, style = MaterialTheme.typography.bodyLarge)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text, style = MaterialTheme.typography.bodyLarge)
+            if (description != null) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.padding(start = 16.dp)
         )
     }
 }
