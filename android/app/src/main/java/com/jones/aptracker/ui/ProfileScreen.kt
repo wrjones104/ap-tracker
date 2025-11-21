@@ -177,17 +177,16 @@ fun ProfileScreen(
                             }
                         )
                         NotificationToggle(
-                            text = "Hints in my World",
-                            description = "Notify when any item is found in your tracked world.",
+                            text = "Hints in my world",
+                            description = "Notify when someone hints for an item at one of your locations.",
                             checked = profile.notify_hints_default,
                             onCheckedChange = {
                                 userViewModel.updateGlobalPreferences(hints = it)
                             }
                         )
-
                         NotificationToggle(
-                            text = "Hints for my Items",
-                            description = "Notify when your items are found in any world.",
+                            text = "Hints for my items",
+                            description = "Notify when a hint reveals your item's location in any world.",
                             checked = profile.notify_hints_remote_items_default,
                             onCheckedChange = {
                                 userViewModel.updateGlobalPreferences(remoteHints = it)
