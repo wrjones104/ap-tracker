@@ -29,4 +29,13 @@ interface HintDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHints(hints: List<HintEntity>)
+
+    @Query("DELETE FROM hints WHERE roomDbId = :roomId AND (itemOwnerId IN (:slotIds) OR locationOwnerId IN (:slotIds))")
+    suspend fun deleteHintsForSlots(roomId: Int, slotIds: Set<Int>)
+
+    @Query("SELECT COUNT(*) FROM hints WHERE roomDbId = :roomId AND isFound = 1")
+    suspend fun countFoundHints(roomId: Int): Int
+
+    @Query("SELECT COUNT(*) FROM hints WHERE isFound = 1")
+    suspend fun countGlobalFoundHints(): Int
 }

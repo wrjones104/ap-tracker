@@ -30,6 +30,7 @@ class User(Base):
     notify_useful_default = Column(Boolean, default=True, nullable=False)
     notify_hints_default = Column(Boolean, default=True, nullable=False)
     notify_finished_default = Column(Boolean, default=False, nullable=False)
+    notify_hints_remote_items_default = Column(Boolean, default=True, nullable=False)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
 
 class Device(Base):

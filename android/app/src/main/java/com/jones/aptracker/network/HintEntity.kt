@@ -11,9 +11,12 @@ data class HintEntity(
     val roomAlias: String,
     val hintType: String,
     val itemOwnerName: String,
+    val itemOwnerId: Int = 0,
+    val locationOwnerId: Int = 0,
     val locationOwnerName: String,
     val itemName: String,
     val locationName: String,
     val isFound: Boolean,
-    val timestamp: String
+    val timestamp: String,
+    val itemFlags: Int = 0
 )

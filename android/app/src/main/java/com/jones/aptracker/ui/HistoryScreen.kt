@@ -1,8 +1,12 @@
 package com.jones.aptracker.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -27,6 +31,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.OpenInNew
@@ -105,6 +112,7 @@ fun HistoryScreen(
     val searchQuery by historyViewModel.searchQuery
 
     var selectedItem by remember { mutableStateOf<HistoryItem?>(null) }
+    var selectedHint by remember { mutableStateOf<HintEntity?>(null) }
     val sheetState = rememberModalBottomSheetState()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -233,7 +241,8 @@ fun HistoryScreen(
                         )
                         1 -> HintHistoryTab(
                             historyViewModel = historyViewModel,
-                            searchQuery = searchQuery
+                            searchQuery = searchQuery,
+                            onHintClick = { hint -> selectedHint = hint }
                         )
                     }
                 }
@@ -262,6 +271,17 @@ fun HistoryScreen(
                     historyViewModel.ignoreItem(selectedItem!!.itemName, gameName)
                     selectedItem = null
                 }
+            )
+        }
+    }
+    selectedHint?.let { hint ->
+        ModalBottomSheet(
+            onDismissRequest = { selectedHint = null },
+            sheetState = sheetState
+        ) {
+            HintDetailSheet(
+                hint = hint,
+                onDismiss = { selectedHint = null }
             )
         }
     }
@@ -363,6 +383,8 @@ fun HistoryDetailSheet(
         )
     }
 }
+
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -523,11 +545,18 @@ fun ItemHistoryTab(
 }
 
 @Composable
-fun HintHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
+fun HintHistoryTab(
+    historyViewModel: HistoryViewModel,
+    searchQuery: String,
+    onHintClick: (HintEntity) -> Unit
+) {
     val hintsForYou by historyViewModel.hintsForYou.collectAsState()
     val hintsByYou by historyViewModel.hintsByYou.collectAsState()
     val showFinished by historyViewModel.showFinished.collectAsState()
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
+
+    val availablePlayers by historyViewModel.availableHintPlayers.collectAsState()
+    val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
 
     val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
@@ -537,59 +566,246 @@ fun HintHistoryTab(historyViewModel: HistoryViewModel, searchQuery: String) {
     var isForYouExpanded by rememberSaveable { mutableStateOf(true) }
     var isByYouExpanded by rememberSaveable { mutableStateOf(true) }
 
-    val filteredHintsForYou = remember(hintsForYou, searchQuery, showFinished, finishedKeys) {
-        filterHints(hintsForYou, searchQuery, showFinished, finishedKeys)
+    val filteredHintsForYou = remember(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer) {
+        filterHints(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer)
     }
-    val filteredHintsByYou = remember(hintsByYou, searchQuery, showFinished, finishedKeys) {
-        filterHints(hintsByYou, searchQuery, showFinished, finishedKeys)
+    val filteredHintsByYou = remember(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer) {
+        filterHints(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer)
     }
 
-    if (filteredHintsForYou.isEmpty() && filteredHintsByYou.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No hint history found.")
+    Column(modifier = Modifier.fillMaxSize()) {
+
+        if (availablePlayers.isNotEmpty()) {
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item {
+                    FilterChip(
+                        selected = selectedPlayer == null,
+                        onClick = { historyViewModel.onPlayerFilterSelected(null) },
+                        label = { Text("All") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    )
+                }
+                items(availablePlayers) { player ->
+                    FilterChip(
+                        selected = player == selectedPlayer,
+                        onClick = { historyViewModel.onPlayerFilterSelected(player) },
+                        label = { Text(player) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    )
+                }
+            }
         }
-    } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            if (filteredHintsForYou.isNotEmpty()) {
-                item {
-                    SectionHeader(
-                        title = "Hints For Your Items",
-                        count = filteredHintsForYou.size,
-                        isExpanded = isForYouExpanded,
-                        onClick = { isForYouExpanded = !isForYouExpanded }
-                    )
-                }
-                if (isForYouExpanded) {
-                    items(filteredHintsForYou, key = { it.hint_db_id }) { hint ->
-                        HintCard(hint = hint, formatter = formatter, type = "for_you")
-                    }
-                }
-            }
 
-            if (filteredHintsByYou.isNotEmpty()) {
-                item {
-                    if (filteredHintsForYou.isNotEmpty()) {
-                        Spacer(Modifier.height(16.dp))
-                        Divider()
-                        Spacer(Modifier.height(16.dp))
+        if (filteredHintsForYou.isEmpty() && filteredHintsByYou.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
+            Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
+                Text("No hint history found.")
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (filteredHintsForYou.isNotEmpty()) {
+                    item {
+                        SectionHeader(
+                            title = "Hints For Your Items",
+                            count = filteredHintsForYou.size,
+                            isExpanded = isForYouExpanded,
+                            onClick = { isForYouExpanded = !isForYouExpanded }
+                        )
                     }
-                    SectionHeader(
-                        title = "Hints For Items In Your World",
-                        count = filteredHintsByYou.size,
-                        isExpanded = isByYouExpanded,
-                        onClick = { isByYouExpanded = !isByYouExpanded }
-                    )
+                    if (isForYouExpanded) {
+                        items(filteredHintsForYou, key = { it.hint_db_id }) { hint ->
+                            HintCard(
+                                hint = hint,
+                                formatter = formatter,
+                                onClick = { onHintClick(hint) }
+                            )
+                        }
+                    }
                 }
-                if (isByYouExpanded) {
-                    items(filteredHintsByYou, key = { it.hint_db_id }) { hint ->
-                        HintCard(hint = hint, formatter = formatter, type = "by_you")
+
+                if (filteredHintsByYou.isNotEmpty()) {
+                    item {
+                        if (filteredHintsForYou.isNotEmpty()) {
+                            Spacer(Modifier.height(16.dp))
+                            Divider()
+                            Spacer(Modifier.height(16.dp))
+                        }
+                        SectionHeader(
+                            title = "Hints For Items In Your World",
+                            count = filteredHintsByYou.size,
+                            isExpanded = isByYouExpanded,
+                            onClick = { isByYouExpanded = !isByYouExpanded }
+                        )
+                    }
+                    if (isByYouExpanded) {
+                        items(filteredHintsByYou, key = { it.hint_db_id }) { hint ->
+                            HintCard(
+                                hint = hint,
+                                formatter = formatter,
+                                // REMOVED: type = "by_you",
+                                onClick = { onHintClick(hint) }
+                            )
+                        }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun HintCard(
+    hint: HintEntity,
+    formatter: DateTimeFormatter,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        // No colors param ensures it matches Item cards (Surface Variant default)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (hint.isFound) Icons.Default.CheckCircle else Icons.Default.Info,
+                contentDescription = if (hint.isFound) "Found" else "Hint",
+                tint = if (hint.isFound) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+
+                val itemColor = when {
+                    (hint.itemFlags and 1) != 0 -> APTheme.colors.progression
+                    (hint.itemFlags and 2) != 0 -> APTheme.colors.useful
+                    (hint.itemFlags and 4) != 0 -> APTheme.colors.trap
+                    else -> Color.Unspecified
+                }
+
+                // Line 1: [ItemOwner]'s [Item]
+                Text(
+                    buildAnnotatedString {
+                        withStyle(style = SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                            append("${hint.itemOwnerName}'s ")
+                        }
+                        withStyle(style = SpanStyle(color = itemColor, fontWeight = FontWeight.Bold)) {
+                            append(hint.itemName)
+                        }
+                    },
+                    style = MaterialTheme.typography.bodyLarge
+                )
+
+                // Line 2: is at [Location]
+                Text(
+                    text = "is at ${hint.locationName}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                // Line 3: in [LocationOwner]'s World • Timestamp
+                Text(
+                    text = buildAnnotatedString {
+                        append("in ")
+                        withStyle(style = SpanStyle(fontWeight = FontWeight.Medium)) {
+                            append("${hint.locationOwnerName}'s World")
+                        }
+
+                        append(" • ")
+
+                        if (hint.isFound) {
+                            withStyle(style = SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)) {
+                                append("Found")
+                            }
+                            append(" • ")
+                        }
+                        append(formatTimestamp(hint.timestamp, formatter))
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun HintDetailSheet(
+    hint: HintEntity,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    // Explicit copy text: [ItemOwner]'s [Item] is at [Location] in [LocationOwner]'s World
+    val copyText = "${hint.itemOwnerName}'s ${hint.itemName} is at ${hint.locationName} in ${hint.locationOwnerName}'s World"
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(24.dp)
+            .navigationBarsPadding()
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(Modifier.width(16.dp))
+            Text(
+                text = "Hint Detail",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = copyText,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(16.dp)
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Button(
+            onClick = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("Archipelago Hint", copyText)
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                onDismiss()
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Copy Text to Clipboard")
         }
     }
 }
@@ -598,7 +814,8 @@ private fun filterHints(
     hints: List<HintEntity>,
     query: String,
     showFinished: Boolean,
-    finishedKeys: Set<Pair<Int, String>>
+    finishedKeys: Set<Pair<Int, String>>,
+    selectedPlayer: String?
 ): List<HintEntity> {
     return hints.filter { hint ->
         val matchesQuery = if (query.isBlank()) true else {
@@ -612,7 +829,15 @@ private fun filterHints(
         val isItemOwnerFinished = finishedKeys.contains(hint.roomDbId to hint.itemOwnerName)
         val matchesFinished = showFinished || !isItemOwnerFinished
 
-        matchesQuery && matchesFinished
+        val matchesPlayer = if (selectedPlayer == null) true else {
+            if (hint.hintType == "for_you") {
+                hint.itemOwnerName == selectedPlayer
+            } else {
+                hint.locationOwnerName == selectedPlayer
+            }
+        }
+
+        matchesQuery && matchesFinished && matchesPlayer
     }
 }
 

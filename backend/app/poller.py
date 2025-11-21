@@ -318,6 +318,7 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
 def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game_map, game_checksums, has_hint_history):
     """
     Iterates hints, dedupes, creates objects, detects found hints, preps notifications.
+    NOW: Filters by Item Flags (Progression/Useful only).
     """
     hints_to_add = []
     new_hints_for_notify = []
@@ -328,16 +329,26 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
     hints_processed_count = 0
     hints_added_count = 0
     hints_skipped_backfill = 0
+    hints_skipped_classification = 0
 
     for p_hints in tracker_data.get('hints', []):
          for hint_data in p_hints.get('hints', []):
             hints_processed_count += 1
             try:
                 if len(hint_data) < 5: continue 
-                io_id, lo_id, loc_id, item_id, is_found_from_tracker, *_ = hint_data
-                io_id, lo_id, loc_id, item_id = int(io_id), int(lo_id), int(loc_id), int(item_id)
-                is_found_from_tracker = bool(is_found_from_tracker) 
+                
+                io_id = int(hint_data[0])
+                lo_id = int(hint_data[1])
+                loc_id = int(hint_data[2])
+                item_id = int(hint_data[3])
+                is_found_from_tracker = bool(hint_data[4])
+                flags = int(hint_data[6]) if len(hint_data) > 6 else 0
+                
             except (ValueError, IndexError):
+                continue
+
+            if not (flags & 0b011):
+                hints_skipped_classification += 1
                 continue
 
             hint_key_db = (io_id, lo_id, item_id, loc_id)
@@ -374,7 +385,8 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                         'hint_key_batch': hint_key_batch,
                         'io_id': io_id, 'lo_id': lo_id, 'item_id': item_id, 'loc_id': loc_id,
                         'io_game': io_game, 'lo_game': lo_game,
-                        'io_checksum': io_checksum, 'lo_checksum': lo_checksum
+                        'io_checksum': io_checksum, 'lo_checksum': lo_checksum,
+                        'flags': flags
                     })
                     
                     if is_found_from_tracker:
@@ -388,7 +400,7 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                     just_found_hint_item_loc_pairs.add((loc_id, item_id))
     
     if hints_processed_count > 0:
-         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Hints: Proc={hints_processed_count}, Added={hints_added_count}")
+         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Hints: Proc={hints_processed_count}, SkipClass={hints_skipped_classification}, Added={hints_added_count}")
     if hints_skipped_backfill > 0:
         logging.info(f"[POLLER_INFO][RoomDBID:{room_db_id}] Suppressed {hints_skipped_backfill} hint notifications (backfill).")
 
@@ -442,6 +454,9 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
         for user_id, tracked_slots in tracked_slots_by_user.items():
             if rid in tracked_slots:
+                if rid == send_id:
+                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed local item '{item_name}' (Slot {rid} found its own item).")
+                     continue
                 alias = aliases_by_user.get(user_id, "Unknown Room")
                 user_prefs = users_by_id.get(user_id)
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
@@ -523,29 +538,66 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
             is_at_our_location = lo_id in tracked_slots
 
             if is_for_us or is_at_our_location:
-                slot_to_check = io_id if is_for_us else lo_id
-                user_prefs = users_by_id.get(user_id)
-                slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_to_check)
-
-                if not user_prefs or not slot_prefs: continue
-
-                if (user_id, slot_to_check) in backfill_check_set:
-                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {slot_to_check} is backfilling. Suppressing hint.")
+                
+                # --- 1. STRICT SAME-WORLD SUPPRESSION ---
+                # "I know because I did it" (Item A is in Slot A)
+                if io_id == lo_id:
                     continue
+
+                # Determine User Preferences
+                user_prefs = users_by_id.get(user_id)
+                if not user_prefs: continue
                 
-                notify_override = slot_prefs.notify_hints
-                # Default hints to the Progression default setting if no hint specific setting
-                should_notify = notify_override if notify_override is not None else user_prefs.notify_hints_default
+                should_send_notification = False
+
+                # Rule 1: Hints for MY Items (is_for_us)
+                # Controlled by: notify_hints_remote_items_default
+                if is_for_us:
+                    # Note: We treat this as a global user preference (no specific slot override for "my items anywhere")
+                    if getattr(user_prefs, 'notify_hints_remote_items_default', True):
+                        should_send_notification = True
+
+                # Rule 2: Hints for Items in MY World (is_at_our_location)
+                # Controlled by: notify_hints_default (AND per-slot overrides)
+                if is_at_our_location and not should_send_notification:
+                    # Check slot specific override for the location owner
+                    slot_prefs = prefs_by_user_slot.get(user_id, {}).get(lo_id)
+                    
+                    # 1. Slot Override takes precedence
+                    if slot_prefs and slot_prefs.notify_hints is not None:
+                         if slot_prefs.notify_hints:
+                             should_send_notification = True
+                    
+                    # 2. Fallback to Global Default for "Local World"
+                    elif user_prefs.notify_hints_default:
+                        should_send_notification = True
                 
-                if should_notify:
-                    alias = aliases_by_user.get(user_id, "Unknown Room")
-                    title = f"💡 New Hint! - [{alias}]"
-                    item_owner_name = name_map.get(io_id, f'P{io_id}')
-                    location_owner_name = name_map.get(lo_id, f'P{lo_id}')
-                    body = f"{item_owner_name}'s {item_name} is at {loc_name} in {location_owner_name}'s World."
-                    notifications_by_user.setdefault(user_id, []).append({
-                        'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']
-                    })
+                # --- FINAL CHECK ---
+                if not should_send_notification:
+                    continue
+
+                # Check Backfill status (prevent spam on startup)
+                # We check the slot that triggered the rule.
+                relevant_slot = io_id if (is_for_us and getattr(user_prefs, 'notify_hints_remote_items_default', True)) else lo_id
+                if (user_id, relevant_slot) in backfill_check_set:
+                    continue
+
+                # --- BUILD NOTIFICATION ---
+                alias = aliases_by_user.get(user_id, "Unknown Room")
+                hint_type_icon = "🏆" if (hint_data.get('flags', 0) & 1) else "✅"
+                title = f"💡 {hint_type_icon} New Hint! - [{alias}]"
+                
+                item_owner_name = name_map.get(io_id, f'P{io_id}')
+                location_owner_name = name_map.get(lo_id, f'P{lo_id}')
+                
+                if is_for_us:
+                    body = f"Your {item_name} is at {loc_name} ({location_owner_name})"
+                else:
+                    body = f"{item_owner_name}'s {item_name} is at your {loc_name}"
+                
+                notifications_by_user.setdefault(user_id, []).append({
+                    'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']
+                })
     
     return notifications_by_user
 
