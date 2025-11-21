@@ -596,8 +596,7 @@ def update_tracked_slots(current_user, room_db_id):
             UserTrackedSlot(
                 user_id=current_user.id, 
                 room_id=room_db_id, 
-                slot_id=slot_id,
-                notify_finished=current_user.notify_finished_default
+                slot_id=slot_id
             )
             for slot_id in slots_to_add if isinstance(slot_id, int) and slot_id > 0
         ]
@@ -1091,6 +1090,7 @@ def get_user_tracked_slots(current_user):
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,
                     'notify_hints': slot.notify_hints,
+                    'notify_hints_remote_items': slot.notify_hints_remote_items,
                     'notify_finished': slot.notify_finished
                 })
 
@@ -1169,6 +1169,8 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
             tracked_slot.notify_useful = data['notify_useful']
         if 'notify_hints' in data:
             tracked_slot.notify_hints = data['notify_hints']
+        if 'notify_hints_remote_items' in data:
+            tracked_slot.notify_hints_remote_items = data['notify_hints_remote_items']
         if 'notify_finished' in data:
             tracked_slot.notify_finished = data['notify_finished']
 

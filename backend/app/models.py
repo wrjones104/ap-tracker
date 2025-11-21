@@ -86,6 +86,7 @@ class UserTrackedSlot(Base):
     notify_progression = Column(Boolean, nullable=True, default=None)
     notify_useful = Column(Boolean, nullable=True, default=None)
     notify_hints = Column(Boolean, nullable=True, default=None)
+    notify_hints_remote_items = Column(Boolean, nullable=True, default=None)
     notify_finished = Column(Boolean, nullable=True, default=None)
     user = relationship("User", viewonly=True)    
     

@@ -114,10 +114,11 @@ fun ProfileScreen(
                 currentProgression = slotDetail.notify_progression,
                 currentUseful = slotDetail.notify_useful,
                 currentHints = slotDetail.notify_hints,
+                currentRemoteHints = slotDetail.notify_hints_remote_items,
                 currentFinished = slotDetail.notify_finished,
                 globalProfile = userProfile!!,
-                onSave = { prog, use, hint, finished ->
-                    userViewModel.updateSlotPreferences(roomId, slotDetail.slot_id, prog, use, hint, finished)
+                onSave = { prog, use, hint, remote, finished ->
+                    userViewModel.updateSlotPreferences(roomId, slotDetail.slot_id, prog, use, hint, remote, finished)
                     editingSlot = null
                 },
                 onDismiss = { editingSlot = null }
@@ -499,14 +500,16 @@ fun SlotSettingsSheet(
     currentProgression: Boolean?,
     currentUseful: Boolean?,
     currentHints: Boolean?,
+    currentRemoteHints: Boolean?,
     currentFinished: Boolean?,
     globalProfile: UserProfile,
-    onSave: (prog: Boolean?, use: Boolean?, hint: Boolean?, finished: Boolean?) -> Unit,
+    onSave: (prog: Boolean?, use: Boolean?, hint: Boolean?, remote: Boolean?, finished: Boolean?) -> Unit,
     onDismiss: () -> Unit
 ) {
     var progression by remember(playerSlotId) { mutableStateOf(currentProgression) }
     var useful by remember(playerSlotId) { mutableStateOf(currentUseful) }
     var hints by remember(playerSlotId) { mutableStateOf(currentHints) }
+    var remoteHints by remember(playerSlotId) { mutableStateOf(currentRemoteHints) }
     var finished by remember(playerSlotId) { mutableStateOf(currentFinished) }
 
     Column(
@@ -537,12 +540,21 @@ fun SlotSettingsSheet(
         )
         Spacer(Modifier.height(16.dp))
 
-        Text("Hints", style = MaterialTheme.typography.titleMedium)
+        Text("Hints in this World", style = MaterialTheme.typography.titleMedium)
         PreferenceToggle(
             selectedValue = hints,
             globalDefault = globalProfile.notify_hints_default,
             onValueChanged = { hints = it }
         )
+        Spacer(Modifier.height(16.dp))
+
+        Text("Hints for this Player's Items", style = MaterialTheme.typography.titleMedium)
+        PreferenceToggle(
+            selectedValue = remoteHints,
+            globalDefault = globalProfile.notify_hints_remote_items_default,
+            onValueChanged = { remoteHints = it }
+        )
+
         Spacer(Modifier.height(16.dp))
 
         Text("Finished", style = MaterialTheme.typography.titleMedium)
@@ -561,7 +573,7 @@ fun SlotSettingsSheet(
                 Text("Cancel")
             }
             Spacer(Modifier.width(8.dp))
-            Button(onClick = { onSave(progression, useful, hints, finished) }) {
+            Button(onClick = { onSave(progression, useful, hints, remoteHints, finished) }) {
                 Text("Save")
             }
         }
