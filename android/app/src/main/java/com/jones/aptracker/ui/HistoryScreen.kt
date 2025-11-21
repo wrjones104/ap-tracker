@@ -274,13 +274,13 @@ fun HistoryScreen(
             )
         }
     }
-    if (selectedHint != null) {
+    selectedHint?.let { hint ->
         ModalBottomSheet(
             onDismissRequest = { selectedHint = null },
             sheetState = sheetState
         ) {
             HintDetailSheet(
-                hint = selectedHint!!,
+                hint = hint,
                 onDismiss = { selectedHint = null }
             )
         }
