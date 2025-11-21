@@ -314,18 +314,20 @@ fun VersionGate(
 @Composable
 fun UpdateRequiredScreen(storeUrl: String) {
     val context = LocalContext.current
-    val githubReleasesUrl = "https://github.com/wrjones104/ap-tracker/releases"
+    val playStoreUrl = "https://play.google.com/store/apps/details?id=com.jones.aptracker"
 
-    AlertDialog(
+   AlertDialog(
         onDismissRequest = { /* Do nothing, cannot be dismissed */ },
         title = { Text("Update Required") },
-        text = { Text("This version of AP Tracker is no longer supported. Please update to the latest version to continue.") },
+        text = { Text("This version of AP Alerts is no longer supported. Please update to the latest version via the Play Store to continue.") },
         confirmButton = {
             Button(onClick = {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(githubReleasesUrl))
+                // We use the storeUrl passed from ViewModel, or fallback to the hardcoded one
+                val urlToOpen = if (storeUrl.isNotEmpty()) storeUrl else playStoreUrl
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToOpen))
                 context.startActivity(intent)
             }) {
-                Text("Go to Releases")
+                Text("Update on Play Store")
             }
         },
         dismissButton = null
