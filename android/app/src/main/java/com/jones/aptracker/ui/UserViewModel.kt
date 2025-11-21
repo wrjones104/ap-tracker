@@ -112,6 +112,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         progression: Boolean?,
         useful: Boolean?,
         hints: Boolean?,
+        remoteHints: Boolean?,
         finished: Boolean?
     ) {
         viewModelScope.launch {
@@ -120,6 +121,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                     notify_progression = progression,
                     notify_useful = useful,
                     notify_hints = hints,
+                    notify_hints_remote_items = remoteHints,
                     notify_finished = finished
                 )
                 RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
