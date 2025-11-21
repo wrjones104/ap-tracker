@@ -39,10 +39,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (currentVersion >= minVersion) {
                     _versionState.value = AppVersionState.UpToDate
                 } else {
-                    _versionState.value = AppVersionState.Outdated("https://github.com/wrjones104/ap-tracker/releases")
+                    _versionState.value = AppVersionState.Outdated("https://play.google.com/store/apps/details?id=com.jones.aptracker")
                 }
 
             } catch (e: Exception) {
+                // Fail open (allow user in if check fails) to prevent locking out users with bad internet
                 _versionState.value = AppVersionState.UpToDate
             }
         }
