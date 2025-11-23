@@ -406,7 +406,7 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 
     return hints_to_add, new_hints_for_notify, cache_keys_to_fetch, just_found_hint_item_loc_pairs
 
-def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, name_map, backfill_check_set, just_found_hint_item_loc_pairs):
+def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids):
     """
     Fetches names from DB in chunks and constructs final notification payloads.
     """
@@ -462,6 +462,11 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
 
                 if not user_prefs or not slot_prefs: continue
+
+                wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
+                if rid in finished_player_ids and not wants_finished_notifs:
+                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed item for Slot {rid} (Slot Finished).")
+                    continue
 
                 if (user_id, rid) in backfill_check_set:
                     logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
@@ -547,6 +552,18 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 # Determine User Preferences
                 user_prefs = users_by_id.get(user_id)
                 if not user_prefs: continue
+
+                relevant_slot = io_id if is_for_us else lo_id
+
+                # Determine if user wants notifications for finished slots
+                relevant_slot_prefs = prefs_by_user_slot.get(user_id, {}).get(relevant_slot)
+                wants_finished_notifs = user_prefs.notify_finished_default
+                if relevant_slot_prefs and relevant_slot_prefs.notify_finished is not None:
+                    wants_finished_notifs = relevant_slot_prefs.notify_finished
+
+                if relevant_slot in finished_player_ids and not wants_finished_notifs:
+                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed hint for Slot {relevant_slot} (Slot Finished).")
+                    continue
                 
                 should_send_notification = False
 
@@ -700,7 +717,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         data_notifs = _resolve_names_and_notify(
             session, db_id, all_cache_keys, new_items_notif, new_hints_notif,
             users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, name_map,
-            backfill_check_set, just_found_hints
+            backfill_check_set, just_found_hints, finished_player_ids
         )
 
         # Combine notifications (Finished + Items + Hints)
