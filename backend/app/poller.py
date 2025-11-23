@@ -554,14 +554,13 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 if not user_prefs: continue
 
                 relevant_slot = io_id if is_for_us else lo_id
-                wants_finished_notifs = True
-                
-                # Re-fetch slot prefs specifically for the relevant slot (safety check)
+
+                # Determine if user wants notifications for finished slots
                 relevant_slot_prefs = prefs_by_user_slot.get(user_id, {}).get(relevant_slot)
-                
-                if relevant_slot_prefs:
-                    wants_finished_notifs = relevant_slot_prefs.notify_finished if relevant_slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
-                
+                wants_finished_notifs = user_prefs.notify_finished_default
+                if relevant_slot_prefs and relevant_slot_prefs.notify_finished is not None:
+                    wants_finished_notifs = relevant_slot_prefs.notify_finished
+
                 if relevant_slot in finished_player_ids and not wants_finished_notifs:
                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed hint for Slot {relevant_slot} (Slot Finished).")
                     continue
