@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 from functools import wraps
 from urllib.parse import urlparse
 from ipaddress import ip_address
+from typing import cast
 
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import OperationalError, IntegrityError
@@ -219,7 +220,7 @@ def register_device(current_user):
     It now uses 'android_id' to uniquely identify a device and
     update its FCM token, preventing duplicate device entries.
     """
-    data = request.json
+    data = request.json or {}
     fcm_token = data.get('fcm_token')
     android_id = data.get('android_id') # New ID from the app
 
@@ -321,7 +322,7 @@ def add_room(current_user):
     Adds a new room to the global tracking list and subscribes the
     current user to it.
     """
-    data = request.json
+    data = request.json or {}
     room_url = data.get('room_url', '').strip()
     alias = data.get('alias', '').strip()
     icon_name = data.get('icon_name')
@@ -405,7 +406,6 @@ def add_room(current_user):
 
     if subscription:
         return jsonify({'error': 'User is already subscribed to this room'}), 409
-
     subscription = UserRoomSubscription(
         user_id=current_user.id,
         room_id=room.id,
@@ -414,11 +414,12 @@ def add_room(current_user):
     )
     session.add(subscription)
     
-    room.is_suspended = False 
+    room.is_suspended = cast(bool, False)
 
     logging.info(f"[API] User {current_user.id} subscribed to room {room.id} ('{alias}')")
 
     session.commit()
+
 
     if current_user.cheese_api_key and ap_tracker_id and not current_user.is_guest:
         try:
@@ -540,6 +541,7 @@ def get_room_players(current_user, room_db_id):
             response_players.append({
                 'slot_id': slot_id,
                 'name': p.get('name'),
+                'alias': p.get('alias'),
                 'game': p.get('game'),
                 'is_finished': p.get('is_finished', False),
                 'is_tracked': tracked_slot_entry is not None,
@@ -728,10 +730,19 @@ def get_item_history(current_user, room_db_id):
             location_name_key = (sender_game, snd_checksum, 'location', item.location_id)
             cache_keys_to_find.add(location_name_key)
 
+        receiver_name = receiver_obj.get('name', f"Player {receiver_id}") if receiver_obj else f"Player {receiver_id}"
+        sender_name = sender_obj.get('name', f"Player {sender_id}") if sender_obj else f"Player {sender_id}"
+        
+        # Extract Aliases
+        receiver_alias = receiver_obj.get('alias') if receiver_obj else None
+        sender_alias = sender_obj.get('alias') if sender_obj else None
+
         history_pre_cache.append({
             "playerName": receiver_name,
+            "playerAlias": receiver_alias,
             "receivingGame": receiver_game, 
-            "senderName": sender_name,     
+            "senderName": sender_name,    
+            "senderAlias": sender_alias,
             "senderGame": sender_game,   
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": room.tracker_id,
@@ -775,9 +786,11 @@ def get_item_history(current_user, room_db_id):
         
         history.append({
             "playerName": temp_item["playerName"],
+            "playerAlias": temp_item["playerAlias"],
             "receivingGame": temp_item["receivingGame"], 
             "itemName": item_name,
             "senderName": temp_item["senderName"],       
+            "senderAlias": temp_item["senderAlias"],
             "senderGame": temp_item["senderGame"],       
             "locationName": location_name,               
             "isPlayerFinished": temp_item["isPlayerFinished"],
@@ -887,8 +900,9 @@ def get_global_item_history(current_user):
             continue
 
         # Metadata Maps
+        # Note: p is the whole object, so we can access 'alias'
         player_map = {p['slot_id']: p for p in players}
-        game_map = {p['slot_id']: p['game'] for p in players}
+        game_map = {p['slot_id']: p.get('game') for p in players}
         
         # Resolve Entities
         receiver_id = item.receiving_slot_id
@@ -898,7 +912,10 @@ def get_global_item_history(current_user):
         sender_obj = player_map.get(sender_id)
         
         receiver_name = receiver_obj.get('name', f"Player {receiver_id}") if receiver_obj else f"Player {receiver_id}"
+        receiver_alias = receiver_obj.get('alias') if receiver_obj else None
+        
         sender_name = sender_obj.get('name', f"Player {sender_id}") if sender_obj else f"Player {sender_id}"
+        sender_alias = sender_obj.get('alias') if sender_obj else None
         
         receiver_game = game_map.get(receiver_id, "Unknown")
         sender_game = game_map.get(sender_id, "Unknown")
@@ -926,8 +943,10 @@ def get_global_item_history(current_user):
             "alias": sub.alias, 
             "icon_name": sub.icon_name,
             "playerName": receiver_name,
+            "playerAlias": receiver_alias, 
             "receivingGame": receiver_game, 
             "senderName": sender_name,    
+            "senderAlias": sender_alias,  
             "senderGame": sender_game,    
             "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "tracker_id": room_data.tracker_id,
@@ -975,9 +994,11 @@ def get_global_item_history(current_user):
             "alias": temp_item["alias"], 
             "icon_name": temp_item["icon_name"],
             "playerName": temp_item['playerName'],
+            "playerAlias": temp_item['playerAlias'],
             "receivingGame": temp_item['receivingGame'],
             "itemName": item_name,
             "senderName": temp_item['senderName'],     
+            "senderAlias": temp_item['senderAlias'],
             "senderGame": temp_item['senderGame'],      
             "locationName": location_name,              
             "isPlayerFinished": temp_item['is_player_finished'],
@@ -1014,6 +1035,7 @@ def get_current_user(current_user):
             'notify_useful_default': current_user.notify_useful_default,
             'notify_hints_default': current_user.notify_hints_default,
             'notify_finished_default': current_user.notify_finished_default,
+            'use_condensed_messages_default': current_user.use_condensed_messages_default,
             'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'is_guest': True
@@ -1039,6 +1061,7 @@ def get_current_user(current_user):
             'notify_useful_default': current_user.notify_useful_default,
             'notify_hints_default': current_user.notify_hints_default,
             'notify_finished_default': current_user.notify_finished_default,
+            'use_condensed_messages_default': current_user.use_condensed_messages_default,
             'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'is_guest': False
@@ -1080,18 +1103,26 @@ def get_user_tracked_slots(current_user):
             except (json.JSONDecodeError, TypeError):
                 players_json = []
 
-            players_map = {p['slot_id']: p['name'] for p in players_json}
+            # --- Store full player object to access alias ---
+            players_map = {p['slot_id']: p for p in players_json}
 
             tracked_slots_list = []
             for slot in sorted(sub.tracked_slots, key=lambda s: s.slot_id):
+                # Resolve Name and Alias
+                p_obj = players_map.get(slot.slot_id)
+                p_name = p_obj.get('name', f"Player {slot.slot_id}") if p_obj else f"Player {slot.slot_id}"
+                p_alias = p_obj.get('alias') if p_obj else None
+
                 tracked_slots_list.append({
                     'slot_id': slot.slot_id,
-                    'player_name': players_map.get(slot.slot_id, f"Player {slot.slot_id}"),
+                    'player_name': p_name,
+                    'player_alias': p_alias,
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,
                     'notify_hints': slot.notify_hints,
                     'notify_hints_remote_items': slot.notify_hints_remote_items,
-                    'notify_finished': slot.notify_finished
+                    'notify_finished': slot.notify_finished,
+                    'use_condensed_messages': slot.use_condensed_messages 
                 })
 
             response_data.append({
@@ -1113,7 +1144,7 @@ def update_user_preferences(current_user):
     """
     Updates the global notification preferences for the authenticated user.
     """
-    data = request.json
+    data = request.json or {}
     session = Session()
     try:
         user = session.query(User).filter_by(id=current_user.id).first()
@@ -1121,16 +1152,17 @@ def update_user_preferences(current_user):
             return jsonify({'error': 'User not found'}), 404
 
         if 'notify_progression' in data:
-            user.notify_progression_default = bool(data['notify_progression'])
+            setattr(user, 'notify_progression_default', bool(data['notify_progression']))
         if 'notify_useful' in data:
-            user.notify_useful_default = bool(data['notify_useful'])
+            setattr(user, 'notify_useful_default', bool(data['notify_useful']))
         if 'notify_hints' in data:
-            user.notify_hints_default = bool(data['notify_hints'])
+            setattr(user, 'notify_hints_default', bool(data['notify_hints']))
         if 'notify_finished' in data:
-            user.notify_finished_default = bool(data['notify_finished'])
+            setattr(user, 'notify_finished_default', bool(data['notify_finished']))
         if 'notify_hints_remote_items' in data:
-            user.notify_hints_remote_items_default = bool(data['notify_hints_remote_items'])
-        # -------------------
+            setattr(user, 'notify_hints_remote_items_default', bool(data['notify_hints_remote_items']))
+        if 'use_condensed_messages' in data:
+            setattr(user, 'use_condensed_messages_default', bool(data['use_condensed_messages']))
 
         session.commit()
         return jsonify({'message': 'Preferences updated successfully'}), 200
@@ -1151,7 +1183,7 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
     Updates the per-slot notification preferences for the authenticated user.
     'None' (null) means "use global default".
     """
-    data = request.json
+    data = request.json or {}
     session = Session()
     try:
         tracked_slot = session.query(UserTrackedSlot).filter_by(
@@ -1173,6 +1205,8 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
             tracked_slot.notify_hints_remote_items = data['notify_hints_remote_items']
         if 'notify_finished' in data:
             tracked_slot.notify_finished = data['notify_finished']
+        if 'use_condensed_messages' in data:
+            tracked_slot.use_condensed_messages = data['use_condensed_messages']
 
         session.commit()
         return jsonify({'message': 'Slot preferences updated successfully'}), 200
@@ -1301,7 +1335,7 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
         except (json.JSONDecodeError, ValueError):
             checksum_json = {}
 
-        player_map_by_room[r.id] = {p['slot_id']: p['name'] for p in players_json}
+        player_map_by_room[r.id] = {p['slot_id']: p for p in players_json}
         game_map_by_room[r.id] = {p['slot_id']: p.get('game') for p in players_json}
         checksum_map_by_room[r.id] = checksum_json
     uuid_to_db_id = {v: k for k, v in room_id_to_uuid.items()}
@@ -1325,8 +1359,10 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
         game_map = game_map_by_room.get(room_db_id_for_hint, {})
         checksum_map = checksum_map_by_room.get(room_db_id_for_hint, {})
 
-        item_owner_name = player_map.get(hint.item_owner_id, f"Player {hint.item_owner_id}")
-        location_owner_name = player_map.get(hint.location_owner_id, f"Player {hint.location_owner_id}")
+        io_obj = player_map.get(hint.item_owner_id)
+        item_owner_name = io_obj.get('name', f"Player {hint.item_owner_id}") if io_obj else f"Player {hint.item_owner_id}"
+        lo_obj = player_map.get(hint.location_owner_id)
+        location_owner_name = lo_obj.get('name', f"Player {hint.location_owner_id}") if lo_obj else f"Player {hint.location_owner_id}"
         
         item_owner_game = game_map.get(hint.item_owner_id)
         location_owner_game = game_map.get(hint.location_owner_id)
@@ -1381,6 +1417,15 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
         
         item_name = name_cache_map.get(temp_data["item_name_key"]) or f"Item ID {hint.item_id}"
         location_name = name_cache_map.get(temp_data["location_name_key"]) or f"Location ID {hint.location_id}"
+        io_obj = player_map.get(hint.item_owner_id)
+        lo_obj = player_map.get(hint.location_owner_id)
+
+        # EXTRACT 'name' STRING EXPLICITLY
+        item_owner_name = io_obj.get('name', f"Player {hint.item_owner_id}") if io_obj else f"Player {hint.item_owner_id}"
+        item_owner_alias = io_obj.get('alias') if io_obj else None
+
+        location_owner_name = lo_obj.get('name', f"Player {hint.location_owner_id}") if lo_obj else f"Player {hint.location_owner_id}"
+        location_owner_alias = lo_obj.get('alias') if lo_obj else None
 
         hint_data = {
             "id": hint.id,
@@ -1388,8 +1433,10 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             "room_alias": alias_map.get(temp_data["room_db_id"], "Unknown Room"),
             "item_owner_id": hint.item_owner_id,
             "item_owner_name": temp_data["item_owner_name"],
+            "item_owner_alias": item_owner_alias, 
             "location_owner_id": hint.location_owner_id,
             "location_owner_name": temp_data["location_owner_name"],
+            "location_owner_alias": location_owner_alias,
             "item_name": item_name,
             "location_name": location_name,
             "is_found": getattr(hint, 'is_found', False),

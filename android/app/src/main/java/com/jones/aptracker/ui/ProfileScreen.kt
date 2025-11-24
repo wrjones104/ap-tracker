@@ -104,21 +104,32 @@ fun ProfileScreen(
 
     if (editingSlot != null && userProfile != null) {
         val (roomId, slotDetail) = editingSlot!!
+        val sheetHeaderName = if (!slotDetail.player_alias.isNullOrBlank()) {
+            "${slotDetail.player_alias} (${slotDetail.player_name})"
+        } else {
+            slotDetail.player_name
+        }
         ModalBottomSheet(
             onDismissRequest = { editingSlot = null },
             sheetState = sheetState
         ) {
             SlotSettingsSheet(
                 playerSlotId = slotDetail.slot_id,
-                playerName = slotDetail.player_name,
+                playerName = sheetHeaderName,
                 currentProgression = slotDetail.notify_progression,
                 currentUseful = slotDetail.notify_useful,
                 currentHints = slotDetail.notify_hints,
                 currentRemoteHints = slotDetail.notify_hints_remote_items,
                 currentFinished = slotDetail.notify_finished,
+                currentCondensed = slotDetail.use_condensed_messages,
                 globalProfile = userProfile!!,
-                onSave = { prog, use, hint, remote, finished ->
-                    userViewModel.updateSlotPreferences(roomId, slotDetail.slot_id, prog, use, hint, remote, finished)
+                onSave = { prog, use, hint, remote, finished, condensed ->
+                    userViewModel.updateSlotPreferences(
+                        roomId,
+                        slotDetail.slot_id,
+                        prog, use, hint, remote, finished,
+                        condensed
+                    )
                     editingSlot = null
                 },
                 onDismiss = { editingSlot = null }
@@ -163,7 +174,16 @@ fun ProfileScreen(
                 userProfile?.let { profile ->
                     Column {
                         NotificationToggle(
+                            text = "Condensed Messages",
+                            description = "Shorten messages for notifications and history items.",
+                            checked = profile.use_condensed_messages_default,
+                            onCheckedChange = {
+                                userViewModel.updateGlobalPreferences(useCondensed = it)
+                            }
+                        )
+                        NotificationToggle(
                             text = "Progression Items",
+                            description = "Notify when a progression item is received.",
                             checked = profile.notify_progression_default,
                             onCheckedChange = {
                                 userViewModel.updateGlobalPreferences(progression = it)
@@ -171,6 +191,7 @@ fun ProfileScreen(
                         )
                         NotificationToggle(
                             text = "Useful Items",
+                            description = "Notify when a useful item is received.",
                             checked = profile.notify_useful_default,
                             onCheckedChange = {
                                 userViewModel.updateGlobalPreferences(useful = it)
@@ -194,6 +215,7 @@ fun ProfileScreen(
                         )
                         NotificationToggle(
                             text = "Finished Slots",
+                            description = "Notify when a slot finishes, as well as for hints & items received afterwards.",
                             checked = profile.notify_finished_default,
                             onCheckedChange = {
                                 userViewModel.updateGlobalPreferences(finished = it)
@@ -477,8 +499,14 @@ fun SlotPreferenceItem(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
+        val displayName = if (!slot.player_alias.isNullOrBlank()) {
+            "${slot.player_alias} (${slot.player_name})"
+        } else {
+            slot.player_name
+        }
+
         Text(
-            text = slot.player_name,
+            text = displayName,
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.weight(1f)
         )
@@ -501,8 +529,9 @@ fun SlotSettingsSheet(
     currentHints: Boolean?,
     currentRemoteHints: Boolean?,
     currentFinished: Boolean?,
+    currentCondensed: Boolean?,
     globalProfile: UserProfile,
-    onSave: (prog: Boolean?, use: Boolean?, hint: Boolean?, remote: Boolean?, finished: Boolean?) -> Unit,
+    onSave: (prog: Boolean?, use: Boolean?, hint: Boolean?, remote: Boolean?, finished: Boolean?, condensed: Boolean?) -> Unit,
     onDismiss: () -> Unit
 ) {
     var progression by remember(playerSlotId) { mutableStateOf(currentProgression) }
@@ -510,6 +539,7 @@ fun SlotSettingsSheet(
     var hints by remember(playerSlotId) { mutableStateOf(currentHints) }
     var remoteHints by remember(playerSlotId) { mutableStateOf(currentRemoteHints) }
     var finished by remember(playerSlotId) { mutableStateOf(currentFinished) }
+    var condensed by remember(playerSlotId) { mutableStateOf(currentCondensed) }
 
     Column(
         modifier = Modifier
@@ -562,6 +592,16 @@ fun SlotSettingsSheet(
             globalDefault = globalProfile.notify_finished_default,
             onValueChanged = { finished = it }
         )
+
+        Spacer(Modifier.height(16.dp))
+
+        Text("Condensed Messages", style = MaterialTheme.typography.titleMedium)
+        PreferenceToggle(
+            selectedValue = condensed,
+            globalDefault = globalProfile.use_condensed_messages_default,
+            onValueChanged = { condensed = it }
+        )
+
         Spacer(Modifier.height(24.dp))
 
         Row(
@@ -572,7 +612,11 @@ fun SlotSettingsSheet(
                 Text("Cancel")
             }
             Spacer(Modifier.width(8.dp))
-            Button(onClick = { onSave(progression, useful, hints, remoteHints, finished) }) {
+            Button(
+                onClick = {
+                    onSave(progression, useful, hints, remoteHints, finished, condensed)
+                }
+            ) {
                 Text("Save")
             }
         }

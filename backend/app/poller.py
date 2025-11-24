@@ -128,7 +128,7 @@ async def fetch_json(url):
 # POLL LOGIC & SUBROUTINES
 # =============================================================================
 
-def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id, prefs_by_user_slot, tracked_slots_by_user, backfill_check_set, name_map, aliases_by_user):
+def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id, prefs_by_user_slot, tracked_slots_by_user, backfill_check_set, full_name_map, short_name_map, aliases_by_user):
     """
     Checks both AP status AND location counts to determine if players are finished.
     Returns: (notifications_dict, finished_player_ids_set, players_list_updated_bool)
@@ -181,15 +181,26 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
         for user_id, tracked_slots in tracked_slots_by_user.items():
             for slot_id in players_just_marked_finished:
                 if slot_id in tracked_slots:
-                    player_name = name_map.get(slot_id, f"Player {slot_id}")
-                    finished_players_by_user.setdefault(user_id, []).append((slot_id, player_name))
+                    finished_players_by_user.setdefault(user_id, []).append(slot_id)
 
-        for user_id, finished_list in finished_players_by_user.items():
+        for user_id, finished_slot_ids in finished_players_by_user.items():
             user_prefs = users_by_id.get(user_id)
             if not user_prefs: continue 
 
             names_to_notify = [] 
-            for slot_id, player_name in finished_list:
+            
+            # Determine Condensed Preference for this user batch
+            # We use the preference of the FIRST slot in the batch to decide the format for the whole group
+            # (Edge case: user wants mixed formats for different slots finishing simultaneously, but rare)
+            use_condensed = user_prefs.use_condensed_messages_default
+            first_slot_id = finished_slot_ids[0]
+            first_slot_prefs = prefs_by_user_slot.get(user_id, {}).get(first_slot_id)
+            if first_slot_prefs and first_slot_prefs.use_condensed_messages is not None:
+                use_condensed = first_slot_prefs.use_condensed_messages
+
+            current_name_map = short_name_map if use_condensed else full_name_map
+
+            for slot_id in finished_slot_ids:
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_id)
                 if not slot_prefs: continue 
 
@@ -197,14 +208,15 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
                     logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {slot_id} is backfilling. Suppressing 'Finished' notification.")
                     continue 
                 
-                # Check new notify_finished preference
+                # Check notify_finished preference
                 notify_override = slot_prefs.notify_finished
                 should_notify = notify_override if notify_override is not None else user_prefs.notify_finished_default
                 
                 if should_notify:
+                    player_name = current_name_map.get(slot_id, f"Player {slot_id}")
                     names_to_notify.append(player_name)
                 else:
-                    logging.info(f"[NOTIFY_SKIP] User {user_id} has disabled finished notifications for {player_name}.")
+                    logging.info(f"[NOTIFY_SKIP] User {user_id} has disabled finished notifications for Slot {slot_id}.")
 
             if not names_to_notify:
                 continue
@@ -406,14 +418,15 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 
     return hints_to_add, new_hints_for_notify, cache_keys_to_fetch, just_found_hint_item_loc_pairs
 
-def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids):
+def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids):
     """
     Fetches names from DB in chunks and constructs final notification payloads.
+    Applies filtering, backfill checks, ignore lists, and alias/condensed formatting.
     """
     notifications_by_user = {}
     name_lookup_map = {}
 
-    # 1. Fetch Names
+    # 1. Fetch Names from DatapackageCache
     if cache_keys_to_fetch:
         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Fetching {len(cache_keys_to_fetch)} names...")
         try:
@@ -457,34 +470,33 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 if rid == send_id:
                      logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed local item '{item_name}' (Slot {rid} found its own item).")
                      continue
+                
                 alias = aliases_by_user.get(user_id, "Unknown Room")
                 user_prefs = users_by_id.get(user_id)
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
 
                 if not user_prefs or not slot_prefs: continue
 
+                # Check Finished Suppression
                 wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
                 if rid in finished_player_ids and not wants_finished_notifs:
                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed item for Slot {rid} (Slot Finished).")
                     continue
 
+                # Check Backfill Suppression
                 if (user_id, rid) in backfill_check_set:
                     logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
                     continue
 
                 # --- IGNORE LIST CHECK START ---
-                # Normalize incoming item name for comparison
                 normalized_item_name = item_name.lower().strip()
                 should_ignore = False
                 
                 if user_prefs.ignore_items:
-                    # Check against user's ignore list
                     for ignore_rule in user_prefs.ignore_items:
-                        # 1. Check Item Name Match (Case insensitive, Exact match)
+                        # 1. Check Item Name Match
                         if ignore_rule.item_name.lower().strip() == normalized_item_name:
                             # 2. Check Game Scope
-                            # If rule.game_name is None -> It is Global -> IGNORE
-                            # If rule.game_name is Set -> Must match current item's game -> IGNORE
                             if not ignore_rule.game_name:
                                 should_ignore = True
                                 break
@@ -496,6 +508,21 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' for game '{item_data['receiver_game']}'.")
                     continue
                 # --- IGNORE LIST CHECK END ---
+
+                # --- CONDENSED MESSAGING CHECK ---
+                use_condensed = user_prefs.use_condensed_messages_default
+                if slot_prefs.use_condensed_messages is not None:
+                    use_condensed = slot_prefs.use_condensed_messages
+
+                current_name_map = short_name_map if use_condensed else full_name_map
+                sender_name = current_name_map.get(send_id, f'P{send_id}')
+                receiver_name = current_name_map.get(rid, f'P{rid}')
+
+                # Build Body based on Preference
+                if use_condensed:
+                    body = f"Sent to {receiver_name} by {sender_name}"
+                else:
+                    body = f"{sender_name} sent {item_name} to {receiver_name} ({loc_name})"
 
                 is_progression = bool(item_data['flags'] & 1)
                 should_notify = False
@@ -517,9 +544,6 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     title_prefix = "💡 " + title_prefix
                 
                 title = f"{title_prefix} - [{alias}]"
-                sender_name = name_map.get(send_id, f'P{send_id}')
-                receiver_name = name_map.get(rid, f'P{rid}')
-                body = f"{sender_name} sent {item_name} to {receiver_name} ({loc_name})"
                 
                 if should_notify:
                     notifications_by_user.setdefault(user_id, []).append({
@@ -544,9 +568,9 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
             if is_for_us or is_at_our_location:
                 
-                # --- 1. STRICT SAME-WORLD SUPPRESSION ---
-                # "I know because I did it" (Item A is in Slot A)
+                # --- STRICT SAME-WORLD SUPPRESSION ---
                 if io_id == lo_id:
+                    logging.debug(f"[POLLER_DEBUG] Skipped Hint {hint_data['item_id']} for User {user_id}: Self-hint (Item Owner == Location Owner).")
                     continue
 
                 # Determine User Preferences
@@ -568,52 +592,44 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 should_send_notification = False
 
                 # Rule 1: Hints for MY Items (is_for_us)
-                # Controlled by: notify_hints_remote_items_default (Global) OR Slot Override
                 if is_for_us:
-                    # 1. Start with Global Default
                     wants_remote = getattr(user_prefs, 'notify_hints_remote_items_default', True)
-                    
-                    # 2. Check Slot Override
-                    if slot_prefs and slot_prefs.notify_hints_remote_items is not None:
-                        wants_remote = slot_prefs.notify_hints_remote_items
-
+                    if relevant_slot_prefs and relevant_slot_prefs.notify_hints_remote_items is not None:
+                        wants_remote = relevant_slot_prefs.notify_hints_remote_items
                     if wants_remote:
                         should_send_notification = True
 
                 # Rule 2: Hints for Items in MY World (is_at_our_location)
-                # Controlled by: notify_hints_default (Global) OR Slot Override
                 if is_at_our_location and not should_send_notification:
-                    # 1. Start with Global Default
                     wants_local = user_prefs.notify_hints_default
-                    
-                    # 2. Check Slot Override
-                    if slot_prefs and slot_prefs.notify_hints is not None:
-                         wants_local = slot_prefs.notify_hints
-                    
+                    if relevant_slot_prefs and relevant_slot_prefs.notify_hints is not None:
+                         wants_local = relevant_slot_prefs.notify_hints
                     if wants_local:
                         should_send_notification = True
-                    
-                    # 2. Fallback to Global Default for "Local World"
-                    elif user_prefs.notify_hints_default:
-                        should_send_notification = True
                 
-                # --- FINAL CHECK ---
                 if not should_send_notification:
                     continue
 
-                # Check Backfill status (prevent spam on startup)
-                # We check the slot that triggered the rule.
-                relevant_slot = io_id if (is_for_us and getattr(user_prefs, 'notify_hints_remote_items_default', True)) else lo_id
-                if (user_id, relevant_slot) in backfill_check_set:
+                # Check Backfill (using the slot that triggered the rule)
+                relevant_slot_for_backfill = io_id if (is_for_us and should_send_notification) else lo_id
+                if (user_id, relevant_slot_for_backfill) in backfill_check_set:
+                    logging.debug(f"[POLLER_DEBUG] Skipped Hint {hint_data['item_id']} for User {user_id}: Slot {relevant_slot_for_backfill} is backfilling.")
                     continue
 
+                # --- CONDENSED MESSAGING CHECK ---
+                use_condensed = user_prefs.use_condensed_messages_default
+                if relevant_slot_prefs and relevant_slot_prefs.use_condensed_messages is not None:
+                    use_condensed = relevant_slot_prefs.use_condensed_messages
+
+                current_name_map = short_name_map if use_condensed else full_name_map
+                
                 # --- BUILD NOTIFICATION ---
                 alias = aliases_by_user.get(user_id, "Unknown Room")
                 hint_type_icon = "🏆" if (hint_data.get('flags', 0) & 1) else "✅"
                 title = f"💡 {hint_type_icon} New Hint! - [{alias}]"
                 
-                item_owner_name = name_map.get(io_id, f'P{io_id}')
-                location_owner_name = name_map.get(lo_id, f'P{lo_id}')
+                item_owner_name = current_name_map.get(io_id, f'P{io_id}')
+                location_owner_name = current_name_map.get(lo_id, f'P{lo_id}')
                 
                 body = f"{item_owner_name}'s {item_name} is at {loc_name} in {location_owner_name}'s World"
                 
@@ -649,9 +665,45 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         game_checksums_json_str = room_data['game_checksums_json_str']
         is_complete_status = room_data['is_complete_status']
         
+        # 1. Load existing player cache
         players = json.loads(cached_players_json_str if cached_players_json_str else '[]')
         game_checksums = json.loads(game_checksums_json_str if game_checksums_json_str else '{}')
-        name_map = {p['slot_id']: p['name'] for p in players}
+
+        aliases_raw = tracker_data.get('aliases', [])
+        alias_map = {}
+        
+        if isinstance(aliases_raw, list):
+            for entry in aliases_raw:
+                if entry.get('alias') and 'player' in entry:
+                    alias_map[entry['player']] = entry['alias']
+
+        players_updated_local = False 
+        
+        # Update local player objects if aliases have changed
+        for player in players:
+            slot_id = player.get('slot_id')
+            current_stored_alias = player.get('alias') 
+            new_remote_alias = alias_map.get(slot_id)
+
+            if new_remote_alias != current_stored_alias:
+                player['alias'] = new_remote_alias
+                players_updated_local = True
+                logging.info(f"[POLLER] Detected alias change for Slot {slot_id}: {current_stored_alias} -> {new_remote_alias}")
+
+        full_name_map = {}   # Format: Alias (Original)
+        short_name_map = {}  # Format: Alias (or Original if no alias)
+
+        for p in players:
+            original_name = p.get('name', f"Player {p['slot_id']}")
+            alias = p.get('alias')
+            
+            if alias:
+                full_name_map[p['slot_id']] = f"{alias} ({original_name})"
+                short_name_map[p['slot_id']] = alias
+            else:
+                full_name_map[p['slot_id']] = original_name
+                short_name_map[p['slot_id']] = original_name
+
         game_map = {p['slot_id']: p['game'] for p in players}
 
         has_item_history = session.query(NotifiedItem.id).filter_by(room_id=room_uuid).limit(1).scalar() is not None
@@ -687,12 +739,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         aliases_by_user = {sub.user_id: sub.alias for sub in session.query(UserRoomSubscription).filter(UserRoomSubscription.user_id.in_(all_user_ids_in_room), UserRoomSubscription.room_id == db_id)}
 
         # --- LOGIC STEP 1: Check Player Completions ---
-        finish_notifs, finished_player_ids, players_updated = _check_player_completion(
+        finish_notifs, finished_player_ids, players_updated_finished = _check_player_completion(
             tracker_data, players, db_id, users_by_id, prefs_by_user_slot, 
-            tracked_slots_by_user, backfill_check_set, name_map, aliases_by_user
+            tracked_slots_by_user, backfill_check_set, full_name_map, short_name_map, aliases_by_user
         )
         
-        if players_updated:
+        if players_updated_finished or players_updated_local:
              room.cached_players_json = json.dumps(players)
 
         total_players = len(players)
@@ -716,14 +768,14 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         all_cache_keys = item_cache_keys | hint_cache_keys
         data_notifs = _resolve_names_and_notify(
             session, db_id, all_cache_keys, new_items_notif, new_hints_notif,
-            users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, name_map,
+            users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, 
+            full_name_map, short_name_map,
             backfill_check_set, just_found_hints, finished_player_ids
         )
 
         # Combine notifications (Finished + Items + Hints)
         notifications_to_send = {}
         
-        # Merge dicts helper
         def merge_notifs(source, dest):
             for uid, notif_list in source.items():
                 dest.setdefault(uid, []).extend(notif_list)
@@ -758,7 +810,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             for user_id, notifications in notifications_to_send.items():
                 user_tokens = tokens_by_user.get(user_id)
                 if user_tokens:
-                    # Dedupe
                     unique_notifications = list({json.dumps(d): d for d in notifications}.values())
                     final_payloads[user_id] = {
                         'notifications': unique_notifications,

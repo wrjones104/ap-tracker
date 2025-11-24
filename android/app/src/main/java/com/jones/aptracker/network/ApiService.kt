@@ -132,6 +132,7 @@ data class UpdateRoomRequest(
 data class Player(
     val slot_id: Int,
     val name: String?,
+    val alias: String?,
     val game: String?,
     val is_tracked: Boolean,
     val is_finished: Boolean,
@@ -147,9 +148,11 @@ data class UpdateSlotsRequest(
 data class HistoryItem(
     val id: Long,
     val playerName: String,
+    val playerAlias: String?,
     val receivingGame: String?,
     val itemName: String,
     val senderName: String?,
+    val senderAlias: String?,
     val senderGame: String?,
     val locationName: String?,
     val isPlayerFinished: Boolean,
@@ -190,6 +193,7 @@ data class UserProfile(
     val notify_hints_default: Boolean,
     val notify_hints_remote_items_default: Boolean,
     val notify_finished_default: Boolean,
+    val use_condensed_messages_default: Boolean,
     val is_cheese_connected: Boolean = false
 )
 
@@ -198,7 +202,8 @@ data class UpdateGlobalPrefsRequest(
     val notify_useful: Boolean? = null,
     val notify_hints: Boolean? = null,
     val notify_hints_remote_items: Boolean? = null,
-    val notify_finished: Boolean? = null
+    val notify_finished: Boolean? = null,
+    val use_condensed_messages: Boolean? = null
 )
 
 data class UpdateSlotPrefsRequest(
@@ -206,7 +211,8 @@ data class UpdateSlotPrefsRequest(
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,
     val notify_hints_remote_items: Boolean?,
-    val notify_finished: Boolean? = null
+    val notify_finished: Boolean? = null,
+    val use_condensed_messages: Boolean? = null
 )
 
 data class RoomWithTrackedSlots(
@@ -219,11 +225,13 @@ data class RoomWithTrackedSlots(
 data class TrackedSlotDetail(
     val slot_id: Int,
     val player_name: String,
+    val player_alias: String?,
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,
     val notify_hints_remote_items: Boolean?,
-    val notify_finished: Boolean?
+    val notify_finished: Boolean?,
+    val use_condensed_messages: Boolean?
 )
 
 data class HintHistoryResponse(
@@ -237,8 +245,10 @@ data class HintDetail(
     val room_alias: String,
     val item_owner_id: Int,
     val item_owner_name: String,
+    val item_owner_alias: String?,
     val location_owner_id: Int,
     val location_owner_name: String,
+    val location_owner_alias: String?,
     val item_name: String,
     val location_name: String,
     val is_found: Boolean,

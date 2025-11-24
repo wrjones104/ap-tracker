@@ -31,6 +31,7 @@ class User(Base):
     notify_hints_default = Column(Boolean, default=True, nullable=False)
     notify_finished_default = Column(Boolean, default=False, nullable=False)
     notify_hints_remote_items_default = Column(Boolean, default=True, nullable=False)
+    use_condensed_messages_default = Column(Boolean, default=False, nullable=False)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
 
 class Device(Base):
@@ -88,6 +89,7 @@ class UserTrackedSlot(Base):
     notify_hints = Column(Boolean, nullable=True, default=None)
     notify_hints_remote_items = Column(Boolean, nullable=True, default=None)
     notify_finished = Column(Boolean, nullable=True, default=None)
+    use_condensed_messages = Column(Boolean, nullable=True, default=None)
     user = relationship("User", viewonly=True)    
     
     __table_args__ = (

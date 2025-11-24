@@ -266,7 +266,7 @@ fun HistoryScreen(
                     context.startActivity(intent)
                     selectedItem = null
                 },
-                onIgnoreItem = { gameName ->
+                onIgnoreItem = { gameName: String? ->
                     // gameName null = Global, otherwise specific game
                     historyViewModel.ignoreItem(selectedItem!!.itemName, gameName)
                     selectedItem = null
@@ -398,6 +398,7 @@ fun ItemHistoryTab(
     val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
     val showFinished by historyViewModel.showFinished.collectAsState()
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
+    val useCondensed by historyViewModel.useCondensed.collectAsState()
 
     val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
@@ -445,11 +446,13 @@ fun ItemHistoryTab(
                         )
                     )
                 }
-                items(availablePlayers) { player ->
+                items(availablePlayers) { playerInfo ->
                     FilterChip(
-                        selected = player == selectedPlayer,
-                        onClick = { historyViewModel.onPlayerFilterSelected(player) },
-                        label = { Text(player) },
+                        selected = playerInfo.originalName == selectedPlayer,
+                        onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.originalName) },
+                        label = {
+                            Text(getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed))
+                        },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                             selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -500,38 +503,41 @@ fun ItemHistoryTab(
                                     else -> Color.Unspecified
                                 }
 
+                                val displayPlayer = getDisplayName(item.playerName, item.playerAlias, useCondensed)
+                                val displaySender = getDisplayName(item.senderName, item.senderAlias, useCondensed)
+
+                                // MAIN TEXT: "Player received Item"
                                 Text(
                                     buildAnnotatedString {
                                         if (item.isPlayerFinished) {
-                                            withStyle(
-                                                style = SpanStyle(
-                                                    color = finishedColor,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                            ) {
-                                                append("🏁 ${item.playerName} ")
+                                            withStyle(style = SpanStyle(color = finishedColor, fontWeight = FontWeight.SemiBold)) {
+                                                append("🏁 $displayPlayer ")
                                             }
                                         } else {
                                             withStyle(style = SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                                                append("${item.playerName} ")
+                                                append("$displayPlayer ")
                                             }
                                         }
 
-                                        append("received: ")
+                                        append("received ")
 
-                                        withStyle(
-                                            style = SpanStyle(
-                                                color = itemColor,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        ) {
+                                        withStyle(style = SpanStyle(color = itemColor, fontWeight = FontWeight.Bold)) {
                                             append(item.itemName)
                                         }
                                     },
                                     style = MaterialTheme.typography.bodyLarge
                                 )
+
+                                // SUBTEXT: "Sent by Sender • Time"
+                                val subtext = buildString {
+                                    if (!item.senderName.isNullOrBlank() && item.senderName != item.playerName) {
+                                        append("Sent by $displaySender • ")
+                                    }
+                                    append(formatTimestamp(item.timestamp, formatter))
+                                }
+
                                 Text(
-                                    text = formatTimestamp(item.timestamp, formatter),
+                                    text = subtext,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color.Gray
                                 )
@@ -552,6 +558,7 @@ fun HintHistoryTab(
 ) {
     val hintsForYou by historyViewModel.hintsForYou.collectAsState()
     val hintsByYou by historyViewModel.hintsByYou.collectAsState()
+    val useCondensed by historyViewModel.useCondensed.collectAsState()
     val showFinished by historyViewModel.showFinished.collectAsState()
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
 
@@ -593,11 +600,13 @@ fun HintHistoryTab(
                         )
                     )
                 }
-                items(availablePlayers) { player ->
+                items(availablePlayers) { playerInfo ->
                     FilterChip(
-                        selected = player == selectedPlayer,
-                        onClick = { historyViewModel.onPlayerFilterSelected(player) },
-                        label = { Text(player) },
+                        selected = playerInfo.originalName == selectedPlayer,
+                        onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.originalName) },
+                        label = {
+                            Text(getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed))
+                        },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                             selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -631,6 +640,7 @@ fun HintHistoryTab(
                             HintCard(
                                 hint = hint,
                                 formatter = formatter,
+                                useCondensed = useCondensed,
                                 onClick = { onHintClick(hint) }
                             )
                         }
@@ -656,7 +666,7 @@ fun HintHistoryTab(
                             HintCard(
                                 hint = hint,
                                 formatter = formatter,
-                                // REMOVED: type = "by_you",
+                                useCondensed = useCondensed,
                                 onClick = { onHintClick(hint) }
                             )
                         }
@@ -671,6 +681,7 @@ fun HintHistoryTab(
 fun HintCard(
     hint: HintEntity,
     formatter: DateTimeFormatter,
+    useCondensed: Boolean,
     onClick: () -> Unit
 ) {
     Card(
@@ -678,7 +689,9 @@ fun HintCard(
             .fillMaxWidth()
             .clickable(onClick = onClick),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        // No colors param ensures it matches Item cards (Surface Variant default)
+        colors = CardDefaults.cardColors(
+            containerColor = if (hint.isFound) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+        )
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -702,11 +715,14 @@ fun HintCard(
                     else -> Color.Unspecified
                 }
 
+                val itemOwner = getDisplayName(hint.itemOwnerName, hint.itemOwnerAlias, useCondensed)
+                val locOwner = getDisplayName(hint.locationOwnerName, hint.locationOwnerAlias, useCondensed)
+
                 // Line 1: [ItemOwner]'s [Item]
                 Text(
                     buildAnnotatedString {
                         withStyle(style = SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                            append("${hint.itemOwnerName}'s ")
+                            append("$itemOwner's ")
                         }
                         withStyle(style = SpanStyle(color = itemColor, fontWeight = FontWeight.Bold)) {
                             append(hint.itemName)
@@ -726,7 +742,7 @@ fun HintCard(
                     text = buildAnnotatedString {
                         append("in ")
                         withStyle(style = SpanStyle(fontWeight = FontWeight.Medium)) {
-                            append("${hint.locationOwnerName}'s World")
+                            append("$locOwner's World")
                         }
 
                         append(" • ")
@@ -864,66 +880,6 @@ fun SectionHeader(
             imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
             contentDescription = if (isExpanded) "Collapse" else "Expand"
         )
-    }
-}
-
-@Composable
-fun HintCard(hint: HintEntity, formatter: DateTimeFormatter, type: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (hint.isFound) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
-        )
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = hint.roomAlias,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.Gray
-                )
-                Text(
-                    text = formatTimestamp(hint.timestamp, formatter),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.Gray
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-
-            if (type == "for_you") {
-                Text(
-                    "Your ${hint.itemName}",
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                Text(
-                    "is at ${hint.locationOwnerName}'s ${hint.locationName}",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            } else {
-                Text(
-                    "${hint.itemOwnerName}'s ${hint.itemName}",
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                Text(
-                    "is at your ${hint.locationName}",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-
-            if (hint.isFound) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Found!",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
     }
 }
 

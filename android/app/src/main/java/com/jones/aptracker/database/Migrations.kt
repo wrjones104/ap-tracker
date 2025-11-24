@@ -117,3 +117,12 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
         db.execSQL("ALTER TABLE hints ADD COLUMN locationOwnerId INTEGER NOT NULL DEFAULT 0")
     }
 }
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE history_items ADD COLUMN playerAlias TEXT")
+        db.execSQL("ALTER TABLE history_items ADD COLUMN senderAlias TEXT")
+
+        db.execSQL("ALTER TABLE hints ADD COLUMN itemOwnerAlias TEXT")
+        db.execSQL("ALTER TABLE hints ADD COLUMN locationOwnerAlias TEXT")
+    }
+}

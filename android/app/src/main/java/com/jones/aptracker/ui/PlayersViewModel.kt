@@ -37,12 +37,16 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
         )
     }
     val filteredPlayers by derivedStateOf {
-        if (searchQuery.value.isBlank()) {
+        val query = searchQuery.value.trim()
+
+        if (query.isBlank()) {
             allPlayers.value
         } else {
             allPlayers.value.filter { player ->
-                (player.name?.contains(searchQuery.value, ignoreCase = true) ?: false) ||
-                        (player.game?.contains(searchQuery.value, ignoreCase = true) ?: false)
+                val nameMatches = player.name?.contains(query, ignoreCase = true) == true
+                val aliasMatches = player.alias?.contains(query, ignoreCase = true) == true
+                val gameMatches = player.game?.contains(query, ignoreCase = true) == true
+                nameMatches || aliasMatches || gameMatches
             }
         }
     }
