@@ -84,7 +84,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         useful: Boolean? = null,
         hints: Boolean? = null,
         remoteHints: Boolean? = null,
-        finished: Boolean? = null
+        finished: Boolean? = null,
+        useCondensed: Boolean? = null
     ) {
         viewModelScope.launch {
             try {
@@ -93,7 +94,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                     notify_useful = useful,
                     notify_hints = hints,
                     notify_hints_remote_items = remoteHints,
-                    notify_finished = finished
+                    notify_finished = finished,
+                    use_condensed_messages = useCondensed
                 )
                 RetrofitClient.instance.updateUserPreferences(request)
 
@@ -113,7 +115,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         useful: Boolean?,
         hints: Boolean?,
         remoteHints: Boolean?,
-        finished: Boolean?
+        finished: Boolean?,
+        useCondensed: Boolean?
     ) {
         viewModelScope.launch {
             try {
@@ -122,7 +125,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                     notify_useful = useful,
                     notify_hints = hints,
                     notify_hints_remote_items = remoteHints,
-                    notify_finished = finished
+                    notify_finished = finished,
+                    use_condensed_messages = useCondensed
                 )
                 RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
                 fetchTrackedSlots()

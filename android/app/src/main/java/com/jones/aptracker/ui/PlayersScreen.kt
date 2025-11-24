@@ -137,9 +137,18 @@ fun PlayersScreen(
                                     )
                                     Spacer(Modifier.width(16.dp))
                                     Column {
+                                        val originalName = player.name ?: "Unnamed"
+                                        val displayName = if (!player.alias.isNullOrBlank()) {
+                                            "${player.alias} ($originalName)"
+                                        } else {
+                                            originalName
+                                        }
+
+                                        val statusPrefix = if (isPlayerDone) "🏁 " else ""
+
                                         Text(
-                                            text = if (isPlayerDone) "🏁 " + player.name else player.name ?: "Unnamed Player",
-                                            color = if (isPlayerDone || player.name == null) Color.Green else Color.Unspecified
+                                            text = statusPrefix + displayName,
+                                            color = if (isPlayerDone) Color(0xFF0E8A0E) else Color.Unspecified
                                         )
                                         Text(
                                             text =  player.game ?: "Unknown Game",
