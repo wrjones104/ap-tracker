@@ -1103,18 +1103,26 @@ def get_user_tracked_slots(current_user):
             except (json.JSONDecodeError, TypeError):
                 players_json = []
 
-            players_map = {p['slot_id']: p['name'] for p in players_json}
+            # --- Store full player object to access alias ---
+            players_map = {p['slot_id']: p for p in players_json}
 
             tracked_slots_list = []
             for slot in sorted(sub.tracked_slots, key=lambda s: s.slot_id):
+                # Resolve Name and Alias
+                p_obj = players_map.get(slot.slot_id)
+                p_name = p_obj.get('name', f"Player {slot.slot_id}") if p_obj else f"Player {slot.slot_id}"
+                p_alias = p_obj.get('alias') if p_obj else None
+
                 tracked_slots_list.append({
                     'slot_id': slot.slot_id,
-                    'player_name': players_map.get(slot.slot_id, f"Player {slot.slot_id}"),
+                    'player_name': p_name,
+                    'player_alias': p_alias,
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,
                     'notify_hints': slot.notify_hints,
                     'notify_hints_remote_items': slot.notify_hints_remote_items,
-                    'notify_finished': slot.notify_finished
+                    'notify_finished': slot.notify_finished,
+                    'use_condensed_messages': slot.use_condensed_messages 
                 })
 
             response_data.append({

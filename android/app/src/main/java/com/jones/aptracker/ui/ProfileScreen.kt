@@ -104,13 +104,18 @@ fun ProfileScreen(
 
     if (editingSlot != null && userProfile != null) {
         val (roomId, slotDetail) = editingSlot!!
+        val sheetHeaderName = if (!slotDetail.player_alias.isNullOrBlank()) {
+            "${slotDetail.player_alias} (${slotDetail.player_name})"
+        } else {
+            slotDetail.player_name
+        }
         ModalBottomSheet(
             onDismissRequest = { editingSlot = null },
             sheetState = sheetState
         ) {
             SlotSettingsSheet(
                 playerSlotId = slotDetail.slot_id,
-                playerName = slotDetail.player_name,
+                playerName = sheetHeaderName,
                 currentProgression = slotDetail.notify_progression,
                 currentUseful = slotDetail.notify_useful,
                 currentHints = slotDetail.notify_hints,
@@ -494,8 +499,14 @@ fun SlotPreferenceItem(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
+        val displayName = if (!slot.player_alias.isNullOrBlank()) {
+            "${slot.player_alias} (${slot.player_name})"
+        } else {
+            slot.player_name
+        }
+
         Text(
-            text = slot.player_name,
+            text = displayName,
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.weight(1f)
         )

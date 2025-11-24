@@ -225,6 +225,7 @@ data class RoomWithTrackedSlots(
 data class TrackedSlotDetail(
     val slot_id: Int,
     val player_name: String,
+    val player_alias: String?,
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,
