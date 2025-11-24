@@ -361,7 +361,6 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 
             if not (flags & 0b011):
                 hints_skipped_classification += 1
-                logging.debug(f"[POLLER_DEBUG] Hint skipped due to flags: {flags}")
                 continue
 
             hint_key_db = (io_id, lo_id, item_id, loc_id)
