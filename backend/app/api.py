@@ -419,7 +419,7 @@ def add_room(current_user):
     logging.info(f"[API] User {current_user.id} subscribed to room {room.id} ('{alias}')")
 
     session.commit()
-    session.commit()
+
 
     if current_user.cheese_api_key and ap_tracker_id and not current_user.is_guest:
         try:
