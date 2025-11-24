@@ -54,20 +54,28 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _selectedPlayerFilter = MutableStateFlow<String?>(null)
     val selectedPlayerFilter: StateFlow<String?> = _selectedPlayerFilter
 
-    val availablePlayers: StateFlow<List<String>> = _itemHistory.map { history ->
-        history.map { it.playerName }.distinct().sorted()
+    val availablePlayers: StateFlow<List<PlayerDisplayInfo>> = _itemHistory.map { history ->
+        history.map {
+            PlayerDisplayInfo(it.playerName, it.playerAlias)
+        }
+            .distinct()
+            .sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val availableHintPlayers: StateFlow<List<String>> = combine(_hintsForYou, _hintsByYou) { forYou, byYou ->
-        val names = mutableSetOf<String>()
-        names.addAll(forYou.map { it.itemOwnerName })
-        names.addAll(byYou.map { it.locationOwnerName })
-        names.toList().sorted()
+    val availableHintPlayers: StateFlow<List<PlayerDisplayInfo>> = combine(_hintsForYou, _hintsByYou) { forYou, byYou ->
+        val players = mutableSetOf<PlayerDisplayInfo>()
+
+        players.addAll(forYou.map { PlayerDisplayInfo(it.itemOwnerName, it.itemOwnerAlias) })
+        players.addAll(byYou.map { PlayerDisplayInfo(it.locationOwnerName, it.locationOwnerAlias) })
+
+        players.toList().sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage
     private var validTrackedSlots: Set<Pair<Int, Int>> = emptySet()
+    private val _useCondensed = MutableStateFlow(false)
+    val useCondensed: StateFlow<Boolean> = _useCondensed
 
     init {
         val db = AppDatabase.getInstance(application)
@@ -77,6 +85,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         val apiService = RetrofitClient.instance
         repository = HistoryRepository(apiService, historyDao, hintDao)
         userRepository = UserRepository(apiService)
+        fetchUserPreferences()
     }
 
     fun loadHistoryFor(roomId: Int?) {
@@ -97,6 +106,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         refreshAllHistory()
     }
 
+    private fun fetchUserPreferences() {
+        viewModelScope.launch {
+            try {
+                val profile = RetrofitClient.instance.getUserProfile()
+                _useCondensed.value = profile.use_condensed_messages_default
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to load user profile for settings", e)
+            }
+        }
+    }
+
     fun setShowFinished(show: Boolean) {
         _showFinished.value = show
     }
@@ -108,6 +128,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
+                fetchUserPreferences()
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
 
                 validTrackedSlots = trackedRooms.flatMap { room ->
@@ -133,6 +154,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     HistoryItem(
                         id = entity.id,
                         playerName = entity.playerName,
+                        playerAlias = entity.playerAlias,
                         itemName = entity.itemName,
                         isPlayerFinished = entity.isPlayerFinished,
                         itemFlags = entity.itemFlags,
@@ -144,6 +166,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         host = entity.host,
                         receivingGame = entity.receivingGame,
                         senderName = entity.senderName,
+                        senderAlias = entity.senderAlias,
                         senderGame = entity.senderGame,
                         locationName = entity.locationName
                     )
@@ -209,5 +232,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
     fun clearActionMessage() {
         _actionMessage.value = null
+    }
+}
+
+data class PlayerDisplayInfo(
+    val originalName: String,
+    val alias: String?
+) : Comparable<PlayerDisplayInfo> {
+    override fun compareTo(other: PlayerDisplayInfo): Int {
+        return this.originalName.compareTo(other.originalName)
     }
 }
