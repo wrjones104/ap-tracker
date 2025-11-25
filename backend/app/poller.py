@@ -430,20 +430,38 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     if cache_keys_to_fetch:
         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Fetching {len(cache_keys_to_fetch)} names...")
         try:
-            keys_list = list(cache_keys_to_fetch)
-            chunk_size = 500
-            for i in range(0, len(keys_list), chunk_size):
-                chunk = keys_list[i:i + chunk_size]
+            # OPTIMIZATION:
+            # We avoid tuple_().in_() queries here because they can cause type binding issues 
+            # with BigInteger IDs (like Monster Hunter World or Jak & Daxter) on some DB drivers
+            # if the batch contains mixed small/large integers.
+            
+            ids_to_fetch = {k[3] for k in cache_keys_to_fetch}
+            checksums_to_fetch = {k[1] for k in cache_keys_to_fetch}
+            
+            ids_list = list(ids_to_fetch)
+            chunk_size = 1000
+            
+            for i in range(0, len(ids_list), chunk_size):
+                id_chunk = ids_list[i:i + chunk_size]
+                
+                # We fetch anything matching the ID and Checksum.
+                # This might return slightly more data (e.g. if an item and location share an ID),
+                # but we filter exactly in Python below.
                 results = session.query(
                     DatapackageCache.game, DatapackageCache.checksum,
                     DatapackageCache.entity_type, DatapackageCache.entity_id,
                     DatapackageCache.entity_name
-                ).filter(tuple_(
-                    DatapackageCache.game, DatapackageCache.checksum,
-                    DatapackageCache.entity_type, DatapackageCache.entity_id
-                ).in_(chunk))
+                ).filter(
+                    DatapackageCache.checksum.in_(checksums_to_fetch),
+                    DatapackageCache.entity_id.in_(id_chunk)
+                ).all()
+
                 for game, chk, etype, eid, name in results:
-                    name_lookup_map[(game, chk, etype, eid)] = name
+                    key = (game, chk, etype, eid)
+                    # Only add to map if it was actually requested
+                    if key in cache_keys_to_fetch:
+                        name_lookup_map[key] = name
+
         except Exception as e:
             logging.error(f"[POLLER_DB_ERROR][RoomDBID:{room_db_id}] Failed to bulk-fetch names: {e}", exc_info=True)
             return {}
@@ -1142,10 +1160,28 @@ async def run_room_setup(room_info, loop):
                     
                     current_game_entries = []
                     actual_data = game_data.get('games', {}).get(game, game_data)
+                    
+                    seen_ids = set() 
+
+                    # 1. Process Items
                     for n, eid in actual_data.get('item_name_to_id', {}).items():
-                        current_game_entries.append(DatapackageCache(game=game, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n))
+                        if ('item', eid) in seen_ids:
+                            continue # Skip duplicate/alias
+                        
+                        seen_ids.add(('item', eid))
+                        current_game_entries.append(DatapackageCache(
+                            game=game, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n
+                        ))
+
+                    # 2. Process Locations
                     for n, eid in actual_data.get('location_name_to_id', {}).items():
-                        current_game_entries.append(DatapackageCache(game=game, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n))
+                        if ('location', eid) in seen_ids:
+                             continue # Skip duplicate/alias
+                        
+                        seen_ids.add(('location', eid))
+                        current_game_entries.append(DatapackageCache(
+                            game=game, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n
+                        ))
                     
                     if current_game_entries:
                         datapackage_entries_by_game[game] = current_game_entries
@@ -1199,14 +1235,26 @@ def db_commit_setup_data(db_id, setup_data):
         session.commit()
         
         if setup_data.get('datapackage_entries_by_game'):
+            # Iterate over games one by one
             for game, entries in setup_data['datapackage_entries_by_game'].items():
                 try:
-                    session.bulk_save_objects(entries)
-                    session.commit()
+                    chunk_size = 500 
+                    total_entries = len(entries)
+                    
+                    for i in range(0, total_entries, chunk_size):
+                        chunk = entries[i:i + chunk_size]
+                        session.bulk_save_objects(chunk)
+                        session.commit()
+                        
+                    logging.info(f"[POLLER_SETUP] Successfully cached {total_entries} entities for {game}.")
+                        
                 except IntegrityError:
-                    session.rollback() 
-                except Exception:
                     session.rollback()
+                    logging.warning(f"[POLLER_DB_WARN] Duplicate datapackage data for {game}, skipping.")
+                except Exception as e:
+                    session.rollback()
+                    logging.error(f"[POLLER_DB_ERROR] Failed to save datapackage for {game}: {e}", exc_info=True)
+
     except Exception as e:
         session.rollback()
         raise e
