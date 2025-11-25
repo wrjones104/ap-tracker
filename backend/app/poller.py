@@ -661,7 +661,6 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
     """
     Synchronously processes tracker data and updates the database.
-    Refactored to orchestrate logic via helper functions.
     """
     session = Session()
     try:
@@ -695,6 +694,21 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 if entry.get('alias') and 'player' in entry:
                     alias_map[entry['player']] = entry['alias']
 
+        # --- SELF-HEALING CHECK ---
+        # If the remote Tracker is sending aliases for Slot IDs that do not exist in our local cache,
+        # it means our local player list is stale/out-of-sync (the "Off by 4" issue).
+        # We must force a full Re-Setup to fetch the correct player list.
+        
+        local_slot_ids = {p['slot_id'] for p in players}
+        remote_alias_ids = set(alias_map.keys())
+        unknown_ids = remote_alias_ids - local_slot_ids
+        
+        if len(unknown_ids) > 0:
+            logging.warning(f"[POLLER_HEALING][RoomDBID:{db_id}] Detected {len(unknown_ids)} unknown slots in Alias Map (e.g. {list(unknown_ids)[:3]}). Local cache is stale. Forcing Re-Setup.")
+            room.is_setup = False
+            session.commit()
+            return # Stop processing this poll cycle
+
         players_updated_local = False 
         
         # Update local player objects if aliases have changed
@@ -707,6 +721,19 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 player['alias'] = new_remote_alias
                 players_updated_local = True
                 logging.info(f"[POLLER] Detected alias change for Slot {slot_id}: {current_stored_alias} -> {new_remote_alias}")
+
+        # --- IMMEDIATE COMMIT FOR ALIASES ---
+        # If we updated aliases, save immediately. This prevents the "Infinite Loop" scenario
+        # where a crash/error in Item Processing rolls back the Alias update, causing it to detect again endlessly.
+        if players_updated_local:
+            try:
+                room.cached_players_json = json.dumps(players)
+                session.commit()
+                logging.info(f"[POLLER] Persisted alias updates for Room {db_id}.")
+            except Exception as e:
+                logging.error(f"[POLLER_ERROR] Failed to persist aliases: {e}")
+                session.rollback()
+                return
 
         full_name_map = {}   # Format: Alias (Original)
         short_name_map = {}  # Format: Alias (or Original if no alias)
@@ -762,7 +789,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             tracked_slots_by_user, backfill_check_set, full_name_map, short_name_map, aliases_by_user
         )
         
-        if players_updated_finished or players_updated_local:
+        if players_updated_finished:
              room.cached_players_json = json.dumps(players)
 
         total_players = len(players)
@@ -1003,8 +1030,6 @@ async def run_room_poll(room_info, loop):
 
     except Exception as e:
         logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Error in run_room_poll!", exc_info=True)
-
-# Add to poller.py
 
 async def run_cheese_poll(room_info, loop):
     """
