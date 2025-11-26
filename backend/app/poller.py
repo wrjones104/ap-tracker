@@ -60,6 +60,21 @@ def _extract_ap_room_id(url_string):
         pass
     return None
 
+async def _attempt_room_wake(hostname, room_uuid):
+    """
+    Attempts to 'wake' a sleeping AP room by sending an HTTP GET to its public page.
+    """
+    url = f"https://{hostname}/room/{room_uuid}"
+    logging.info(f"[POLLER_WAKE] Attempting to wake room: {url}")
+    session = get_aiohttp_session()
+    try:
+        async with session.get(url, timeout=10) as response:
+            logging.info(f"[POLLER_WAKE] Wake request sent. Status: {response.status}")
+            return True
+    except Exception as e:
+        logging.warning(f"[POLLER_WAKE] Failed to send wake request: {e}")
+        return False
+
 async def send_push_notifications(notifications, device_tokens, loop):
     firebase_app = get_firebase_app()
     if not firebase_app or not notifications or not device_tokens: return
@@ -673,7 +688,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
         if not tracker_data:
             room.failed_poll_count += 1
-            if room.failed_poll_count >= 20: room.is_suspended = True
+            if room.failed_poll_count >= 60: room.is_suspended = True
             session.commit()
             return
 
@@ -1160,16 +1175,41 @@ async def run_room_setup(room_info, loop):
 
         if port:
             uri = f"wss://{hostname}:{port}"
-            try:
-                async with websockets.connect(uri, open_timeout=5) as ws:
-                    msg_str = await asyncio.wait_for(ws.recv(), timeout=5)
-                    room_info_msg = json.loads(msg_str)
-                    checksums = room_info_msg[0].get('datapackage_checksums', {})
-            except Exception as ws_e:
-                logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to get checksums from WebSocket: {ws_e}")
-                checksums = room_status.get('datapackage_checksums', {})
+            max_ws_retries = 3
+            ws_success = False
+
+            for attempt in range(1, max_ws_retries + 1):
+                try:
+                    logging.debug(f"[POLLER_SETUP] WebSocket attempt {attempt}/{max_ws_retries} for {uri}")
+                    async with websockets.connect(uri, open_timeout=5) as ws:
+                        msg_str = await asyncio.wait_for(ws.recv(), timeout=5)
+                        room_info_msg = json.loads(msg_str)
+                        checksums = room_info_msg[0].get('datapackage_checksums', {})
+                        ws_success = True
+                        break
+                except (OSError, asyncio.TimeoutError, websockets.InvalidURI, websockets.InvalidHandshake, ConnectionRefusedError) as ws_e:
+                    logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket attempt {attempt} failed: {ws_e}")
+                    
+                    if attempt < max_ws_retries:
+                        # Try to wake the room
+                        await _attempt_room_wake(hostname, room_uuid)
+                        logging.info(f"[POLLER_SETUP] Waiting 8 seconds for room to wake up...")
+                        await asyncio.sleep(8)
+                    else:
+                        logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] All WebSocket attempts failed.")
+
+            # Fallback to HTTP if WS failed
+            if not ws_success:
+                 logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Falling back to HTTP checksums.")
+                 checksums = room_status.get('datapackage_checksums', {})
         else:
             checksums = room_status.get('datapackage_checksums', {})
+
+        if not checksums:
+            logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] No checksums found (WS and HTTP failed). Aborting setup.")
+            # Trigger failure count so it eventually suspends if this persists
+            await loop.run_in_executor(None, db_handle_setup_failure, db_id)
+            return
 
         new_checksums_json_str = json.dumps(checksums)
         datapackage_entries_by_game = {}
@@ -1301,7 +1341,7 @@ def db_handle_setup_failure(db_id):
 
         room.failed_poll_count += 1
         
-        if room.failed_poll_count >= 10:
+        if room.failed_poll_count >= 5:
             room.is_suspended = True
             logging.warning(f"[POLLER_ACTION][RoomDBID:{db_id}] Suspended room after repeated setup failures.")
         

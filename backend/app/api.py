@@ -409,6 +409,10 @@ def add_room(current_user):
     
     else:
         ap_tracker_id = room.tracker_id
+        if room.is_suspended:
+            logging.info(f"[API] Reviving suspended room {room.id} because User {current_user.id} requested it.")
+            room.is_suspended = False
+            room.failed_poll_count = 0
 
     subscription = session.query(UserRoomSubscription).filter_by(
         user_id=current_user.id,
