@@ -23,6 +23,17 @@ from .models import (
 
 bp = Blueprint('api', __name__)
 
+def format_iso_z(dt_obj):
+    """Formats a datetime object to ISO-8601 with strictly 'Z' for UTC."""
+    if not dt_obj:
+        return None
+    # Ensure it is UTC aware
+    if dt_obj.tzinfo is None:
+        dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+    
+    # Generate ISO format and swap the offset
+    return dt_obj.isoformat().replace("+00:00", "Z")
+
 def log_api_call(f):
     """A decorator to log API request and response."""
     @wraps(f)
@@ -744,7 +755,7 @@ def get_item_history(current_user, room_db_id):
             "senderName": sender_name,    
             "senderAlias": sender_alias,
             "senderGame": sender_game,   
-            "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+            "timestamp": format_iso_z(item.timestamp),
             "tracker_id": room.tracker_id,
             "slot_id": receiver_id,
             "host": room.hostname,
@@ -948,7 +959,7 @@ def get_global_item_history(current_user):
             "senderName": sender_name,    
             "senderAlias": sender_alias,  
             "senderGame": sender_game,    
-            "timestamp": item.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+            "timestamp": format_iso_z(item.timestamp),
             "tracker_id": room_data.tracker_id,
             "slot_id": receiver_id,
             "host": room_data.hostname,
@@ -1427,6 +1438,12 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
         location_owner_name = lo_obj.get('name', f"Player {hint.location_owner_id}") if lo_obj else f"Player {hint.location_owner_id}"
         location_owner_alias = lo_obj.get('alias') if lo_obj else None
 
+        ts_val = None
+        if hasattr(hint, 'timestamp') and hint.timestamp:
+            ts_val = format_iso_z(hint.timestamp)
+        else:
+            ts_val = format_iso_z(datetime.fromtimestamp(hint.id / 1000.0, tz=timezone.utc))
+
         hint_data = {
             "id": hint.id,
             "room_db_id": temp_data["room_db_id"],
@@ -1440,7 +1457,7 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             "item_name": item_name,
             "location_name": location_name,
             "is_found": getattr(hint, 'is_found', False),
-            "timestamp": (hint.timestamp.replace(tzinfo=timezone.utc).isoformat() if hasattr(hint, 'timestamp') and hint.timestamp else datetime.fromtimestamp(hint.id / 1000.0, tz=timezone.utc).isoformat())
+            "timestamp": ts_val
         }
         
         if temp_data["is_item_owner_tracked"]:

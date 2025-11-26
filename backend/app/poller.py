@@ -286,7 +286,8 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
                 sending_slot_id=send_id,
                 item_id=item_id,
                 location_id=loc_id,
-                item_flags=flags
+                item_flags=flags,
+                timestamp=datetime.now(timezone.utc)
             ))
             items_in_this_batch.add(item_key_batch)
             items_added_count += 1
@@ -377,7 +378,8 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                     location_owner_id=lo_id,
                     item_id=item_id,
                     location_id=loc_id,
-                    is_found=is_found_from_tracker
+                    is_found=is_found_from_tracker,
+                    timestamp=datetime.now(timezone.utc)
                 ))
                 hints_in_this_batch.add(hint_key_batch)
                 hints_added_count += 1
