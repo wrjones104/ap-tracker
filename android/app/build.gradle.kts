@@ -24,8 +24,8 @@ android {
         applicationId = "com.jones.aptracker"
         minSdk = 26
         targetSdk = 36
-        versionCode = 21
-        versionName = "1.0.8"
+        versionCode = 22
+        versionName = "1.0.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "com.jones.aptracker"
         buildConfigField(

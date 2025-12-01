@@ -215,7 +215,7 @@ fun ProfileScreen(
                         )
                         NotificationToggle(
                             text = "Finished Slots",
-                            description = "Notify when a slot finishes, as well as for hints & items received afterwards.",
+                            description = "Notify for hints & items received after a slot has goaled.",
                             checked = profile.notify_finished_default,
                             onCheckedChange = {
                                 userViewModel.updateGlobalPreferences(finished = it)
