@@ -160,37 +160,34 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
                 if isinstance(status_info, dict) and status_info.get('status') == 30 and 'player' in status_info:
                     finished_player_ids.add(status_info.get('player'))
 
-    # 2. Parse 'player_checks_done'
-    checks_done_map = {} 
-    player_checks_data = tracker_data.get('player_checks_done', [])
-    if isinstance(player_checks_data, list):
-        for entry in player_checks_data:
-            if 'player' in entry and 'locations' in entry:
-                    checks_done_map[entry['player']] = len(entry['locations'])
-
-    # 3. Mathematical Check (Total Locations vs Checks Done)
-    for player in players_list:
-        pid = player.get('slot_id')
-        total = player.get('total_locations', 0)
-        done = checks_done_map.get(pid, 0)
-        
-        if total > 0 and done >= total:
-            finished_player_ids.add(pid)
-
-    # 4. Determine newly finished players
+    # 2. Determine newly finished players
     players_just_marked_finished = set()
     players_list_updated = False
 
+    has_status_data = len(tracker_data.get('player_status', {})) > 0
+
     for player in players_list:
-        if player.get('slot_id') in finished_player_ids and not player.get('is_finished'):
+        slot_id = player.get('slot_id')
+        is_actually_finished = slot_id in finished_player_ids
+        was_marked_finished = player.get('is_finished', False)
+    
+        if is_actually_finished and not was_marked_finished:
+            # Case A: They just finished (Status 30)
             player['is_finished'] = True
             players_list_updated = True
-            players_just_marked_finished.add(player.get('slot_id'))
+            players_just_marked_finished.add(slot_id)
+            
+        elif not is_actually_finished and was_marked_finished and has_status_data:
+            # Case B: False Positive (Old "Math" logic marked them, but Status != 30)
+            # We revert them to unfinished.
+            player['is_finished'] = False
+            players_list_updated = True
+            logging.info(f"[POLLER_FIX][RoomDBID:{room_db_id}] Reverting 'Finished' status for Slot {slot_id} (Status != 30).")
 
     if players_list_updated:
         logging.info(f"[POLLER_ACTION][RoomDBID:{room_db_id}] {len(players_just_marked_finished)} player(s) just finished.")
 
-    # 5. Generate Notifications
+    # 3. Generate Notifications
     if players_just_marked_finished:
         finished_players_by_user = {} 
         for user_id, tracked_slots in tracked_slots_by_user.items():
@@ -1485,7 +1482,12 @@ async def poller_supervisor(app, loop):
                     task_to_stop.cancel()
 
             if datetime.utcnow() - last_cleanup_time > timedelta(hours=24):
+                # 1. Delete orphaned rooms (No subscribers)
                 await loop.run_in_executor(None, db_run_cleanup)
+                
+                # 2. Suspend stale active rooms (Has subscribers, but no activity)
+                await loop.run_in_executor(None, db_check_stale_rooms)
+                
                 last_cleanup_time = datetime.utcnow()
 
         except Exception as e:
@@ -1538,3 +1540,60 @@ def run_poller(app):
     finally:
         loop.run_until_complete(close_aiohttp_session())
         loop.close()
+
+def db_check_stale_rooms():
+    """
+    Suspends rooms that have had NO activity (Items or Hints) for 30 days.
+    Sets failed_poll_count to 0 to differentiate from connection errors.
+    """
+    session = Session()
+    try:
+        limit_date = datetime.utcnow() - timedelta(days=30)
+        
+        # Only check rooms that are currently Active
+        active_rooms = session.query(TrackedRoom).filter(
+            TrackedRoom.is_complete == False,
+            TrackedRoom.is_suspended == False
+        ).all()
+        
+        stale_count = 0
+        for room in active_rooms:
+            # 1. Get latest Item time
+            last_item = session.query(NotifiedItem.timestamp).filter_by(room_id=room.room_id).order_by(NotifiedItem.timestamp.desc()).first()
+            last_item_time = last_item[0] if last_item else None
+            
+            # 2. Get latest Hint time
+            last_hint = session.query(NotifiedHint.timestamp).filter_by(room_id=room.room_id).order_by(NotifiedHint.timestamp.desc()).first()
+            last_hint_time = last_hint[0] if last_hint else None
+            
+            # 3. Determine latest activity
+            latest_activity = None
+            if last_item_time and last_hint_time:
+                latest_activity = max(last_item_time, last_hint_time)
+            elif last_item_time:
+                latest_activity = last_item_time
+            elif last_hint_time:
+                latest_activity = last_hint_time
+            
+            # 4. Check vs Limit
+            # Note: We enforce naive UTC comparison by stripping info if present, or assuming native is UTC.
+            # (Adjust based on your DB driver behavior, assuming naive UTC for now as per api.py)
+            if latest_activity:
+                if latest_activity.tzinfo:
+                    latest_activity = latest_activity.replace(tzinfo=None)
+                
+                if latest_activity < limit_date:
+                    room.is_suspended = True
+                    room.failed_poll_count = 0 # Distinct from Error Suspension (which is >= 60)
+                    stale_count += 1
+                    logging.info(f"[POLLER_STALE] Suspending Room {room.id} due to inactivity (Last Active: {latest_activity})")
+
+        if stale_count > 0:
+            session.commit()
+            logging.info(f"[POLLER_STALE] Suspended {stale_count} stale rooms.")
+            
+    except Exception as e:
+        logging.error(f"[POLLER_STALE_ERROR] Failed to check stale rooms: {e}", exc_info=True)
+        session.rollback()
+    finally:
+        Session.remove()

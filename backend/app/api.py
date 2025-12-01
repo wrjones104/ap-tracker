@@ -287,7 +287,7 @@ def register_device(current_user):
 def get_rooms(current_user):
     """
     Gets the list of rooms the current user is subscribed to.
-    Filters out 'PENDING_DISCOVERY' rooms so they don't appear as zombies in the app.
+    Filters out 'PENDING_DISCOVERY' rooms.
     """
     session = Session()
     subscriptions = session.query(UserRoomSubscription).join(TrackedRoom).filter(
@@ -299,17 +299,24 @@ def get_rooms(current_user):
     for sub in subscriptions:
         room = sub.room
         
-        # --- FILTER: Hide Pending Discovery Rooms ---
-        # These exist in DB for polling/healing but shouldn't be visible to the user yet
         if room.room_id.startswith("PENDING_DISCOVERY"):
             continue
-        # --------------------------------------------
 
         tracked_count = session.query(UserTrackedSlot).filter_by(
             user_id=current_user.id, 
             room_id=room.id
         ).count()
         
+        status = 'active'
+        if room.is_complete:
+            status = 'completed'
+        elif room.is_suspended:
+            # Distinguish between Connection Error and Stale/Manual Suspension
+            if room.failed_poll_count >= 60:
+                status = 'suspended_error'
+            else:
+                status = 'suspended_stale'
+
         rooms_list.append({
             'id': room.id,
             'room_id': room.room_id,
@@ -318,6 +325,7 @@ def get_rooms(current_user):
             'host': room.cached_full_address, 
             'is_complete': room.is_complete,
             'is_suspended': room.is_suspended,
+            'status': status,  
             'total_slots_count': room.cached_total_slots,
             'tracked_slots_count': tracked_count
         })
