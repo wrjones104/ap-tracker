@@ -958,31 +958,41 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         # =========================================================================
         room.cached_cheese_json = json.dumps(new_tracker_data)
         
+        current_cheese_time = datetime.utcnow()
         try:
             clean_time = remote_updated_at
             if '.' in clean_time:
                 main, frac = clean_time.split('.')
                 clean_time = f"{main}.{frac[:6]}"
-            room.cheese_updated_at = datetime.fromisoformat(clean_time.replace('Z', '+00:00'))
+            # Ensure we are working with a timezone-aware or naive UTC object consistent with your app
+            parsed_dt = datetime.fromisoformat(clean_time.replace('Z', '+00:00'))
+            
+            # Convert to naive UTC if your DB/App uses naive UTC (which api.py seems to imply)
+            if parsed_dt.tzinfo:
+                parsed_dt = parsed_dt.replace(tzinfo=None)
+                
+            room.cheese_updated_at = parsed_dt
+            current_cheese_time = parsed_dt
         except (ValueError, TypeError):
             room.cheese_updated_at = datetime.utcnow()
 
         # =========================================================================
-        # 3. UNCLAIM SYNC (State-Based)
+        # 3. UNCLAIM SYNC (State-Based) with GRACE PERIOD
         # =========================================================================
-        # Instead of looking at history, we look at the CURRENT database state.
-        # IF a user is tracking a slot locally
-        # AND they are a known Cheese User (have a cheese_user_id)
-        # AND Cheese says "This slot is NOT owned by that ID"
-        # THEN -> Delete the local tracking.
+        
+        # If the room data from Cheese is very new (e.g., created/updated < 5 mins ago),
+        # we assume the user might still be in the process of setting up/claiming slots.
+        # We skip the destructive "Unclaim" logic during this window.
+        
+        is_fresh_room_data = False
+        if current_cheese_time:
+            time_since_update = datetime.utcnow() - current_cheese_time
+            if time_since_update < timedelta(minutes=5):
+                is_fresh_room_data = True
 
         # Map Position -> Game Data from Cheese
         new_games_map = {g['position']: g for g in new_tracker_data.get('games', [])}
         
-        # Fetch all local tracking rows for this room
-        # We join subscription -> user so we can check the cheese_user_id
-        
-        # Fetch all local tracking rows for this room
         current_tracked_slots = session.query(UserTrackedSlot).options(
             selectinload(UserTrackedSlot.user) 
         ).filter_by(room_id=room.id).all()
@@ -998,12 +1008,22 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
             if game_data:
                 # Case A: Slot exists in Cheese data. Check ownership.
                 remote_owner_id = game_data.get('claimed_by_ct_user_id')
+                
                 if remote_owner_id != user.cheese_user_id:
+                    # SAFETY CHECK: If the room is fresh, don't delete yet.
+                    if is_fresh_room_data:
+                        logging.info(f"[POLLER_SYNC] GRACE PERIOD: Skipping unclaim for Slot {ts.slot_id} (Room data is fresh).")
+                        continue
+
                     logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Owner mismatch: {remote_owner_id} != {user.cheese_user_id})")
                     session.delete(ts)
             else:
                 # Case B: Slot is MISSING from Cheese data.
-                # As per your finding: this implies it is Unclaimed/Hidden.
+                # SAFETY CHECK: If the room is fresh, don't delete yet.
+                if is_fresh_room_data:
+                    logging.info(f"[POLLER_SYNC] GRACE PERIOD: Skipping unclaim for Slot {ts.slot_id} (Slot missing from fresh data).")
+                    continue
+
                 logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Slot vanished from Cheese)")
                 session.delete(ts)
 

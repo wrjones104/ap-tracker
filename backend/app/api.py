@@ -517,10 +517,32 @@ def unsubscribe_from_room(current_user, room_db_id):
     if not subscription:
         return jsonify({'error': 'Not subscribed to this room'}), 404
 
+    # --- CHEESE INTEGRATION START ---
+    # Capture details before deletion
+    cheese_tracker_id = None
+    if subscription.room:
+        cheese_tracker_id = subscription.room.cheese_tracker_id
+
     session.delete(subscription)
     session.commit()
     
     logging.info(f"[API] User {current_user.id} unsubscribed from room {room_db_id}")
+
+    # --- CHEESE INTEGRATION TRIGGER ---
+    # If connected to Cheese, hide this tracker so it doesn't auto-reappear on next sync.
+    if current_user.cheese_api_key and cheese_tracker_id:
+        try:
+            from .api_cheese import update_tracker_visibility
+            import threading
+            
+            app_context = current_app._get_current_object()
+            threading.Thread(
+                target=update_tracker_visibility,
+                args=(app_context, current_user.id, cheese_tracker_id, False) # False = Hide
+            ).start()
+        except Exception as e:
+            logging.error(f"[API_ERROR] Failed to start Cheese visibility thread: {e}", exc_info=True)
+
     return jsonify({'message': 'Successfully unsubscribed from room.'})
 
 # =============================================================================

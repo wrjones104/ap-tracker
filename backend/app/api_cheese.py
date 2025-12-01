@@ -97,6 +97,8 @@ def setup_cheese_user_task(app, user_id):
 
             # 3. Iterate and Link
             for tracker_meta in trackers_list:
+                if tracker_meta.get('dashboard_override_visibility') is False:
+                    continue
                 ct_id = tracker_meta.get('tracker_id')
                 room_link = tracker_meta.get('room_link')
                 title = tracker_meta.get('title') or "Unknown Room"
@@ -451,6 +453,26 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
                 local_room.cheese_tracker_id = cheese_tracker_id
                 session.commit()
                 logging.info(f"[CHEESE_PUSH_NEW] Successfully created/linked {ap_room_id} to Cheese ID {cheese_tracker_id}.")
+                # Check if the user has already tracked slots locally while we were pushing the room.
+                # This ensures they get claimed immediately, reducing reliance on the poller grace period.
+                try:
+                    slots_to_claim = session.query(UserTrackedSlot.slot_id).filter_by(
+                        user_id=user_id, 
+                        room_id=local_room.id
+                    ).all()
+                    
+                    if slots_to_claim:
+                        slot_ids = [s[0] for s in slots_to_claim]
+                        logging.info(f"[CHEESE_PUSH_NEW] Found {len(slot_ids)} slots waiting to be claimed. Triggering push.")
+                        # Release the session before starting a new thread/task to avoid deadlocks
+                        session.commit() 
+                        
+                        # Call the existing slot push function
+                        # We use a daemon thread or direct call depending on your preference, 
+                        # but direct call here is safe as we are already in a background thread.
+                        push_slot_changes_to_cheese(app, user_id, local_room.id, slot_ids, [])
+                except Exception as e:
+                     logging.error(f"[CHEESE_PUSH_NEW] Error during catch-up claim: {e}")
             else:
                 logging.error(f"[CHEESE_PUSH_NEW] Race condition: Could not find local room {ap_room_id} to link.")
         except Exception as e:
@@ -605,3 +627,37 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
         )).start()
     except Exception as e:
         logging.error(f"Failed to start push thread for user {user_id}: {e}")
+
+def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):
+    """
+    Sets the dashboard visibility override for a specific tracker.
+    Used to hide a room from the sync list when a user unsubscribes locally.
+    """
+    with app.app_context():
+        session = Session()
+        try:
+            user = session.query(User).get(user_id)
+            if not user or not user.cheese_api_key:
+                return
+
+            api_key = decrypt_api_key(user.cheese_api_key)
+            if not api_key:
+                return
+
+            headers = {"Authorization": f"Bearer {api_key}"}
+            
+            # Endpoint: PUT /tracker/{tracker_id}/dashboard_override
+            url = f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}/dashboard_override"
+            payload = {"visibility": visibility}
+            
+            resp = requests.put(url, json=payload, headers=headers, timeout=10)
+            
+            if resp.status_code not in [200, 204]:
+                logging.warning(f"[CHEESE_VISIBILITY] Failed to set visibility {visibility} for {cheese_tracker_id}: {resp.status_code}")
+            else:
+                logging.info(f"[CHEESE_VISIBILITY] Set visibility={visibility} for tracker {cheese_tracker_id} (User {user_id})")
+
+        except Exception as e:
+            logging.error(f"[CHEESE_VISIBILITY] Error updating visibility: {e}", exc_info=True)
+        finally:
+            Session.remove()
