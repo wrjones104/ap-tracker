@@ -55,20 +55,26 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     val selectedPlayerFilter: StateFlow<String?> = _selectedPlayerFilter
 
     val availablePlayers: StateFlow<List<PlayerDisplayInfo>> = _itemHistory.map { history ->
-        history.map {
-            PlayerDisplayInfo(it.playerName, it.playerAlias)
-        }
-            .distinct()
+        history
+            .groupBy { it.playerName }
+            .map { (name, items) ->
+                val bestAlias = items.firstNotNullOfOrNull { it.playerAlias }
+                PlayerDisplayInfo(name, bestAlias)
+            }
             .sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val availableHintPlayers: StateFlow<List<PlayerDisplayInfo>> = combine(_hintsForYou, _hintsByYou) { forYou, byYou ->
-        val players = mutableSetOf<PlayerDisplayInfo>()
+        val allMentions = (forYou.map { PlayerDisplayInfo(it.itemOwnerName, it.itemOwnerAlias) } +
+                byYou.map { PlayerDisplayInfo(it.locationOwnerName, it.locationOwnerAlias) })
 
-        players.addAll(forYou.map { PlayerDisplayInfo(it.itemOwnerName, it.itemOwnerAlias) })
-        players.addAll(byYou.map { PlayerDisplayInfo(it.locationOwnerName, it.locationOwnerAlias) })
-
-        players.toList().sorted()
+        allMentions
+            .groupBy { it.originalName }
+            .map { (name, mentions) ->
+                val bestAlias = mentions.firstNotNullOfOrNull { it.alias }
+                PlayerDisplayInfo(name, bestAlias)
+            }
+            .sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _actionMessage = MutableStateFlow<String?>(null)
