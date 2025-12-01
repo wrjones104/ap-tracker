@@ -314,8 +314,10 @@ fun HistoryDetailSheet(
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold
                 )
+                val displayPlayer = getDisplayName(item.playerName, item.playerAlias, useCondensed = false)
+
                 Text(
-                    text = "Received by ${item.playerName}",
+                    text = "Received by $displayPlayer",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -689,9 +691,6 @@ fun HintCard(
             .fillMaxWidth()
             .clickable(onClick = onClick),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (hint.isFound) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
-        )
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -771,7 +770,9 @@ fun HintDetailSheet(
     val context = LocalContext.current
 
     // Explicit copy text: [ItemOwner]'s [Item] is at [Location] in [LocationOwner]'s World
-    val copyText = "${hint.itemOwnerName}'s ${hint.itemName} is at ${hint.locationName} in ${hint.locationOwnerName}'s World"
+    val itemOwner = getDisplayName(hint.itemOwnerName, hint.itemOwnerAlias, useCondensed = false)
+    val locOwner = getDisplayName(hint.locationOwnerName, hint.locationOwnerAlias, useCondensed = false)
+    val copyText = "$itemOwner's ${hint.itemName} is at ${hint.locationName} in $locOwner's World"
 
     Column(
         modifier = Modifier
@@ -885,10 +886,25 @@ fun SectionHeader(
 
 private fun formatTimestamp(isoString: String, formatter: DateTimeFormatter): String {
     return try {
-        val instant = Instant.parse(isoString)
+        var cleanString = isoString.trim()
+
+        if (cleanString.contains(" ") && !cleanString.contains("T")) {
+            cleanString = cleanString.replace(" ", "T")
+        }
+
+        val hasTimeZone = cleanString.endsWith("Z") ||
+                (cleanString.indexOfAny(charArrayOf('+', '-'), 10) != -1)
+
+        if (!hasTimeZone) {
+            cleanString += "Z"
+        }
+
+        val instant = Instant.parse(cleanString)
+
         instant.atZone(ZoneId.systemDefault()).format(formatter)
     } catch (e: Exception) {
-        Log.e("TimestampFormat", "Failed to parse timestamp: $isoString", e)
+        Log.e("TimestampFormat", "Failed to parse timestamp: '$isoString'", e)
+
         "Invalid date"
     }
 }

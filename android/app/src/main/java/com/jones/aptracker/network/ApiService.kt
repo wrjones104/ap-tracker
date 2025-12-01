@@ -194,6 +194,8 @@ data class UserProfile(
     val notify_hints_remote_items_default: Boolean,
     val notify_finished_default: Boolean,
     val use_condensed_messages_default: Boolean,
+    val ui_show_finished_default: Boolean = true,
+    val ui_show_found_hints_default: Boolean = false,
     val is_cheese_connected: Boolean = false
 )
 
@@ -203,7 +205,9 @@ data class UpdateGlobalPrefsRequest(
     val notify_hints: Boolean? = null,
     val notify_hints_remote_items: Boolean? = null,
     val notify_finished: Boolean? = null,
-    val use_condensed_messages: Boolean? = null
+    val use_condensed_messages: Boolean? = null,
+    val ui_show_finished: Boolean? = null,
+    val ui_show_found_hints: Boolean? = null
 )
 
 data class UpdateSlotPrefsRequest(

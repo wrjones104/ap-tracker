@@ -45,7 +45,7 @@ class HistoryRepository(
                             locationName = item.locationName,
                             isPlayerFinished = item.isPlayerFinished,
                             itemFlags = item.itemFlags,
-                            timestamp = item.timestamp,
+                            timestamp = normalizeTimestamp(item.timestamp),
                             tracker_id = item.tracker_id,
                             slot_id = item.slot_id,
                             icon_name = item.icon_name,
@@ -183,7 +183,7 @@ class HistoryRepository(
             itemName = detail.item_name,
             locationName = detail.location_name,
             isFound = detail.is_found,
-            timestamp = detail.timestamp,
+            timestamp = normalizeTimestamp(detail.timestamp),
             itemFlags = detail.item_flags
         )
     }
@@ -197,4 +197,21 @@ class HistoryRepository(
             Log.e("PRUNING", "Failed to prune slot data: ${e.message}", e)
         }
     }
+}
+
+private fun normalizeTimestamp(rawTime: String): String {
+    var cleanString = rawTime.trim()
+
+    if (cleanString.contains(" ") && !cleanString.contains("T")) {
+        cleanString = cleanString.replace(" ", "T")
+    }
+
+    val hasTimeZone = cleanString.endsWith("Z") ||
+            (cleanString.indexOfAny(charArrayOf('+', '-'), 10) != -1)
+
+    if (!hasTimeZone) {
+        cleanString += "Z"
+    }
+
+    return cleanString
 }

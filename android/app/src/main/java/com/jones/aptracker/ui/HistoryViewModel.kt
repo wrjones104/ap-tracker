@@ -95,22 +95,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         refreshAllHistory()
     }
 
-    fun setShowFoundHints(show: Boolean) {
-        if (show == _showFoundHints.value) {
-            Log.d("HintToggleDebug", "VM: setShowFoundHints called with same value: $show. Skipping.")
-            return
-        }
-        Log.d("HintToggleDebug", "VM: setShowFoundHints NEW value: $show")
-        _showFoundHints.value = show
-
-        refreshAllHistory()
-    }
-
     private fun fetchUserPreferences() {
         viewModelScope.launch {
             try {
                 val profile = RetrofitClient.instance.getUserProfile()
                 _useCondensed.value = profile.use_condensed_messages_default
+                _showFinished.value = profile.ui_show_finished_default
+                _showFoundHints.value = profile.ui_show_found_hints_default
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to load user profile for settings", e)
             }
@@ -118,7 +109,18 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setShowFinished(show: Boolean) {
-        _showFinished.value = show
+        if (_showFinished.value != show) {
+            _showFinished.value = show
+            saveViewPreferences(showFinished = show)
+        }
+    }
+
+    fun setShowFoundHints(show: Boolean) {
+        if (_showFoundHints.value != show) {
+            _showFoundHints.value = show
+            saveViewPreferences(showFoundHints = show)
+            refreshAllHistory()
+        }
     }
 
     fun refreshAllHistory() {
@@ -128,7 +130,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
-                fetchUserPreferences()
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
 
                 validTrackedSlots = trackedRooms.flatMap { room ->
@@ -232,6 +233,23 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
     fun clearActionMessage() {
         _actionMessage.value = null
+    }
+
+    private fun saveViewPreferences(
+        showFinished: Boolean? = null,
+        showFoundHints: Boolean? = null
+    ) {
+        viewModelScope.launch {
+            try {
+                val request = com.jones.aptracker.network.UpdateGlobalPrefsRequest(
+                    ui_show_finished = showFinished,
+                    ui_show_found_hints = showFoundHints
+                )
+                RetrofitClient.instance.updateUserPreferences(request)
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to save view preferences", e)
+            }
+        }
     }
 }
 

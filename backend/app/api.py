@@ -1083,6 +1083,8 @@ def get_current_user(current_user):
             'use_condensed_messages_default': current_user.use_condensed_messages_default,
             'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
+            'ui_show_finished_default': current_user.ui_show_finished_default,
+            'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
             'is_guest': True
         })
 
@@ -1109,6 +1111,8 @@ def get_current_user(current_user):
             'use_condensed_messages_default': current_user.use_condensed_messages_default,
             'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
+            'ui_show_finished_default': current_user.ui_show_finished_default,
+            'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
             'is_guest': False
         })
 
@@ -1208,6 +1212,10 @@ def update_user_preferences(current_user):
             setattr(user, 'notify_hints_remote_items_default', bool(data['notify_hints_remote_items']))
         if 'use_condensed_messages' in data:
             setattr(user, 'use_condensed_messages_default', bool(data['use_condensed_messages']))
+        if 'ui_show_finished' in data:
+            setattr(user, 'ui_show_finished_default', bool(data['ui_show_finished']))
+        if 'ui_show_found_hints' in data:
+            setattr(user, 'ui_show_found_hints_default', bool(data['ui_show_found_hints']))
 
         session.commit()
         return jsonify({'message': 'Preferences updated successfully'}), 200
@@ -1491,7 +1499,8 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             "item_name": item_name,
             "location_name": location_name,
             "is_found": getattr(hint, 'is_found', False),
-            "timestamp": ts_val
+            "timestamp": ts_val,
+            "item_flags": getattr(hint, 'item_flags', 0)
         }
         
         if temp_data["is_item_owner_tracked"]:

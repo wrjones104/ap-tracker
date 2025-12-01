@@ -391,7 +391,8 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                     item_id=item_id,
                     location_id=loc_id,
                     is_found=is_found_from_tracker,
-                    timestamp=datetime.now(timezone.utc)
+                    timestamp=datetime.now(timezone.utc),
+                    item_flags=flags
                 ))
                 hints_in_this_batch.add(hint_key_batch)
                 hints_added_count += 1

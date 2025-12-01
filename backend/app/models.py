@@ -32,6 +32,8 @@ class User(Base):
     notify_finished_default = Column(Boolean, default=False, nullable=False)
     notify_hints_remote_items_default = Column(Boolean, default=True, nullable=False)
     use_condensed_messages_default = Column(Boolean, default=False, nullable=False)
+    ui_show_finished_default = Column(Boolean, default=True, nullable=False)
+    ui_show_found_hints_default = Column(Boolean, default=False, nullable=False)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
 
 class Device(Base):
@@ -147,9 +149,10 @@ class NotifiedHint(Base):
     location_id = Column(BigInteger, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_found = Column(Boolean, default=False, nullable=False)
+    item_flags = Column(Integer, default=0)
     __table_args__ = (
         UniqueConstraint('room_id', 'item_id', 'location_id', 'item_owner_id', 'location_owner_id', name='_hint_event_uc'),
-        Index('ix_notifiedhint_timestamp', 'timestamp'), # <-- ADDED THIS
+        Index('ix_notifiedhint_timestamp', 'timestamp'), 
     )
 
 class JWTBlocklist(Base):
