@@ -12,6 +12,7 @@ service-account-key.json
 build/
 .gradle/
 app/build/
+prod/
 # Local configuration file (contains SDK path, often strictly local)
 local.properties
 # Android Studio IDE files
