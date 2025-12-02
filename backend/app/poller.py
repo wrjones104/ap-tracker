@@ -38,7 +38,8 @@ async def close_aiohttp_session():
 
 def get_aiohttp_session():
     if not hasattr(thread_local_data, "aiohttp_session") or thread_local_data.aiohttp_session.closed:
-        thread_local_data.aiohttp_session = aiohttp.ClientSession()
+        # Use DummyCookieJar to prevent memory leak from accumulating cookies across thousands of rooms
+        thread_local_data.aiohttp_session = aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar())
     return thread_local_data.aiohttp_session
 
 def log_resource_usage(app):
@@ -1411,15 +1412,19 @@ async def poll_cheese_with_interval(room_info, loop):
         except asyncio.CancelledError:
             break
 
-async def setup_worker(setup_queue, setup_semaphore, loop):
+async def setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop):
     while True:
+        room_info = None
         try:
             room_info = await setup_queue.get()
             async with setup_semaphore:
                 await run_room_setup(room_info, loop)
-            setup_queue.task_done()
         except Exception as e:
             logging.error(f"[SETUP_WORKER_ERROR] Unhandled error: {e}", exc_info=True)
+        finally:
+            if room_info:
+                rooms_in_setup.discard(room_info['db_id'])
+                setup_queue.task_done()
 
 async def poller_supervisor(app, loop):
     logging.info("[POLLER] Background polling service starting...")
@@ -1428,9 +1433,10 @@ async def poller_supervisor(app, loop):
 
     setup_queue = asyncio.Queue()
     setup_semaphore = asyncio.Semaphore(2) 
+    rooms_in_setup = set()
     
-    asyncio.create_task(setup_worker(setup_queue, setup_semaphore, loop))
-    asyncio.create_task(setup_worker(setup_queue, setup_semaphore, loop))
+    asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
+    asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
     
     while True:
         try:
@@ -1464,11 +1470,13 @@ async def poller_supervisor(app, loop):
                     needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations)
 
                     if needs_setup:
-                        if room.id not in running_tasks:
+                        if room.id not in running_tasks and room.id not in rooms_in_setup:
                             logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup.")
+                            rooms_in_setup.add(room.id)
                             await setup_queue.put(room_info)
-                        else:
+                        elif room.id in running_tasks and room.id not in rooms_in_setup:
                             logging.info(f"[SUPERVISOR] Re-queuing running room {room.id} for metadata repair.")
+                            rooms_in_setup.add(room.id)
                             await setup_queue.put(room_info)
                     else:
                         if room.id not in running_tasks:
