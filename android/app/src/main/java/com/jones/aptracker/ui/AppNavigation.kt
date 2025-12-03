@@ -76,6 +76,7 @@ fun MainNavHost(
                 onManageSlotsClick = { roomId, roomAlias ->
                     navController.navigate("players/$roomId/${Uri.encode(roomAlias)}")
                 },
+                onCreditsClick = { navController.navigate("credits") }
             )
         }
         composable("profile") {
@@ -88,6 +89,11 @@ fun MainNavHost(
         }
         composable("ignore_list") {
             IgnoreListScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+        composable("credits") {
+            CreditsScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }
