@@ -24,6 +24,10 @@ from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 thread_local_data = local()
 load_dotenv()
 
+# Limit concurrent requests to Cheese Tracker API to avoid rate limits
+CHEESE_POLL_SEMAPHORE_LIMIT = 3
+cheese_semaphore = asyncio.Semaphore(CHEESE_POLL_SEMAPHORE_LIMIT)
+
 # =============================================================================
 # CORE HELPERS & SETUP
 # =============================================================================
@@ -1078,7 +1082,10 @@ async def run_cheese_poll(room_info, loop):
     # 1. Fetch Public Data (No Auth needed for reads)
     base_url = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.theincrediblewheelofchee.se/api')
     url = f"{base_url}/tracker/{ct_id}"
-    new_data = await fetch_json(url)
+
+    # Use semaphore to limit concurrent requests to Cheese API
+    async with cheese_semaphore:
+        new_data = await fetch_json(url)
     
     if not new_data: 
         return

@@ -3,6 +3,7 @@ import requests
 import threading
 import os
 import json
+import time
 from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +20,7 @@ load_dotenv()
 bp = Blueprint('api_cheese', __name__)
 
 CHEESE_BASE_URL = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.theincrediblewheelofchee.se/api')
+CHEESE_DELAY = 1.0
 
 def _extract_ap_room_id(url_string):
     """
@@ -97,6 +99,7 @@ def setup_cheese_user_task(app, user_id):
 
             # 3. Iterate and Link
             for tracker_meta in trackers_list:
+                time.sleep(CHEESE_DELAY)
                 if tracker_meta.get('dashboard_override_visibility') is False:
                     continue
                 ct_id = tracker_meta.get('tracker_id')
@@ -401,6 +404,8 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
             logging.error(f"[CHEESE_PUSH_NEW] Succeeded POST, but no tracker_id in response for {tracker_url}.")
             return
 
+        time.sleep(CHEESE_DELAY)
+
         # Step 2: GET the tracker's current state
         response_get = requests.get(f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}", headers=headers, timeout=10)
         
@@ -428,6 +433,8 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         if 'updated_at' in tracker_data:
             put_headers['If-Unmodified-Since'] = tracker_data.get('updated_at')
         
+        time.sleep(CHEESE_DELAY)
+
         # Step 5: PUT the update
         response_put = requests.put(f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}", json=put_payload, headers=put_headers, timeout=10)
         
@@ -528,6 +535,7 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
 
     # Helper function to send the state
     def send_state(app, ap_position, is_tracked, current_user_id_for_thread, initial_ct_id):
+        time.sleep(CHEESE_DELAY)
         # The thread will create its *own* session
         # This function is already safe (Network -> DB)
         with app.app_context():
@@ -594,6 +602,8 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
                 }
                 put_headers['x-if-owner-is'] = json.dumps(owner_precondition)
                 
+                time.sleep(CHEESE_DELAY)
+
                 # 6. Send the update
                 response = requests.put(url, json=payload, headers=put_headers, timeout=5)
                 
