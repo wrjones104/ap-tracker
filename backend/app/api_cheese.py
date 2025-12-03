@@ -94,6 +94,7 @@ def setup_cheese_user_task(app, user_id):
 
                 # 3. Iterate and Link
                 for tracker_meta in trackers_list:
+                    time.sleep(0.5)
                     if tracker_meta.get('dashboard_override_visibility') is False:
                         continue
                     ct_id = tracker_meta.get('tracker_id')
