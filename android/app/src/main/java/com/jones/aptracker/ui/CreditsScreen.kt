@@ -76,7 +76,7 @@ fun CreditsScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Copyright © 2025 Will Jones",
+                    text = "Copyright © ${java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)} Will Jones",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
