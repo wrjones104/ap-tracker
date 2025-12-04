@@ -1385,6 +1385,7 @@ def db_handle_setup_failure(db_id):
 # =============================================================================
 
 async def poll_room_with_interval(room_info, loop):
+    await asyncio.sleep(random.uniform(1, 45))
     while True:
         try:
             await run_room_poll(room_info, loop)
