@@ -908,6 +908,8 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
         if not room: 
             return {}
+        
+        is_first_sync = room.cheese_updated_at is None
 
         # =========================================================================
         # 1. SELF-HEALING & MERGE LOGIC (Existing)
@@ -986,17 +988,6 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         # 3. UNCLAIM SYNC (State-Based) with GRACE PERIOD
         # =========================================================================
         
-        # If the room data from Cheese is very new (e.g., created/updated < 5 mins ago),
-        # we assume the user might still be in the process of setting up/claiming slots.
-        # We skip the destructive "Unclaim" logic during this window.
-        
-        is_fresh_room_data = False
-        if current_cheese_time:
-            time_since_update = datetime.utcnow() - current_cheese_time
-            if time_since_update < timedelta(minutes=5):
-                is_fresh_room_data = True
-
-        # Map Position -> Game Data from Cheese
         new_games_map = {g['position']: g for g in new_tracker_data.get('games', [])}
         
         current_tracked_slots = session.query(UserTrackedSlot).options(
@@ -1005,24 +996,37 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
 
         for ts in current_tracked_slots:
             user = ts.user 
-            
-            if not user or not user.cheese_user_id:
-                continue
+            if not user or not user.cheese_user_id: continue
 
             game_data = new_games_map.get(ts.slot_id)
             
             if game_data:
-                # Case A: Slot exists in Cheese data. Check ownership.
+                # Case A: Slot exists in Cheese data.
                 remote_owner_id = game_data.get('claimed_by_ct_user_id')
                 
-                if remote_owner_id != user.cheese_user_id:
-                    logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Owner mismatch: {remote_owner_id} != {user.cheese_user_id})")
+                # CONFLICT: Someone else owns it. 
+                # ALWAYS Prune. Security/Integrity beats Grace Period.
+                if remote_owner_id and remote_owner_id != user.cheese_user_id:
+                    logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Owner mismatch)")
                     session.delete(ts)
+                
+                # UNCLAIMED: Remote is None, but we are tracking it.
+                elif remote_owner_id is None:
+                    # CHECK: Is this the first sync?
+                    if is_first_sync:
+                         logging.info(f"[POLLER_SYNC] GRACE PERIOD: Keeping Slot {ts.slot_id} (First Sync - Waiting for push).")
+                         continue
+                    
+                    # If not first sync, we assume the user released it on the website.
+                    logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Remote is unclaimed).")
+                    session.delete(ts)
+
             else:
-                # Case B: Slot is MISSING from Cheese data.
-                # SAFETY CHECK: If the room is fresh, don't delete yet.
-                if is_fresh_room_data:
-                    logging.info(f"[POLLER_SYNC] GRACE PERIOD: Skipping unclaim for Slot {ts.slot_id} (Slot missing from fresh data).")
+                # Case B: Slot is MISSING from Cheese data entirely.
+                # This happens if Cheese API returns partial data or during creation.
+                # We can also trust is_first_sync here.
+                if is_first_sync:
+                    logging.info(f"[POLLER_SYNC] GRACE PERIOD: Keeping Slot {ts.slot_id} (Slot missing - First Sync).")
                     continue
 
                 logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Slot vanished from Cheese)")
