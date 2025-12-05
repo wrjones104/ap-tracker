@@ -62,9 +62,8 @@ This project uses a hybrid database setup. The backend is designed to run with *
     source venv/bin/activate  # On Windows use `venv\Scripts\activate`
 
 3.  **Install Dependencies**
-    *(You will need to create a `requirements.txt` file)*
     
-    pip install Flask gunicorn sqlalchemy psycopg2-binary alembic firebase-admin
+    pip install -r requirements.txt
 
 4.  **Set up Firebase Admin**
     * In your Firebase project settings, generate a new private key for the Service Account.
