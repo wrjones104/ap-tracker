@@ -1,0 +1,65 @@
+# Archipelago Alerts - Project Summary for LLMs
+
+This document is intended to help an LLM or AI assistant understand the structure, purpose, and key components of the **Archipelago Alerts** project.
+
+## Project Overview
+
+**Archipelago Alerts** (formerly AP Tracker) is a tool for tracking Archipelago multiworld games. It allows users to subscribe to rooms, track specific players, and receive push notifications for in-game events (items received, hints found, etc.).
+
+The system consists of two main parts:
+1.  **Backend:** A Python Flask application that handles API requests, authenticates users (Discord), manages the database, and polls Archipelago servers for game updates.
+2.  **Android App:** A native Android application (Kotlin/Jetpack Compose) that serves as the frontend client.
+
+## Directory Structure
+
+*   `backend/`: Contains the Python backend code.
+    *   `app/`: Main application package.
+        *   `api.py`: Core REST API endpoints (Rooms, Slots, History).
+        *   `auth.py`: Authentication logic (Discord OAuth2, JWT).
+        *   `poller.py`: The background worker that polls Archipelago servers and Cheese Tracker.
+        *   `models.py`: SQLAlchemy database models.
+        *   `api_cheese.py`: Integration logic for "Cheese Tracker".
+        *   `templates/`: HTML templates for simple web pages (Privacy Policy, Delete Account).
+    *   `alembic/`: Database migration scripts.
+    *   `run.py`: Entry point for the Flask app.
+    *   `requirements.txt`: Python dependencies.
+*   `android/`: Contains the Android application code.
+    *   `app/src/main/java/`: Kotlin source code.
+    *   `app/src/main/res/`: Android resources (layouts, strings, etc.).
+
+## Key Components & Technologies
+
+### Backend
+
+*   **Framework:** Flask with Gunicorn/Waitress.
+*   **Database:** SQLAlchemy ORM. Supports SQLite (local) and PostgreSQL (production).
+*   **Asynchronous Processing:** The `poller.py` script uses `asyncio` and `aiohttp` for high-concurrency polling of multiple Archipelago rooms.
+*   **Authentication:**
+    *   **Discord OAuth2:** Users log in via Discord.
+    *   **JWT:** The backend issues JWTs for API access after Discord auth.
+    *   **Guest Mode:** Supports anonymous guest accounts.
+*   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
+*   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted.
+
+### Database Schema (Key Models)
+
+*   `User`: Stores Discord ID, preferences, and encryption keys.
+*   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
+*   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias.
+*   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
+*   `Device`: Stores FCM tokens for push notifications.
+*   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
+*   `DatapackageCache`: Caches game data (Item/Location names) to reduce API calls.
+
+## Development Notes
+
+1.  **Environment Variables:** The backend relies on environment variables (often in `backend/.env`). Key vars include `DATABASE_URL`, `DISCORD_CLIENT_ID`, `SECRET_KEY`, and `ENCRYPTION_KEY`.
+2.  **Polling Logic:** The `poller.py` is complex. It manages concurrent setups, regular polling, and "Cheese" polling. It handles "backfilling" history for new subscriptions to avoid notification spam.
+3.  **No Tests:** The project currently lacks a formal test suite. Changes should be verified carefully, preferably by running the backend locally.
+4.  **Frontend/Backend Sync:** Changes to API response formats in `backend/app/api.py` usually require corresponding updates in the Android app (specifically the Retrofit interfaces).
+
+## "Gotchas"
+
+*   **Database:** SQLite uses WAL mode.
+*   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
+*   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.

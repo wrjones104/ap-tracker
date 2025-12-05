@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AP Tracker - Account Deletion</title>
+    <title>Archipelago Alerts - Account Deletion</title>
     <style>
         /* Same dark mode styles as before for consistency */
         body {
@@ -42,7 +42,7 @@
     <div class="container">
         {% if state == 'landing' %}
             <h1>Manage Your Data</h1>
-            <p>If you cannot access the AP Tracker app, you can securely delete your account data here.</p>
+            <p>If you cannot access the Archipelago Alerts app, you can securely delete your account data here.</p>
             <p>Please sign in with Discord so we can verify which account to delete.</p>
             <a href="/web/auth" class="btn btn-discord">Login with Discord</a>
         
@@ -68,7 +68,7 @@
 
         {% elif state == 'done' %}
             <h1 style="color: #4caf50;">Account Deleted</h1>
-            <p>Your data has been successfully removed from AP Tracker servers.</p>
+            <p>Your data has been successfully removed from the Archipelago Alert servers.</p>
             <p>You may now close this window.</p>
         {% endif %}
     </div>
