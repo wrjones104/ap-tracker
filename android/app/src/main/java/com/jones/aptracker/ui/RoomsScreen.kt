@@ -1,17 +1,19 @@
 package com.jones.aptracker.ui
 
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.snapshotFlow
-import kotlinx.coroutines.flow.filterNotNull
-import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,19 +22,22 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -42,6 +47,8 @@ import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.R
 import com.jones.aptracker.network.Room
 import com.jones.aptracker.network.UserProfile
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,7 +94,6 @@ fun RoomsScreen(
                     message = message,
                     duration = SnackbarDuration.Short
                 )
-
                 roomsViewModel.clearErrorMessage()
             }
     }
@@ -96,6 +102,12 @@ fun RoomsScreen(
     var roomToDelete by remember { mutableStateOf<Room?>(null) }
     var roomToEdit by remember { mutableStateOf<Room?>(null) }
     var newRoomAliasToFind by remember { mutableStateOf<String?>(null) }
+
+    // --- Drag and Drop State ---
+    var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
+    var draggingItemOffset by remember { mutableStateOf(0f) }
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(rooms, newRoomAliasToFind) {
         if (newRoomAliasToFind != null) {
@@ -158,7 +170,7 @@ fun RoomsScreen(
                             R.drawable.add_room_2,
                             R.drawable.add_room_3,
                         )
-                        val randomBanner by remember { mutableStateOf(bannerImages.random())}
+                        val randomBanner by remember { mutableStateOf(bannerImages.random()) }
                         Image(
                             painter = painterResource(id = randomBanner),
                             contentDescription = "Archipelago Alerts Add-a-Room Banner",
@@ -176,7 +188,94 @@ fun RoomsScreen(
                     }
                 } else {
                     LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = { offset ->
+                                        listState.layoutInfo.visibleItemsInfo
+                                            .firstOrNull { item ->
+                                                offset.y.toInt() in item.offset..(item.offset + item.size)
+                                            }?.let { item ->
+                                                // Prevent dragging the banner (Index 0)
+                                                if (item.index > 0) {
+                                                    draggingItemIndex = item.index
+                                                    draggingItemOffset = 0f
+                                                }
+                                            }
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        draggingItemOffset += dragAmount.y
+
+                                        val currentDraggingIndex = draggingItemIndex ?: return@detectDragGesturesAfterLongPress
+                                        val currentItemInfo = listState.layoutInfo.visibleItemsInfo
+                                            .firstOrNull { it.index == currentDraggingIndex } ?: return@detectDragGesturesAfterLongPress
+
+                                        val startOffset = currentItemInfo.offset + draggingItemOffset
+
+                                        // Use toInt() for safe range check
+                                        val centerOffset = (startOffset + (currentItemInfo.size / 2)).toInt()
+
+                                        // Find target
+                                        val targetItem = listState.layoutInfo.visibleItemsInfo
+                                            .firstOrNull {
+                                                it.index != currentDraggingIndex &&
+                                                        it.index > 0 && // Cannot swap with Banner
+                                                        centerOffset in it.offset..(it.offset + it.size)
+                                            }
+
+                                        if (targetItem != null) {
+                                            // Convert LazyColumn indices to Data List indices
+                                            // LazyColumn 0 = Banner. LazyColumn 1 = Room[0].
+                                            val fromDataIndex = currentDraggingIndex - 1
+                                            val toDataIndex = targetItem.index - 1
+
+                                            if (fromDataIndex >= 0 && toDataIndex >= 0) {
+                                                // --- HEIGHT-AWARE OFFSET CALCULATION ---
+                                                // Calculate where our item will effectively land logically
+                                                val newLogicalOffset = if (targetItem.index > currentDraggingIndex) {
+                                                    // Dragging DOWN: We move to the spot AFTER the target.
+                                                    // Effectively, we are at [Current Pos] + [Target Size]
+                                                    currentItemInfo.offset + targetItem.size
+                                                } else {
+                                                    // Dragging UP: We move to the target's current spot.
+                                                    targetItem.offset
+                                                }
+
+                                                // The adjustment needed is the difference between where we were
+                                                // and where the logic thinks we are now.
+                                                val adjustment = currentItemInfo.offset - newLogicalOffset
+
+                                                roomsViewModel.reorderRooms(fromDataIndex, toDataIndex)
+                                                draggingItemIndex = targetItem.index
+
+                                                // Apply the precise adjustment
+                                                draggingItemOffset += adjustment
+                                            }
+                                        }
+
+                                        // Auto Scroll
+                                        val overscrollThreshold = 150f
+                                        val endOffset = startOffset + currentItemInfo.size
+
+                                        if (startOffset < 0) {
+                                            coroutineScope.launch { listState.scrollBy(-overscrollThreshold / 5) }
+                                        } else if (endOffset > listState.layoutInfo.viewportEndOffset) {
+                                            coroutineScope.launch { listState.scrollBy(overscrollThreshold / 5) }
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        draggingItemIndex = null
+                                        draggingItemOffset = 0f
+                                    },
+                                    onDragCancel = {
+                                        draggingItemIndex = null
+                                        draggingItemOffset = 0f
+                                    }
+                                )
+                            },
                         contentPadding = PaddingValues(
                             start = 8.dp,
                             top = 8.dp,
@@ -185,6 +284,7 @@ fun RoomsScreen(
                         ),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        // Banner Item (Index 0)
                         item {
                             val bannerImages = listOf(
                                 R.drawable.room_1,
@@ -197,7 +297,7 @@ fun RoomsScreen(
                                 R.drawable.room_8,
                                 R.drawable.room_9,
                             )
-                            val randomBanner by remember { mutableStateOf(bannerImages.random())}
+                            val randomBanner by remember { mutableStateOf(bannerImages.random()) }
                             Image(
                                 painter = painterResource(id = randomBanner),
                                 contentDescription = "Archipelago Alerts Room Banner",
@@ -207,20 +307,45 @@ fun RoomsScreen(
                                     .clip(RoundedCornerShape(8.dp)),
                                 contentScale = ContentScale.FillWidth
                             )
+                            Text(
+                                text = "Long-press a room to reorder",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .padding(top = 4.dp, bottom = 8.dp)
+                                    .fillMaxWidth()
+                                    .wrapContentWidth(Alignment.CenterHorizontally)
+                            )
                         }
 
-                        items(rooms) { room ->
+                        // Room Items (Index 1+)
+                        itemsIndexed(rooms) { index, room ->
+                            // Calculate actual list index (Banner is 0, so these are index + 1)
+                            val listIndex = index + 1
+                            val isDragging = listIndex == draggingItemIndex
+
+                            val elevation by animateDpAsState(if (isDragging) 8.dp else 2.dp, label = "elevation")
+                            val scale by animateFloatAsState(if (isDragging) 1.05f else 1.0f, label = "scale")
+
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp)
+                                    .zIndex(if (isDragging) 1f else 0f)
+                                    .graphicsLayer {
+                                        translationY = if (isDragging) draggingItemOffset else 0f
+                                        scaleX = scale
+                                        scaleY = scale
+                                        // Visual transparency during drag can be nice
+                                        alpha = if (isDragging) 0.9f else 1f
+                                    }
                                     .clickable { onRoomClick(room.id, room.alias) },
-                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                                elevation = CardDefaults.cardElevation(defaultElevation = elevation)
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(start = 16.dp),
+                                        .padding(start = 16.dp, end = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
@@ -256,6 +381,12 @@ fun RoomsScreen(
                                     IconButton(onClick = { roomToDelete = room }) {
                                         Icon(Icons.Default.Delete, contentDescription = "Delete Room")
                                     }
+                                    Icon(
+                                        imageVector = Icons.Default.DragHandle,
+                                        contentDescription = "Reorder",
+                                        tint = MaterialTheme.colorScheme.outline,
+                                        modifier = Modifier.padding(start = 8.dp)
+                                    )
                                 }
                             }
                         }
@@ -351,7 +482,7 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
                                 .size(40.dp)
                                 .clip(CircleShape)
                                 .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-                                .border(1.dp, if(isSelected) MaterialTheme.colorScheme.primary else Color.Gray, CircleShape)
+                                .border(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray, CircleShape)
                                 .clickable { selectedIconName = name },
                             contentAlignment = Alignment.Center
                         ) {
@@ -411,7 +542,7 @@ fun EditRoomDialog(
                                 .size(40.dp)
                                 .clip(CircleShape)
                                 .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-                                .border(1.dp, if(isSelected) MaterialTheme.colorScheme.primary else Color.Gray, CircleShape)
+                                .border(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray, CircleShape)
                                 .clickable { selectedIconName = name },
                             contentAlignment = Alignment.Center
                         ) {
@@ -471,7 +602,9 @@ fun ProfileMenu(
                     AsyncImage(
                         model = userProfile?.avatar_url,
                         contentDescription = "User Profile",
-                        modifier = Modifier.size(32.dp).clip(CircleShape),
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape),
                         contentScale = ContentScale.Crop
                     )
                 } else {
@@ -511,7 +644,12 @@ fun ProfileMenu(
         ) {
             userProfile?.discord_username?.let {
                 DropdownMenuItem(
-                    text = { Text("Logged in as $it", style = MaterialTheme.typography.labelMedium) },
+                    text = {
+                        Text(
+                            "Logged in as $it",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    },
                     onClick = { },
                     enabled = false
                 )

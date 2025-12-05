@@ -126,3 +126,9 @@ val MIGRATION_11_12 = object : Migration(11, 12) {
         db.execSQL("ALTER TABLE hints ADD COLUMN locationOwnerAlias TEXT")
     }
 }
+
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE rooms ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+    }
+}

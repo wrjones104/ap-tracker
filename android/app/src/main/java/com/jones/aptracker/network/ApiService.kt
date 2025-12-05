@@ -115,7 +115,8 @@ data class Room(
     val host: String?,
     val tracked_slots_count: Int,
     val total_slots_count: Int,
-    val icon_name: String
+    val icon_name: String,
+    val sort_order: Int = 0
 )
 
 data class AddRoomRequest(

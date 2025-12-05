@@ -12,14 +12,27 @@ class RoomsRepository(
 
     val allRooms: Flow<List<RoomEntity>> = roomDao.getAllRooms()
 
-    /**
-     * Fetches the latest list of rooms from the network and updates the local database.
-     * If the network call fails, this function will throw an exception, but our
-     * local data will remain untouched.
-     */
     suspend fun refreshRooms() {
         val networkRooms = apiService.getRooms()
+
+        // 1. Fetch current local rooms to see existing sort orders
+        val localRooms = roomDao.getAllRoomsOneShot()
+        val sortOrderMap = localRooms.associate { it.room_id to it.sort_order }
+
+        // 2. Find the highest sort order currently used (for new rooms)
+        var nextSortOrder = (localRooms.maxOfOrNull { it.sort_order } ?: 0) + 1
+
         val roomEntities = networkRooms.map { networkRoom ->
+            // 3. Preserve existing order if known, else append to end
+            val currentOrder = sortOrderMap[networkRoom.room_id]
+            val finalOrder = if (currentOrder != null) {
+                currentOrder
+            } else {
+                val newOrder = nextSortOrder
+                nextSortOrder++
+                newOrder
+            }
+
             RoomEntity(
                 id = networkRoom.id,
                 room_id = networkRoom.room_id,
@@ -27,8 +40,15 @@ class RoomsRepository(
                 host = networkRoom.host,
                 tracked_slots_count = networkRoom.tracked_slots_count,
                 total_slots_count = networkRoom.total_slots_count,
-                icon_name = networkRoom.icon_name
+                icon_name = networkRoom.icon_name,
+                sort_order = finalOrder
             )
         }
-        roomDao.syncRooms(roomEntities)    }
+        roomDao.syncRooms(roomEntities)
+    }
+
+    // Updates the order of the list in the DB
+    suspend fun updateRoomOrder(rooms: List<RoomEntity>) {
+        roomDao.updateRooms(rooms)
+    }
 }
