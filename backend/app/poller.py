@@ -1016,11 +1016,6 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                 remote_owner_id = game_data.get('claimed_by_ct_user_id')
                 
                 if remote_owner_id != user.cheese_user_id:
-                    # SAFETY CHECK: If the room is fresh, don't delete yet.
-                    if is_fresh_room_data:
-                        logging.info(f"[POLLER_SYNC] GRACE PERIOD: Skipping unclaim for Slot {ts.slot_id} (Room data is fresh).")
-                        continue
-
                     logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Owner mismatch: {remote_owner_id} != {user.cheese_user_id})")
                     session.delete(ts)
             else:
