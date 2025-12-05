@@ -5,6 +5,7 @@ import json
 import websockets
 import os
 import random
+import fnmatch
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
@@ -532,9 +533,14 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 
                 if user_prefs.ignore_items:
                     for ignore_rule in user_prefs.ignore_items:
-                        # 1. Check Item Name Match
-                        if ignore_rule.item_name.lower().strip() == normalized_item_name:
-                            # 2. Check Game Scope
+                        # Prepare the pattern from the user's input
+                        rule_pattern = ignore_rule.item_name.lower().strip()
+
+                        # 1. Check Item Name Match (UPDATED to use fnmatch for wildcards)
+                        # This allows inputs like "*Key" or "Map*" or "*for Toad"
+                        if fnmatch.fnmatch(normalized_item_name, rule_pattern):
+                            
+                            # 2. Check Game Scope (Existing logic)
                             if not ignore_rule.game_name:
                                 should_ignore = True
                                 break
@@ -543,7 +549,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                                 break
                 
                 if should_ignore:
-                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' for game '{item_data['receiver_game']}'.")
+                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}') for game '{item_data['receiver_game']}'.")
                     continue
                 # --- IGNORE LIST CHECK END ---
 

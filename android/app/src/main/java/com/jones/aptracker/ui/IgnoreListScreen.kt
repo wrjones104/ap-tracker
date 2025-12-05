@@ -168,7 +168,7 @@ fun AddIgnoreRuleDialog(
         title = { Text("Ignore Item") },
         text = {
             Column {
-                Text("Enter the exact name of the item you want to ignore.")
+                Text("Enter the name of the item you want to ignore. You can use wildcards as well (e.g. *Key).")
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
                     value = itemName,

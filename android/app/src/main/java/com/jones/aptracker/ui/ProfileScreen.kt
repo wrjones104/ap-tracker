@@ -267,7 +267,7 @@ fun ProfileScreen(
                     Column {
                         Text("Manage Ignore List", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Mute notifications for specific items",
+                            "Mute notifications (supports wildcards, e.g. '*Key')",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
