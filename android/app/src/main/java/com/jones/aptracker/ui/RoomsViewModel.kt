@@ -51,17 +51,8 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.allRooms
                 .map { roomEntities ->
-                    roomEntities.map { entity ->
-                        Room(
-                            id = entity.id,
-                            room_id = entity.room_id,
-                            alias = entity.alias,
-                            host = entity.host,
-                            tracked_slots_count = entity.tracked_slots_count,
-                            total_slots_count = entity.total_slots_count,
-                            icon_name = entity.icon_name
-                        )
-                    }
+                    // MAPPER USAGE HERE
+                    roomEntities.map { RoomMapper.toDomain(it) }
                 }
                 .catch {
                     _errorMessage.value = "Failed to load rooms from database."
@@ -73,6 +64,30 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         fetchRooms()
+    }
+
+    fun reorderRooms(fromIndex: Int, toIndex: Int) {
+        val currentList = _rooms.value.toMutableList()
+
+        // Safety checks
+        if (fromIndex == toIndex ||
+            fromIndex !in currentList.indices ||
+            toIndex !in currentList.indices
+        ) return
+
+        // 1. Move item in memory immediately for UI responsiveness
+        val item = currentList.removeAt(fromIndex)
+        currentList.add(toIndex, item)
+
+        // 2. Update StateFlow immediately
+        _rooms.value = currentList.toList()
+
+        // 3. Persist new order to DB using Mapper
+        viewModelScope.launch {
+            // The Mapper.toEntityList helper will assign sort_order based on list index
+            val updatedEntities = RoomMapper.toEntityList(currentList)
+            repository.updateRoomOrder(updatedEntities)
+        }
     }
 
     fun fetchRooms() {
