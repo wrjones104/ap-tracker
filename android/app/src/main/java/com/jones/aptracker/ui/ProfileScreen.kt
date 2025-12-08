@@ -1,342 +1,167 @@
 package com.jones.aptracker.ui
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.jones.aptracker.network.TrackedSlotDetail
-import com.jones.aptracker.network.UserProfile
+import coil.compose.AsyncImage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
     userViewModel: UserViewModel = viewModel(),
-    onBackClick: () -> Unit,
-    onLogout: () -> Unit,
-    onLoginClick: () -> Unit,
-    onIgnoreListClick: () -> Unit
+    onLogoutClick: () -> Unit,
+    onGuestUpgradeClick: () -> Unit,
+    onIgnoreListClick: () -> Unit,
+    onCreditsClick: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onNavigateToArchived: () -> Unit
 ) {
     val userProfile by userViewModel.userProfile.collectAsState()
-    val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
+    val isAutoSyncEnabled by userViewModel.isAutoSyncEnabled.collectAsState()
 
-    val errorMessage by userViewModel.errorMessage.collectAsState()
-    val snackbarHostState = remember { SnackbarHostState() }
+    // State for Delete Dialog
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    val integrationMessage by userViewModel.integrationMessage.collectAsState()
-
-    LaunchedEffect(errorMessage) {
-        if (errorMessage != null) {
-            snackbarHostState.showSnackbar(
-                message = errorMessage!!,
-                duration = SnackbarDuration.Short
-            )
-            userViewModel.clearErrorMessage()
-        }
-    }
-
-    LaunchedEffect(integrationMessage) {
-        if (integrationMessage != null) {
-            snackbarHostState.showSnackbar(
-                message = integrationMessage!!,
-                duration = SnackbarDuration.Short
-            )
-            userViewModel.clearIntegrationMessage()
-        }
-    }
-
-    var editingSlot by remember { mutableStateOf<Pair<Int, TrackedSlotDetail>?>(null) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
-    if (editingSlot != null && userProfile != null) {
-        val (roomId, slotDetail) = editingSlot!!
-        val sheetHeaderName = if (!slotDetail.player_alias.isNullOrBlank()) {
-            "${slotDetail.player_alias} (${slotDetail.player_name})"
-        } else {
-            slotDetail.player_name
-        }
-        ModalBottomSheet(
-            onDismissRequest = { editingSlot = null },
-            sheetState = sheetState
-        ) {
-            SlotSettingsSheet(
-                playerSlotId = slotDetail.slot_id,
-                playerName = sheetHeaderName,
-                currentProgression = slotDetail.notify_progression,
-                currentUseful = slotDetail.notify_useful,
-                currentHints = slotDetail.notify_hints,
-                currentRemoteHints = slotDetail.notify_hints_remote_items,
-                currentFinished = slotDetail.notify_finished,
-                currentCondensed = slotDetail.use_condensed_messages,
-                globalProfile = userProfile!!,
-                onSave = { prog, use, hint, remote, finished, condensed ->
-                    userViewModel.updateSlotPreferences(
-                        roomId,
-                        slotDetail.slot_id,
-                        prog, use, hint, remote, finished,
-                        condensed
-                    )
-                    editingSlot = null
-                },
-                onDismiss = { editingSlot = null }
-            )
-        }
-    }
-
     Scaffold(
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
+        topBar = { TopAppBar(title = { Text("Profile") }) }
     ) { padding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            item {
-                userProfile?.let {
-                    if (it.is_guest) {
-                        GuestLoginPrompt(onLoginClick = onLoginClick)
-                    }
-                }
-            }
-            item {
-                Text(
-                    text = "Global Notification Defaults",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(vertical = 16.dp)
-                )
-            }
-            item {
-                userProfile?.let { profile ->
-                    Column {
-                        NotificationToggle(
-                            text = "Condensed Messages",
-                            description = "Shorten messages for notifications and history items.",
-                            checked = profile.use_condensed_messages_default,
-                            onCheckedChange = {
-                                userViewModel.updateGlobalPreferences(useCondensed = it)
-                            }
-                        )
-                        NotificationToggle(
-                            text = "Progression Items",
-                            description = "Notify when a progression item is received.",
-                            checked = profile.notify_progression_default,
-                            onCheckedChange = {
-                                userViewModel.updateGlobalPreferences(progression = it)
-                            }
-                        )
-                        NotificationToggle(
-                            text = "Useful Items",
-                            description = "Notify when a useful item is received.",
-                            checked = profile.notify_useful_default,
-                            onCheckedChange = {
-                                userViewModel.updateGlobalPreferences(useful = it)
-                            }
-                        )
-                        NotificationToggle(
-                            text = "Hints in my world",
-                            description = "Notify when someone hints for an item at one of your locations.",
-                            checked = profile.notify_hints_default,
-                            onCheckedChange = {
-                                userViewModel.updateGlobalPreferences(hints = it)
-                            }
-                        )
-                        NotificationToggle(
-                            text = "Hints for my items",
-                            description = "Notify when a hint reveals your item's location in any world.",
-                            checked = profile.notify_hints_remote_items_default,
-                            onCheckedChange = {
-                                userViewModel.updateGlobalPreferences(remoteHints = it)
-                            }
-                        )
-                        NotificationToggle(
-                            text = "Finished Slots",
-                            description = "Notify for hints & items received after a slot has goaled.",
-                            checked = profile.notify_finished_default,
-                            onCheckedChange = {
-                                userViewModel.updateGlobalPreferences(finished = it)
-                            }
-                        )
-                    }
-                } ?: run {
-                    Box(
+
+            // --- Header: User Info ---
+            userProfile?.let { profile ->
+                if (profile.avatar_url != null) {
+                    AsyncImage(
+                        model = profile.avatar_url,
+                        contentDescription = "Avatar",
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 16.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                }
-            }
-
-            item {
-                if (userProfile?.is_guest == false) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-                    Text(
-                        text = "Integrations",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                            .size(100.dp)
+                            .clip(CircleShape)                       // <--- 1. Circular Clip
+                            .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape), // <--- Optional Border
+                        contentScale = ContentScale.Crop
                     )
-                    CheeseIntegrationCard(
-                        isConnected = userProfile?.is_cheese_connected ?: false,
-                        isAutoSyncEnabled = userViewModel.isAutoSyncEnabled.collectAsState().value,
-                        onAutoSyncChanged = { userViewModel.setAutoSync(it) },
-                        onConnect = { key -> userViewModel.connectCheeseTracker(key) },
-                        onSync = { userViewModel.manualSyncCheese() },
-                        onDisconnect = { userViewModel.disconnectCheese() }
+                } else {
+                    Icon(
+                        Icons.Default.AccountCircle,
+                        null,
+                        modifier = Modifier.size(100.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-            }
 
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onIgnoreListClick)
-                        .padding(vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text("Manage Ignore List", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Mute notifications (supports wildcards, e.g. '*Key')",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
-                }
-            }
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-            }
-
-            item {
-                Text(
-                    text = "Per-Slot Notification Overrides",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
-
-            if (trackedSlotsByRoom.isEmpty()) {
-                item {
-                    Text(
-                        text = "You are not tracking any slots.",
-                        modifier = Modifier.padding(vertical = 16.dp),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            } else {
-                trackedSlotsByRoom.forEach { roomData ->
-                    item(key = "header_${roomData.room_db_id}") {
-                        RoomHeader(alias = roomData.room_alias)
-                    }
-
-                    items(
-                        items = roomData.tracked_slots,
-                        key = { slot -> "slot_${roomData.room_db_id}_${slot.slot_id}" }
-                    ) { slot ->
-                        SlotPreferenceItem(
-                            slot = slot,
-                            onClick = {
-                                editingSlot = Pair(roomData.room_db_id, slot)
-                            }
-                        )
-                    }
-
-                    item(key = "spacer_${roomData.room_db_id}") {
-                        Spacer(Modifier.height(16.dp))
-                    }
-                }
-            }
-            item {
                 Spacer(Modifier.height(16.dp))
-            }
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-                Button(
-                    onClick = { showDeleteDialog = true },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 16.dp)
-                ) {
-                    Text("DELETE ACCOUNT")
+
+                Text(
+                    text = profile.discord_username ?: "Guest",
+                    style = MaterialTheme.typography.headlineMedium
+                )
+
+                if (profile.is_guest) {
+                    Button(onClick = onGuestUpgradeClick, modifier = Modifier.padding(top = 8.dp)) {
+                        Text("Link Discord Account")
+                    }
                 }
+            }
+
+            Spacer(Modifier.height(32.dp))
+
+            // --- Menu Options ---
+
+            ProfileMenuItem(
+                icon = Icons.Default.Settings,
+                title = "Notification Settings",
+                subtitle = "Global defaults for new rooms",
+                onClick = onNavigateToSettings
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.Inventory2,
+                title = "Archived Rooms",
+                subtitle = "View finished or inactive games",
+                onClick = onNavigateToArchived
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.VisibilityOff,
+                title = "Ignore List",
+                subtitle = "Manage muted items",
+                onClick = onIgnoreListClick
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 16.dp))
+
+            // --- Integrations ---
+            Text(
+                "Integrations",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            )
+
+            CheeseIntegrationCard(
+                isConnected = userProfile?.is_cheese_connected ?: false,
+                isAutoSyncEnabled = isAutoSyncEnabled,
+                onAutoSyncChanged = { userViewModel.setAutoSync(it) },
+                onConnect = { key -> userViewModel.connectCheeseTracker(key) },
+                onSync = { userViewModel.manualSyncCheese() },
+                onDisconnect = { userViewModel.disconnectCheese() }
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 16.dp))
+
+            // --- App Info ---
+            ProfileMenuItem(
+                icon = Icons.Default.Info,
+                title = "About & Credits",
+                onClick = onCreditsClick
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 16.dp))
+
+            // --- Logout ---
+            OutlinedButton(
+                onClick = onLogoutClick,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.secondary),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Log Out")
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // --- 2. DELETE ACCOUNT ---
+            OutlinedButton(
+                onClick = { showDeleteDialog = true },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Delete Account",
+                    fontWeight = FontWeight.Bold)
             }
         }
     }
+
+    // --- Delete Confirmation Dialog ---
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
@@ -348,16 +173,14 @@ fun ProfileScreen(
                 )
             },
             confirmButton = {
-                TextButton(
+                Button(
                     onClick = {
                         showDeleteDialog = false
-                        userViewModel.deleteAccount(onAccountDeleted = onLogout)
+                        userViewModel.deleteAccount(onAccountDeleted = onLogoutClick)
                     },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Text("DELETE")
+                    Text("DELETE PERMANENTLY")
                 }
             },
             dismissButton = {
@@ -370,125 +193,10 @@ fun ProfileScreen(
 }
 
 @Composable
-fun GuestLoginPrompt(onLoginClick: () -> Unit) {
-
-    var showConfirmDialog by remember { mutableStateOf(false) }
-
-    if (showConfirmDialog) {
-        AlertDialog(
-            onDismissRequest = { showConfirmDialog = false },
-            title = { Text("Log In?") },
-            text = { Text("Logging in will discard your current guest session. Your tracked rooms and slots will be lost. Do you want to continue?") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showConfirmDialog = false
-                        onLoginClick()
-                    }
-                ) {
-                    Text("Continue & Log Out")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConfirmDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                imageVector = Icons.Default.AccountCircle,
-                contentDescription = "Guest User",
-                modifier = Modifier.height(48.dp),
-                tint = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "You are browsing as a Guest",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Log in with Discord to sync your rooms and settings across devices.",
-                style = MaterialTheme.typography.bodySmall,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = { showConfirmDialog = true },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                )
-            ) {
-                Text("Log In with Discord")
-            }
-        }
-    }
-}
-
-@Composable
-private fun NotificationToggle(
-    text: String,
-    description: String? = null,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(text, style = MaterialTheme.typography.bodyLarge)
-            if (description != null) {
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier.padding(start = 16.dp)
-        )
-    }
-}
-
-@Composable
-fun RoomHeader(alias: String) {
-    Text(
-        text = alias,
-        style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
-    )
-    HorizontalDivider()
-}
-
-@Composable
-fun SlotPreferenceItem(
-    slot: TrackedSlotDetail,
+fun ProfileMenuItem(
+    icon: ImageVector,
+    title: String,
+    subtitle: String? = null,
     onClick: () -> Unit
 ) {
     Row(
@@ -496,167 +204,21 @@ fun SlotPreferenceItem(
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        val displayName = if (!slot.player_alias.isNullOrBlank()) {
-            "${slot.player_alias} (${slot.player_name})"
-        } else {
-            slot.player_name
-        }
-
-        Text(
-            text = displayName,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.weight(1f)
-        )
-        Icon(
-            Icons.Default.Settings,
-            contentDescription = "Edit Slot ${slot.slot_id}",
-            tint = MaterialTheme.colorScheme.primary
-        )
-    }
-}
-
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SlotSettingsSheet(
-    playerSlotId: Int,
-    playerName: String,
-    currentProgression: Boolean?,
-    currentUseful: Boolean?,
-    currentHints: Boolean?,
-    currentRemoteHints: Boolean?,
-    currentFinished: Boolean?,
-    currentCondensed: Boolean?,
-    globalProfile: UserProfile,
-    onSave: (prog: Boolean?, use: Boolean?, hint: Boolean?, remote: Boolean?, finished: Boolean?, condensed: Boolean?) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var progression by remember(playerSlotId) { mutableStateOf(currentProgression) }
-    var useful by remember(playerSlotId) { mutableStateOf(currentUseful) }
-    var hints by remember(playerSlotId) { mutableStateOf(currentHints) }
-    var remoteHints by remember(playerSlotId) { mutableStateOf(currentRemoteHints) }
-    var finished by remember(playerSlotId) { mutableStateOf(currentFinished) }
-    var condensed by remember(playerSlotId) { mutableStateOf(currentCondensed) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp)
-            .navigationBarsPadding()
-    ) {
-        Text(
-            text = "Notify Settings for $playerName (Slot $playerSlotId)",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        Text("Progression Items", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = progression,
-            globalDefault = globalProfile.notify_progression_default,
-            onValueChanged = { progression = it }
-        )
-        Spacer(Modifier.height(16.dp))
-
-        Text("Useful Items", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = useful,
-            globalDefault = globalProfile.notify_useful_default,
-            onValueChanged = { useful = it }
-        )
-        Spacer(Modifier.height(16.dp))
-
-        Text("Hints in this World", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = hints,
-            globalDefault = globalProfile.notify_hints_default,
-            onValueChanged = { hints = it }
-        )
-        Spacer(Modifier.height(16.dp))
-
-        Text("Hints for this Player's Items", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = remoteHints,
-            globalDefault = globalProfile.notify_hints_remote_items_default,
-            onValueChanged = { remoteHints = it }
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        Text("Finished", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = finished,
-            globalDefault = globalProfile.notify_finished_default,
-            onValueChanged = { finished = it }
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        Text("Condensed Messages", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = condensed,
-            globalDefault = globalProfile.use_condensed_messages_default,
-            onValueChanged = { condensed = it }
-        )
-
-        Spacer(Modifier.height(24.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = {
-                    onSave(progression, useful, hints, remoteHints, finished, condensed)
-                }
-            ) {
-                Text("Save")
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PreferenceToggle(
-    selectedValue: Boolean?,
-    globalDefault: Boolean,
-    onValueChanged: (Boolean?) -> Unit
-) {
-    val items = listOf("Off", "Default", "On")
-    val selectedIndex = when (selectedValue) {
-        null -> 1
-        false -> 0
-        true -> 2
-    }
-
-    val globalDefaultText = if (globalDefault) "(On)" else "(Off)"
-
-    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        items.forEachIndexed { index, label ->
-            SegmentedButton(
-                selected = index == selectedIndex,
-                onClick = {
-                    val newValue = when (index) {
-                        0 -> false
-                        1 -> null
-                        2 -> true
-                        else -> null
-                    }
-                    onValueChanged(newValue)
-                },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = items.size)
-            ) {
-                Text(if (label == "Default") "Default $globalDefaultText" else label)
-            }
-        }
+        Icon(Icons.Default.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -671,6 +233,7 @@ fun CheeseIntegrationCard(
     onDisconnect: () -> Unit
 ) {
     var apiKey by remember { mutableStateOf("") }
+    var guestDiscordName by remember { mutableStateOf("") }
 
     Card(
         modifier = Modifier
@@ -683,22 +246,22 @@ fun CheeseIntegrationCard(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
+            // Header
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Cheese Tracker",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
+                Text(
+                    text = "Cheese Tracker",
+                    style = MaterialTheme.typography.titleMedium
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             if (isConnected) {
+                // CONNECTED STATE
                 Text(
                     text = "You are connected to your Cheese Tracker!",
                     style = MaterialTheme.typography.bodySmall,
@@ -739,6 +302,7 @@ fun CheeseIntegrationCard(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Auto-sync Toggle
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -753,7 +317,7 @@ fun CheeseIntegrationCard(
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Text(
-                            "Sync when opening the app or refreshing your rooms",
+                            "Sync when opening the app",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -778,6 +342,7 @@ fun CheeseIntegrationCard(
                 }
 
             } else {
+                // DISCONNECTED STATE
                 Text(
                     text = "Sync your rooms and tracked slots with cheesetracker.gg",
                     style = MaterialTheme.typography.bodySmall,

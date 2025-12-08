@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -45,8 +46,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -94,13 +97,42 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+// --- 1. THE WRAPPER (Unchanged) ---
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
     roomId: Int?,
     roomAlias: String?,
     historyViewModel: HistoryViewModel = viewModel(),
     onBackClick: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(roomAlias ?: "History") },
+                navigationIcon = {
+                    IconButton(onClick = onBackClick) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        HistoryContent(
+            roomId = roomId,
+            historyViewModel = historyViewModel,
+            modifier = Modifier.padding(padding)
+        )
+    }
+}
+
+// --- 2. THE REUSABLE CONTENT (Updated) ---
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun HistoryContent(
+    roomId: Int?,
+    historyViewModel: HistoryViewModel,
+    modifier: Modifier = Modifier
 ) {
     LaunchedEffect(key1 = roomId) {
         historyViewModel.loadHistoryFor(roomId)
@@ -111,178 +143,273 @@ fun HistoryScreen(
     val actionMessage by historyViewModel.actionMessage.collectAsState()
     val searchQuery by historyViewModel.searchQuery
 
+    val showFoundHints by historyViewModel.showFoundHints.collectAsState()
+    val showFinished by historyViewModel.showFinished.collectAsState()
+    val useCondensed by historyViewModel.useCondensed.collectAsState()
+    val roomNames by historyViewModel.roomNames.collectAsState()
+
     var selectedItem by remember { mutableStateOf<HistoryItem?>(null) }
     var selectedHint by remember { mutableStateOf<HintEntity?>(null) }
-    val sheetState = rememberModalBottomSheetState()
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
+    var showFilterSheet by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Handle Action Feedback (e.g. "Ignored Power Star")
+    // Error Handling
     LaunchedEffect(actionMessage) {
-        if (actionMessage != null) {
-            snackbarHostState.showSnackbar(actionMessage!!)
+        actionMessage?.let {
+            snackbarHostState.showSnackbar(it)
             historyViewModel.clearActionMessage()
         }
     }
-
     LaunchedEffect(errorMessage) {
-        if (errorMessage != null) {
-            snackbarHostState.showSnackbar(
-                message = errorMessage!!,
-                duration = SnackbarDuration.Short
-            )
+        errorMessage?.let {
+            snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
             historyViewModel.clearErrorMessage()
         }
     }
 
-    val showFoundHints by historyViewModel.showFoundHints.collectAsState()
-    val showFinished by historyViewModel.showFinished.collectAsState()
-
-    val tabTitles = listOf("Items", "Hints")
-    val pagerState = rememberPagerState(pageCount = { tabTitles.size })
-
-    Scaffold(
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = { Text(roomAlias ?: "Global History") },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { padding ->
+    Box(modifier = modifier.fillMaxSize()) {
         val swipeRefreshState = rememberSwipeRefreshState(isRefreshing = isLoading)
+
         SwipeRefresh(
             state = swipeRefreshState,
             onRefresh = { historyViewModel.refreshAllHistory() },
-            modifier = Modifier.padding(padding)
+            modifier = Modifier.fillMaxSize()
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                TextField(
-                    value = searchQuery,
-                    onValueChange = { historyViewModel.onSearchQueryChanged(it) },
-                    label = { Text("Search History") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                )
 
+                // --- SEARCH & FILTER ROW (Updated) ---
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { historyViewModel.setShowFinished(!showFinished) }
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Show Finished Slots",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Switch(
-                        checked = showFinished,
-                        onCheckedChange = { historyViewModel.setShowFinished(it) }
-                    )
-                }
-
-                AnimatedVisibility(visible = pagerState.currentPage == 1) {
-                    Row(
+                    TextField(
+                        value = searchQuery,
+                        onValueChange = { historyViewModel.onSearchQueryChanged(it) },
+                        label = { Text("Search") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                historyViewModel.setShowFoundHints(!showFoundHints)
-                            }
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Show Found Hints",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Switch(
-                            checked = showFoundHints,
-                            onCheckedChange = {
-                                historyViewModel.setShowFoundHints(it)
-                            }
-                        )
+                            .weight(1f)
+                            .padding(end = 8.dp),
+                        singleLine = true
+                    )
+                    // The Filter Button
+                    FilledTonalIconButton(onClick = { showFilterSheet = true }) {
+                        Icon(Icons.Default.Tune, contentDescription = "View Options")
                     }
                 }
 
+                // --- TABS (Unchanged) ---
                 TabRow(selectedTabIndex = pagerState.currentPage) {
-                    tabTitles.forEachIndexed { index, title ->
+                    listOf("Items", "Hints").forEachIndexed { index, title ->
                         Tab(
                             selected = pagerState.currentPage == index,
-                            onClick = {
-                                coroutineScope.launch { pagerState.animateScrollToPage(index) }
-                            },
+                            onClick = { coroutineScope.launch { pagerState.animateScrollToPage(index) } },
                             text = { Text(title) }
                         )
                     }
                 }
 
+                // --- PAGER CONTENT (Unchanged) ---
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
+                    modifier = Modifier.weight(1f)
                 ) { page ->
                     when (page) {
                         0 -> ItemHistoryTab(
                             historyViewModel = historyViewModel,
                             searchQuery = searchQuery,
-                            onItemClick = { item -> selectedItem = item }
+                            onItemClick = { selectedItem = it }
                         )
                         1 -> HintHistoryTab(
                             historyViewModel = historyViewModel,
                             searchQuery = searchQuery,
-                            onHintClick = { hint -> selectedHint = hint }
+                            onHintClick = { selectedHint = it }
                         )
                     }
                 }
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
     }
 
-    if (selectedItem != null) {
+    if (showFilterSheet) {
         ModalBottomSheet(
-            onDismissRequest = { selectedItem = null },
+            onDismissRequest = { showFilterSheet = false },
             sheetState = sheetState
         ) {
+            HistoryFilterSheet(
+                showFinished = showFinished,
+                onShowFinishedChange = { historyViewModel.setShowFinished(it) },
+                showFoundHints = showFoundHints,
+                onShowFoundHintsChange = { historyViewModel.setShowFoundHints(it) },
+                useCondensed = useCondensed,
+                onUseCondensedChange = { historyViewModel.setUseCondensed(it) },
+                isHintTabSelected = pagerState.currentPage == 1,
+                onDismiss = { showFilterSheet = false }
+            )
+        }
+    }
+
+    // --- DETAIL SHEETS ---
+    if (selectedItem != null) {
+        // 1. DEFINE THE VARIABLE HERE
+        val itemRoomName = selectedItem!!.db_id?.let { roomNames[it] } ?: "Unknown Room"
+
+        ModalBottomSheet(onDismissRequest = { selectedItem = null }, sheetState = sheetState) {
             HistoryDetailSheet(
                 item = selectedItem!!,
+                roomName = itemRoomName, // 2. USE IT HERE
                 onOpenTracker = {
-                    val cleanHost = (selectedItem!!.host?.takeIf { it.isNotBlank() }
-                        ?: "archipelago.gg").removePrefix("https://")
-                        .removePrefix("http://")
+                    val cleanHost = (selectedItem!!.host?.takeIf { it.isNotBlank() } ?: "archipelago.gg")
+                        .removePrefix("https://").removePrefix("http://")
                     val url = "https://${cleanHost}/tracker/${selectedItem!!.tracker_id}/0/${selectedItem!!.slot_id}"
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                    context.startActivity(intent)
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                     selectedItem = null
                 },
-                onIgnoreItem = { gameName: String? ->
-                    // gameName null = Global, otherwise specific game
-                    historyViewModel.ignoreItem(selectedItem!!.itemName, gameName)
+                onIgnoreItem = { game ->
+                    historyViewModel.ignoreItem(selectedItem!!.itemName, game)
                     selectedItem = null
                 }
             )
         }
     }
-    selectedHint?.let { hint ->
-        ModalBottomSheet(
-            onDismissRequest = { selectedHint = null },
-            sheetState = sheetState
+
+    if (selectedHint != null) {
+        ModalBottomSheet(onDismissRequest = { selectedHint = null }, sheetState = sheetState) {
+            HintDetailSheet(hint = selectedHint!!, onDismiss = { selectedHint = null })
+        }
+    }
+}
+
+@Composable
+fun HistoryFilterSheet(
+    showFinished: Boolean,
+    onShowFinishedChange: (Boolean) -> Unit,
+    showFoundHints: Boolean,
+    onShowFoundHintsChange: (Boolean) -> Unit,
+    useCondensed: Boolean,
+    onUseCondensedChange: (Boolean) -> Unit,
+    isHintTabSelected: Boolean,
+    onDismiss: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .navigationBarsPadding()
+    ) {
+        Text(
+            text = "View Options",
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        // Toggle 1: Condensed Names (NEW)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onUseCondensedChange(!useCondensed) }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            HintDetailSheet(
-                hint = hint,
-                onDismiss = { selectedHint = null }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Hide Original Slot Name",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = if (useCondensed) "Showing Alias only" else "Showing 'Alias (Original Slot Name)'",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = useCondensed,
+                onCheckedChange = onUseCondensedChange,
+                modifier = Modifier.padding(start = 16.dp)
             )
+        }
+
+        HorizontalDivider()
+
+        // Toggle 2: Finished Slots
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onShowFinishedChange(!showFinished) }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Show Finished Slots",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = "Include items/hints for players who have already completed their goal.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = showFinished,
+                onCheckedChange = onShowFinishedChange,
+                modifier = Modifier.padding(start = 16.dp)
+            )
+        }
+
+        // Toggle 3: Found Hints (Conditional)
+        AnimatedVisibility(visible = isHintTabSelected) {
+            Column {
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onShowFoundHintsChange(!showFoundHints) }
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Show Found Hints",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        Text(
+                            text = "Include hints for items that have already been found.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = showFoundHints,
+                        onCheckedChange = onShowFoundHintsChange,
+                        modifier = Modifier.padding(start = 16.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Button(
+            onClick = onDismiss,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Done")
         }
     }
 }
@@ -290,22 +417,32 @@ fun HistoryScreen(
 @Composable
 fun HistoryDetailSheet(
     item: HistoryItem,
+    roomName: String,
     onOpenTracker: () -> Unit,
     onIgnoreItem: (String?) -> Unit
 ) {
+    val formatter = remember {
+        DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
+            .withZone(ZoneId.systemDefault())
+    }
+
+    fun formatName(name: String, alias: String?): String {
+        return if (alias.isNullOrBlank()) name else "$alias ($name)"
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(24.dp)
+            .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 48.dp) // Added bottom padding for nav bar
             .navigationBarsPadding()
     ) {
-        // Header
+        // --- Header ---
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 imageVector = getIconByName(item.icon_name),
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(40.dp)
             )
             Spacer(Modifier.width(16.dp))
             Column {
@@ -314,26 +451,56 @@ fun HistoryDetailSheet(
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold
                 )
-                val displayPlayer = getDisplayName(item.playerName, item.playerAlias, useCondensed = false)
-
                 Text(
-                    text = "Received by $displayPlayer",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = formatTimestamp(item.timestamp, formatter),
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+
+        // --- Compact Data Grid (2 Columns) ---
+        Row(modifier = Modifier.fillMaxWidth()) {
+            // LEFT COLUMN
+            Column(modifier = Modifier.weight(1f)) {
+                CompactDetailItem(
+                    label = "Room",
+                    value = roomName
+                )
+                Spacer(Modifier.height(12.dp))
+                CompactDetailItem(
+                    label = "Sender",
+                    value = if (item.senderName != null && item.senderName != item.playerName) {
+                        formatName(item.senderName, item.senderAlias)
+                    } else {
+                        "Server / Self"
+                    }
+                )
+            }
+
+            Spacer(Modifier.width(16.dp))
+
+            // RIGHT COLUMN
+            Column(modifier = Modifier.weight(1f)) {
                 if (!item.receivingGame.isNullOrBlank()) {
-                    Text(
-                        text = "Game: ${item.receivingGame}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    CompactDetailItem(
+                        label = "Game",
+                        value = item.receivingGame
                     )
+                    Spacer(Modifier.height(12.dp))
                 }
+                CompactDetailItem(
+                    label = "Receiver",
+                    value = formatName(item.playerName, item.playerAlias)
+                )
             }
         }
 
         Spacer(Modifier.height(24.dp))
 
-        // Action 1: Open Tracker
+        // --- Actions ---
         Button(
             onClick = onOpenTracker,
             modifier = Modifier.fillMaxWidth()
@@ -343,49 +510,51 @@ fun HistoryDetailSheet(
             Text("Open in Web Tracker")
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
 
-        // Action 2: Ignore Item (Game Specific)
+        // Ignore Actions
         if (!item.receivingGame.isNullOrBlank()) {
             OutlinedButton(
                 onClick = { onIgnoreItem(item.receivingGame) },
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
             ) {
                 Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Ignore '${item.itemName}' in ${item.receivingGame}")
+                Text("Ignore in ${item.receivingGame}")
             }
             Spacer(Modifier.height(8.dp))
         }
 
-        // Action 3: Ignore Item (Global)
         OutlinedButton(
             onClick = { onIgnoreItem(null) },
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = MaterialTheme.colorScheme.error
-            )
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
         ) {
             Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Ignore '${item.itemName}' Globally (All Games)")
+            Text("Ignore Globally")
         }
-
-        Spacer(Modifier.height(8.dp))
-
-        Text(
-            text = "Ignoring this will stop future push notifications for this item name.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 
+// New Compact Helper
+@Composable
+fun CompactDetailItem(label: String, value: String) {
+    Column {
+        Text(
+            text = label.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
 
 
 @OptIn(ExperimentalMaterial3Api::class)

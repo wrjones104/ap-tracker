@@ -298,10 +298,17 @@ def get_rooms(current_user):
     """
     Gets the list of rooms the current user is subscribed to.
     Filters out 'PENDING_DISCOVERY' rooms.
+    Supports filtering by archive status via '?archived=true|false'.
     """
+    # Parse the 'archived' query param (Default to False -> Show Active Rooms)
+    show_archived_str = request.args.get('archived', 'false')
+    show_archived = show_archived_str.lower() in ['true', '1', 't', 'yes']
+
     session = Session()
+    
     subscriptions = session.query(UserRoomSubscription).join(TrackedRoom).filter(
         UserRoomSubscription.user_id == current_user.id,
+        UserRoomSubscription.is_archived == show_archived, 
         ~TrackedRoom.room_id.startswith("PENDING_DISCOVERY") 
     ).all()
     
@@ -321,7 +328,6 @@ def get_rooms(current_user):
         if room.is_complete:
             status = 'completed'
         elif room.is_suspended:
-            # Distinguish between Connection Error and Stale/Manual Suspension
             if room.failed_poll_count >= 60:
                 status = 'suspended_error'
             else:
@@ -332,6 +338,7 @@ def get_rooms(current_user):
             'room_id': room.room_id,
             'alias': sub.alias,
             'icon_name': sub.icon_name,
+            'is_archived': sub.is_archived,
             'host': room.cached_full_address, 
             'is_complete': room.is_complete,
             'is_suspended': room.is_suspended,
@@ -341,6 +348,23 @@ def get_rooms(current_user):
         })
 
     return jsonify(rooms_list)
+
+@bp.route('/games', methods=['GET'])
+@log_api_call
+def get_games():
+    """
+    Returns a list of all unique game names known to the tracker
+    (queried from the DatapackageCache).
+    """
+    session = Session()
+    try:
+        # Fetch distinct game names, ordered alphabetically
+        games = session.query(DatapackageCache.game).distinct().order_by(DatapackageCache.game).all()
+        game_list = [g[0] for g in games if g[0]]
+        
+        return jsonify(game_list)
+    finally:
+        Session.remove()
 
 @bp.route('/rooms', methods=['POST'])
 @handle_db_errors
@@ -482,14 +506,16 @@ def add_room(current_user):
 @token_required
 def update_subscription(current_user, room_db_id):
     """
-    Updates a user's subscription details for a room (e.g., alias).
+    Updates a user's subscription details for a room (alias, icon, archive status).
     """
     data = request.json
     alias = data.get('alias')
     icon_name = data.get('icon_name')
+    is_archived = data.get('is_archived') 
 
-    if not alias and not icon_name:
-        return jsonify({'error': 'Missing alias or icon_name'}), 400
+    # Allow update if ANY of these fields are present
+    if alias is None and icon_name is None and is_archived is None:
+        return jsonify({'error': 'No valid fields provided for update'}), 400
 
     session = Session()
     subscription = session.query(UserRoomSubscription).filter_by(
@@ -500,13 +526,18 @@ def update_subscription(current_user, room_db_id):
     if not subscription:
         return jsonify({'error': 'Not subscribed to this room'}), 403
 
-    if alias:
+    if alias is not None:
         subscription.alias = alias
-    if icon_name:
+    if icon_name is not None:
         subscription.icon_name = icon_name
+    if is_archived is not None:
+        subscription.is_archived = bool(is_archived)
 
     session.commit()
-    return jsonify({'message': 'Subscription updated.'})
+    return jsonify({
+        'message': 'Subscription updated.',
+        'is_archived': subscription.is_archived
+    })
 
 
 @bp.route('/rooms/<int:room_db_id>', methods=['DELETE'])
@@ -1697,6 +1728,52 @@ def add_ignore_item(current_user):
     except Exception as e:
         session.rollback()
         raise e
+    finally:
+        Session.remove()
+
+@bp.route('/users/me/ignore-list/<int:item_id>', methods=['PUT'])
+@handle_db_errors
+@log_api_call
+@token_required
+def update_ignore_item(current_user, item_id):
+    """
+    Updates an existing ignore rule (e.g. fixing a typo or changing the game).
+    """
+    data = request.json
+    new_item_name = data.get('item_name', '').strip()
+    
+    # game_name can be None (Global) or a string
+    new_game_name = data.get('game_name')
+    if new_game_name:
+        new_game_name = new_game_name.strip()
+
+    if not new_item_name:
+        return jsonify({'error': 'item_name is required'}), 400
+
+    session = Session()
+    try:
+        # Find the rule
+        item = session.query(UserIgnoreItem).filter_by(id=item_id, user_id=current_user.id).first()
+        if not item:
+            return jsonify({'error': 'Rule not found'}), 404
+
+        # Check for duplicates (excluding the current item itself)
+        existing = session.query(UserIgnoreItem).filter(
+            UserIgnoreItem.user_id == current_user.id,
+            UserIgnoreItem.item_name == new_item_name,
+            UserIgnoreItem.game_name == new_game_name,
+            UserIgnoreItem.id != item_id 
+        ).first()
+
+        if existing:
+            return jsonify({'error': 'A rule for this item/game already exists.'}), 409
+
+        # Apply updates
+        item.item_name = new_item_name
+        item.game_name = new_game_name
+        
+        session.commit()
+        return jsonify({'message': 'Rule updated.'})
     finally:
         Session.remove()
 

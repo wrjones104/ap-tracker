@@ -15,7 +15,9 @@ import com.jones.aptracker.network.AddIgnoreItemResponse
 
 interface ApiService {
     @GET("rooms")
-    suspend fun getRooms(): List<Room>
+    suspend fun getRooms(
+        @Query("archived") archived: Boolean = false
+    ): List<Room>
 
     @POST("rooms")
     suspend fun addRoom(@Body request: AddRoomRequest): Response<Unit>
@@ -106,6 +108,14 @@ interface ApiService {
     @DELETE("users/me/ignore-list/{id}")
     suspend fun deleteIgnoreItem(@Path("id") itemId: Int): Response<Unit>
 
+    @GET("games")
+    suspend fun getKnownGames(): List<String>
+
+    @PUT("users/me/ignore-list/{id}")
+    suspend fun updateIgnoreItem(
+        @Path("id") itemId: Int,
+        @Body request: AddIgnoreItemRequest
+    ): Response<Unit>
 }
 
 data class Room(
@@ -116,7 +126,8 @@ data class Room(
     val tracked_slots_count: Int,
     val total_slots_count: Int,
     val icon_name: String,
-    val sort_order: Int = 0
+    val sort_order: Int = 0,
+    val is_archived: Boolean = false
 )
 
 data class AddRoomRequest(
@@ -126,8 +137,9 @@ data class AddRoomRequest(
 )
 
 data class UpdateRoomRequest(
-    val alias: String,
-    val icon_name: String
+    val alias: String? = null,
+    val icon_name: String? = null,
+    val is_archived: Boolean? = null
 )
 
 data class Player(
@@ -265,7 +277,9 @@ data class ConfigResponse(
     val min_app_version: Int
 )
 
-data class CheeseAuthRequest(val api_key: String)
+data class CheeseAuthRequest(
+    val api_key: String
+)
 
 data class CheeseSyncResponse(
     val message: String,

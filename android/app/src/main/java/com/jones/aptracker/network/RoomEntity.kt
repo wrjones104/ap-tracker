@@ -15,5 +15,7 @@ data class RoomEntity(
     val total_slots_count: Int,
     val icon_name: String,
     @ColumnInfo(name = "sort_order", defaultValue = "0")
-    val sort_order: Int = 0
+    val sort_order: Int = 0,
+    @ColumnInfo(name = "is_archived", defaultValue = "0")
+val is_archived: Boolean = false
 )

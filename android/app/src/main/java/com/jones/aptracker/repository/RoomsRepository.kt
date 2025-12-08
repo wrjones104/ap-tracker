@@ -13,6 +13,7 @@ class RoomsRepository(
     val allRooms: Flow<List<RoomEntity>> = roomDao.getAllRooms()
 
     suspend fun refreshRooms() {
+        // This gets the "Active" rooms (since archived=false by default)
         val networkRooms = apiService.getRooms()
 
         // 1. Fetch current local rooms to see existing sort orders
@@ -41,13 +42,13 @@ class RoomsRepository(
                 tracked_slots_count = networkRoom.tracked_slots_count,
                 total_slots_count = networkRoom.total_slots_count,
                 icon_name = networkRoom.icon_name,
-                sort_order = finalOrder
+                sort_order = finalOrder,
+                is_archived = networkRoom.is_archived
             )
         }
         roomDao.syncRooms(roomEntities)
     }
 
-    // Updates the order of the list in the DB
     suspend fun updateRoomOrder(rooms: List<RoomEntity>) {
         roomDao.updateRooms(rooms)
     }

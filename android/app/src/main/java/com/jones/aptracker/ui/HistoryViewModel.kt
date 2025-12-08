@@ -24,8 +24,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private val repository: HistoryRepository
     private val userRepository: UserRepository
+
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
     val itemHistory: StateFlow<List<HistoryItem>> = _itemHistory
+
+    // --- NEW: Map to lookup Room Names by ID ---
+    private val _roomNames = MutableStateFlow<Map<Int, String>>(emptyMap())
+    val roomNames: StateFlow<Map<Int, String>> = _roomNames
+    // -------------------------------------------
 
     private val _hintsForYou = MutableStateFlow<List<HintEntity>>(emptyList())
     val hintsForYou: StateFlow<List<HintEntity>> = _hintsForYou
@@ -97,7 +103,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun loadHistoryFor(roomId: Int?) {
         currentRoomId = roomId
         Log.d("HistoryViewModel", "Loading history for Room ID: ${roomId ?: "Global"}")
-
         refreshAllHistory()
     }
 
@@ -129,6 +134,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // --- NEW: Local Toggle Setter (Does not sync to server) ---
+    fun setUseCondensed(use: Boolean) {
+        _useCondensed.value = use
+    }
+
     fun refreshAllHistory() {
         Log.d("HistoryViewModel", "Triggering refresh for Room ID: ${currentRoomId ?: "Global"}")
         viewModelScope.launch {
@@ -137,6 +147,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
             try {
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
+
+                // 1. Populate the Map of RoomID -> RoomAlias
+                _roomNames.value = trackedRooms.associate { it.room_db_id to it.room_alias }
 
                 validTrackedSlots = trackedRooms.flatMap { room ->
                     room.tracked_slots.map { slot ->
@@ -151,6 +164,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     repository.getGlobalHistory()
                 }
+
                 _itemHistory.value = rawItemEntities.mapNotNull { entity ->
                     if (entity.roomId != null && entity.slot_id != null) {
                         if (!validTrackedSlots.contains(entity.roomId to entity.slot_id)) {
