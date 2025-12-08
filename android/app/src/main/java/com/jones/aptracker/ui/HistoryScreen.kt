@@ -82,7 +82,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -97,7 +96,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
-// --- 1. THE WRAPPER (Unchanged) ---
+// --- 1. THE WRAPPER ---
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
@@ -126,7 +125,7 @@ fun HistoryScreen(
     }
 }
 
-// --- 2. THE REUSABLE CONTENT (Updated) ---
+// --- 2. THE REUSABLE CONTENT ---
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryContent(
@@ -182,7 +181,7 @@ fun HistoryContent(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
 
-                // --- SEARCH & FILTER ROW (Updated) ---
+                // --- SEARCH & FILTER ROW ---
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -205,7 +204,7 @@ fun HistoryContent(
                     }
                 }
 
-                // --- TABS (Unchanged) ---
+                // --- TABS ---
                 TabRow(selectedTabIndex = pagerState.currentPage) {
                     listOf("Items", "Hints").forEachIndexed { index, title ->
                         Tab(
@@ -216,7 +215,7 @@ fun HistoryContent(
                     }
                 }
 
-                // --- PAGER CONTENT (Unchanged) ---
+                // --- PAGER CONTENT ---
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.weight(1f)
@@ -263,13 +262,12 @@ fun HistoryContent(
 
     // --- DETAIL SHEETS ---
     if (selectedItem != null) {
-        // 1. DEFINE THE VARIABLE HERE
         val itemRoomName = selectedItem!!.db_id?.let { roomNames[it] } ?: "Unknown Room"
 
         ModalBottomSheet(onDismissRequest = { selectedItem = null }, sheetState = sheetState) {
             HistoryDetailSheet(
                 item = selectedItem!!,
-                roomName = itemRoomName, // 2. USE IT HERE
+                roomName = itemRoomName,
                 onOpenTracker = {
                     val cleanHost = (selectedItem!!.host?.takeIf { it.isNotBlank() } ?: "archipelago.gg")
                         .removePrefix("https://").removePrefix("http://")
@@ -315,7 +313,7 @@ fun HistoryFilterSheet(
             modifier = Modifier.padding(bottom = 16.dp)
         )
 
-        // Toggle 1: Condensed Names (NEW)
+        // Toggle 1: Condensed Names
         Row(
             modifier = Modifier
                 .fillMaxWidth()

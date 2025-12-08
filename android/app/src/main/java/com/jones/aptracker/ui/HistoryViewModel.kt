@@ -9,15 +9,15 @@ import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
-import com.jones.aptracker.repository.UserRepository
 import com.jones.aptracker.repository.HistoryRepository
+import com.jones.aptracker.repository.UserRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
@@ -28,10 +28,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
     val itemHistory: StateFlow<List<HistoryItem>> = _itemHistory
 
-    // --- NEW: Map to lookup Room Names by ID ---
     private val _roomNames = MutableStateFlow<Map<Int, String>>(emptyMap())
     val roomNames: StateFlow<Map<Int, String>> = _roomNames
-    // -------------------------------------------
 
     private val _hintsForYou = MutableStateFlow<List<HintEntity>>(emptyList())
     val hintsForYou: StateFlow<List<HintEntity>> = _hintsForYou
@@ -134,7 +132,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // --- NEW: Local Toggle Setter (Does not sync to server) ---
+    // --- Local Toggle Setter (Does not sync to server) ---
     fun setUseCondensed(use: Boolean) {
         _useCondensed.value = use
     }

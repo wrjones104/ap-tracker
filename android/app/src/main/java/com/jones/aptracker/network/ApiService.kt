@@ -9,9 +9,6 @@ import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
-import com.jones.aptracker.network.IgnoreItem
-import com.jones.aptracker.network.AddIgnoreItemRequest
-import com.jones.aptracker.network.AddIgnoreItemResponse
 
 interface ApiService {
     @GET("rooms")

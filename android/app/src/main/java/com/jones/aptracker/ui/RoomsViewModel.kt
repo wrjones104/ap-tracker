@@ -57,7 +57,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.allRooms
                 .map { roomEntities ->
-                    // MAPPER USAGE HERE
                     roomEntities.map { RoomMapper.toDomain(it) }
                 }
                 .catch {
@@ -176,7 +175,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- NEW: Archive a Room ---
+    // --- Archive a Room ---
     fun archiveRoom(roomId: Int) {
         viewModelScope.launch {
             try {
@@ -195,7 +194,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- NEW: Unarchive a Room ---
+    // --- Unarchive a Room ---
     fun unarchiveRoom(roomId: Int) {
         viewModelScope.launch {
             try {
