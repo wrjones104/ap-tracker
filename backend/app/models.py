@@ -74,6 +74,7 @@ class UserRoomSubscription(Base):
     room_id = Column(Integer, ForeignKey('tracked_rooms.id'), primary_key=True)
     alias = Column(String, nullable=False)
     icon_name = Column(String, default="default_icon")
+    is_archived = Column(Boolean, default=False, nullable=False)
     user = relationship("User", back_populates="subscriptions")
     room = relationship("TrackedRoom", back_populates="subscriptions")
     tracked_slots = relationship("UserTrackedSlot", back_populates="subscription", cascade="all, delete-orphan")

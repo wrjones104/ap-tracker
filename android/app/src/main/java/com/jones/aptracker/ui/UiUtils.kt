@@ -24,7 +24,8 @@ object RoomMapper {
             tracked_slots_count = entity.tracked_slots_count,
             total_slots_count = entity.total_slots_count,
             icon_name = entity.icon_name,
-            sort_order = entity.sort_order
+            sort_order = entity.sort_order,
+            is_archived = entity.is_archived
         )
     }
 
@@ -37,7 +38,8 @@ object RoomMapper {
             tracked_slots_count = domain.tracked_slots_count,
             total_slots_count = domain.total_slots_count,
             icon_name = domain.icon_name,
-            sort_order = sortOrder
+            sort_order = sortOrder,
+            is_archived = domain.is_archived
         )
     }
 

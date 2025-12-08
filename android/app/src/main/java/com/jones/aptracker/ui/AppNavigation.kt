@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,42 +60,48 @@ fun MainNavHost(
     onLogoutClick: () -> Unit,
     onGuestUpgradeClick: () -> Unit
 ) {
-    NavHost(navController = navController, startDestination = "rooms") {
-        composable("rooms") {
-            RoomsScreen(
-                onRoomClick = { roomId, roomAlias ->
+    // Start destination is now 'home', which holds the Bottom Bar
+    NavHost(navController = navController, startDestination = "home") {
+
+        // --- THE MAIN CONTAINER (Bottom Nav) ---
+        composable("home") {
+            MainScreen(
+                onLogoutClick = onLogoutClick,
+                onGuestUpgradeClick = onGuestUpgradeClick,
+                onNavigateToRoomHistory = { roomId, roomAlias ->
                     navController.navigate("history/$roomId/${Uri.encode(roomAlias)}")
                 },
-                onHistoryClick = {
+                onNavigateToGlobalHistory = {
                     navController.navigate("history/global/All Rooms")
                 },
-                onLogoutClick = onLogoutClick,
-                onSettingsClick = { navController.navigate("profile") },
-                onIgnoreListClick = { navController.navigate("ignore_list") },
-                onManageSlotsClick = { roomId, roomAlias ->
+                onNavigateToPlayers = { roomId, roomAlias ->
                     navController.navigate("players/$roomId/${Uri.encode(roomAlias)}")
                 },
-                onCreditsClick = { navController.navigate("credits") }
+                onNavigateToIgnoreList = {
+                    navController.navigate("ignore_list")
+                },
+                onNavigateToCredits = {
+                    navController.navigate("credits")
+                },
+                onNavigateToSettings = { navController.navigate("settings") },
+                onNavigateToArchived = { navController.navigate("archived_rooms") }
             )
         }
-        composable("profile") {
-            ProfileScreen(
-                onBackClick = { navController.popBackStack() },
-                onLogout = onLogoutClick,
-                onLoginClick = onGuestUpgradeClick,
-                onIgnoreListClick = { navController.navigate("ignore_list") }
-            )
-        }
+
+        // --- DETAIL SCREENS (Cover the Bottom Bar) ---
+
         composable("ignore_list") {
             IgnoreListScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }
+
         composable("credits") {
             CreditsScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }
+
         composable(
             route = "players/{roomId}/{roomAlias}",
             arguments = listOf(
@@ -136,10 +141,28 @@ fun MainNavHost(
                 onBackClick = { navController.popBackStack() }
             )
         }
+        composable("settings") {
+            SettingsScreen(
+                onBackClick = { navController.popBackStack() },
+                onNavigateToSlotOverrides = { navController.navigate("slot_overrides") }
+            )
+        }
+
+        composable("slot_overrides") {
+            SlotOverridesScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+
+        composable("archived_rooms") {
+            ArchivedRoomsScreen(
+                onBackClick = { navController.popBackStack()}
+            )
+        }
     }
 }
 
-
+// LoginScreen remains unchanged...
 @Composable
 fun LoginScreen(
     isLoading: Boolean,

@@ -44,6 +44,12 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    private val _archivedRooms = MutableStateFlow<List<Room>>(emptyList())
+    val archivedRooms: StateFlow<List<Room>> = _archivedRooms.asStateFlow()
+
+    private val _isLoadingArchived = MutableStateFlow(false)
+    val isLoadingArchived = _isLoadingArchived.asStateFlow()
+
     init {
         val roomDao = AppDatabase.getInstance(application).roomDao()
         repository = RoomsRepository(RetrofitClient.instance, roomDao)
@@ -144,11 +150,62 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     fun updateRoom(roomId: Int, newAlias: String, iconName: String) {
         viewModelScope.launch {
             try {
-                val request = UpdateRoomRequest(alias = newAlias, icon_name = iconName)
+                // Explicitly set is_archived to null so we don't accidentally unarchive
+                val request = UpdateRoomRequest(alias = newAlias, icon_name = iconName, is_archived = null)
                 RetrofitClient.instance.updateRoom(roomId, request)
                 repository.refreshRooms()
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to update room."
+                e.printStackTrace()
+            }
+        }
+    }
+    fun fetchArchivedRooms() {
+        _isLoadingArchived.value = true
+        viewModelScope.launch {
+            try {
+                // Call API with archived=true
+                val result = RetrofitClient.instance.getRooms(archived = true)
+                _archivedRooms.value = result
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to load archived rooms."
+                e.printStackTrace()
+            } finally {
+                _isLoadingArchived.value = false
+            }
+        }
+    }
+
+    // --- NEW: Archive a Room ---
+    fun archiveRoom(roomId: Int) {
+        viewModelScope.launch {
+            try {
+                // We send ONLY the is_archived flag.
+                // We pass null for alias/icon so they don't change.
+                val request = UpdateRoomRequest(is_archived = true)
+                RetrofitClient.instance.updateRoom(roomId, request)
+
+                // Refresh both lists to update UI
+                repository.refreshRooms() // Updates active list
+                fetchArchivedRooms()      // Updates archived list
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to archive room."
+                e.printStackTrace()
+            }
+        }
+    }
+
+    // --- NEW: Unarchive a Room ---
+    fun unarchiveRoom(roomId: Int) {
+        viewModelScope.launch {
+            try {
+                val request = UpdateRoomRequest(is_archived = false)
+                RetrofitClient.instance.updateRoom(roomId, request)
+
+                repository.refreshRooms()
+                fetchArchivedRooms()
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to restore room."
                 e.printStackTrace()
             }
         }

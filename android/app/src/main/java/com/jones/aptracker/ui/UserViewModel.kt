@@ -43,6 +43,10 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _ignoreList = MutableStateFlow<List<IgnoreItem>>(emptyList())
     val ignoreList = _ignoreList.asStateFlow()
 
+    // --- NEW: Known Games List for Search ---
+    private val _knownGames = MutableStateFlow<List<String>>(emptyList())
+    val knownGames = _knownGames.asStateFlow()
+
     init {
         fetchUserProfile()
         fetchTrackedSlots()
@@ -159,16 +163,20 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun connectCheeseTracker(apiKey: String) {
         viewModelScope.launch {
             try {
-                val response = RetrofitClient.instance.connectCheeseTracker(CheeseAuthRequest(apiKey))
+                val request = CheeseAuthRequest(apiKey)
+                val response = RetrofitClient.instance.connectCheeseTracker(request)
+
                 _integrationMessage.value = response.message
                 fetchUserProfile()
                 fetchTrackedSlots()
             } catch (e: Exception) {
                 e.printStackTrace()
-                _errorMessage.value = "Failed to connect to Cheese Tracker. Check your key."
+                _errorMessage.value = "Failed to connect. Check your key."
             }
         }
     }
+
+    // Kept this private helper
     private fun triggerBackgroundSync() {
         viewModelScope.launch {
             try {
@@ -211,6 +219,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         _integrationMessage.value = null
     }
 
+    // --- IGNORE LIST LOGIC ---
+
     fun fetchIgnoreList() {
         viewModelScope.launch {
             try {
@@ -218,6 +228,20 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to fetch ignore list", e)
                 _errorMessage.value = "Failed to load ignore list."
+            }
+        }
+    }
+
+    // NEW: Fetch known games for the dropdown
+    fun fetchKnownGames() {
+        viewModelScope.launch {
+            try {
+                val games = RetrofitClient.instance.getKnownGames()
+                _knownGames.value = games
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to fetch games list", e)
+                // We set an error message so the user knows why the dropdown is empty
+                _errorMessage.value = "Could not load game list."
             }
         }
     }
@@ -242,9 +266,35 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // NEW: Update existing rule
+    fun updateIgnoreItem(id: Int, itemName: String, gameName: String?) {
+        viewModelScope.launch {
+            try {
+                // Reuse the AddIgnoreItemRequest for the payload
+                val request = com.jones.aptracker.network.AddIgnoreItemRequest(itemName, gameName)
+                val response = RetrofitClient.instance.updateIgnoreItem(id, request)
+
+                if (response.isSuccessful) {
+                    fetchIgnoreList()
+                    _integrationMessage.value = "Rule updated."
+                } else {
+                    if (response.code() == 409) {
+                        _errorMessage.value = "A rule for '$itemName' already exists."
+                    } else {
+                        _errorMessage.value = "Failed to update rule."
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to update rule", e)
+                _errorMessage.value = "Failed to update rule. Check connection."
+            }
+        }
+    }
+
     fun deleteIgnoreItem(itemId: Int) {
         viewModelScope.launch {
             try {
+                // Optimistic UI update
                 val currentList = _ignoreList.value
                 _ignoreList.value = currentList.filter { it.id != itemId }
 
@@ -252,7 +302,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to remove rule", e)
                 _errorMessage.value = "Failed to remove rule."
-                fetchIgnoreList()
+                fetchIgnoreList() // Revert UI on failure
             }
         }
     }

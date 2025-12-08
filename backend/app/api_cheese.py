@@ -62,6 +62,9 @@ def setup_cheese_user_task(app, user_id):
             session.commit()
             # ---------------------------
 
+            user = session.query(User).get(user_id)
+            if not user or not user.cheese_api_key: return
+
             api_key = decrypt_api_key(user.cheese_api_key)
             if not api_key:
                 logging.error(f"[CHEESE_SETUP] Failed to decrypt key for user {user_id}.")
@@ -69,14 +72,26 @@ def setup_cheese_user_task(app, user_id):
                 session.commit()
                 return
 
-            discord_username = user.discord_username.strip().lower() if user.discord_username else None
             my_cheese_id = user.cheese_user_id
+            discord_username = user.discord_username.strip().lower() if user.discord_username else None
 
             logging.info(f"[CHEESE_SETUP] Starting discovery for user {user_id}...")
 
             # --- REQUESTS SESSION START ---
             with requests.Session() as req_session:
                 headers = {"Authorization": f"Bearer {api_key}"}
+
+                try:
+                    me_resp = req_session.get(f"{CHEESE_BASE_URL}/users/me", headers=headers, timeout=10)
+                    if me_resp.ok:
+                        me_data = me_resp.json()
+                        if me_data.get('id'):
+                            found_id = me_data['id']
+                            logging.info(f"[CHEESE_SETUP] Resolved Cheese User ID: {found_id}")
+                            user.cheese_user_id = found_id
+                            session.commit() # Save immediately
+                except Exception as e:
+                    logging.warning(f"[CHEESE_SETUP] Failed to fetch /users/me: {e}")
                 
                 # 2. Fetch User's Trackers List
                 try:
@@ -247,6 +262,8 @@ def setup_cheese_user_task(app, user_id):
         finally:
             Session.remove()
 
+# ... imports ...
+
 @bp.route('/auth', methods=['POST'])
 @handle_db_errors
 @log_api_call
@@ -254,42 +271,52 @@ def setup_cheese_user_task(app, user_id):
 def connect_cheese_account(current_user):
     """
     Sets the Cheese API key and kicks off the discovery task.
+    Allowed for Guests because the API Key provides the identity.
     """
-    if current_user.is_guest:
-        return jsonify({'error': 'Guests cannot use integrations. Please log in.'}), 403
-    
     data = request.json
     api_key = data.get('api_key')
 
-    if not api_key or not isinstance(api_key, str) or len(api_key.strip()) == 0 or len(api_key) > 256:
+    if not api_key or not isinstance(api_key, str) or len(api_key.strip()) == 0:
         return jsonify({'error': 'Invalid or missing api_key.'}), 400
 
     api_key = api_key.strip()
 
-    # 1. Validate Key (Pre-flight)
+    # 1. Validate Key & Fetch Identity
     try:
         test_headers = {"Authorization": f"Bearer {api_key}"}
-        test_resp = requests.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=test_headers, timeout=10)
+        test_resp = requests.get(f"{CHEESE_BASE_URL}/user/self", headers=test_headers, timeout=10)
         
         if test_resp.status_code == 401:
-            logging.warning(f"[CHEESE_AUTH] User {current_user.id} provided invalid API key.")
-            return jsonify({'error': 'Invalid API Key. Please check the key and try again.'}), 400
+            return jsonify({'error': 'Invalid API Key.'}), 400
         
-        test_resp.raise_for_status() 
+        test_resp.raise_for_status()
+        
+        me_data = test_resp.json()
+        cheese_id = me_data.get('id')
+        cheese_discord_name = me_data.get('discord_username')
+
+        if not cheese_id:
+            logging.error(f"[CHEESE_AUTH] /users/me did not return an ID. Response: {me_data}")
+            return jsonify({'error': 'Could not verify Cheese identity.'}), 502
 
     except requests.exceptions.RequestException as e:
         logging.error(f"[CHEESE_AUTH] Network error testing key: {e}")
-        return jsonify({'error': 'Could not verify key with Cheese Tracker. The server may be down.'}), 502
+        return jsonify({'error': 'Could not verify key with Cheese Tracker.'}), 502
 
-    # 2. Save Encrypted Key
+    # 2. Save Data
     session = Session()
     user = session.merge(current_user)
     
     encrypted_key = encrypt_api_key(api_key)
-    if not encrypted_key:
-        return jsonify({'error': 'Failed to secure API key.'}), 500
-
     user.cheese_api_key = encrypted_key
+    user.cheese_user_id = cheese_id
+    
+    # CRITICAL: If guest, assume the Discord identity from Cheese
+    # This allows the rest of the app (slot matching, history names) to work
+    if user.is_guest and cheese_discord_name:
+        user.discord_username = cheese_discord_name
+        logging.info(f"[CHEESE_AUTH] Guest user {user.id} identified as '{cheese_discord_name}' via Cheese.")
+
     session.commit()
 
     # 3. Kick off Background Discovery
@@ -303,7 +330,7 @@ def connect_cheese_account(current_user):
         logging.error(f"Failed to start setup thread for user {user.id}: {e}")
         
     return jsonify({
-        'message': 'Connected! We are finding your rooms now...', 
+        'message': f"Connected as {cheese_discord_name or 'Cheese User'}! Syncing now...", 
         'is_connected': True
     })
 
@@ -315,13 +342,13 @@ def disconnect_cheese_account(current_user):
     """
     Removes the Cheese API key and ID.
     """
-    if current_user.is_guest:
-        return jsonify({'error': 'Guests cannot use integrations.'}), 403
     
     session = Session()
     user = session.merge(current_user)
     user.cheese_api_key = None
-    user.cheese_user_id = None # Clear the ID too so we don't auto-sync later
+    user.cheese_user_id = None 
+    # Optional: If guest, maybe clear discord_username? 
+    # For now, keeping it is safer so they don't lose identity.
     session.commit()
     
     return jsonify({'message': 'Disconnected from Cheese Tracker.'})
@@ -333,22 +360,18 @@ def disconnect_cheese_account(current_user):
 def trigger_manual_sync(current_user):
     """
     Manually triggers discovery/linking.
-    Useful if the user created a new tracker on the website and wants it to appear in the app immediately.
     """
-    if current_user.is_guest:
-        return jsonify({'error': 'Guests cannot use integrations.'}), 403
     if not current_user.cheese_api_key:
         return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
 
     app_context = current_app._get_current_object()
 
-    # Re-use the setup task for manual sync
     threading.Thread(
         target=setup_cheese_user_task, 
         args=(app_context, current_user.id,)
     ).start()
         
-    return jsonify({'message': 'Sync started. Your new rooms should appear shortly.'})
+    return jsonify({'message': 'Sync started.'})
 
 
 def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, alias):
