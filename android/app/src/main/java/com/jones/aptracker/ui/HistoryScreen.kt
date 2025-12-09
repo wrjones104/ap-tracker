@@ -9,6 +9,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +32,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Info
@@ -45,6 +47,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
@@ -313,7 +317,9 @@ fun HistoryFilterSheet(
             modifier = Modifier.padding(bottom = 16.dp)
         )
 
-        // Toggle 1: Condensed Names
+        // Toggle 1: Show Original Slot Name (Inverted logic: Checked = !useCondensed)
+        val showOriginalNames = !useCondensed
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -324,18 +330,19 @@ fun HistoryFilterSheet(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Hide Original Slot Name",
+                    text = "Show Original Slot Name",
                     style = MaterialTheme.typography.bodyLarge
                 )
                 Text(
-                    text = if (useCondensed) "Showing Alias only" else "Showing 'Alias (Original Slot Name)'",
+                    text = if (showOriginalNames) "Showing 'Alias (Original Slot Name)'" else "Showing Alias only",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Switch(
-                checked = useCondensed,
-                onCheckedChange = onUseCondensedChange,
+                checked = showOriginalNames,
+                // If user turns "Show Original" ON (true), we set useCondensed to FALSE
+                onCheckedChange = { isChecked -> onUseCondensedChange(!isChecked) },
                 modifier = Modifier.padding(start = 16.dp)
             )
         }
@@ -568,6 +575,8 @@ fun ItemHistoryTab(
     val showFinished by historyViewModel.showFinished.collectAsState()
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
     val useCondensed by historyViewModel.useCondensed.collectAsState()
+    val selectedRoom by historyViewModel.selectedRoomFilter.collectAsState()
+    val availableRooms by historyViewModel.availableRooms.collectAsState()
 
     val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
@@ -577,11 +586,14 @@ fun ItemHistoryTab(
     val isDark = isSystemInDarkTheme()
     val finishedColor = if (isDark) Color(0xFF81C784) else Color(0xFF0E8A0E)
 
-    val itemsToShow = remember(fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys) {
+    val itemsToShow = remember(fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, selectedRoom) {
         fullHistory.filter { item ->
             val matchesSearch = searchQuery.isBlank() ||
                     item.playerName.contains(searchQuery, ignoreCase = true) ||
                     item.itemName.contains(searchQuery, ignoreCase = true)
+
+            // NEW: Room Filter
+            val matchesRoom = selectedRoom == null || item.db_id == selectedRoom
 
             val matchesPlayer = selectedPlayer == null || item.playerName == selectedPlayer
 
@@ -592,41 +604,67 @@ fun ItemHistoryTab(
             }
             val matchesFinished = showFinished || !isFinished
 
-            matchesSearch && matchesPlayer && matchesFinished
+            matchesSearch && matchesRoom && matchesPlayer && matchesFinished
         }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (availablePlayers.isNotEmpty()) {
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item {
-                    FilterChip(
-                        selected = selectedPlayer == null,
-                        onClick = { historyViewModel.onPlayerFilterSelected(null) },
-                        label = { Text("All") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 1. Room Filter
+            if (availableRooms.isNotEmpty()) {
+                RoomFilterChip(
+                    currentRoomId = selectedRoom,
+                    availableRooms = availableRooms,
+                    onRoomSelected = { historyViewModel.onRoomFilterSelected(it) }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Vertical Divider manually created since VerticalDivider might be experimental/missing in some M3 versions
+                Box(
+                    modifier = Modifier
+                        .height(32.dp)
+                        .width(1.dp)
+                        .padding(vertical = 4.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+
+            // 2. Slot Chips
+            if (availablePlayers.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedPlayer == null,
+                            onClick = { historyViewModel.onPlayerFilterSelected(null) },
+                            label = { Text("All Slots") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
                         )
-                    )
-                }
-                items(availablePlayers) { playerInfo ->
-                    FilterChip(
-                        selected = playerInfo.originalName == selectedPlayer,
-                        onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.originalName) },
-                        label = {
-                            Text(getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed))
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    }
+                    items(availablePlayers) { playerInfo ->
+                        FilterChip(
+                            selected = playerInfo.originalName == selectedPlayer,
+                            onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.originalName) },
+                            label = {
+                                Text(getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed))
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -720,6 +758,79 @@ fun ItemHistoryTab(
 }
 
 @Composable
+fun RoomFilterChip(
+    currentRoomId: Int?,
+    availableRooms: List<Pair<Int, String>>,
+    onRoomSelected: (Int?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    // Find the name of the currently selected room, or default to "All Rooms"
+    val label = if (currentRoomId == null) "All Rooms" else {
+        availableRooms.find { it.first == currentRoomId }?.second ?: "Unknown Room"
+    }
+
+    Box {
+        FilterChip(
+            selected = currentRoomId != null,
+            onClick = { expanded = true },
+            label = { Text(label) },
+            trailingIcon = {
+                val iconTint = if (currentRoomId != null) {
+                    MaterialTheme.colorScheme.onTertiaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = iconTint
+                )
+            },
+            // Use a distinct color (e.g., Tertiary or Secondary) to show this is a "Master" filter
+            colors = FilterChipDefaults.filterChipColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                selectedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onTertiaryContainer
+            )
+        )
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("All Rooms") },
+                onClick = {
+                    onRoomSelected(null)
+                    expanded = false
+                },
+                trailingIcon = {
+                    if (currentRoomId == null) Icon(Icons.Default.Check, contentDescription = null)
+                }
+            )
+            HorizontalDivider()
+            availableRooms.forEach { (id, name) ->
+                DropdownMenuItem(
+                    text = { Text(name) },
+                    onClick = {
+                        onRoomSelected(id)
+                        expanded = false
+                    },
+                    trailingIcon = {
+                        if (currentRoomId == id) Icon(Icons.Default.Check, contentDescription = null)
+                    }
+                )
+            }
+        }
+    }
+}
+
+
+@Composable
 fun HintHistoryTab(
     historyViewModel: HistoryViewModel,
     searchQuery: String,
@@ -734,6 +845,9 @@ fun HintHistoryTab(
     val availablePlayers by historyViewModel.availableHintPlayers.collectAsState()
     val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
 
+    val selectedRoom by historyViewModel.selectedRoomFilter.collectAsState()
+    val availableRooms by historyViewModel.availableRooms.collectAsState()
+
     val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
             .withZone(ZoneId.systemDefault())
@@ -742,45 +856,71 @@ fun HintHistoryTab(
     var isForYouExpanded by rememberSaveable { mutableStateOf(true) }
     var isByYouExpanded by rememberSaveable { mutableStateOf(true) }
 
-    val filteredHintsForYou = remember(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer) {
-        filterHints(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer)
+    val filteredHintsForYou = remember(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer, selectedRoom) {
+        filterHints(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer, selectedRoom)
     }
-    val filteredHintsByYou = remember(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer) {
-        filterHints(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer)
+    val filteredHintsByYou = remember(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer, selectedRoom) {
+        filterHints(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer, selectedRoom)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
 
-        if (availablePlayers.isNotEmpty()) {
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item {
-                    FilterChip(
-                        selected = selectedPlayer == null,
-                        onClick = { historyViewModel.onPlayerFilterSelected(null) },
-                        label = { Text("All") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+        // Filter Row (Room Chip + Player Chips) ---
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 1. Room Filter
+            if (availableRooms.isNotEmpty()) {
+                RoomFilterChip(
+                    currentRoomId = selectedRoom,
+                    availableRooms = availableRooms,
+                    onRoomSelected = { historyViewModel.onRoomFilterSelected(it) }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Box(
+                    modifier = Modifier
+                        .height(32.dp)
+                        .width(1.dp)
+                        .padding(vertical = 4.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+
+            // 2. Player Chips
+            if (availablePlayers.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedPlayer == null,
+                            onClick = { historyViewModel.onPlayerFilterSelected(null) },
+                            label = { Text("All") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
                         )
-                    )
-                }
-                items(availablePlayers) { playerInfo ->
-                    FilterChip(
-                        selected = playerInfo.originalName == selectedPlayer,
-                        onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.originalName) },
-                        label = {
-                            Text(getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed))
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    }
+                    items(availablePlayers) { playerInfo ->
+                        FilterChip(
+                            selected = playerInfo.originalName == selectedPlayer,
+                            onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.originalName) },
+                            label = {
+                                Text(getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed))
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -820,7 +960,7 @@ fun HintHistoryTab(
                     item {
                         if (filteredHintsForYou.isNotEmpty()) {
                             Spacer(Modifier.height(16.dp))
-                            Divider()
+                            HorizontalDivider() // Updated Divider
                             Spacer(Modifier.height(16.dp))
                         }
                         SectionHeader(
@@ -999,9 +1139,13 @@ private fun filterHints(
     query: String,
     showFinished: Boolean,
     finishedKeys: Set<Pair<Int, String>>,
-    selectedPlayer: String?
+    selectedPlayer: String?,
+    selectedRoomId: Int?
 ): List<HintEntity> {
     return hints.filter { hint ->
+        // 1. Room Check
+        val matchesRoom = selectedRoomId == null || hint.roomDbId == selectedRoomId
+
         val matchesQuery = if (query.isBlank()) true else {
             hint.itemName.contains(query, ignoreCase = true) ||
                     hint.locationName.contains(query, ignoreCase = true) ||
@@ -1021,7 +1165,7 @@ private fun filterHints(
             }
         }
 
-        matchesQuery && matchesFinished && matchesPlayer
+        matchesRoom && matchesQuery && matchesFinished && matchesPlayer
     }
 }
 
@@ -1065,8 +1209,7 @@ private fun formatTimestamp(isoString: String, formatter: DateTimeFormatter): St
         if (!hasTimeZone) {
             cleanString += "Z"
         }
-
-        val instant = Instant.parse(cleanString)
+                val instant = Instant.parse(cleanString)
 
         instant.atZone(ZoneId.systemDefault()).format(formatter)
     } catch (e: Exception) {

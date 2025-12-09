@@ -154,27 +154,28 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
     Checks both AP status AND location counts to determine if players are finished.
     Returns: (notifications_dict, finished_player_ids_set, players_list_updated_bool)
     """
-    finished_player_ids = set()
     notifications_by_user = {}
+    final_finished_ids = set()
 
-    # 1. Parse Status from 'player_status'
+    # 1. Parse Status from 'player_status' (Network Truth)
+    network_finished_ids = set()
     player_statuses_raw = tracker_data.get('player_status', {})
     if isinstance(player_statuses_raw, dict): 
-        finished_player_ids.update({int(p) for p, s in player_statuses_raw.items() if s == 30})
+        network_finished_ids.update({int(p) for p, s in player_statuses_raw.items() if s == 30})
     elif isinstance(player_statuses_raw, list):
             for status_info in player_statuses_raw:
                 if isinstance(status_info, dict) and status_info.get('status') == 30 and 'player' in status_info:
-                    finished_player_ids.add(status_info.get('player'))
+                    network_finished_ids.add(status_info.get('player'))
 
-    # 2. Determine newly finished players
+    # 2. Update Cache & Build Final Truth
     players_just_marked_finished = set()
     players_list_updated = False
-
+    
     has_status_data = len(tracker_data.get('player_status', {})) > 0
 
     for player in players_list:
         slot_id = player.get('slot_id')
-        is_actually_finished = slot_id in finished_player_ids
+        is_actually_finished = slot_id in network_finished_ids
         was_marked_finished = player.get('is_finished', False)
     
         if is_actually_finished and not was_marked_finished:
@@ -182,13 +183,19 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
             player['is_finished'] = True
             players_list_updated = True
             players_just_marked_finished.add(slot_id)
+            final_finished_ids.add(slot_id) 
             
         elif not is_actually_finished and was_marked_finished and has_status_data:
-            # Case B: False Positive (Old "Math" logic marked them, but Status != 30)
-            # We revert them to unfinished.
+            # Case B: False Positive (Revert)
             player['is_finished'] = False
             players_list_updated = True
-            logging.info(f"[POLLER_FIX][RoomDBID:{room_db_id}] Reverting 'Finished' status for Slot {slot_id} (Status != 30).")
+            logging.info(f"[POLLER_FIX][RoomDBID:{room_db_id}] Reverting 'Finished' status for Slot {slot_id}.")
+            # Do NOT add to final_finished_ids
+            
+        else:
+            # Case C: Status Unchanged
+            if player.get('is_finished', False):
+                final_finished_ids.add(slot_id)
 
     if players_list_updated:
         logging.info(f"[POLLER_ACTION][RoomDBID:{room_db_id}] {len(players_just_marked_finished)} player(s) just finished.")
@@ -207,9 +214,6 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
 
             names_to_notify = [] 
             
-            # Determine Condensed Preference for this user batch
-            # We use the preference of the FIRST slot in the batch to decide the format for the whole group
-            # (Edge case: user wants mixed formats for different slots finishing simultaneously, but rare)
             use_condensed = user_prefs.use_condensed_messages_default
             first_slot_id = finished_slot_ids[0]
             first_slot_prefs = prefs_by_user_slot.get(user_id, {}).get(first_slot_id)
@@ -226,7 +230,6 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
                     logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {slot_id} is backfilling. Suppressing 'Finished' notification.")
                     continue 
                 
-                # Check notify_finished preference
                 notify_override = slot_prefs.notify_finished
                 should_notify = notify_override if notify_override is not None else user_prefs.notify_finished_default
                 
@@ -248,7 +251,7 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
                 'details': (room_db_id, user_id, player_names_str)
             })
             
-    return notifications_by_user, finished_player_ids, players_list_updated
+    return notifications_by_user, final_finished_ids, players_list_updated
 
 def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_in_db, tracked_slots_by_user, game_map, game_checksums, has_item_history):
     """

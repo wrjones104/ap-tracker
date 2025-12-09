@@ -64,8 +64,25 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _selectedPlayerFilter = MutableStateFlow<String?>(null)
     val selectedPlayerFilter: StateFlow<String?> = _selectedPlayerFilter
 
-    val availablePlayers: StateFlow<List<PlayerDisplayInfo>> = _itemHistory.map { history ->
+    private val _selectedRoomFilter = MutableStateFlow<Int?>(null)
+    val selectedRoomFilter: StateFlow<Int?> = _selectedRoomFilter
+
+    // 2. Helper to get Room List (Derived from the roomNames map we already built)
+    val availableRooms: StateFlow<List<Pair<Int, String>>> = _roomNames.map { map ->
+        map.toList().sortedBy { it.second }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // 3. Update 'availablePlayers' to respect the selected Room
+    //    If a room is selected, we only show chips for players in that room.
+    val availablePlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
+        _itemHistory,
+        _selectedRoomFilter
+    ) { history, selectedRoomId ->
         history
+            .filter { item ->
+                // Only include players that exist in the selected room (if any)
+                selectedRoomId == null || item.db_id == selectedRoomId
+            }
             .groupBy { it.playerName }
             .map { (name, items) ->
                 val bestAlias = items.firstNotNullOfOrNull { it.playerAlias }
@@ -74,9 +91,18 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             .sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val availableHintPlayers: StateFlow<List<PlayerDisplayInfo>> = combine(_hintsForYou, _hintsByYou) { forYou, byYou ->
-        val allMentions = (forYou.map { PlayerDisplayInfo(it.itemOwnerName, it.itemOwnerAlias) } +
-                byYou.map { PlayerDisplayInfo(it.locationOwnerName, it.locationOwnerAlias) })
+    val availableHintPlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
+        _hintsForYou,
+        _hintsByYou,
+        _selectedRoomFilter
+    ) { forYou, byYou, selectedRoomId ->
+
+        // Filter lists by room first
+        val relevantForYou = if (selectedRoomId == null) forYou else forYou.filter { it.roomDbId == selectedRoomId }
+        val relevantByYou = if (selectedRoomId == null) byYou else byYou.filter { it.roomDbId == selectedRoomId }
+
+        val allMentions = (relevantForYou.map { PlayerDisplayInfo(it.itemOwnerName, it.itemOwnerAlias) } +
+                relevantByYou.map { PlayerDisplayInfo(it.locationOwnerName, it.locationOwnerAlias) })
 
         allMentions
             .groupBy { it.originalName }
@@ -108,6 +134,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         currentRoomId = roomId
         Log.d("HistoryViewModel", "Loading history for Room ID: ${roomId ?: "Global"}")
         refreshAllHistory()
+    }
+
+    fun onRoomFilterSelected(roomId: Int?) {
+        _selectedRoomFilter.value = roomId
+        // Reset player filter when switching rooms to avoid getting stuck on a player not in that room
+        _selectedPlayerFilter.value = null
     }
 
     private fun fetchUserPreferences() {
@@ -156,6 +188,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 // 2. Build Lookup Maps for "Live" Data
                 val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
                 val liveFinishedSlots = mutableSetOf<Pair<Int, Int>>()
+                val liveIcons = mutableMapOf<Int, String>()
 
                 // This set is for the filtering logic (Pair<RoomDBID, PlayerName>)
                 val finishedPlayerNames = mutableSetOf<Pair<Int, String>>()
@@ -165,6 +198,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
 
                 trackedRooms.forEach { room ->
+                    liveIcons[room.room_db_id] = room.icon_name
                     roomNameMap[room.room_db_id] = room.room_alias
 
                     room.tracked_slots.forEach { slot ->
@@ -214,6 +248,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         _liveAliases.value[entity.roomId to entity.slot_id]
                     } else null
 
+                    val liveIcon = if (entity.roomId != null) {
+                        liveIcons[entity.roomId]
+                    } else null
+
                     // B. Resolve Live Finished Status
                     // (True if DB says so OR if API says so)
                     val isActuallyFinished = entity.isPlayerFinished ||
@@ -223,14 +261,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     HistoryItem(
                         id = entity.id,
                         playerName = entity.playerName,
-                        playerAlias = liveAlias ?: entity.playerAlias, // Use Live Alias
+                        playerAlias = liveAlias ?: entity.playerAlias,
                         itemName = entity.itemName,
-                        isPlayerFinished = isActuallyFinished,         // Use Live Status
+                        isPlayerFinished = isActuallyFinished,
                         itemFlags = entity.itemFlags,
                         timestamp = entity.timestamp,
                         tracker_id = entity.tracker_id,
                         slot_id = entity.slot_id,
-                        icon_name = entity.icon_name,
+                        icon_name = liveIcon ?: entity.icon_name,
                         db_id = entity.roomId,
                         host = entity.host,
                         receivingGame = entity.receivingGame,
