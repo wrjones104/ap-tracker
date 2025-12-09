@@ -46,11 +46,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _showFinished = MutableStateFlow(true)
     val showFinished: StateFlow<Boolean> = _showFinished
+    private val _liveAliases = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
 
-    val finishedPlayerKeys: StateFlow<Set<Pair<Int, String>>> = _itemHistory.map { history ->
-        history.filter { it.isPlayerFinished && it.db_id != null }
+    private val _confirmedFinishedPlayers = MutableStateFlow<Set<Pair<Int, String>>>(emptySet())
+
+    val finishedPlayerKeys: StateFlow<Set<Pair<Int, String>>> = combine(_itemHistory, _confirmedFinishedPlayers) { history, confirmed ->
+        val fromHistory = history
+            .filter { it.isPlayerFinished && it.db_id != null }
             .map { it.db_id!! to it.playerName }
             .toSet()
+
+        fromHistory + confirmed
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     private var currentRoomId: Int? = null
@@ -144,17 +150,47 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
+                // 1. Fetch latest tracking config from API (includes 'is_finished' status)
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
 
-                // 1. Populate the Map of RoomID -> RoomAlias
-                _roomNames.value = trackedRooms.associate { it.room_db_id to it.room_alias }
+                // 2. Build Lookup Maps for "Live" Data
+                val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
+                val liveFinishedSlots = mutableSetOf<Pair<Int, Int>>()
 
-                validTrackedSlots = trackedRooms.flatMap { room ->
-                    room.tracked_slots.map { slot ->
-                        room.room_db_id to slot.slot_id
+                // This set is for the filtering logic (Pair<RoomDBID, PlayerName>)
+                val finishedPlayerNames = mutableSetOf<Pair<Int, String>>()
+
+                // Helper to build Room ID -> Room Alias map
+                val roomNameMap = mutableMapOf<Int, String>()
+                val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
+
+                trackedRooms.forEach { room ->
+                    roomNameMap[room.room_db_id] = room.room_alias
+
+                    room.tracked_slots.forEach { slot ->
+                        // Track valid slots
+                        validSlotsSet.add(room.room_db_id to slot.slot_id)
+
+                        // Store Live Alias
+                        if (!slot.player_alias.isNullOrBlank()) {
+                            aliasMap[room.room_db_id to slot.slot_id] = slot.player_alias
+                        }
+
+                        // Store Finished Status
+                        if (slot.is_finished) {
+                            liveFinishedSlots.add(room.room_db_id to slot.slot_id)
+                            finishedPlayerNames.add(room.room_db_id to slot.player_name)
+                        }
                     }
-                }.toSet()
+                }
 
+                // Update StateFlows
+                _roomNames.value = roomNameMap
+                validTrackedSlots = validSlotsSet
+                _liveAliases.value = aliasMap
+                _confirmedFinishedPlayers.value = finishedPlayerNames
+
+                // 3. Refresh & Fetch Item History
                 repository.refreshItemHistory()
 
                 val rawItemEntities = if (currentRoomId != null) {
@@ -163,19 +199,33 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     repository.getGlobalHistory()
                 }
 
+                // 4. Map DB Entities to UI Models (Applying Overrides)
                 _itemHistory.value = rawItemEntities.mapNotNull { entity ->
+                    // Filter out slots we stopped tracking
                     if (entity.roomId != null && entity.slot_id != null) {
                         if (!validTrackedSlots.contains(entity.roomId to entity.slot_id)) {
                             return@mapNotNull null
                         }
                     }
 
+                    // A. Resolve Live Alias
+                    // If we have a live alias for this slot, use it. Otherwise fallback to history.
+                    val liveAlias = if (entity.roomId != null && entity.slot_id != null) {
+                        _liveAliases.value[entity.roomId to entity.slot_id]
+                    } else null
+
+                    // B. Resolve Live Finished Status
+                    // (True if DB says so OR if API says so)
+                    val isActuallyFinished = entity.isPlayerFinished ||
+                            (entity.roomId != null && entity.slot_id != null &&
+                                    liveFinishedSlots.contains(entity.roomId to entity.slot_id))
+
                     HistoryItem(
                         id = entity.id,
                         playerName = entity.playerName,
-                        playerAlias = entity.playerAlias,
+                        playerAlias = liveAlias ?: entity.playerAlias, // Use Live Alias
                         itemName = entity.itemName,
-                        isPlayerFinished = entity.isPlayerFinished,
+                        isPlayerFinished = isActuallyFinished,         // Use Live Status
                         itemFlags = entity.itemFlags,
                         timestamp = entity.timestamp,
                         tracker_id = entity.tracker_id,
@@ -191,6 +241,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
 
+                // 5. Handle Hints
                 val includeFound = _showFoundHints.value
                 repository.refreshHintHistory(currentRoomId, includeFound)
 
@@ -199,6 +250,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     repository.getGlobalHints(includeFound)
                 }
+
                 _hintsForYou.value = rawForYou.filter { hint ->
                     validTrackedSlots.contains(hint.roomDbId to hint.itemOwnerId)
                 }

@@ -1201,11 +1201,13 @@ def get_user_tracked_slots(current_user):
                 p_obj = players_map.get(slot.slot_id)
                 p_name = p_obj.get('name', f"Player {slot.slot_id}") if p_obj else f"Player {slot.slot_id}"
                 p_alias = p_obj.get('alias') if p_obj else None
+                p_finished = p_obj.get('is_finished', False) if p_obj else False
 
                 tracked_slots_list.append({
                     'slot_id': slot.slot_id,
                     'player_name': p_name,
                     'player_alias': p_alias,
+                    'is_finished': p_finished,
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,
                     'notify_hints': slot.notify_hints,
