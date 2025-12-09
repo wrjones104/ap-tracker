@@ -9,9 +9,6 @@ import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
-import com.jones.aptracker.network.IgnoreItem
-import com.jones.aptracker.network.AddIgnoreItemRequest
-import com.jones.aptracker.network.AddIgnoreItemResponse
 
 interface ApiService {
     @GET("rooms")
@@ -243,6 +240,7 @@ data class TrackedSlotDetail(
     val slot_id: Int,
     val player_name: String,
     val player_alias: String?,
+    val is_finished: Boolean = false,
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,

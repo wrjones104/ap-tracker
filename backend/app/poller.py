@@ -429,8 +429,10 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
             
             else:
                 if is_found_from_tracker and not existing_hint_obj.is_found:
-                    existing_hint_obj.is_found = True 
-                    just_found_hint_item_loc_pairs.add((loc_id, item_id))
+                    existing_hint_obj.is_found = True                     
+                    existing_hint_obj.timestamp = datetime.now(timezone.utc)                    
+                    just_found_hint_item_loc_pairs.add((loc_id, item_id))                    
+                    logging.info(f"[POLLER_HINT_UPDATE] Marked hint {item_id} as found. Bumped timestamp.")
     
     if hints_processed_count > 0:
          logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Hints: Proc={hints_processed_count}, SkipClass={hints_skipped_classification}, Added={hints_added_count}")
@@ -1171,6 +1173,19 @@ async def run_room_setup(room_info, loop):
         
         setup_data['tracker_id'] = new_tracker_id
 
+        tracker_url = f"https://{hostname}/api/tracker/{new_tracker_id}"
+        tracker_data = await fetch_json(tracker_url)
+        
+        finished_slots = set()
+        if tracker_data:
+            statuses = tracker_data.get('player_status', {})
+            if isinstance(statuses, dict):
+                finished_slots = {int(p) for p, s in statuses.items() if s == 30}
+            elif isinstance(statuses, list):
+                for s in statuses:
+                    if isinstance(s, dict) and s.get('status') == 30:
+                        finished_slots.add(s.get('player'))
+
         static_tracker_url = f"https://{hostname}/api/static_tracker/{new_tracker_id}"
         static_data = await fetch_json(static_tracker_url)
 
@@ -1193,7 +1208,7 @@ async def run_room_setup(room_info, loop):
                 'name': p[0], 
                 'game': p[1],
                 'total_locations': totals_map.get(slot_id, 0),
-                'is_finished': False
+                'is_finished': slot_id in finished_slots
             })
         
         setup_data['cached_players_json'] = json.dumps(player_list)
