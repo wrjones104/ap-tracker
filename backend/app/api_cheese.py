@@ -82,7 +82,7 @@ def setup_cheese_user_task(app, user_id):
                 headers = {"Authorization": f"Bearer {api_key}"}
 
                 try:
-                    me_resp = req_session.get(f"{CHEESE_BASE_URL}/users/me", headers=headers, timeout=10)
+                    me_resp = req_session.get(f"{CHEESE_BASE_URL}/user/self", headers=headers, timeout=10)
                     if me_resp.ok:
                         me_data = me_resp.json()
                         if me_data.get('id'):
@@ -91,7 +91,7 @@ def setup_cheese_user_task(app, user_id):
                             user.cheese_user_id = found_id
                             session.commit() # Save immediately
                 except Exception as e:
-                    logging.warning(f"[CHEESE_SETUP] Failed to fetch /users/me: {e}")
+                    logging.warning(f"[CHEESE_SETUP] Failed to fetch /user/self: {e}")
                 
                 # 2. Fetch User's Trackers List
                 try:
@@ -296,7 +296,7 @@ def connect_cheese_account(current_user):
         cheese_discord_name = me_data.get('discord_username')
 
         if not cheese_id:
-            logging.error(f"[CHEESE_AUTH] /users/me did not return an ID. Response: {me_data}")
+            logging.error(f"[CHEESE_AUTH] /user/self did not return an ID. Response: {me_data}")
             return jsonify({'error': 'Could not verify Cheese identity.'}), 502
 
     except requests.exceptions.RequestException as e:
