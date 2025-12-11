@@ -862,17 +862,17 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
         if items_to_add:
             session.bulk_save_objects(items_to_add)
             if not has_item_history:
-                logging.info(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(items_to_add)} historical items.")
+                logging.debug(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(items_to_add)} historical items.")
             elif not new_items_notif: 
-                logging.info(f"[POLLER][RoomDBID:{db_id}] Silently added {len(items_to_add)} new items (Suppressed/Untracked).")
+                logging.debug(f"[POLLER][RoomDBID:{db_id}] Silently added {len(items_to_add)} new items (Suppressed/Untracked).")
 
         if hints_to_add:
             session.bulk_save_objects(hints_to_add)
             if not has_hint_history:
-                logging.info(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(hints_to_add)} historical hints.")
+                logging.debug(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(hints_to_add)} historical hints.")
 
         if slots_to_clear_backfill:
-            logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Clearing 'needs_backfill' for {len(slots_to_clear_backfill)} slots.")
+            logging.debug(f"[POLLER_ACTION][RoomDBID:{db_id}] Clearing 'needs_backfill' for {len(slots_to_clear_backfill)} slots.")
             for slot in slots_to_clear_backfill:
                 slot.needs_backfill = False
 
