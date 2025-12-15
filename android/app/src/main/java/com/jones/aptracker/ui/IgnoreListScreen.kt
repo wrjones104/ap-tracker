@@ -275,7 +275,7 @@ fun IgnoreListScreen(
                 TextButton(
                     onClick = {
                         if (singleItemToDelete != null) {
-                            userViewModel.deleteIgnoreItem(singleItemToDelete!!.id)
+                            userViewModel.deleteIgnoreItem(singleItemToDelete.id)
                         } else {
                             // Bulk Delete
                             selectedIds.forEach { id -> userViewModel.deleteIgnoreItem(id) }
