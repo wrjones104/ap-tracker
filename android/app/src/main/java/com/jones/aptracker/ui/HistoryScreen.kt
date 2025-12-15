@@ -784,7 +784,7 @@ fun RoomFilterChip(
                 Text(
                     text = label,
                     maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.widthIn(max = 100.dp)
                 )
             },
