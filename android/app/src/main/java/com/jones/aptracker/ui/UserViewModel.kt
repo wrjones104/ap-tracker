@@ -1,30 +1,42 @@
 package com.jones.aptracker.ui
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.network.CheeseAuthRequest
+import com.jones.aptracker.network.IgnoreItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.UpdateGlobalPrefsRequest
 import com.jones.aptracker.network.UpdateSlotPrefsRequest
 import com.jones.aptracker.network.UserProfile
+import com.jones.aptracker.repository.UserRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import com.jones.aptracker.network.IgnoreItem
-import com.jones.aptracker.repository.UserRepository
 import retrofit2.HttpException
 
 class UserViewModel(application: Application) : AndroidViewModel(application) {
+
+    // --- Dependencies ---
     private val settingsManager = SettingsManager(application)
+    private val userRepository = UserRepository(RetrofitClient.instance)
+
+    // Quick access to SharedPreferences for UI state (like sort order)
+    private val uiPrefs by lazy {
+        application.getSharedPreferences("ap_tracker_ui_prefs", Context.MODE_PRIVATE)
+    }
+
+    // --- User Profile State ---
     private val _userProfile = MutableStateFlow<UserProfile?>(null)
     val userProfile = _userProfile.asStateFlow()
+
     private val _trackedSlotsByRoom = MutableStateFlow<List<RoomWithTrackedSlots>>(emptyList())
     val trackedSlotsByRoom = _trackedSlotsByRoom.asStateFlow()
 
@@ -33,31 +45,65 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _integrationMessage = MutableStateFlow<String?>(null)
     val integrationMessage = _integrationMessage.asStateFlow()
+
     val isAutoSyncEnabled = settingsManager.isAutoSyncEnabled.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
         true
     )
-    private val userRepository = UserRepository(RetrofitClient.instance)
 
+    // --- Ignore List & Sorting State ---
     private val _ignoreList = MutableStateFlow<List<IgnoreItem>>(emptyList())
     val ignoreList = _ignoreList.asStateFlow()
 
-    // --- NEW: Known Games List for Search ---
     private val _knownGames = MutableStateFlow<List<String>>(emptyList())
     val knownGames = _knownGames.asStateFlow()
+
+    // Default to Newest, will be overwritten by loadSortPreference() in init
+    private val _ignoreSortOption = MutableStateFlow(IgnoreSortOption.NEWEST)
+    val ignoreSortOption = _ignoreSortOption.asStateFlow()
 
     init {
         fetchUserProfile()
         fetchTrackedSlots()
         fetchIgnoreList()
+        loadSortPreference() // Load saved sort order on startup
     }
+
+    // ============================================================================================
+    // PREFERENCES & SORTING
+    // ============================================================================================
 
     fun setAutoSync(isEnabled: Boolean) {
         viewModelScope.launch {
             settingsManager.setAutoSync(isEnabled)
         }
     }
+
+    /**
+     * Updates the sort option in StateFlow and persists it to SharedPreferences
+     */
+    fun setIgnoreSortOption(option: IgnoreSortOption) {
+        _ignoreSortOption.value = option
+        saveSortPreference(option)
+    }
+
+    private fun loadSortPreference() {
+        val savedName = uiPrefs.getString("IGNORE_SORT_ORDER", IgnoreSortOption.NEWEST.name)
+        _ignoreSortOption.value = try {
+            IgnoreSortOption.valueOf(savedName ?: IgnoreSortOption.NEWEST.name)
+        } catch (e: Exception) {
+            IgnoreSortOption.NEWEST
+        }
+    }
+
+    private fun saveSortPreference(option: IgnoreSortOption) {
+        uiPrefs.edit().putString("IGNORE_SORT_ORDER", option.name).apply()
+    }
+
+    // ============================================================================================
+    // API OPERATIONS: USER & SLOTS
+    // ============================================================================================
 
     fun fetchUserProfile() {
         viewModelScope.launch {
@@ -82,7 +128,6 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-
     fun updateGlobalPreferences(
         progression: Boolean? = null,
         useful: Boolean? = null,
@@ -102,9 +147,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                     use_condensed_messages = useCondensed
                 )
                 RetrofitClient.instance.updateUserPreferences(request)
-
                 fetchUserProfile()
-
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to save preferences."
                 e.printStackTrace()
@@ -146,9 +189,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             _errorMessage.value = null
             try {
                 RetrofitClient.instance.deleteAccount()
-
                 onAccountDeleted()
-
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to delete account. Please try again."
                 e.printStackTrace()
@@ -159,6 +200,10 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun clearErrorMessage() {
         _errorMessage.value = null
     }
+
+    // ============================================================================================
+    // CHEESE TRACKER INTEGRATION
+    // ============================================================================================
 
     fun connectCheeseTracker(apiKey: String) {
         viewModelScope.launch {
@@ -172,19 +217,6 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 e.printStackTrace()
                 _errorMessage.value = "Failed to connect. Check your key."
-            }
-        }
-    }
-
-    // Kept this private helper
-    private fun triggerBackgroundSync() {
-        viewModelScope.launch {
-            try {
-                RetrofitClient.instance.syncCheeseTracker()
-                fetchTrackedSlots()
-            } catch (e: Exception) {
-                e.printStackTrace()
-                Log.w("UserViewModel", "Background sync failed: ${e.message}")
             }
         }
     }
@@ -219,7 +251,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         _integrationMessage.value = null
     }
 
-    // --- IGNORE LIST LOGIC ---
+    // ============================================================================================
+    // IGNORE LIST LOGIC
+    // ============================================================================================
 
     fun fetchIgnoreList() {
         viewModelScope.launch {
@@ -232,7 +266,6 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // NEW: Fetch known games for the dropdown
     fun fetchKnownGames() {
         viewModelScope.launch {
             try {
@@ -240,7 +273,6 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 _knownGames.value = games
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to fetch games list", e)
-                // We set an error message so the user knows why the dropdown is empty
                 _errorMessage.value = "Could not load game list."
             }
         }
@@ -266,11 +298,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // NEW: Update existing rule
     fun updateIgnoreItem(id: Int, itemName: String, gameName: String?) {
         viewModelScope.launch {
             try {
-                // Reuse the AddIgnoreItemRequest for the payload
                 val request = com.jones.aptracker.network.AddIgnoreItemRequest(itemName, gameName)
                 val response = RetrofitClient.instance.updateIgnoreItem(id, request)
 
