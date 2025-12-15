@@ -197,9 +197,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 val roomNameMap = mutableMapOf<Int, String>()
                 val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
 
-                trackedRooms.forEach { room ->
-                    // --- Skip Archived Rooms ---
-                    if (room.is_archived) return@forEach
+                trackedRooms.filterNot { it.is_archived }.forEach { room ->
 
                     liveIcons[room.room_db_id] = room.icon_name
                     roomNameMap[room.room_db_id] = room.room_alias
