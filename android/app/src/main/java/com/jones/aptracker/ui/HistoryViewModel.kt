@@ -385,11 +385,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private fun saveViewPreferences(showFinished: Boolean? = null, showFoundHints: Boolean? = null) {
         viewModelScope.launch {
             try {
-                val request = com.jones.aptracker.network.UpdateGlobalPrefsRequest(
-                    ui_show_finished = showFinished,
-                    ui_show_found_hints = showFoundHints
-                )
-                RetrofitClient.instance.updateUserPreferences(request)
+                // 1. Create a map for the parameters
+                val params = mutableMapOf<String, Boolean>()
+
+                // 2. Only add the keys that are actually changing
+                showFinished?.let { params["ui_show_finished"] = it }
+                showFoundHints?.let { params["ui_show_found_hints"] = it }
+
+                // 3. Send the map to the API
+                if (params.isNotEmpty()) {
+                    RetrofitClient.instance.updateUserPreferences(params)
+                }
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to save view preferences", e)
             }

@@ -134,20 +134,32 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         hints: Boolean? = null,
         remoteHints: Boolean? = null,
         finished: Boolean? = null,
-        useCondensed: Boolean? = null
+        useCondensed: Boolean? = null,
+        uiShowFinished: Boolean? = null,
+        uiShowFoundHints: Boolean? = null
     ) {
         viewModelScope.launch {
             try {
-                val request = UpdateGlobalPrefsRequest(
-                    notify_progression = progression,
-                    notify_useful = useful,
-                    notify_hints = hints,
-                    notify_hints_remote_items = remoteHints,
-                    notify_finished = finished,
-                    use_condensed_messages = useCondensed
-                )
-                RetrofitClient.instance.updateUserPreferences(request)
+                // Create a Map to ensure we ONLY send the fields that are changing.
+                // This prevents Gson from sending "null" for the other fields,
+                // which would accidentally turn them off.
+                val params = mutableMapOf<String, Boolean>()
+
+                progression?.let { params["notify_progression"] = it }
+                useful?.let { params["notify_useful"] = it }
+                hints?.let { params["notify_hints"] = it }
+                remoteHints?.let { params["notify_hints_remote_items"] = it }
+                finished?.let { params["notify_finished"] = it }
+                useCondensed?.let { params["use_condensed_messages"] = it }
+
+                // Map the camelCase arguments to the snake_case keys the API expects
+                uiShowFinished?.let { params["ui_show_finished"] = it }
+                uiShowFoundHints?.let { params["ui_show_found_hints"] = it }
+
+                RetrofitClient.instance.updateUserPreferences(params)
+
                 fetchUserProfile()
+
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to save preferences."
                 e.printStackTrace()
