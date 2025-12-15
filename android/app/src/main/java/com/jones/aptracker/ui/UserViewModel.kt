@@ -156,7 +156,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 uiShowFinished?.let { params["ui_show_finished"] = it }
                 uiShowFoundHints?.let { params["ui_show_found_hints"] = it }
 
-                RetrofitClient.instance.updateUserPreferences(params)
+                if (params.isNotEmpty()) {
+                    RetrofitClient.instance.updateUserPreferences(params)
+                }
 
                 fetchUserProfile()
 
