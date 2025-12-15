@@ -8,7 +8,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -81,7 +80,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jones.aptracker.network.IgnoreItem
 
 // Enum for Sorting Options
-// NOTE: Ideally, move this to a shared 'models' file so the ViewModel can access it easily.
 enum class IgnoreSortOption(val label: String) {
     NEWEST("Newest First"),
     OLDEST("Oldest First"),

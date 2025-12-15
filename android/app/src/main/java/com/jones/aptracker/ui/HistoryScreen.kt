@@ -47,7 +47,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -226,8 +225,10 @@ fun HistoryContent(
                     state = pagerState,
                     modifier = Modifier.weight(1f)
                 ) { page ->
-                    // Only show room filter if we are in "Global" view (roomId is null)
+                    // Determine if we should show the filter chip.
+                    // If a roomId was passed (e.g. from Main Screen), we are locked to that room, so hide the filter.
                     val showRoomFilter = roomId == null
+
                     when (page) {
                         0 -> ItemHistoryTab(
                             historyViewModel = historyViewModel,
@@ -582,7 +583,10 @@ fun ItemHistoryTab(
     val showFinished by historyViewModel.showFinished.collectAsState()
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
     val useCondensed by historyViewModel.useCondensed.collectAsState()
-    val selectedRoom by historyViewModel.selectedRoomFilter.collectAsState()
+
+    val historyFilter by historyViewModel.historyFilter.collectAsState()
+    val activeRoomIds by historyViewModel.activeRoomIds.collectAsState()
+    val archivedRoomIds by historyViewModel.archivedRoomIds.collectAsState()
     val availableRooms by historyViewModel.availableRooms.collectAsState()
 
     val formatter = remember {
@@ -593,14 +597,19 @@ fun ItemHistoryTab(
     val isDark = isSystemInDarkTheme()
     val finishedColor = if (isDark) Color(0xFF81C784) else Color(0xFF0E8A0E)
 
-    val itemsToShow = remember(fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, selectedRoom) {
+    // Filter Logic
+    val itemsToShow = remember(fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, historyFilter, activeRoomIds, archivedRoomIds) {
         fullHistory.filter { item ->
             val matchesSearch = searchQuery.isBlank() ||
                     item.playerName.contains(searchQuery, ignoreCase = true) ||
                     item.itemName.contains(searchQuery, ignoreCase = true)
 
-            // Room Filter
-            val matchesRoom = selectedRoom == null || item.db_id == selectedRoom
+            val matchesRoom = when (val f = historyFilter) {
+                is HistoryFilter.Active -> item.db_id in activeRoomIds
+                is HistoryFilter.Archived -> item.db_id in archivedRoomIds
+                is HistoryFilter.All -> true
+                is HistoryFilter.Specific -> item.db_id == f.roomId
+            }
 
             val matchesPlayer = selectedPlayer == null || item.playerName == selectedPlayer
 
@@ -623,15 +632,14 @@ fun ItemHistoryTab(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 1. Room Filter
-            if (showRoomFilter && availableRooms.isNotEmpty()) {
+            if (showRoomFilter) {
                 RoomFilterChip(
-                    currentRoomId = selectedRoom,
+                    currentFilter = historyFilter,
                     availableRooms = availableRooms,
-                    onRoomSelected = { historyViewModel.onRoomFilterSelected(it) }
+                    onFilterSelected = { historyViewModel.setHistoryFilter(it) }
                 )
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Vertical Divider manually created since VerticalDivider might be experimental/missing in some M3 versions
                 Box(
                     modifier = Modifier
                         .height(32.dp)
@@ -766,49 +774,44 @@ fun ItemHistoryTab(
 
 @Composable
 fun RoomFilterChip(
-    currentRoomId: Int?,
+    currentFilter: HistoryFilter,
     availableRooms: List<Pair<Int, String>>,
-    onRoomSelected: (Int?) -> Unit
+    onFilterSelected: (HistoryFilter) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    // Find the name of the currently selected room, or default to "All Rooms"
-    val label = if (currentRoomId == null) "All Rooms" else {
-        availableRooms.find { it.first == currentRoomId }?.second ?: "Unknown Room"
+    val label = when (currentFilter) {
+        HistoryFilter.Active -> "Active Rooms"
+        HistoryFilter.Archived -> "Archived Rooms"
+        HistoryFilter.All -> "All History"
+        is HistoryFilter.Specific -> availableRooms.find { it.first == currentFilter.roomId }?.second ?: "Unknown Room"
     }
+
+    // Use a different color for "Meta" filters (Active/Archived/All) vs "Specific Room"
+    val isMetaFilter = currentFilter !is HistoryFilter.Specific
 
     Box {
         FilterChip(
-            selected = currentRoomId != null,
+            selected = true,
             onClick = { expanded = true },
             label = {
                 Text(
                     text = label,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 100.dp)
+                    modifier = Modifier.widthIn(max = 160.dp)
                 )
             },
             trailingIcon = {
-                val iconTint = if (currentRoomId != null) {
-                    MaterialTheme.colorScheme.onTertiaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = iconTint
+                    modifier = Modifier.size(16.dp)
                 )
             },
-            // Use a distinct color (e.g., Tertiary or Secondary) to show this is a "Master" filter
             colors = FilterChipDefaults.filterChipColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                selectedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onTertiaryContainer
+                containerColor = if (isMetaFilter) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.secondaryContainer,
+                labelColor = if (isMetaFilter) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSecondaryContainer
             )
         )
 
@@ -817,27 +820,37 @@ fun RoomFilterChip(
             onDismissRequest = { expanded = false }
         ) {
             DropdownMenuItem(
-                text = { Text("All Rooms") },
-                onClick = {
-                    onRoomSelected(null)
-                    expanded = false
-                },
-                trailingIcon = {
-                    if (currentRoomId == null) Icon(Icons.Default.Check, contentDescription = null)
-                }
+                text = { Text("Active Rooms") },
+                onClick = { onFilterSelected(HistoryFilter.Active); expanded = false },
+                trailingIcon = { if (currentFilter is HistoryFilter.Active) Icon(Icons.Default.Check, null) }
             )
-            HorizontalDivider()
-            availableRooms.forEach { (id, name) ->
-                DropdownMenuItem(
-                    text = { Text(name) },
-                    onClick = {
-                        onRoomSelected(id)
-                        expanded = false
-                    },
-                    trailingIcon = {
-                        if (currentRoomId == id) Icon(Icons.Default.Check, contentDescription = null)
-                    }
-                )
+            DropdownMenuItem(
+                text = { Text("Archived Rooms") },
+                onClick = { onFilterSelected(HistoryFilter.Archived); expanded = false },
+                trailingIcon = { if (currentFilter is HistoryFilter.Archived) Icon(Icons.Default.Check, null) }
+            )
+            DropdownMenuItem(
+                text = { Text("All History") },
+                onClick = { onFilterSelected(HistoryFilter.All); expanded = false },
+                trailingIcon = { if (currentFilter is HistoryFilter.All) Icon(Icons.Default.Check, null) }
+            )
+
+            if (availableRooms.isNotEmpty()) {
+                HorizontalDivider()
+                availableRooms.forEach { (id, name) ->
+                    DropdownMenuItem(
+                        text = { Text(name) },
+                        onClick = {
+                            onFilterSelected(HistoryFilter.Specific(id))
+                            expanded = false
+                        },
+                        trailingIcon = {
+                            if (currentFilter is HistoryFilter.Specific && currentFilter.roomId == id) {
+                                Icon(Icons.Default.Check, null)
+                            }
+                        }
+                    )
+                }
             }
         }
     }
@@ -860,7 +873,9 @@ fun HintHistoryTab(
     val availablePlayers by historyViewModel.availableHintPlayers.collectAsState()
     val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
 
-    val selectedRoom by historyViewModel.selectedRoomFilter.collectAsState()
+    val historyFilter by historyViewModel.historyFilter.collectAsState()
+    val activeRoomIds by historyViewModel.activeRoomIds.collectAsState()
+    val archivedRoomIds by historyViewModel.archivedRoomIds.collectAsState()
     val availableRooms by historyViewModel.availableRooms.collectAsState()
 
     val formatter = remember {
@@ -871,11 +886,11 @@ fun HintHistoryTab(
     var isForYouExpanded by rememberSaveable { mutableStateOf(true) }
     var isByYouExpanded by rememberSaveable { mutableStateOf(true) }
 
-    val filteredHintsForYou = remember(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer, selectedRoom) {
-        filterHints(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer, selectedRoom)
+    val filteredHintsForYou = remember(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer, historyFilter, activeRoomIds, archivedRoomIds) {
+        filterHints(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer, historyFilter, activeRoomIds, archivedRoomIds)
     }
-    val filteredHintsByYou = remember(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer, selectedRoom) {
-        filterHints(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer, selectedRoom)
+    val filteredHintsByYou = remember(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer, historyFilter, activeRoomIds, archivedRoomIds) {
+        filterHints(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer, historyFilter, activeRoomIds, archivedRoomIds)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -888,11 +903,11 @@ fun HintHistoryTab(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 1. Room Filter
-            if (showRoomFilter && availableRooms.isNotEmpty()) {
+            if (showRoomFilter) {
                 RoomFilterChip(
-                    currentRoomId = selectedRoom,
+                    currentFilter = historyFilter,
                     availableRooms = availableRooms,
-                    onRoomSelected = { historyViewModel.onRoomFilterSelected(it) }
+                    onFilterSelected = { historyViewModel.setHistoryFilter(it) }
                 )
                 Spacer(modifier = Modifier.width(8.dp))
 
@@ -1155,11 +1170,18 @@ private fun filterHints(
     showFinished: Boolean,
     finishedKeys: Set<Pair<Int, String>>,
     selectedPlayer: String?,
-    selectedRoomId: Int?
+    historyFilter: HistoryFilter,
+    activeRoomIds: Set<Int>,
+    archivedRoomIds: Set<Int>
 ): List<HintEntity> {
     return hints.filter { hint ->
         // 1. Room Check
-        val matchesRoom = selectedRoomId == null || hint.roomDbId == selectedRoomId
+        val matchesRoom = when (val f = historyFilter) {
+            is HistoryFilter.Active -> hint.roomDbId in activeRoomIds
+            is HistoryFilter.Archived -> hint.roomDbId in archivedRoomIds
+            is HistoryFilter.All -> true
+            is HistoryFilter.Specific -> hint.roomDbId == f.roomId
+        }
 
         val matchesQuery = if (query.isBlank()) true else {
             hint.itemName.contains(query, ignoreCase = true) ||
@@ -1224,7 +1246,7 @@ private fun formatTimestamp(isoString: String, formatter: DateTimeFormatter): St
         if (!hasTimeZone) {
             cleanString += "Z"
         }
-                val instant = Instant.parse(cleanString)
+        val instant = Instant.parse(cleanString)
 
         instant.atZone(ZoneId.systemDefault()).format(formatter)
     } catch (e: Exception) {

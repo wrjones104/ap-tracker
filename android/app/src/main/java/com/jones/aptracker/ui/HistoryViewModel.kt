@@ -15,10 +15,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+
+// --- 1. FILTER INTERFACE ---
+sealed interface HistoryFilter {
+    object Active : HistoryFilter
+    object Archived : HistoryFilter
+    object All : HistoryFilter
+    data class Specific(val roomId: Int) : HistoryFilter
+}
 
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -31,6 +38,25 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _roomNames = MutableStateFlow<Map<Int, String>>(emptyMap())
     val roomNames: StateFlow<Map<Int, String>> = _roomNames
 
+    // --- 2. STATE FLOWS ---
+    private val _activeRoomIds = MutableStateFlow<Set<Int>>(emptySet())
+    val activeRoomIds: StateFlow<Set<Int>> = _activeRoomIds
+
+    private val _archivedRoomIds = MutableStateFlow<Set<Int>>(emptySet())
+    val archivedRoomIds: StateFlow<Set<Int>> = _archivedRoomIds
+
+    // Default filter is now ACTIVE (instead of null/All)
+    private val _historyFilter = MutableStateFlow<HistoryFilter>(HistoryFilter.Active)
+    val historyFilter: StateFlow<HistoryFilter> = _historyFilter
+
+    // We keep this solely to populate the Dropdown List with *ACTIVE* rooms only
+    val availableRooms: StateFlow<List<Pair<Int, String>>> = combine(_roomNames, _activeRoomIds) { names, activeIds ->
+        names.filterKeys { it in activeIds }
+            .toList()
+            .sortedBy { it.second }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Standard flows...
     private val _hintsForYou = MutableStateFlow<List<HintEntity>>(emptyList())
     val hintsForYou: StateFlow<List<HintEntity>> = _hintsForYou
 
@@ -46,8 +72,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _showFinished = MutableStateFlow(true)
     val showFinished: StateFlow<Boolean> = _showFinished
-    private val _liveAliases = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
 
+    private val _liveAliases = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
     private val _confirmedFinishedPlayers = MutableStateFlow<Set<Pair<Int, String>>>(emptySet())
 
     val finishedPlayerKeys: StateFlow<Set<Pair<Int, String>>> = combine(_itemHistory, _confirmedFinishedPlayers) { history, confirmed ->
@@ -61,25 +87,27 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private var currentRoomId: Int? = null
 
+    // For player chips, we just rely on the historyFilter to drive the data visibility,
+    // but the chip generation logic needs to know which filter is active.
     private val _selectedPlayerFilter = MutableStateFlow<String?>(null)
     val selectedPlayerFilter: StateFlow<String?> = _selectedPlayerFilter
 
-    private val _selectedRoomFilter = MutableStateFlow<Int?>(null)
-    val selectedRoomFilter: StateFlow<Int?> = _selectedRoomFilter
-
-    // 2. Helper to get Room List (Derived from the roomNames map we already built)
-    val availableRooms: StateFlow<List<Pair<Int, String>>> = _roomNames.map { map ->
-        map.toList().sortedBy { it.second }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    // 3. Update 'availablePlayers' to respect the selected Room
+    // Updated Player Chips Logic
     val availablePlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
         _itemHistory,
-        _selectedRoomFilter
-    ) { history, selectedRoomId ->
+        _historyFilter,
+        _activeRoomIds,
+        _archivedRoomIds
+    ) { history, filter, activeIds, archivedIds ->
         history
             .filter { item ->
-                currentRoomId != null || selectedRoomId == null || item.db_id == selectedRoomId
+                // Apply the same logic as the list view to the chips
+                when (filter) {
+                    is HistoryFilter.Active -> item.db_id in activeIds
+                    is HistoryFilter.Archived -> item.db_id in archivedIds
+                    is HistoryFilter.All -> true
+                    is HistoryFilter.Specific -> item.db_id == filter.roomId
+                }
             }
             .groupBy { it.playerName }
             .map { (name, items) ->
@@ -92,14 +120,23 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     val availableHintPlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
         _hintsForYou,
         _hintsByYou,
-        _selectedRoomFilter
-    ) { forYou, byYou, selectedRoomId ->
+        _historyFilter,
+        _activeRoomIds,
+        _archivedRoomIds
+    ) { forYou, byYou, filter, activeIds, archivedIds ->
 
-        // Determine effective filter ID
-        val effectiveRoomFilter = if (currentRoomId != null) null else selectedRoomId
+        fun shouldShow(roomId: Int?): Boolean {
+            if (roomId == null) return true // Global items
+            return when (filter) {
+                is HistoryFilter.Active -> roomId in activeIds
+                is HistoryFilter.Archived -> roomId in archivedIds
+                is HistoryFilter.All -> true
+                is HistoryFilter.Specific -> roomId == filter.roomId
+            }
+        }
 
-        val relevantForYou = if (effectiveRoomFilter == null) forYou else forYou.filter { it.roomDbId == effectiveRoomFilter }
-        val relevantByYou = if (effectiveRoomFilter == null) byYou else byYou.filter { it.roomDbId == effectiveRoomFilter }
+        val relevantForYou = forYou.filter { shouldShow(it.roomDbId) }
+        val relevantByYou = byYou.filter { shouldShow(it.roomDbId) }
 
         val allMentions = (relevantForYou.map { PlayerDisplayInfo(it.itemOwnerName, it.itemOwnerAlias) } +
                 relevantByYou.map { PlayerDisplayInfo(it.locationOwnerName, it.locationOwnerAlias) })
@@ -133,18 +170,25 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun loadHistoryFor(roomId: Int?) {
         currentRoomId = roomId
 
-        // RESET FILTERS on navigation to prevent stale state
-        _selectedRoomFilter.value = null
+        // RESET STATE
         _selectedPlayerFilter.value = null
         searchQuery.value = ""
+
+        // If entering specific room, force Specific filter.
+        // If Global, default to Active.
+        if (roomId != null) {
+            _historyFilter.value = HistoryFilter.Specific(roomId)
+        } else {
+            _historyFilter.value = HistoryFilter.Active
+        }
 
         Log.d("HistoryViewModel", "Loading history for Room ID: ${roomId ?: "Global"}")
         refreshAllHistory()
     }
 
-    fun onRoomFilterSelected(roomId: Int?) {
-        _selectedRoomFilter.value = roomId
-        _selectedPlayerFilter.value = null
+    fun setHistoryFilter(filter: HistoryFilter) {
+        _historyFilter.value = filter
+        _selectedPlayerFilter.value = null // Reset player chip when changing room mode
     }
 
     private fun fetchUserPreferences() {
@@ -186,10 +230,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
-                // 1. Fetch latest tracking config from API
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
 
-                // 2. Build Lookup Maps for "Live" Data
                 val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
                 val liveFinishedSlots = mutableSetOf<Pair<Int, Int>>()
                 val liveIcons = mutableMapOf<Int, String>()
@@ -197,21 +239,27 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 val roomNameMap = mutableMapOf<Int, String>()
                 val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
 
-                trackedRooms.filterNot { it.is_archived }.forEach { room ->
+                // Classification Sets
+                val activeIds = mutableSetOf<Int>()
+                val archivedIds = mutableSetOf<Int>()
+
+                trackedRooms.forEach { room ->
+                    // 1. Classify Room
+                    if (room.is_archived) {
+                        archivedIds.add(room.room_db_id)
+                    } else {
+                        activeIds.add(room.room_db_id)
+                    }
 
                     liveIcons[room.room_db_id] = room.icon_name
                     roomNameMap[room.room_db_id] = room.room_alias
 
                     room.tracked_slots.forEach { slot ->
-                        // Track valid slots
                         validSlotsSet.add(room.room_db_id to slot.slot_id)
 
-                        // Store Live Alias
                         if (!slot.player_alias.isNullOrBlank()) {
                             aliasMap[room.room_db_id to slot.slot_id] = slot.player_alias
                         }
-
-                        // Store Finished Status
                         if (slot.is_finished) {
                             liveFinishedSlots.add(room.room_db_id to slot.slot_id)
                             finishedPlayerNames.add(room.room_db_id to slot.player_name)
@@ -219,24 +267,25 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                // Update StateFlows (This now excludes archived rooms)
                 _roomNames.value = roomNameMap
                 validTrackedSlots = validSlotsSet
                 _liveAliases.value = aliasMap
                 _confirmedFinishedPlayers.value = finishedPlayerNames
 
-                // 3. Refresh & Fetch Item History
+                // Publish the Sets
+                _activeRoomIds.value = activeIds
+                _archivedRoomIds.value = archivedIds
+
                 repository.refreshItemHistory()
 
+                // We fetch EVERYTHING (validTrackedSlots now includes archived)
                 val rawItemEntities = if (currentRoomId != null) {
                     repository.getHistoryForRoom(currentRoomId!!)
                 } else {
                     repository.getGlobalHistory()
                 }
 
-                // 4. Map DB Entities to UI Models
                 _itemHistory.value = rawItemEntities.mapNotNull { entity ->
-                    // Filter out slots we stopped tracking (includes slots from archived rooms)
                     if (entity.roomId != null && entity.slot_id != null) {
                         if (!validTrackedSlots.contains(entity.roomId to entity.slot_id)) {
                             return@mapNotNull null
@@ -276,7 +325,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
 
-                // 5. Handle Hints
                 val includeFound = _showFoundHints.value
                 repository.refreshHintHistory(currentRoomId, includeFound)
 
@@ -286,7 +334,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     repository.getGlobalHints(includeFound)
                 }
 
-                // Filtering hints using validTrackedSlots automatically excludes archived rooms
                 _hintsForYou.value = rawForYou.filter { hint ->
                     validTrackedSlots.contains(hint.roomDbId to hint.itemOwnerId)
                 }
@@ -304,12 +351,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun onSearchQueryChanged(query: String) {
-        searchQuery.value = query
-    }
-    fun clearErrorMessage() {
-        errorMessage.value = null
-    }
+    fun onSearchQueryChanged(query: String) { searchQuery.value = query }
+    fun clearErrorMessage() { errorMessage.value = null }
+    fun clearActionMessage() { _actionMessage.value = null }
 
     fun onPlayerFilterSelected(player: String?) {
         if (_selectedPlayerFilter.value == player) {
@@ -337,14 +381,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    fun clearActionMessage() {
-        _actionMessage.value = null
-    }
 
-    private fun saveViewPreferences(
-        showFinished: Boolean? = null,
-        showFoundHints: Boolean? = null
-    ) {
+    private fun saveViewPreferences(showFinished: Boolean? = null, showFoundHints: Boolean? = null) {
         viewModelScope.launch {
             try {
                 val request = com.jones.aptracker.network.UpdateGlobalPrefsRequest(
