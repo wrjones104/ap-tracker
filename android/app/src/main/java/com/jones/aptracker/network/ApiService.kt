@@ -47,7 +47,7 @@ interface ApiService {
     suspend fun getUserProfile(): UserProfile
 
     @PUT("users/me/preferences")
-    suspend fun updateUserPreferences(@Body request: UpdateGlobalPrefsRequest): Response<Unit>
+    suspend fun updateUserPreferences(@Body request: Map<String, Boolean>): Response<Unit>
 
     @PUT("rooms/{id}/slots/{slot_id}/preferences")
     suspend fun updateSlotPreferences(
