@@ -79,13 +79,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     ) { history, selectedRoomId ->
         history
             .filter { item ->
-                // Optimized logic from previous step:
-                // If in "Room Mode" (currentRoomId != null), ignore the dropdown filter.
-                if (currentRoomId != null) {
-                    true
-                } else {
-                    selectedRoomId == null || item.db_id == selectedRoomId
-                }
+                currentRoomId != null || selectedRoomId == null || item.db_id == selectedRoomId
             }
             .groupBy { it.playerName }
             .map { (name, items) ->
