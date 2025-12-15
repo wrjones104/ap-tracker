@@ -21,6 +21,8 @@ import androidx.compose.material.icons.outlined.PriorityHigh
 import androidx.compose.material.icons.outlined.Elderly
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.Landscape
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.PestControlRodent
 import androidx.compose.ui.graphics.vector.ImageVector
 
 object AppIcons {
@@ -28,6 +30,7 @@ object AppIcons {
         "default_icon" to Icons.Outlined.Home,
         "star" to Icons.Outlined.Star,
         "videogame" to Icons.Outlined.VideogameAsset,
+        "rat" to Icons.Outlined.PestControlRodent,
         "token" to Icons.Outlined.Token,
         "heart" to Icons.Outlined.Favorite,
         "anchor" to Icons.Outlined.Anchor,
@@ -35,6 +38,7 @@ object AppIcons {
         "person" to Icons.Outlined.Person,
         "elder" to Icons.Outlined.Elderly,
         "thumb_up" to Icons.Outlined.ThumbUp,
+        "key" to Icons.Outlined.Key,
         "landscape" to Icons.Outlined.Landscape,
         "place" to Icons.Outlined.Place,
         "priority" to Icons.Outlined.PriorityHigh,
