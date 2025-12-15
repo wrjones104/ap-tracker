@@ -233,7 +233,8 @@ data class RoomWithTrackedSlots(
     val room_db_id: Int,
     val room_alias: String,
     val icon_name: String,
-    val tracked_slots: List<TrackedSlotDetail>
+    val tracked_slots: List<TrackedSlotDetail>,
+    val is_archived: Boolean = false
 )
 
 data class TrackedSlotDetail(
