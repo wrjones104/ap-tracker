@@ -25,10 +25,26 @@ fun SlotOverridesScreen(
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
     val userProfile by userViewModel.userProfile.collectAsState()
 
+    // 1. Create a filtered list of active rooms
+    val activeRooms = remember(trackedSlotsByRoom) {
+        trackedSlotsByRoom.filter { !it.is_archived }
+    }
+
+    val errorMessage by userViewModel.errorMessage.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
     var editingSlot by remember { mutableStateOf<Pair<Int, TrackedSlotDetail>?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            userViewModel.clearErrorMessage()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Per-Slot Overrides") },
@@ -40,7 +56,8 @@ fun SlotOverridesScreen(
             )
         }
     ) { padding ->
-        if (trackedSlotsByRoom.isEmpty()) {
+        // 2. Use 'activeRooms' instead of 'trackedSlotsByRoom' for the check
+        if (activeRooms.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -68,7 +85,8 @@ fun SlotOverridesScreen(
                     )
                 }
 
-                trackedSlotsByRoom.forEach { roomData ->
+                // 3. Iterate over the filtered 'activeRooms' list
+                activeRooms.forEach { roomData ->
                     item(key = "header_${roomData.room_db_id}") {
                         RoomHeader(alias = roomData.room_alias)
                     }
