@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -224,16 +225,20 @@ fun HistoryContent(
                     state = pagerState,
                     modifier = Modifier.weight(1f)
                 ) { page ->
+                    // Only show room filter if we are in "Global" view (roomId is null)
+                    val showRoomFilter = roomId == null
                     when (page) {
                         0 -> ItemHistoryTab(
                             historyViewModel = historyViewModel,
                             searchQuery = searchQuery,
-                            onItemClick = { selectedItem = it }
+                            onItemClick = { selectedItem = it },
+                            showRoomFilter = showRoomFilter
                         )
                         1 -> HintHistoryTab(
                             historyViewModel = historyViewModel,
                             searchQuery = searchQuery,
-                            onHintClick = { selectedHint = it }
+                            onHintClick = { selectedHint = it },
+                            showRoomFilter = showRoomFilter
                         )
                     }
                 }
@@ -567,7 +572,8 @@ fun CompactDetailItem(label: String, value: String) {
 fun ItemHistoryTab(
     historyViewModel: HistoryViewModel,
     searchQuery: String,
-    onItemClick: (HistoryItem) -> Unit
+    onItemClick: (HistoryItem) -> Unit,
+    showRoomFilter: Boolean
 ) {
     val fullHistory by historyViewModel.itemHistory.collectAsState()
     val availablePlayers by historyViewModel.availablePlayers.collectAsState()
@@ -592,7 +598,7 @@ fun ItemHistoryTab(
                     item.playerName.contains(searchQuery, ignoreCase = true) ||
                     item.itemName.contains(searchQuery, ignoreCase = true)
 
-            // NEW: Room Filter
+            // Room Filter
             val matchesRoom = selectedRoom == null || item.db_id == selectedRoom
 
             val matchesPlayer = selectedPlayer == null || item.playerName == selectedPlayer
@@ -616,7 +622,7 @@ fun ItemHistoryTab(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 1. Room Filter
-            if (availableRooms.isNotEmpty()) {
+            if (showRoomFilter && availableRooms.isNotEmpty()) {
                 RoomFilterChip(
                     currentRoomId = selectedRoom,
                     availableRooms = availableRooms,
@@ -774,7 +780,14 @@ fun RoomFilterChip(
         FilterChip(
             selected = currentRoomId != null,
             onClick = { expanded = true },
-            label = { Text(label) },
+            label = {
+                Text(
+                    text = label,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 100.dp)
+                )
+            },
             trailingIcon = {
                 val iconTint = if (currentRoomId != null) {
                     MaterialTheme.colorScheme.onTertiaryContainer
@@ -834,7 +847,8 @@ fun RoomFilterChip(
 fun HintHistoryTab(
     historyViewModel: HistoryViewModel,
     searchQuery: String,
-    onHintClick: (HintEntity) -> Unit
+    onHintClick: (HintEntity) -> Unit,
+    showRoomFilter: Boolean
 ) {
     val hintsForYou by historyViewModel.hintsForYou.collectAsState()
     val hintsByYou by historyViewModel.hintsByYou.collectAsState()
@@ -873,7 +887,7 @@ fun HintHistoryTab(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 1. Room Filter
-            if (availableRooms.isNotEmpty()) {
+            if (showRoomFilter && availableRooms.isNotEmpty()) {
                 RoomFilterChip(
                     currentRoomId = selectedRoom,
                     availableRooms = availableRooms,

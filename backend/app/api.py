@@ -1220,6 +1220,7 @@ def get_user_tracked_slots(current_user):
                 'room_db_id': sub.room_id,
                 'room_alias': sub.alias,
                 'icon_name': sub.icon_name,
+                'is_archived': sub.is_archived,
                 'tracked_slots': tracked_slots_list
             })
 

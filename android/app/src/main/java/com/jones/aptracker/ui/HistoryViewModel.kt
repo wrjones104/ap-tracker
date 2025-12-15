@@ -73,15 +73,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // 3. Update 'availablePlayers' to respect the selected Room
-    //    If a room is selected, we only show chips for players in that room.
     val availablePlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
         _itemHistory,
         _selectedRoomFilter
     ) { history, selectedRoomId ->
         history
             .filter { item ->
-                // Only include players that exist in the selected room (if any)
-                selectedRoomId == null || item.db_id == selectedRoomId
+                currentRoomId != null || selectedRoomId == null || item.db_id == selectedRoomId
             }
             .groupBy { it.playerName }
             .map { (name, items) ->
@@ -97,9 +95,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         _selectedRoomFilter
     ) { forYou, byYou, selectedRoomId ->
 
-        // Filter lists by room first
-        val relevantForYou = if (selectedRoomId == null) forYou else forYou.filter { it.roomDbId == selectedRoomId }
-        val relevantByYou = if (selectedRoomId == null) byYou else byYou.filter { it.roomDbId == selectedRoomId }
+        // Determine effective filter ID
+        val effectiveRoomFilter = if (currentRoomId != null) null else selectedRoomId
+
+        val relevantForYou = if (effectiveRoomFilter == null) forYou else forYou.filter { it.roomDbId == effectiveRoomFilter }
+        val relevantByYou = if (effectiveRoomFilter == null) byYou else byYou.filter { it.roomDbId == effectiveRoomFilter }
 
         val allMentions = (relevantForYou.map { PlayerDisplayInfo(it.itemOwnerName, it.itemOwnerAlias) } +
                 relevantByYou.map { PlayerDisplayInfo(it.locationOwnerName, it.locationOwnerAlias) })
@@ -132,13 +132,18 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     fun loadHistoryFor(roomId: Int?) {
         currentRoomId = roomId
+
+        // RESET FILTERS on navigation to prevent stale state
+        _selectedRoomFilter.value = null
+        _selectedPlayerFilter.value = null
+        searchQuery.value = ""
+
         Log.d("HistoryViewModel", "Loading history for Room ID: ${roomId ?: "Global"}")
         refreshAllHistory()
     }
 
     fun onRoomFilterSelected(roomId: Int?) {
         _selectedRoomFilter.value = roomId
-        // Reset player filter when switching rooms to avoid getting stuck on a player not in that room
         _selectedPlayerFilter.value = null
     }
 
@@ -170,7 +175,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // --- Local Toggle Setter (Does not sync to server) ---
     fun setUseCondensed(use: Boolean) {
         _useCondensed.value = use
     }
@@ -182,22 +186,19 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
-                // 1. Fetch latest tracking config from API (includes 'is_finished' status)
+                // 1. Fetch latest tracking config from API
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
 
                 // 2. Build Lookup Maps for "Live" Data
                 val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
                 val liveFinishedSlots = mutableSetOf<Pair<Int, Int>>()
                 val liveIcons = mutableMapOf<Int, String>()
-
-                // This set is for the filtering logic (Pair<RoomDBID, PlayerName>)
                 val finishedPlayerNames = mutableSetOf<Pair<Int, String>>()
-
-                // Helper to build Room ID -> Room Alias map
                 val roomNameMap = mutableMapOf<Int, String>()
                 val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
 
-                trackedRooms.forEach { room ->
+                trackedRooms.filterNot { it.is_archived }.forEach { room ->
+
                     liveIcons[room.room_db_id] = room.icon_name
                     roomNameMap[room.room_db_id] = room.room_alias
 
@@ -218,7 +219,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                // Update StateFlows
+                // Update StateFlows (This now excludes archived rooms)
                 _roomNames.value = roomNameMap
                 validTrackedSlots = validSlotsSet
                 _liveAliases.value = aliasMap
@@ -233,17 +234,15 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     repository.getGlobalHistory()
                 }
 
-                // 4. Map DB Entities to UI Models (Applying Overrides)
+                // 4. Map DB Entities to UI Models
                 _itemHistory.value = rawItemEntities.mapNotNull { entity ->
-                    // Filter out slots we stopped tracking
+                    // Filter out slots we stopped tracking (includes slots from archived rooms)
                     if (entity.roomId != null && entity.slot_id != null) {
                         if (!validTrackedSlots.contains(entity.roomId to entity.slot_id)) {
                             return@mapNotNull null
                         }
                     }
 
-                    // A. Resolve Live Alias
-                    // If we have a live alias for this slot, use it. Otherwise fallback to history.
                     val liveAlias = if (entity.roomId != null && entity.slot_id != null) {
                         _liveAliases.value[entity.roomId to entity.slot_id]
                     } else null
@@ -252,8 +251,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         liveIcons[entity.roomId]
                     } else null
 
-                    // B. Resolve Live Finished Status
-                    // (True if DB says so OR if API says so)
                     val isActuallyFinished = entity.isPlayerFinished ||
                             (entity.roomId != null && entity.slot_id != null &&
                                     liveFinishedSlots.contains(entity.roomId to entity.slot_id))
@@ -289,6 +286,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     repository.getGlobalHints(includeFound)
                 }
 
+                // Filtering hints using validTrackedSlots automatically excludes archived rooms
                 _hintsForYou.value = rawForYou.filter { hint ->
                     validTrackedSlots.contains(hint.roomDbId to hint.itemOwnerId)
                 }
