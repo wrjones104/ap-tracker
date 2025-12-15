@@ -191,6 +191,7 @@ fun SlotSettingsSheet(
     onSave: (Boolean?, Boolean?, Boolean?, Boolean?, Boolean?, Boolean?) -> Unit,
     onDismiss: () -> Unit
 ) {
+    // Local state for the overrides (null means "Use Default")
     var progression by remember(playerSlotId) { mutableStateOf(currentProgression) }
     var useful by remember(playerSlotId) { mutableStateOf(currentUseful) }
     var hints by remember(playerSlotId) { mutableStateOf(currentHints) }
@@ -205,58 +206,56 @@ fun SlotSettingsSheet(
             .navigationBarsPadding()
     ) {
         Text(
-            text = "Notify Settings for $playerName (Slot $playerSlotId)",
+            text = "Notify Settings for $playerName",
             style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(bottom = 16.dp)
+            modifier = Modifier.padding(bottom = 24.dp)
         )
 
-        Text("Progression Items", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = progression,
-            globalDefault = globalProfile.notify_progression_default,
-            onValueChanged = { progression = it }
-        )
-        Spacer(Modifier.height(16.dp))
-
-        Text("Useful Items", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = useful,
-            globalDefault = globalProfile.notify_useful_default,
-            onValueChanged = { useful = it }
+        OverrideRow(
+            title = "Progression Items",
+            currentValue = progression,
+            defaultValue = globalProfile.notify_progression_default,
+            onValueChange = { progression = it }
         )
         Spacer(Modifier.height(16.dp))
 
-        Text("Hints in this World", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = hints,
-            globalDefault = globalProfile.notify_hints_default,
-            onValueChanged = { hints = it }
+        OverrideRow(
+            title = "Useful Items",
+            currentValue = useful,
+            defaultValue = globalProfile.notify_useful_default,
+            onValueChange = { useful = it }
         )
         Spacer(Modifier.height(16.dp))
 
-        Text("Hints for this Player's Items", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = remoteHints,
-            globalDefault = globalProfile.notify_hints_remote_items_default,
-            onValueChanged = { remoteHints = it }
+        OverrideRow(
+            title = "Hints in this World",
+            currentValue = hints,
+            defaultValue = globalProfile.notify_hints_default,
+            onValueChange = { hints = it }
         )
-
         Spacer(Modifier.height(16.dp))
 
-        Text("Finished", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = finished,
-            globalDefault = globalProfile.notify_finished_default,
-            onValueChanged = { finished = it }
+        OverrideRow(
+            title = "Hints for this Player's Items",
+            currentValue = remoteHints,
+            defaultValue = globalProfile.notify_hints_remote_items_default,
+            onValueChange = { remoteHints = it }
         )
-
         Spacer(Modifier.height(16.dp))
 
-        Text("Condensed Messages", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle(
-            selectedValue = condensed,
-            globalDefault = globalProfile.use_condensed_messages_default,
-            onValueChanged = { condensed = it }
+        OverrideRow(
+            title = "Finished",
+            currentValue = finished,
+            defaultValue = globalProfile.notify_finished_default,
+            onValueChange = { finished = it }
+        )
+        Spacer(Modifier.height(16.dp))
+
+        OverrideRow(
+            title = "Condensed Messages",
+            currentValue = condensed,
+            defaultValue = globalProfile.use_condensed_messages_default,
+            onValueChange = { condensed = it }
         )
 
         Spacer(Modifier.height(24.dp))
@@ -265,52 +264,76 @@ fun SlotSettingsSheet(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
+            TextButton(onClick = onDismiss) { Text("Cancel") }
             Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = {
-                    onSave(progression, useful, hints, remoteHints, finished, condensed)
-                }
-            ) {
-                Text("Save")
-            }
+            Button(onClick = {
+                onSave(progression, useful, hints, remoteHints, finished, condensed)
+            }) { Text("Save") }
         }
     }
 }
 
+/**
+ * A clean row that handles the Title, the Toggle, and the "Reset" logic.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PreferenceToggle(
-    selectedValue: Boolean?,
-    globalDefault: Boolean,
-    onValueChanged: (Boolean?) -> Unit
+fun OverrideRow(
+    title: String,
+    currentValue: Boolean?,
+    defaultValue: Boolean,
+    onValueChange: (Boolean?) -> Unit
 ) {
-    val items = listOf("Off", "Default", "On")
-    val selectedIndex = when (selectedValue) {
-        null -> 1
-        false -> 0
-        true -> 2
-    }
-    val globalDefaultText = if (globalDefault) "(On)" else "(Off)"
+    // Effective value is what the toggle should show (Actual OR Default)
+    val effectiveValue = currentValue ?: defaultValue
+    val isOverridden = currentValue != null
 
-    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        items.forEachIndexed { index, label ->
-            SegmentedButton(
-                selected = index == selectedIndex,
-                onClick = {
-                    val newValue = when (index) {
-                        0 -> false
-                        1 -> null
-                        2 -> true
-                        else -> null
-                    }
-                    onValueChanged(newValue)
-                },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = items.size)
-            ) {
-                Text(if (label == "Default") "Default $globalDefaultText" else label)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = title, style = MaterialTheme.typography.titleMedium)
+                if (!isOverridden) {
+                    Text(
+                        text = "Using default (${if (defaultValue) "On" else "Off"})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Only show the Reset button if the user has actually changed this setting
+            if (isOverridden) {
+                TextButton(
+                    onClick = { onValueChange(null) }, // Reset to null (Default)
+                    modifier = Modifier.padding(end = 8.dp)
+                ) {
+                    Text("Reset")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Simple 2-state toggle
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            val options = listOf("Off", "On")
+            val selectedIndex = if (effectiveValue) 1 else 0
+
+            options.forEachIndexed { index, label ->
+                SegmentedButton(
+                    selected = index == selectedIndex,
+                    onClick = {
+                        val newValue = (index == 1) // 0 -> false, 1 -> true
+                        onValueChange(newValue)
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size)
+                ) {
+                    Text(label)
+                }
             }
         }
     }

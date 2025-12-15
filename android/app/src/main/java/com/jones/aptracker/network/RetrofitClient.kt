@@ -1,6 +1,7 @@
 package com.jones.aptracker.network
 
 import android.content.Context
+import com.google.gson.GsonBuilder
 import com.jones.aptracker.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -28,10 +29,16 @@ object RetrofitClient {
             .connectTimeout(15, TimeUnit.SECONDS)
             .build()
 
+        // Create a custom Gson instance that processes nulls
+        val gson = GsonBuilder()
+            .setLenient()       // Handles malformed JSON gracefully
+            .serializeNulls()   // CRITICAL: Sends {"key": null} instead of ignoring it
+            .create()
+
         val retrofit = Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
             .client(httpClient)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
 
         apiService = retrofit.create(ApiService::class.java)
