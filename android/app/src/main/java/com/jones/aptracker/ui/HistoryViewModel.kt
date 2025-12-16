@@ -220,7 +220,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setUseCondensed(use: Boolean) {
-        _useCondensed.value = use
+        if (_useCondensed.value != use) {
+            _useCondensed.value = use
+            // Triggers the API save using the inverted logic or direct boolean as needed
+            saveViewPreferences(useCondensed = use)
+        }
     }
 
     fun refreshAllHistory() {
@@ -382,7 +386,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun saveViewPreferences(showFinished: Boolean? = null, showFoundHints: Boolean? = null) {
+    private fun saveViewPreferences(
+        showFinished: Boolean? = null,
+        showFoundHints: Boolean? = null,
+        useCondensed: Boolean? = null
+    ) {
         viewModelScope.launch {
             try {
                 // 1. Create a map for the parameters
@@ -391,6 +399,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 // 2. Only add the keys that are actually changing
                 showFinished?.let { params["ui_show_finished"] = it }
                 showFoundHints?.let { params["ui_show_found_hints"] = it }
+
+                // Handle the condensed preference
+                // We use "use_condensed_messages" based on the profile field "use_condensed_messages_default"
+                useCondensed?.let { params["use_condensed_messages"] = it }
 
                 // 3. Send the map to the API
                 if (params.isNotEmpty()) {
