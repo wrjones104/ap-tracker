@@ -4,6 +4,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
@@ -33,7 +35,8 @@ fun SlotOverridesScreen(
     val errorMessage by userViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    var editingSlot by remember { mutableStateOf<Pair<Int, TrackedSlotDetail>?>(null) }
+    // Store IDs instead of the object so we can look up the "Live" version
+    var editingSlotIds by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(errorMessage) {
@@ -56,7 +59,6 @@ fun SlotOverridesScreen(
             )
         }
     ) { padding ->
-        // 2. Use 'activeRooms' instead of 'trackedSlotsByRoom' for the check
         if (activeRooms.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -85,7 +87,6 @@ fun SlotOverridesScreen(
                     )
                 }
 
-                // 3. Iterate over the filtered 'activeRooms' list
                 activeRooms.forEach { roomData ->
                     item(key = "header_${roomData.room_db_id}") {
                         RoomHeader(alias = roomData.room_alias)
@@ -98,7 +99,7 @@ fun SlotOverridesScreen(
                         SlotPreferenceItem(
                             slot = slot,
                             onClick = {
-                                editingSlot = Pair(roomData.room_db_id, slot)
+                                editingSlotIds = Pair(roomData.room_db_id, slot.slot_id)
                             }
                         )
                     }
@@ -111,20 +112,31 @@ fun SlotOverridesScreen(
         }
     }
 
-    if (editingSlot != null && userProfile != null) {
-        val (roomId, slotDetail) = editingSlot!!
+    // Lookup the live object based on IDs
+    val editingSlotDetail = remember(editingSlotIds, activeRooms) {
+        editingSlotIds?.let { (rId, sId) ->
+            activeRooms.find { it.room_db_id == rId }
+                ?.tracked_slots
+                ?.find { it.slot_id == sId }
+                ?.let { slot -> Pair(rId, slot) }
+        }
+    }
+
+    if (editingSlotDetail != null && userProfile != null) {
+        val (roomId, slotDetail) = editingSlotDetail
         val sheetHeaderName = if (!slotDetail.player_alias.isNullOrBlank()) {
             "${slotDetail.player_alias} (${slotDetail.player_name})"
         } else {
             slotDetail.player_name
         }
+
         ModalBottomSheet(
-            onDismissRequest = { editingSlot = null },
+            onDismissRequest = { editingSlotIds = null },
             sheetState = sheetState
         ) {
             SlotSettingsSheet(
-                playerSlotId = slotDetail.slot_id,
                 playerName = sheetHeaderName,
+                // Pass the live values directly
                 currentProgression = slotDetail.notify_progression,
                 currentUseful = slotDetail.notify_useful,
                 currentHints = slotDetail.notify_hints,
@@ -132,16 +144,14 @@ fun SlotOverridesScreen(
                 currentFinished = slotDetail.notify_finished,
                 currentCondensed = slotDetail.use_condensed_messages,
                 globalProfile = userProfile!!,
-                onSave = { prog, use, hint, remote, finished, condensed ->
+                onUpdate = { prog, use, hint, remote, finished, condensed ->
                     userViewModel.updateSlotPreferences(
                         roomId,
                         slotDetail.slot_id,
                         prog, use, hint, remote, finished,
                         condensed
                     )
-                    editingSlot = null
-                },
-                onDismiss = { editingSlot = null }
+                }
             )
         }
     }
@@ -197,7 +207,6 @@ fun SlotPreferenceItem(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SlotSettingsSheet(
-    playerSlotId: Int,
     playerName: String,
     currentProgression: Boolean?,
     currentUseful: Boolean?,
@@ -206,20 +215,27 @@ fun SlotSettingsSheet(
     currentFinished: Boolean?,
     currentCondensed: Boolean?,
     globalProfile: UserProfile,
-    onSave: (Boolean?, Boolean?, Boolean?, Boolean?, Boolean?, Boolean?) -> Unit,
-    onDismiss: () -> Unit
+    onUpdate: (Boolean?, Boolean?, Boolean?, Boolean?, Boolean?, Boolean?) -> Unit
 ) {
-    // Local state for the overrides (null means "Use Default")
-    var progression by remember(playerSlotId) { mutableStateOf(currentProgression) }
-    var useful by remember(playerSlotId) { mutableStateOf(currentUseful) }
-    var hints by remember(playerSlotId) { mutableStateOf(currentHints) }
-    var remoteHints by remember(playerSlotId) { mutableStateOf(currentRemoteHints) }
-    var finished by remember(playerSlotId) { mutableStateOf(currentFinished) }
-    var condensed by remember(playerSlotId) { mutableStateOf(currentCondensed) }
+    // We maintain local state for immediate UI feedback,
+    // but we initialize it from props.
+    var progression by remember(currentProgression) { mutableStateOf(currentProgression) }
+    var useful by remember(currentUseful) { mutableStateOf(currentUseful) }
+    var hints by remember(currentHints) { mutableStateOf(currentHints) }
+    var remoteHints by remember(currentRemoteHints) { mutableStateOf(currentRemoteHints) }
+    var finished by remember(currentFinished) { mutableStateOf(currentFinished) }
+    var condensed by remember(currentCondensed) { mutableStateOf(currentCondensed) }
+
+    // Helper to fire the update callback with current local state + the new change
+    fun triggerUpdate() {
+        onUpdate(progression, useful, hints, remoteHints, finished, condensed)
+    }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // Add scroll state to ensure bottom items are accessible on small screens
+            .verticalScroll(rememberScrollState())
             .padding(16.dp)
             .navigationBarsPadding()
     ) {
@@ -233,7 +249,10 @@ fun SlotSettingsSheet(
             title = "Progression Items",
             currentValue = progression,
             defaultValue = globalProfile.notify_progression_default,
-            onValueChange = { progression = it }
+            onValueChange = {
+                progression = it
+                triggerUpdate()
+            }
         )
         Spacer(Modifier.height(16.dp))
 
@@ -241,7 +260,10 @@ fun SlotSettingsSheet(
             title = "Useful Items",
             currentValue = useful,
             defaultValue = globalProfile.notify_useful_default,
-            onValueChange = { useful = it }
+            onValueChange = {
+                useful = it
+                triggerUpdate()
+            }
         )
         Spacer(Modifier.height(16.dp))
 
@@ -249,7 +271,10 @@ fun SlotSettingsSheet(
             title = "Hints in this World",
             currentValue = hints,
             defaultValue = globalProfile.notify_hints_default,
-            onValueChange = { hints = it }
+            onValueChange = {
+                hints = it
+                triggerUpdate()
+            }
         )
         Spacer(Modifier.height(16.dp))
 
@@ -257,7 +282,10 @@ fun SlotSettingsSheet(
             title = "Hints for this Player's Items",
             currentValue = remoteHints,
             defaultValue = globalProfile.notify_hints_remote_items_default,
-            onValueChange = { remoteHints = it }
+            onValueChange = {
+                remoteHints = it
+                triggerUpdate()
+            }
         )
         Spacer(Modifier.height(16.dp))
 
@@ -265,7 +293,10 @@ fun SlotSettingsSheet(
             title = "Finished",
             currentValue = finished,
             defaultValue = globalProfile.notify_finished_default,
-            onValueChange = { finished = it }
+            onValueChange = {
+                finished = it
+                triggerUpdate()
+            }
         )
         Spacer(Modifier.height(16.dp))
 
@@ -273,21 +304,14 @@ fun SlotSettingsSheet(
             title = "Condensed Messages",
             currentValue = condensed,
             defaultValue = globalProfile.use_condensed_messages_default,
-            onValueChange = { condensed = it }
+            onValueChange = {
+                condensed = it
+                triggerUpdate()
+            }
         )
 
-        Spacer(Modifier.height(24.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = {
-                onSave(progression, useful, hints, remoteHints, finished, condensed)
-            }) { Text("Save") }
-        }
+        // Extra spacer at bottom for scrolling clearance
+        Spacer(Modifier.height(48.dp))
     }
 }
 
