@@ -116,6 +116,8 @@ def token_required(f):
             if not current_user:
                 logging.warning(f"Auth success, but user {data['user_id']} not found in DB.")
                 return jsonify({'error': 'User not found'}), 401
+            current_user.last_activity = datetime.utcnow()
+            session.commit()
         except jwt.ExpiredSignatureError:
             logging.info(f"Auth failure: Token has expired.")
             return jsonify({'error': 'Token has expired'}), 401

@@ -1,7 +1,7 @@
 import uuid
 
 from sqlalchemy import (
-    create_engine, Column, Integer, String, ForeignKey, DateTime, 
+    create_engine, func, Column, Integer, String, ForeignKey, DateTime, 
     UniqueConstraint, Boolean, ForeignKeyConstraint, BigInteger,
     Index
 )
@@ -17,6 +17,7 @@ class User(Base):
     discord_username = Column(String, nullable=True)
     discord_avatar_hash = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    last_activity = Column(DateTime, default=datetime.utcnow, server_default=func.now())
     cheese_api_key = Column(String, nullable=True)
     cheese_user_id = Column(Integer, nullable=True)
     cheese_last_sync = Column(DateTime, nullable=True)

@@ -1572,6 +1572,7 @@ def db_get_active_rooms():
 def db_run_cleanup():
     session = Session()
     try:
+        # 1. Clean up Orphaned Rooms (Existing Logic)
         thirty_days_ago = datetime.utcnow() - timedelta(days=30)
         rooms_to_delete = session.query(TrackedRoom).filter(
             TrackedRoom.subscriptions.any() == False,
@@ -1582,6 +1583,19 @@ def db_run_cleanup():
         ).all()
         for room in rooms_to_delete:
             session.delete(room)
+        
+        # 2. Clean up Stale Guest Accounts (e.g., > 30 days inactive)
+        # We ONLY delete 'is_guest' users. We never touch Discord users.
+        stale_guests = session.query(User).filter(
+            User.is_guest == True,
+            User.last_activity < thirty_days_ago
+        ).all()
+
+        if stale_guests:
+            logging.info(f"[JANITOR] Pruning {len(stale_guests)} stale guest accounts.")
+            for guest in stale_guests:
+                session.delete(guest) # Cascade deletes their subscriptions/devices too
+
         session.commit()
     except Exception as e:
         logging.error(f"[JANITOR_DB_ERROR] Failed to run cleanup: {e}", exc_info=True)
