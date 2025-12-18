@@ -149,6 +149,34 @@
         </div>
     </section>
 
+    <section class="py-10 bg-slate-950 border-y border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-8 text-center" id="stats-container">
+                
+                <div class="space-y-2">
+                    <p class="text-slate-500 font-mono text-sm uppercase tracking-widest">Users</p>
+                    <p class="text-3xl md:text-4xl font-bold text-white" id="stat-users">...</p>
+                </div>
+
+                <div class="space-y-2">
+                    <p class="text-slate-500 font-mono text-sm uppercase tracking-widest">Active Games</p>
+                    <p class="text-3xl md:text-4xl font-bold text-teal-400" id="stat-games">...</p>
+                </div>
+
+                <div class="space-y-2">
+                    <p class="text-slate-500 font-mono text-sm uppercase tracking-widest">Slots Tracked</p>
+                    <p class="text-3xl md:text-4xl font-bold text-white" id="stat-slots">...</p>
+                </div>
+
+                <div class="space-y-2">
+                    <p class="text-slate-500 font-mono text-sm uppercase tracking-widest">Notifications</p>
+                    <p class="text-3xl md:text-4xl font-bold text-emerald-400" id="stat-notifs">...</p>
+                </div>
+
+            </div>
+        </div>
+    </section>
+
     <!-- Features Section -->
     <section id="features" class="py-20 bg-slate-900 relative">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -319,6 +347,29 @@
 
         btn.addEventListener('click', () => {
             menu.classList.toggle('hidden');
+        });
+
+        // Fetch Live Stats
+        document.addEventListener('DOMContentLoaded', () => {
+            fetch('/api/public/stats')
+                .then(response => {
+                    if (!response.ok) throw new Error("Stats failed");
+                    return response.json();
+                })
+                .then(data => {
+                    // Helper to format numbers (e.g. 1,200)
+                    const fmt = (num) => new Intl.NumberFormat().format(num);
+
+                    document.getElementById('stat-users').innerText = fmt(data.total_users);
+                    document.getElementById('stat-games').innerText = fmt(data.active_games_24h);
+                    document.getElementById('stat-slots').innerText = fmt(data.total_slots);
+                    document.getElementById('stat-notifs').innerText = fmt(data.total_notifications);
+                })
+                .catch(err => {
+                    console.log('Stats currently unavailable', err);
+                    // Optional: Hide the stats container if fetch fails
+                    // document.getElementById('stats-container').style.display = 'none';
+                });
         });
     </script>
 </body>

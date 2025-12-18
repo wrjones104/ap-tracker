@@ -146,6 +146,9 @@ def create_app():
     from . import auth
     app.register_blueprint(auth.bp)
 
+    from . import api_public
+    app.register_blueprint(api_public.bp)
+
     from . import main
     app.register_blueprint(main.bp)
 
