@@ -350,27 +350,25 @@
         });
 
         // Fetch Live Stats
-        document.addEventListener('DOMContentLoaded', () => {
-            fetch('/api/public/stats')
-                .then(response => {
-                    if (!response.ok) throw new Error("Stats failed");
-                    return response.json();
-                })
-                .then(data => {
-                    // Helper to format numbers (e.g. 1,200)
-                    const fmt = (num) => new Intl.NumberFormat().format(num);
+        fetch('/api/public/stats')
+            .then(response => {
+                if (!response.ok) throw new Error("Stats failed");
+                return response.json();
+            })
+            .then(data => {
+                // Helper to format numbers (e.g. 1,200)
+                const fmt = (num) => new Intl.NumberFormat().format(num);
 
-                    document.getElementById('stat-users').innerText = fmt(data.total_users);
-                    document.getElementById('stat-games').innerText = fmt(data.active_games_24h);
-                    document.getElementById('stat-slots').innerText = fmt(data.total_slots);
-                    document.getElementById('stat-notifs').innerText = fmt(data.total_notifications);
-                })
-                .catch(err => {
-                    console.log('Stats currently unavailable', err);
-                    // Optional: Hide the stats container if fetch fails
-                    // document.getElementById('stats-container').style.display = 'none';
-                });
-        });
+                document.getElementById('stat-users').innerText = fmt(data.total_users);
+                document.getElementById('stat-games').innerText = fmt(data.active_games_24h);
+                document.getElementById('stat-slots').innerText = fmt(data.total_slots);
+                document.getElementById('stat-notifs').innerText = fmt(data.total_notifications);
+            })
+            .catch(err => {
+                console.log('Stats currently unavailable', err);
+                // Optional: Hide the stats container if fetch fails
+                // document.getElementById('stats-container').style.display = 'none';
+            });
     </script>
 </body>
 </html>
