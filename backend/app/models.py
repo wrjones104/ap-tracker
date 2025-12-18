@@ -39,7 +39,7 @@ class User(Base):
 class Device(Base):
     __tablename__ = 'devices'
     id = Column(Integer, primary_key=True)
-    fcm_token = Column(String, nullable=False, index=True)
+    fcm_token = Column(String, nullable=False, unique=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     android_id = Column(String, nullable=True, index=True)
     user = relationship("User", back_populates="devices")

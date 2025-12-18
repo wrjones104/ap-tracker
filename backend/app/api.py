@@ -238,29 +238,49 @@ def get_public_config():
 def register_device(current_user):
     """
     Registers a new device (FCM token) for the current user.
-    It now uses 'android_id' to uniquely identify a device and
-    update its FCM token, preventing duplicate device entries.
+    Ensures that the FCM token is unique to the current active user by 
+    removing it from any other users (e.g., previous guest accounts).
     """
     data = request.json or {}
     fcm_token = data.get('fcm_token')
-    android_id = data.get('android_id') # New ID from the app
+    android_id = data.get('android_id') 
 
     if not fcm_token:
         return jsonify({'error': 'Missing fcm_token'}), 400
 
     session = Session()
+
+    # --- Prune Duplicate Tokens ---
+    # If this FCM token exists for ANY user other than the current one, delete it.
+    # This handles app reinstalls (new Guest ID) or account switching.
+    stale_devices = session.query(Device).filter(
+        Device.fcm_token == fcm_token,
+        Device.user_id != current_user.id
+    ).all()
+
+    if stale_devices:
+        for stale in stale_devices:
+            logging.info(f"[API] Unlinking FCM token from old User {stale.user_id} to assign to Current User {current_user.id}")
+            session.delete(stale)
+    # --------------------------------------------------
+
     device = None
 
     if android_id:
+        # Modern App Logic (Version 9+)
+        # We look for a device record belonging to THIS user with THIS android_id
         device = session.query(Device).filter_by(
             user_id=current_user.id,
             android_id=android_id
         ).first()
 
         if device:
-            device.fcm_token = fcm_token
-            logging.info(f"[API] Refreshed FCM token for existing device (Android ID: {android_id}) for user {current_user.id}")
+            # Update existing record for this user
+            if device.fcm_token != fcm_token:
+                device.fcm_token = fcm_token
+                logging.info(f"[API] Refreshed FCM token for existing device (Android ID: {android_id}) for user {current_user.id}")
         else:
+            # Create new record
             device = Device(
                 fcm_token=fcm_token, 
                 user_id=current_user.id, 
@@ -270,15 +290,11 @@ def register_device(current_user):
             logging.info(f"[API] Registered new device (Android ID: {android_id}) for user {current_user.id}")
     
     else:
-        device = session.query(Device).filter_by(fcm_token=fcm_token).first()
+        # Legacy Logic (< Version 9)
+        # We look for a device by token belonging to THIS user (since we pruned others above)
+        device = session.query(Device).filter_by(fcm_token=fcm_token, user_id=current_user.id).first()
         
-        if device:
-            if device.user_id != current_user.id:
-                device.user_id = current_user.id
-                logging.info(f"[API] Re-assigned existing device token (legacy) to user {current_user.id}")
-            else:
-                logging.info(f"[API] Refreshed device token (legacy) for user {current_user.id}")
-        else:
+        if not device:
             device = Device(fcm_token=fcm_token, user_id=current_user.id)
             session.add(device)
             logging.info(f"[API] Registered new device (legacy) for user {current_user.id}")
