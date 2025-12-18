@@ -116,14 +116,23 @@ def token_required(f):
             if not current_user:
                 logging.warning(f"Auth success, but user {data['user_id']} not found in DB.")
                 return jsonify({'error': 'User not found'}), 401
+            
             current_user.last_activity = datetime.utcnow()
-            session.commit()
+            session.commit() 
+            
+            # 1. Refresh: Reloads the attributes (like 'id') from DB so they aren't "expired"
+            session.refresh(current_user)
+            # 2. Expunge: Detaches the object from this session so it can be used 
+            #    safely in the next function (which has its own session).
+            session.expunge(current_user)
+
         except jwt.ExpiredSignatureError:
             logging.info(f"Auth failure: Token has expired.")
             return jsonify({'error': 'Token has expired'}), 401
         except jwt.InvalidTokenError:
             logging.warning(f"Auth failure: Invalid token received.")
             return jsonify({'error': 'Invalid token'}), 401
+        
         except Exception as e:
             if session:
                 session.rollback()
