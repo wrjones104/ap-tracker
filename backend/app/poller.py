@@ -435,7 +435,7 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                     existing_hint_obj.is_found = True                     
                     existing_hint_obj.timestamp = datetime.now(timezone.utc)                    
                     just_found_hint_item_loc_pairs.add((loc_id, item_id))                    
-                    logging.info(f"[POLLER_HINT_UPDATE] Marked hint {item_id} as found. Bumped timestamp.")
+                    logging.debug(f"[POLLER_HINT_UPDATE] Marked hint {item_id} as found. Bumped timestamp.")
     
     if hints_processed_count > 0:
          logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Hints: Proc={hints_processed_count}, SkipClass={hints_skipped_classification}, Added={hints_added_count}")
