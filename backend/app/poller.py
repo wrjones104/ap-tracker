@@ -227,7 +227,7 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
                 if not slot_prefs: continue 
 
                 if (user_id, slot_id) in backfill_check_set:
-                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {slot_id} is backfilling. Suppressing 'Finished' notification.")
+                    logging.debug(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {slot_id} is backfilling. Suppressing 'Finished' notification.")
                     continue 
                 
                 notify_override = slot_prefs.notify_finished
@@ -529,7 +529,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
                 # Check Backfill Suppression
                 if (user_id, rid) in backfill_check_set:
-                    logging.info(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
+                    logging.debug(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
                     continue
 
                 # --- IGNORE LIST CHECK START ---
