@@ -56,6 +56,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -1023,11 +1024,34 @@ fun HintCard(
     useCondensed: Boolean,
     onClick: () -> Unit
 ) {
+    // 1. Define the colors.
+    // Found: Use SecondaryContainer for the dynamic "pop" (works in Light/Dark).
+    // Unfound: Use DEFAULT colors. This restores the default tonal elevation
+    //          that matches your "Item" cards, ensuring they stand out from the background.
+    val cardColors = if (hint.isFound) {
+        CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    } else {
+        CardDefaults.cardColors() // Falls back to default 'Surface Container' tone
+    }
+
+    // 2. Define the icon tint.
+    // If we are on the colored background (Found), use the "OnSecondaryContainer" color.
+    // If we are on the default background (Unfound), use the standard primary color to stand out.
+    val iconTint = if (hint.isFound) {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = cardColors // Apply our conditional colors
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -1036,14 +1060,14 @@ fun HintCard(
             Icon(
                 imageVector = if (hint.isFound) Icons.Default.CheckCircle else Icons.Default.Info,
                 contentDescription = if (hint.isFound) "Found" else "Hint",
-                tint = if (hint.isFound) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = iconTint,
                 modifier = Modifier.size(24.dp)
             )
 
             Spacer(modifier = Modifier.width(16.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-
+                // ... (Item Color Logic)
                 val itemColor = when {
                     (hint.itemFlags and 1) != 0 -> APTheme.colors.progression
                     (hint.itemFlags and 2) != 0 -> APTheme.colors.useful
@@ -1084,7 +1108,7 @@ fun HintCard(
                         append(" • ")
 
                         if (hint.isFound) {
-                            withStyle(style = SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)) {
+                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
                                 append("Found")
                             }
                             append(" • ")
@@ -1092,7 +1116,9 @@ fun HintCard(
                         append(formatTimestamp(hint.timestamp, formatter))
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    // Use standard "onSurfaceVariant" for text color, but make it slightly transparent
+                    // so it blends nicely on both the colored and default backgrounds.
+                    color = LocalContentColor.current.copy(alpha = 0.7f)
                 )
             }
         }

@@ -106,48 +106,17 @@ class HistoryRepository(
     }
 
     suspend fun refreshHintHistory(roomId: Int? = null, includeFound: Boolean) {
+        Log.d("HINT_SYNC", "Forcing full hint refresh (since=null)")
 
-        var performFullRefresh = false
-
-        if (includeFound) {
-            val foundCount = if (roomId != null) {
-                hintDao.countFoundHints(roomId)
-            } else {
-                hintDao.countGlobalFoundHints()
-            }
-
-            if (foundCount == 0) {
-                performFullRefresh = true
-                Log.d("HINT_SYNC", "Cold Start detected: 'Show Found' enabled but 0 found hints in DB. Forcing full refresh.")
-            }
-        }
-
-        val latestTimestamp = if (performFullRefresh) {
-            null
-        } else {
-            if (roomId != null) {
-                hintDao.getLatestTimestampForRoom(roomId)
-            } else {
-                hintDao.getLatestGlobalTimestamp()
-            }
-        }
-
-        Log.d("HintToggleDebug", "Repo: API 'since' param will be: $latestTimestamp")
         try {
+            // Pass null for 'since' to fetch everything
             val response = if (roomId != null) {
-                apiService.getRoomHintHistory(roomId, since = latestTimestamp, includeFound = includeFound)
+                apiService.getRoomHintHistory(roomId, since = null, includeFound = includeFound)
             } else {
-                apiService.getGlobalHintHistory(since = latestTimestamp, includeFound = includeFound)
+                apiService.getGlobalHintHistory(since = null, includeFound = includeFound)
             }
 
             Log.d("HINT_DEBUG", "Received ${response.hints_for_you.size} 'for_you' and ${response.hints_by_you.size} 'by_you' hints.")
-
-            if (response.hints_for_you.isNotEmpty()) {
-                Log.d("HintToggleDebug", "Repo: First 'for_you' hint from API has is_found=${response.hints_for_you[0].is_found} (ID: ${response.hints_for_you[0].id})")
-            }
-            if (response.hints_by_you.isNotEmpty()) {
-                Log.d("HintToggleDebug", "Repo: First 'by_you' hint from API has is_found=${response.hints_by_you[0].is_found} (ID: ${response.hints_by_you[0].id})")
-            }
 
             val entitiesToInsert = mutableListOf<HintEntity>()
 
@@ -159,14 +128,16 @@ class HistoryRepository(
             }
 
             if (entitiesToInsert.isNotEmpty()) {
-                Log.d("HintToggleDebug", "Repo: Inserting ${entitiesToInsert.size} hints. First hint's isFound=${entitiesToInsert[0].isFound} (ID: ${entitiesToInsert[0].hint_db_id})")
+                // Because DAO uses OnConflictStrategy.REPLACE, this will update isFound status
+                // for existing hints and insert new ones.
                 hintDao.insertHints(entitiesToInsert)
-                Log.d("HintToggleDebug", "Repo: Insertion complete.")
+                Log.d("HINT_DEBUG", "Insertion/Update complete.")
             }
         } catch (e: Exception) {
             Log.e("HINT_DEBUG", "!!! FAILED hint history refresh: ${e.message}", e)
         }
     }
+
 
     private fun mapHintDetailToEntity(detail: HintDetail, type: String): HintEntity {
         return HintEntity(
