@@ -1537,7 +1537,8 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
 
     for temp_data in temp_hint_data:
         hint = temp_data["hint_obj"]
-        
+        current_room_db_id = temp_data["room_db_id"]
+        player_map = player_map_by_room.get(current_room_db_id, {})
         item_name = name_cache_map.get(temp_data["item_name_key"]) or f"Item ID {hint.item_id}"
         location_name = name_cache_map.get(temp_data["location_name_key"]) or f"Location ID {hint.location_id}"
         io_obj = player_map.get(hint.item_owner_id)
