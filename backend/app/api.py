@@ -1727,11 +1727,6 @@ def add_ignore_item(current_user):
 
     session = Session()
     try:
-        # SECURITY: Prevent list bloating
-        count = session.query(UserIgnoreItem).filter_by(user_id=current_user.id).count()
-        if count >= MAX_IGNORE_ITEMS:
-            return jsonify({'error': f'Limit reached. You cannot have more than {MAX_IGNORE_ITEMS} ignored items.'}), 400
-
         # Check for duplicates (though DB constraint handles this, it's nicer to return 409 explicitly)
         existing = session.query(UserIgnoreItem).filter_by(
             user_id=current_user.id,
