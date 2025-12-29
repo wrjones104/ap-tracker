@@ -791,7 +791,13 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             for h in session.query(NotifiedHint).filter_by(room_id=room_uuid)
         }
 
-        all_tracked_slots_in_room = session.query(UserTrackedSlot).filter_by(room_id=db_id).all()
+        all_tracked_slots_in_room = session.query(UserTrackedSlot)\
+            .join(UserTrackedSlot.subscription)\
+            .filter(
+                UserTrackedSlot.room_id == db_id,
+                UserRoomSubscription.is_archived == False
+            ).all()
+
         if not all_tracked_slots_in_room:
              session.commit()
              return

@@ -1,6 +1,8 @@
 package com.jones.aptracker.ui
 
 import android.app.Application
+import android.content.Context
+import androidx.core.content.edit
 import android.util.Log
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
@@ -32,6 +34,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val repository: HistoryRepository
     private val userRepository: UserRepository
 
+    // --- NEW: SharedPreferences for local UI settings ---
+    // Must be declared BEFORE _useCondensed so it can be used in the initializer
+    private val prefs = application.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
+
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
     val itemHistory: StateFlow<List<HistoryItem>> = _itemHistory
 
@@ -45,18 +51,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _archivedRoomIds = MutableStateFlow<Set<Int>>(emptySet())
     val archivedRoomIds: StateFlow<Set<Int>> = _archivedRoomIds
 
-    // Default filter is now ACTIVE (instead of null/All)
+    // Default filter is now ACTIVE
     private val _historyFilter = MutableStateFlow<HistoryFilter>(HistoryFilter.Active)
     val historyFilter: StateFlow<HistoryFilter> = _historyFilter
 
-    // We keep this solely to populate the Dropdown List with *ACTIVE* rooms only
     val availableRooms: StateFlow<List<Pair<Int, String>>> = combine(_roomNames, _activeRoomIds) { names, activeIds ->
         names.filterKeys { it in activeIds }
             .toList()
             .sortedBy { it.second }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Standard flows...
     private val _hintsForYou = MutableStateFlow<List<HintEntity>>(emptyList())
     val hintsForYou: StateFlow<List<HintEntity>> = _hintsForYou
 
@@ -73,6 +77,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _showFinished = MutableStateFlow(true)
     val showFinished: StateFlow<Boolean> = _showFinished
 
+    // UPDATED: Initialize from SharedPreferences (Default to false/OFF)
+    private val _useCondensed = MutableStateFlow(prefs.getBoolean("ui_use_condensed", false))
+    val useCondensed: StateFlow<Boolean> = _useCondensed
+
     private val _liveAliases = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
     private val _confirmedFinishedPlayers = MutableStateFlow<Set<Pair<Int, String>>>(emptySet())
 
@@ -87,12 +95,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private var currentRoomId: Int? = null
 
-    // For player chips, we just rely on the historyFilter to drive the data visibility,
-    // but the chip generation logic needs to know which filter is active.
     private val _selectedPlayerFilter = MutableStateFlow<String?>(null)
     val selectedPlayerFilter: StateFlow<String?> = _selectedPlayerFilter
 
-    // Updated Player Chips Logic
     val availablePlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
         _itemHistory,
         _historyFilter,
@@ -101,7 +106,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     ) { history, filter, activeIds, archivedIds ->
         history
             .filter { item ->
-                // Apply the same logic as the list view to the chips
                 when (filter) {
                     is HistoryFilter.Active -> item.db_id in activeIds
                     is HistoryFilter.Archived -> item.db_id in archivedIds
@@ -153,8 +157,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage
     private var validTrackedSlots: Set<Pair<Int, Int>> = emptySet()
-    private val _useCondensed = MutableStateFlow(false)
-    val useCondensed: StateFlow<Boolean> = _useCondensed
 
     init {
         val db = AppDatabase.getInstance(application)
@@ -169,13 +171,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     fun loadHistoryFor(roomId: Int?) {
         currentRoomId = roomId
-
-        // RESET STATE
         _selectedPlayerFilter.value = null
         searchQuery.value = ""
 
-        // If entering specific room, force Specific filter.
-        // If Global, default to Active.
         if (roomId != null) {
             _historyFilter.value = HistoryFilter.Specific(roomId)
         } else {
@@ -188,14 +186,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     fun setHistoryFilter(filter: HistoryFilter) {
         _historyFilter.value = filter
-        _selectedPlayerFilter.value = null // Reset player chip when changing room mode
+        _selectedPlayerFilter.value = null
     }
 
     private fun fetchUserPreferences() {
         viewModelScope.launch {
             try {
                 val profile = RetrofitClient.instance.getUserProfile()
-                _useCondensed.value = profile.use_condensed_messages_default
+                // UPDATED: We no longer sync condensed preference from API for the UI view
                 _showFinished.value = profile.ui_show_finished_default
                 _showFoundHints.value = profile.ui_show_found_hints_default
             } catch (e: Exception) {
@@ -222,8 +220,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setUseCondensed(use: Boolean) {
         if (_useCondensed.value != use) {
             _useCondensed.value = use
-            // Triggers the API save using the inverted logic or direct boolean as needed
-            saveViewPreferences(useCondensed = use)
+            // UPDATED: Save to SharedPreferences
+            prefs.edit {
+                putBoolean("ui_use_condensed", use)
+            }
         }
     }
 
@@ -243,12 +243,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 val roomNameMap = mutableMapOf<Int, String>()
                 val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
 
-                // Classification Sets
                 val activeIds = mutableSetOf<Int>()
                 val archivedIds = mutableSetOf<Int>()
 
                 trackedRooms.forEach { room ->
-                    // 1. Classify Room
                     if (room.is_archived) {
                         archivedIds.add(room.room_db_id)
                     } else {
@@ -276,13 +274,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 _liveAliases.value = aliasMap
                 _confirmedFinishedPlayers.value = finishedPlayerNames
 
-                // Publish the Sets
                 _activeRoomIds.value = activeIds
                 _archivedRoomIds.value = archivedIds
 
                 repository.refreshItemHistory()
 
-                // We fetch EVERYTHING (validTrackedSlots now includes archived)
                 val rawItemEntities = if (currentRoomId != null) {
                     repository.getHistoryForRoom(currentRoomId!!)
                 } else {
@@ -388,23 +384,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun saveViewPreferences(
         showFinished: Boolean? = null,
-        showFoundHints: Boolean? = null,
-        useCondensed: Boolean? = null
+        showFoundHints: Boolean? = null
+        // UPDATED: Removed useCondensed
     ) {
         viewModelScope.launch {
             try {
-                // 1. Create a map for the parameters
                 val params = mutableMapOf<String, Boolean>()
-
-                // 2. Only add the keys that are actually changing
                 showFinished?.let { params["ui_show_finished"] = it }
                 showFoundHints?.let { params["ui_show_found_hints"] = it }
+                // UPDATED: No longer sending use_condensed_messages to API
 
-                // Handle the condensed preference
-                // We use "use_condensed_messages" based on the profile field "use_condensed_messages_default"
-                useCondensed?.let { params["use_condensed_messages"] = it }
-
-                // 3. Send the map to the API
                 if (params.isNotEmpty()) {
                     RetrofitClient.instance.updateUserPreferences(params)
                 }
