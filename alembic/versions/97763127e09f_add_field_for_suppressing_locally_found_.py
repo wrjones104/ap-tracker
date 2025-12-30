@@ -25,7 +25,8 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column('suppress_self_found', sa.Boolean(), nullable=True))
 
     with op.batch_alter_table('users', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('suppress_self_found_default', sa.Boolean(), nullable=False))
+        batch_op.add_column(sa.Column('suppress_self_found_default', sa.Boolean(), nullable=False, server_default=sa.true()))
+
 
     # ### end Alembic commands ###
 
