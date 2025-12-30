@@ -675,21 +675,20 @@ fun ItemHistoryTab(
             }
             val matchesFinished = showFinished || !isFinished
 
-            // --- TYPE CHECK (Traps Removed) ---
+            // --- TYPE CHECK (Prioritized to match visual colors) ---
             val isProgression = (item.itemFlags and 1) != 0
             val isUseful = (item.itemFlags and 2) != 0
 
-            // Logic: If it's Progression, check that flag. If Useful, check that flag.
-            // If it's neither (flags=0 or 4), we assume it's clutter or unintended if strict flags are used,
-            // but to be safe, we only hide it if it affirmatively conflicts with a disabled toggle.
-            // However, typically "Show Progression" means "Show ONLY Progression" if others are off.
-            // With Traps removed, we simply check:
-            val matchesType = (isProgression && showProgression) ||
-                    (isUseful && showUseful)
-
-            // NOTE: If an item is neither Progression nor Useful, it will now be HIDDEN.
-            // If you want "Other" items to always show, change to:
-            // val matchesType = (isProgression && showProgression) || (isUseful && showUseful) || (!isProgression && !isUseful)
+            val matchesType = if (isProgression) {
+                showProgression
+            } else if (isUseful) {
+                showUseful
+            } else {
+                // Determine behavior for items that are NEITHER (e.g. traps/junk)
+                // Since we don't have a toggle for them, we hide them if they don't match above.
+                // This corresponds to "false" in the old logic when toggles were off.
+                false
+            }
 
             matchesSearch && matchesRoom && matchesPlayer && matchesFinished && matchesType
         }
@@ -1309,12 +1308,17 @@ private fun filterHints(
             }
         }
 
-        // --- TYPE CHECK (Traps Removed) ---
+        // --- TYPE CHECK (Prioritized to match visual colors) ---
         val isProgression = (hint.itemFlags and 1) != 0
         val isUseful = (hint.itemFlags and 2) != 0
 
-        val matchesType = (isProgression && showProgression) ||
-                (isUseful && showUseful)
+        val matchesType = if (isProgression) {
+            showProgression
+        } else if (isUseful) {
+            showUseful
+        } else {
+            false
+        }
 
         matchesRoom && matchesQuery && matchesFinished && matchesPlayer && matchesType
     }

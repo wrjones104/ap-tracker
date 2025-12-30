@@ -77,7 +77,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _showFinished = MutableStateFlow(true)
     val showFinished: StateFlow<Boolean> = _showFinished
 
-    // NEW: Item Type Toggles (Traps removed)
     private val _showProgression = MutableStateFlow(true)
     val showProgression: StateFlow<Boolean> = _showProgression
 
