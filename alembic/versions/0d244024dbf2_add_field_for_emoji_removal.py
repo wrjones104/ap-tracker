@@ -25,7 +25,8 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column('remove_emojis', sa.Boolean(), nullable=True))
 
     with op.batch_alter_table('users', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('remove_emojis_default', sa.Boolean(), nullable=False))
+        batch_op.add_column(sa.Column('remove_emojis_default', sa.Boolean(), nullable=False, server_default=sa.false()))
+
 
     # ### end Alembic commands ###
 
