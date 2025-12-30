@@ -462,11 +462,6 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     if cache_keys_to_fetch:
         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Fetching {len(cache_keys_to_fetch)} names...")
         try:
-            # OPTIMIZATION:
-            # We avoid tuple_().in_() queries here because they can cause type binding issues 
-            # with BigInteger IDs (like Monster Hunter World or Jak & Daxter) on some DB drivers
-            # if the batch contains mixed small/large integers.
-            
             ids_to_fetch = {k[3] for k in cache_keys_to_fetch}
             checksums_to_fetch = {k[1] for k in cache_keys_to_fetch}
             
@@ -476,9 +471,6 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
             for i in range(0, len(ids_list), chunk_size):
                 id_chunk = ids_list[i:i + chunk_size]
                 
-                # We fetch anything matching the ID and Checksum.
-                # This might return slightly more data (e.g. if an item and location share an ID),
-                # but we filter exactly in Python below.
                 results = session.query(
                     DatapackageCache.game, DatapackageCache.checksum,
                     DatapackageCache.entity_type, DatapackageCache.entity_id,
@@ -490,7 +482,6 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
                 for game, chk, etype, eid, name in results:
                     key = (game, chk, etype, eid)
-                    # Only add to map if it was actually requested
                     if key in cache_keys_to_fetch:
                         name_lookup_map[key] = name
 
@@ -517,11 +508,13 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
         for user_id, tracked_slots in tracked_slots_by_user.items():
             if rid in tracked_slots:
-                # Check preferences
+                # 1. Load User/Slot Preferences
                 user_prefs = users_by_id.get(user_id)
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
                 
-                # Determine "Suppress Own" setting
+                if not user_prefs or not slot_prefs: continue
+
+                # Helper to resolve overrides
                 def get_pref(attr, default_attr):
                     val = getattr(user_prefs, default_attr)
                     if slot_prefs and getattr(slot_prefs, attr) is not None:
@@ -530,30 +523,21 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
                 suppress_own = get_pref('suppress_own_events', 'suppress_own_events_default')
                 suppress_self = get_pref('suppress_self_found', 'suppress_self_found_default')
-                
-                # Apply Logic
+                remove_emojis = get_pref('remove_emojis', 'remove_emojis_default')
+
+                # 2. Suppression Logic
                 is_from_self = (rid == send_id)
                 
-                # Check "Strict" Self-Found (Sender == Receiver)
                 if is_from_self:
                     if suppress_self:
                         logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Self-found item (Slot {rid}).")
                         continue
-                
-                # Check "Broad" Own Events (Sender is ANY tracked slot, but NOT this one)
                 elif send_id in tracked_slots:
                     if suppress_own:
                         logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Cross-slot item (From {send_id} to {rid}).")
                         continue
                 
                 alias = aliases_by_user.get(user_id, "Unknown Room")
-                user_prefs = users_by_id.get(user_id)
-                slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
-                remove_emojis = user_prefs.remove_emojis_default
-                if slot_prefs.remove_emojis is not None:
-                    remove_emojis = slot_prefs.remove_emojis
-
-                if not user_prefs or not slot_prefs: continue
 
                 # Check Finished Suppression
                 wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
@@ -566,20 +550,14 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     logging.debug(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
                     continue
 
-                # --- IGNORE LIST CHECK START ---
+                # --- IGNORE LIST CHECK ---
                 normalized_item_name = item_name.lower().strip()
                 should_ignore = False
                 
                 if user_prefs.ignore_items:
                     for ignore_rule in user_prefs.ignore_items:
-                        # Prepare the pattern from the user's input
                         rule_pattern = ignore_rule.item_name.lower().strip()
-
-                        # 1. Check Item Name Match (UPDATED to use fnmatch for wildcards)
-                        # This allows inputs like "*Key" or "Map*" or "*for Toad"
                         if fnmatch.fnmatch(normalized_item_name, rule_pattern):
-                            
-                            # 2. Check Game Scope (Existing logic)
                             if not ignore_rule.game_name:
                                 should_ignore = True
                                 break
@@ -590,7 +568,6 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 if should_ignore:
                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}') for game '{item_data['receiver_game']}'.")
                     continue
-                # --- IGNORE LIST CHECK END ---
 
                 # --- CONDENSED MESSAGING CHECK ---
                 use_condensed = user_prefs.use_condensed_messages_default
@@ -601,21 +578,21 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 sender_name = current_name_map.get(send_id, f'P{send_id}')
                 receiver_name = current_name_map.get(rid, f'P{rid}')
 
-                # Build Body based on Preference
+                # Build Body
                 if use_condensed:
                     body = f"Sent to {receiver_name} by {sender_name}"
                 else:
                     body = f"{sender_name} sent {item_name} to {receiver_name} ({loc_name})"
 
                 is_progression = bool(item_data['flags'] & 1)
-                
-                # ICONS
-                icon_prog = "" if remove_emojis else "🏆 "
-                icon_useful = "" if remove_emojis else "✅ "
-                icon_bulb = "" if remove_emojis else "💡 "
                 should_notify = False
                 title_prefix = ""
                 item_type = ""
+                
+                # Icons
+                icon_prog = "" if remove_emojis else "🏆 "
+                icon_useful = "" if remove_emojis else "✅ "
+                icon_bulb = "" if remove_emojis else "💡 "
                 
                 if is_progression:
                     title_prefix = f"{icon_prog}{item_name}"
@@ -656,19 +633,17 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
             if is_for_us or is_at_our_location:
                 
-                # --- STRICT SAME-WORLD SUPPRESSION ---
                 if io_id == lo_id:
-                    logging.debug(f"[POLLER_DEBUG] Skipped Hint {hint_data['item_id']} for User {user_id}: Self-hint (Item Owner == Location Owner).")
+                    logging.debug(f"[POLLER_DEBUG] Skipped Hint {hint_data['item_id']} for User {user_id}: Self-hint.")
                     continue
 
-                # Determine User Preferences
                 user_prefs = users_by_id.get(user_id)
                 if not user_prefs: continue
-
+                
                 relevant_slot = io_id if is_for_us else lo_id
-
-                # Determine if user wants notifications for finished slots
                 relevant_slot_prefs = prefs_by_user_slot.get(user_id, {}).get(relevant_slot)
+
+                # Check Finished
                 wants_finished_notifs = user_prefs.notify_finished_default
                 if relevant_slot_prefs and relevant_slot_prefs.notify_finished is not None:
                     wants_finished_notifs = relevant_slot_prefs.notify_finished
@@ -677,13 +652,10 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed hint for Slot {relevant_slot} (Slot Finished).")
                     continue
                 
+                # Check Notification Rules
                 should_send_notification = False
 
-                remove_emojis = user_prefs.remove_emojis_default
-                if relevant_slot_prefs and relevant_slot_prefs.remove_emojis is not None:
-                    remove_emojis = relevant_slot_prefs.remove_emojis
-
-                # Rule 1: Hints for MY Items (is_for_us)
+                # Rule 1: Hints for MY Items
                 if is_for_us:
                     wants_remote = getattr(user_prefs, 'notify_hints_remote_items_default', True)
                     if relevant_slot_prefs and relevant_slot_prefs.notify_hints_remote_items is not None:
@@ -691,7 +663,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     if wants_remote:
                         should_send_notification = True
 
-                # Rule 2: Hints for Items in MY World (is_at_our_location)
+                # Rule 2: Hints for Items in MY World
                 if is_at_our_location and not should_send_notification:
                     wants_local = user_prefs.notify_hints_default
                     if relevant_slot_prefs and relevant_slot_prefs.notify_hints is not None:
@@ -702,13 +674,17 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 if not should_send_notification:
                     continue
 
-                # Check Backfill (using the slot that triggered the rule)
+                # Check Backfill
                 relevant_slot_for_backfill = io_id if (is_for_us and should_send_notification) else lo_id
                 if (user_id, relevant_slot_for_backfill) in backfill_check_set:
-                    logging.debug(f"[POLLER_DEBUG] Skipped Hint {hint_data['item_id']} for User {user_id}: Slot {relevant_slot_for_backfill} is backfilling.")
                     continue
 
-                # --- CONDENSED MESSAGING CHECK ---
+                # Check Emoji Pref
+                remove_emojis = user_prefs.remove_emojis_default
+                if relevant_slot_prefs and relevant_slot_prefs.remove_emojis is not None:
+                    remove_emojis = relevant_slot_prefs.remove_emojis
+
+                # Condensed Check
                 use_condensed = user_prefs.use_condensed_messages_default
                 if relevant_slot_prefs and relevant_slot_prefs.use_condensed_messages is not None:
                     use_condensed = relevant_slot_prefs.use_condensed_messages
@@ -716,12 +692,13 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 current_name_map = short_name_map if use_condensed else full_name_map
                 
                 # --- BUILD NOTIFICATION ---
+                alias = aliases_by_user.get(user_id, "Unknown Room")
+                
                 icon_bulb = "" if remove_emojis else "💡 "
                 hint_sub_icon = ""
                 if not remove_emojis:
                     hint_sub_icon = "🏆" if (hint_data.get('flags', 0) & 1) else "✅"
                 
-                # Construct
                 if hint_sub_icon:
                      title = f"{icon_bulb}{hint_sub_icon} New Hint! - [{alias}]"
                 else:
