@@ -202,6 +202,10 @@ data class UserProfile(
     val notify_useful_default: Boolean,
     val notify_hints_default: Boolean,
     val notify_hints_remote_items_default: Boolean,
+    val combine_notifications_default: Boolean = false,
+    val suppress_own_events_default: Boolean = true,
+    val remove_emojis_default: Boolean = false,
+    val suppress_self_found_default: Boolean = true,
     val notify_finished_default: Boolean,
     val use_condensed_messages_default: Boolean,
     val ui_show_finished_default: Boolean = true,
@@ -214,6 +218,10 @@ data class UpdateGlobalPrefsRequest(
     val notify_useful: Boolean? = null,
     val notify_hints: Boolean? = null,
     val notify_hints_remote_items: Boolean? = null,
+    val combine_notifications: Boolean? = null,
+    val suppress_own_events: Boolean? = null,
+    val remove_emojis: Boolean? = null,
+    val suppress_self_found: Boolean? = null,
     val notify_finished: Boolean? = null,
     val use_condensed_messages: Boolean? = null,
     val ui_show_finished: Boolean? = null,
@@ -225,6 +233,10 @@ data class UpdateSlotPrefsRequest(
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,
     val notify_hints_remote_items: Boolean?,
+    val combine_notifications: Boolean? = null,
+    val suppress_own_events: Boolean? = null,
+    val remove_emojis: Boolean? = null,
+    val suppress_self_found: Boolean? = null,
     val notify_finished: Boolean? = null,
     val use_condensed_messages: Boolean? = null
 )
@@ -246,6 +258,10 @@ data class TrackedSlotDetail(
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,
     val notify_hints_remote_items: Boolean?,
+    val combine_notifications: Boolean? = null,
+    val suppress_own_events: Boolean? = null,
+    val remove_emojis: Boolean? = null,
+    val suppress_self_found: Boolean? = null,
     val notify_finished: Boolean?,
     val use_condensed_messages: Boolean?
 )

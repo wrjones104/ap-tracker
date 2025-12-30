@@ -70,6 +70,7 @@ fun SettingsScreen(
                 .padding(top = padding.calculateTopPadding())
                 .padding(horizontal = 16.dp)
         ) {
+            // --- TOP SECTION: OVERRIDES ---
             item {
                 Text(
                     text = "Global Defaults",
@@ -79,7 +80,6 @@ fun SettingsScreen(
                 )
             }
 
-            // --- PER-SLOT OVERRIDES BUTTON ---
             item {
                 ProfileMenuItem(
                     icon = Icons.Default.Tune,
@@ -90,17 +90,13 @@ fun SettingsScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }
 
-            // --- GLOBAL TOGGLES ---
+            // --- MAIN TOGGLES ---
             item {
                 userProfile?.let { profile ->
                     Column {
-                        NotificationToggle(
-                            text = "Shorter notifications",
-                            description = "Show shorter notification messages.",
-                            checked = profile.use_condensed_messages_default,
-                            onCheckedChange = { userViewModel.updateGlobalPreferences(useCondensed = it) }
-                        )
-                        HorizontalDivider()
+                        // 1. EVENTS SECTION
+                        SectionHeader("Events")
+
                         NotificationToggle(
                             text = "Progression items",
                             description = "Notify when a progression item is received.",
@@ -108,6 +104,7 @@ fun SettingsScreen(
                             onCheckedChange = { userViewModel.updateGlobalPreferences(progression = it) }
                         )
                         HorizontalDivider()
+
                         NotificationToggle(
                             text = "Useful items",
                             description = "Notify when a useful item is received.",
@@ -115,6 +112,7 @@ fun SettingsScreen(
                             onCheckedChange = { userViewModel.updateGlobalPreferences(useful = it) }
                         )
                         HorizontalDivider()
+
                         NotificationToggle(
                             text = "Hints in my world",
                             description = "Notify when someone hints for an item at one of your locations.",
@@ -122,6 +120,7 @@ fun SettingsScreen(
                             onCheckedChange = { userViewModel.updateGlobalPreferences(hints = it) }
                         )
                         HorizontalDivider()
+
                         NotificationToggle(
                             text = "Hints for my items",
                             description = "Notify when a hint reveals your item's location remotely.",
@@ -129,12 +128,60 @@ fun SettingsScreen(
                             onCheckedChange = { userViewModel.updateGlobalPreferences(remoteHints = it) }
                         )
                         HorizontalDivider()
+
                         NotificationToggle(
                             text = "Finished slots",
                             description = "Notify for events after a slot has goaled.",
                             checked = profile.notify_finished_default,
                             onCheckedChange = { userViewModel.updateGlobalPreferences(finished = it) }
                         )
+
+                        // 2. BEHAVIOR SECTION
+                        SectionHeader("Behavior")
+
+                        NotificationToggle(
+                            text = "Suppress locally found items",
+                            description = "Don't notify for items found in the same slot that I'm playing.",
+                            checked = profile.suppress_self_found_default,
+                            onCheckedChange = { userViewModel.updateGlobalPreferences(suppressSelfFound = it) }
+                        )
+                        HorizontalDivider()
+
+                        NotificationToggle(
+                            text = "Suppress items from my other slots",
+                            description = "Don't notify me if an item is found in one of my other tracked slots.",
+                            checked = profile.suppress_own_events_default,
+                            onCheckedChange = { userViewModel.updateGlobalPreferences(suppressOwn = it) }
+                        )
+
+                        // 3. FORMAT SECTION
+                        SectionHeader("Format")
+
+                        NotificationToggle(
+                            text = "Combine notifications",
+                            description = "Group multiple notifications into a single summary.",
+                            checked = profile.combine_notifications_default,
+                            onCheckedChange = { userViewModel.updateGlobalPreferences(combine = it) }
+                        )
+                        HorizontalDivider()
+
+                        NotificationToggle(
+                            text = "Remove emojis",
+                            description = "Strip icons (🏆, ✅) from notification titles.",
+                            checked = profile.remove_emojis_default,
+                            onCheckedChange = { userViewModel.updateGlobalPreferences(removeEmojis = it) }
+                        )
+                        HorizontalDivider()
+
+                        NotificationToggle(
+                            text = "Shorter notifications",
+                            description = "Show shorter notification messages.",
+                            checked = profile.use_condensed_messages_default,
+                            onCheckedChange = { userViewModel.updateGlobalPreferences(useCondensed = it) }
+                        )
+
+                        // Bottom padding
+                        Box(Modifier.padding(bottom = 32.dp))
                     }
                 } ?: Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
@@ -142,6 +189,16 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+@Composable
+fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
+    )
 }
 
 @Composable

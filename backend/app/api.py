@@ -1133,11 +1133,6 @@ def get_global_item_history(current_user):
 @log_api_call
 @token_required
 def get_current_user(current_user):
-    """
-    Returns the profile information for the currently authenticated user.
-    Handles both guest and authenticated (Discord) users.
-    """
-
     if current_user.is_guest:
         return jsonify({
             'discord_id': None,
@@ -1149,6 +1144,10 @@ def get_current_user(current_user):
             'notify_finished_default': current_user.notify_finished_default,
             'use_condensed_messages_default': current_user.use_condensed_messages_default,
             'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
+            'combine_notifications_default': current_user.combine_notifications_default,
+            'suppress_own_events_default': current_user.suppress_own_events_default,
+            'remove_emojis_default': current_user.remove_emojis_default,
+            'suppress_self_found_default': current_user.suppress_self_found_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
@@ -1177,6 +1176,10 @@ def get_current_user(current_user):
             'notify_finished_default': current_user.notify_finished_default,
             'use_condensed_messages_default': current_user.use_condensed_messages_default,
             'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
+            'combine_notifications_default': current_user.combine_notifications_default,
+            'suppress_own_events_default': current_user.suppress_own_events_default,
+            'remove_emojis_default': current_user.remove_emojis_default,
+            'suppress_self_found_default': current_user.suppress_self_found_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
@@ -1188,10 +1191,6 @@ def get_current_user(current_user):
 @log_api_call
 @token_required
 def get_user_tracked_slots(current_user):
-    """
-    Returns a list of all rooms and slots the authenticated user is tracking.
-    Also filters out 'PENDING_DISCOVERY' rooms.
-    """
     session = Session()
     try:
         subscriptions = session.query(UserRoomSubscription).join(TrackedRoom).filter(
@@ -1207,10 +1206,8 @@ def get_user_tracked_slots(current_user):
             room_data = sub.room
             if not room_data: continue
 
-            # --- FILTER: Hide Pending Discovery Rooms ---
             if room_data.room_id.startswith("PENDING_DISCOVERY"):
                 continue
-            # --------------------------------------------
 
             try:
                 players_json = json.loads(room_data.cached_players_json or '[]')
@@ -1219,12 +1216,10 @@ def get_user_tracked_slots(current_user):
             except (json.JSONDecodeError, TypeError):
                 players_json = []
 
-            # --- Store full player object to access alias ---
             players_map = {p['slot_id']: p for p in players_json}
 
             tracked_slots_list = []
             for slot in sorted(sub.tracked_slots, key=lambda s: s.slot_id):
-                # Resolve Name and Alias
                 p_obj = players_map.get(slot.slot_id)
                 p_name = p_obj.get('name', f"Player {slot.slot_id}") if p_obj else f"Player {slot.slot_id}"
                 p_alias = p_obj.get('alias') if p_obj else None
@@ -1240,7 +1235,11 @@ def get_user_tracked_slots(current_user):
                     'notify_hints': slot.notify_hints,
                     'notify_hints_remote_items': slot.notify_hints_remote_items,
                     'notify_finished': slot.notify_finished,
-                    'use_condensed_messages': slot.use_condensed_messages 
+                    'use_condensed_messages': slot.use_condensed_messages,
+                    'combine_notifications': slot.combine_notifications,
+                    'suppress_own_events': slot.suppress_own_events,
+                    'remove_emojis': slot.remove_emojis,
+                    'suppress_self_found': slot.suppress_self_found
                 })
 
             response_data.append({
@@ -1260,9 +1259,6 @@ def get_user_tracked_slots(current_user):
 @log_api_call
 @token_required
 def update_user_preferences(current_user):
-    """
-    Updates the global notification preferences for the authenticated user.
-    """
     data = request.json or {}
     session = Session()
     try:
@@ -1286,7 +1282,14 @@ def update_user_preferences(current_user):
             setattr(user, 'ui_show_finished_default', bool(data['ui_show_finished']))
         if 'ui_show_found_hints' in data:
             setattr(user, 'ui_show_found_hints_default', bool(data['ui_show_found_hints']))
-
+        if 'combine_notifications' in data:
+            setattr(user, 'combine_notifications_default', bool(data['combine_notifications']))
+        if 'suppress_own_events' in data:
+            setattr(user, 'suppress_own_events_default', bool(data['suppress_own_events']))
+        if 'remove_emojis' in data:
+            setattr(user, 'remove_emojis_default', bool(data['remove_emojis']))
+        if 'suppress_self_found' in data:
+            setattr(user, 'suppress_self_found_default', bool(data['suppress_self_found']))
         session.commit()
         return jsonify({'message': 'Preferences updated successfully'}), 200
     except Exception as e:
@@ -1296,16 +1299,11 @@ def update_user_preferences(current_user):
     finally:
         Session.remove()
 
-
 @bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/preferences', methods=['PUT'])
 @handle_db_errors
 @log_api_call
 @token_required
 def update_slot_preferences(current_user, room_db_id, slot_id):
-    """
-    Updates the per-slot notification preferences for the authenticated user.
-    'None' (null) means "use global default".
-    """
     data = request.json or {}
     session = Session()
     try:
@@ -1330,7 +1328,14 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
             tracked_slot.notify_finished = data['notify_finished']
         if 'use_condensed_messages' in data:
             tracked_slot.use_condensed_messages = data['use_condensed_messages']
-
+        if 'combine_notifications' in data:
+            tracked_slot.combine_notifications = data['combine_notifications']
+        if 'suppress_own_events' in data:
+            tracked_slot.suppress_own_events = data['suppress_own_events']
+        if 'remove_emojis' in data:
+            tracked_slot.remove_emojis = data['remove_emojis']
+        if 'suppress_self_found' in data: # <--- NEW
+            tracked_slot.suppress_self_found = data['suppress_self_found']
         session.commit()
         return jsonify({'message': 'Slot preferences updated successfully'}), 200
     except Exception as e:

@@ -215,10 +215,14 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
             names_to_notify = [] 
             
             use_condensed = user_prefs.use_condensed_messages_default
+            remove_emojis = user_prefs.remove_emojis_default
             first_slot_id = finished_slot_ids[0]
             first_slot_prefs = prefs_by_user_slot.get(user_id, {}).get(first_slot_id)
-            if first_slot_prefs and first_slot_prefs.use_condensed_messages is not None:
-                use_condensed = first_slot_prefs.use_condensed_messages
+            if first_slot_prefs:
+                if first_slot_prefs.use_condensed_messages is not None:
+                    use_condensed = first_slot_prefs.use_condensed_messages
+                if first_slot_prefs.remove_emojis is not None:
+                    remove_emojis = first_slot_prefs.remove_emojis
 
             current_name_map = short_name_map if use_condensed else full_name_map
 
@@ -244,8 +248,10 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
 
             player_names_str = ", ".join(names_to_notify)
             alias = aliases_by_user.get(user_id, "Unknown Room")
+            icon = "" if remove_emojis else "🏁 "
+            
             notifications_by_user.setdefault(user_id, []).append({
-                'title': f"🏁 Player(s) Finished!",
+                'title': f"{icon}Player(s) Finished!",
                 'body': f"{player_names_str} has finished in '{alias}'!",
                 'type': 'player_finish',
                 'details': (room_db_id, user_id, player_names_str)
@@ -511,13 +517,41 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
         for user_id, tracked_slots in tracked_slots_by_user.items():
             if rid in tracked_slots:
-                if rid == send_id:
-                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed local item '{item_name}' (Slot {rid} found its own item).")
-                     continue
+                # Check preferences
+                user_prefs = users_by_id.get(user_id)
+                slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
+                
+                # Determine "Suppress Own" setting
+                def get_pref(attr, default_attr):
+                    val = getattr(user_prefs, default_attr)
+                    if slot_prefs and getattr(slot_prefs, attr) is not None:
+                        val = getattr(slot_prefs, attr)
+                    return val
+
+                suppress_own = get_pref('suppress_own_events', 'suppress_own_events_default')
+                suppress_self = get_pref('suppress_self_found', 'suppress_self_found_default')
+                
+                # Apply Logic
+                is_from_self = (rid == send_id)
+                
+                # Check "Strict" Self-Found (Sender == Receiver)
+                if is_from_self:
+                    if suppress_self:
+                        logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Self-found item (Slot {rid}).")
+                        continue
+                
+                # Check "Broad" Own Events (Sender is ANY tracked slot, but NOT this one)
+                elif send_id in tracked_slots:
+                    if suppress_own:
+                        logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Cross-slot item (From {send_id} to {rid}).")
+                        continue
                 
                 alias = aliases_by_user.get(user_id, "Unknown Room")
                 user_prefs = users_by_id.get(user_id)
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
+                remove_emojis = user_prefs.remove_emojis_default
+                if slot_prefs.remove_emojis is not None:
+                    remove_emojis = slot_prefs.remove_emojis
 
                 if not user_prefs or not slot_prefs: continue
 
@@ -574,23 +608,28 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     body = f"{sender_name} sent {item_name} to {receiver_name} ({loc_name})"
 
                 is_progression = bool(item_data['flags'] & 1)
+                
+                # ICONS
+                icon_prog = "" if remove_emojis else "🏆 "
+                icon_useful = "" if remove_emojis else "✅ "
+                icon_bulb = "" if remove_emojis else "💡 "
                 should_notify = False
                 title_prefix = ""
                 item_type = ""
                 
                 if is_progression:
-                    title_prefix = f"🏆 {item_name}"
+                    title_prefix = f"{icon_prog}{item_name}"
                     item_type = "item_progression"
                     notify_override = slot_prefs.notify_progression
                     should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
                 else:
-                    title_prefix = f"✅ {item_name}"
+                    title_prefix = f"{icon_useful}{item_name}"
                     item_type = "item_useful"
                     notify_override = slot_prefs.notify_useful
                     should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
                 
                 if is_a_found_hint:
-                    title_prefix = "💡 " + title_prefix
+                    title_prefix = icon_bulb + title_prefix
                 
                 title = f"{title_prefix} - [{alias}]"
                 
@@ -640,6 +679,10 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 
                 should_send_notification = False
 
+                remove_emojis = user_prefs.remove_emojis_default
+                if relevant_slot_prefs and relevant_slot_prefs.remove_emojis is not None:
+                    remove_emojis = relevant_slot_prefs.remove_emojis
+
                 # Rule 1: Hints for MY Items (is_for_us)
                 if is_for_us:
                     wants_remote = getattr(user_prefs, 'notify_hints_remote_items_default', True)
@@ -673,9 +716,16 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 current_name_map = short_name_map if use_condensed else full_name_map
                 
                 # --- BUILD NOTIFICATION ---
-                alias = aliases_by_user.get(user_id, "Unknown Room")
-                hint_type_icon = "🏆" if (hint_data.get('flags', 0) & 1) else "✅"
-                title = f"💡 {hint_type_icon} New Hint! - [{alias}]"
+                icon_bulb = "" if remove_emojis else "💡 "
+                hint_sub_icon = ""
+                if not remove_emojis:
+                    hint_sub_icon = "🏆" if (hint_data.get('flags', 0) & 1) else "✅"
+                
+                # Construct
+                if hint_sub_icon:
+                     title = f"{icon_bulb}{hint_sub_icon} New Hint! - [{alias}]"
+                else:
+                     title = f"{icon_bulb}New Hint! - [{alias}]"
                 
                 item_owner_name = current_name_map.get(io_id, f'P{io_id}')
                 location_owner_name = current_name_map.get(lo_id, f'P{lo_id}')
@@ -726,10 +776,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                     alias_map[entry['player']] = entry['alias']
 
         # --- SELF-HEALING CHECK ---
-        # If the remote Tracker is sending aliases for Slot IDs that do not exist in our local cache,
-        # it means our local player list is stale/out-of-sync (the "Off by 4" issue).
-        # We must force a full Re-Setup to fetch the correct player list.
-        
         local_slot_ids = {p['slot_id'] for p in players}
         remote_alias_ids = set(alias_map.keys())
         unknown_ids = remote_alias_ids - local_slot_ids
@@ -754,8 +800,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
                 logging.info(f"[POLLER] Detected alias change for Slot {slot_id}: {current_stored_alias} -> {new_remote_alias}")
 
         # --- IMMEDIATE COMMIT FOR ALIASES ---
-        # If we updated aliases, save immediately. This prevents the "Infinite Loop" scenario
-        # where a crash/error in Item Processing rolls back the Alias update, causing it to detect again endlessly.
         if players_updated_local:
             try:
                 room.cached_players_json = json.dumps(players)
@@ -791,6 +835,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             for h in session.query(NotifiedHint).filter_by(room_id=room_uuid)
         }
 
+        # 1. Primary Query (Should filter archived, but we will double check)
         all_tracked_slots_in_room = session.query(UserTrackedSlot)\
             .join(UserTrackedSlot.subscription)\
             .filter(
@@ -818,7 +863,35 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             .options(selectinload(User.ignore_items))
             .filter(User.id.in_(all_user_ids_in_room))
         }
-        aliases_by_user = {sub.user_id: sub.alias for sub in session.query(UserRoomSubscription).filter(UserRoomSubscription.user_id.in_(all_user_ids_in_room), UserRoomSubscription.room_id == db_id)}
+        
+        # --- SAFETY CHECK: Explicitly verify Archive Status ---
+        aliases_by_user = {}
+        archived_users_found = set()
+        
+        # We fetch is_archived explicitly here to verify the User IDs we collected
+        sub_check_query = session.query(
+            UserRoomSubscription.user_id, 
+            UserRoomSubscription.alias, 
+            UserRoomSubscription.is_archived
+        ).filter(
+            UserRoomSubscription.user_id.in_(all_user_ids_in_room), 
+            UserRoomSubscription.room_id == db_id
+        ).all()
+        
+        for uid, alias, is_arch in sub_check_query:
+            if is_arch:
+                archived_users_found.add(uid)
+            else:
+                aliases_by_user[uid] = alias
+
+        # If any users are actually archived (despite the initial query), remove them now.
+        if archived_users_found:
+            logging.info(f"[POLLER_GUARD] Pruning {len(archived_users_found)} archived users who slipped through initial query.")
+            for uid in archived_users_found:
+                tracked_slots_by_user.pop(uid, None)
+                prefs_by_user_slot.pop(uid, None)
+                users_by_id.pop(uid, None)
+                backfill_check_set = {k for k in backfill_check_set if k[0] != uid}
 
         # --- LOGIC STEP 1: Check Player Completions ---
         finish_notifs, finished_player_ids, players_updated_finished = _check_player_completion(
@@ -889,12 +962,23 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
             for device in devices_to_notify: 
                 tokens_by_user.setdefault(device.user_id, []).append(device.fcm_token)
 
-            for user_id, notifications in notifications_to_send.items():
+            for user_id, raw_notifs in notifications_to_send.items():
                 user_tokens = tokens_by_user.get(user_id)
                 if user_tokens:
-                    unique_notifications = list({json.dumps(d): d for d in notifications}.values())
+                    user_prefs = users_by_id.get(user_id)
+                    
+                    # Dedupe first
+                    unique_notifications = list({json.dumps(d): d for d in raw_notifs}.values())
+                    
+                    # Compress
+                    processed_notifications = compress_notifications(
+                        unique_notifications, 
+                        user_prefs, 
+                        prefs_by_user_slot.get(user_id, {})
+                    )
+
                     final_payloads[user_id] = {
-                        'notifications': unique_notifications,
+                        'notifications': processed_notifications,
                         'tokens': user_tokens,
                         'alias': aliases_by_user.get(user_id)
                     }
@@ -1677,3 +1761,89 @@ def db_check_stale_rooms():
         session.rollback()
     finally:
         Session.remove()
+
+def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
+    """
+    Combines notifications of the same type if the user has 'combine_notifications' enabled.
+    """
+    # 1. Check if we should combine
+    # We use the user default, unless the specific slot involved overrides it. 
+    # Since a batch might involve multiple slots, we'll stick to the Global Default 
+    # or the default of the first tracked slot found in the batch to keep it simple.
+    should_combine = user_prefs.combine_notifications_default
+    remove_emojis = user_prefs.remove_emojis_default
+
+    # Simple check: if NO notifications, return empty
+    if not user_notifications: return []
+    
+    if not should_combine:
+        return user_notifications
+
+    # 2. Group by Type
+    items = []
+    hints = []
+    finishes = []
+    others = []
+
+    for n in user_notifications:
+        t = n.get('type')
+        if t in ['item_progression', 'item_useful']:
+            items.append(n)
+        elif t == 'hint':
+            hints.append(n)
+        elif t == 'player_finish':
+            finishes.append(n)
+        else:
+            others.append(n)
+
+    compressed = []
+    compressed.extend(others) # Pass through unknown types
+
+    # 3. Helper to squash
+    def squash(notif_list, title_base):
+        if not notif_list: return
+        if len(notif_list) == 1:
+            compressed.append(notif_list[0])
+            return
+        
+        # We will grab the room alias from the first item
+        first_title = notif_list[0]['title']
+        room_suffix = ""
+        if " - [" in first_title:
+            room_suffix = first_title.split(" - [")[-1]
+            room_suffix = " - [" + room_suffix
+
+        # Extract item names (naive parse)
+        # Title format: "🏆 Item Name - [Room]"
+        item_names = []
+        for n in notif_list:
+            raw = n['title'].split(" - [")[0]
+            # Remove emoji
+            clean = raw.replace("🏆 ", "").replace("✅ ", "").replace("💡 ", "")
+            item_names.append(clean)
+
+        count = len(item_names)
+        display_names = item_names[:2]
+        remainder = count - 2
+        
+        body_str = ", ".join(display_names)
+        if remainder > 0:
+            body_str += f", and {remainder} others"
+        
+        final_title = f"{title_base} ({count}){room_suffix}"
+        
+        compressed.append({
+            'title': final_title,
+            'body': body_str,
+            'type': notif_list[0]['type'] # Keep type for icon logic if needed
+        })
+
+    t_items = "New Items" if remove_emojis else "📦 New Items"
+    t_hints = "New Hints" if remove_emojis else "💡 New Hints"
+    t_finish = "Finished" if remove_emojis else "🏁 Finished"
+
+    squash(items, t_items)
+    squash(hints, t_hints)
+    squash(finishes, t_finish)
+
+    return compressed

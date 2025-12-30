@@ -2,9 +2,9 @@ package com.jones.aptracker.ui
 
 import android.app.Application
 import android.content.Context
-import androidx.core.content.edit
 import android.util.Log
 import androidx.compose.runtime.mutableStateOf
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.database.AppDatabase
@@ -34,8 +34,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val repository: HistoryRepository
     private val userRepository: UserRepository
 
-    // --- NEW: SharedPreferences for local UI settings ---
-    // Must be declared BEFORE _useCondensed so it can be used in the initializer
+    // SharedPreferences for local UI settings
     private val prefs = application.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
 
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
@@ -71,13 +70,21 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     val isLoading = MutableStateFlow(true)
     val errorMessage = mutableStateOf<String?>(null)
 
+    // --- Toggles ---
     private val _showFoundHints = MutableStateFlow(false)
     val showFoundHints: StateFlow<Boolean> = _showFoundHints
 
     private val _showFinished = MutableStateFlow(true)
     val showFinished: StateFlow<Boolean> = _showFinished
 
-    // UPDATED: Initialize from SharedPreferences (Default to false/OFF)
+    // NEW: Item Type Toggles (Traps removed)
+    private val _showProgression = MutableStateFlow(true)
+    val showProgression: StateFlow<Boolean> = _showProgression
+
+    private val _showUseful = MutableStateFlow(true)
+    val showUseful: StateFlow<Boolean> = _showUseful
+
+    // Initialize from SharedPreferences (Default to false/OFF)
     private val _useCondensed = MutableStateFlow(prefs.getBoolean("ui_use_condensed", false))
     val useCondensed: StateFlow<Boolean> = _useCondensed
 
@@ -193,7 +200,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val profile = RetrofitClient.instance.getUserProfile()
-                // UPDATED: We no longer sync condensed preference from API for the UI view
+                // We no longer sync condensed preference from API for the UI view
                 _showFinished.value = profile.ui_show_finished_default
                 _showFoundHints.value = profile.ui_show_found_hints_default
             } catch (e: Exception) {
@@ -201,6 +208,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
+
+    // --- TOGGLE SETTERS ---
 
     fun setShowFinished(show: Boolean) {
         if (_showFinished.value != show) {
@@ -217,10 +226,19 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun setShowProgression(show: Boolean) {
+        _showProgression.value = show
+        // Note: Not saving these to API/Prefs yet, but could be added to saveViewPreferences if desired
+    }
+
+    fun setShowUseful(show: Boolean) {
+        _showUseful.value = show
+    }
+
     fun setUseCondensed(use: Boolean) {
         if (_useCondensed.value != use) {
             _useCondensed.value = use
-            // UPDATED: Save to SharedPreferences
+            // Save to SharedPreferences using KTX
             prefs.edit {
                 putBoolean("ui_use_condensed", use)
             }
@@ -385,14 +403,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private fun saveViewPreferences(
         showFinished: Boolean? = null,
         showFoundHints: Boolean? = null
-        // UPDATED: Removed useCondensed
     ) {
         viewModelScope.launch {
             try {
                 val params = mutableMapOf<String, Boolean>()
                 showFinished?.let { params["ui_show_finished"] = it }
                 showFoundHints?.let { params["ui_show_found_hints"] = it }
-                // UPDATED: No longer sending use_condensed_messages to API
+                // No longer sending use_condensed_messages to API
 
                 if (params.isNotEmpty()) {
                     RetrofitClient.instance.updateUserPreferences(params)
