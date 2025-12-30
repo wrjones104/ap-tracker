@@ -148,9 +148,15 @@ fun HistoryContent(
     val actionMessage by historyViewModel.actionMessage.collectAsState()
     val searchQuery by historyViewModel.searchQuery
 
+    // Filter States
     val showFoundHints by historyViewModel.showFoundHints.collectAsState()
     val showFinished by historyViewModel.showFinished.collectAsState()
     val useCondensed by historyViewModel.useCondensed.collectAsState()
+
+    // New Type Filter States (Traps Removed)
+    val showProgression by historyViewModel.showProgression.collectAsState()
+    val showUseful by historyViewModel.showUseful.collectAsState()
+
     val roomNames by historyViewModel.roomNames.collectAsState()
 
     var selectedItem by remember { mutableStateOf<HistoryItem?>(null) }
@@ -266,6 +272,12 @@ fun HistoryContent(
                 onShowFoundHintsChange = { historyViewModel.setShowFoundHints(it) },
                 useCondensed = useCondensed,
                 onUseCondensedChange = { historyViewModel.setUseCondensed(it) },
+                // NEW (Traps Removed)
+                showProgression = showProgression,
+                onShowProgressionChange = { historyViewModel.setShowProgression(it) },
+                showUseful = showUseful,
+                onShowUsefulChange = { historyViewModel.setShowUseful(it) },
+                // ---
                 isHintTabSelected = pagerState.currentPage == 1,
                 onDismiss = { showFilterSheet = false }
             )
@@ -310,6 +322,12 @@ fun HistoryFilterSheet(
     onShowFoundHintsChange: (Boolean) -> Unit,
     useCondensed: Boolean,
     onUseCondensedChange: (Boolean) -> Unit,
+    // New Type Filters (Traps Removed)
+    showProgression: Boolean,
+    onShowProgressionChange: (Boolean) -> Unit,
+    showUseful: Boolean,
+    onShowUsefulChange: (Boolean) -> Unit,
+
     isHintTabSelected: Boolean,
     onDismiss: () -> Unit
 ) {
@@ -325,7 +343,38 @@ fun HistoryFilterSheet(
             modifier = Modifier.padding(bottom = 16.dp)
         )
 
-        // Toggle 1: Show Original Slot Name (Inverted logic: Checked = !useCondensed)
+        // --- NEW: Item Types Section ---
+        Text(
+            text = "Item Types",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 8.dp),
+            color = MaterialTheme.colorScheme.primary
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = showProgression,
+                onClick = { onShowProgressionChange(!showProgression) },
+                label = { Text("Progression") },
+                leadingIcon = if (showProgression) {
+                    { Icon(Icons.Default.Check, null) }
+                } else null
+            )
+            FilterChip(
+                selected = showUseful,
+                onClick = { onShowUsefulChange(!showUseful) },
+                label = { Text("Useful") },
+                leadingIcon = if (showUseful) {
+                    { Icon(Icons.Default.Check, null) }
+                } else null
+            )
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+
+        // Toggle 1: Show Original Slot Name
         val showOriginalNames = !useCondensed
 
         Row(
@@ -349,7 +398,6 @@ fun HistoryFilterSheet(
             }
             Switch(
                 checked = showOriginalNames,
-                // If user turns "Show Original" ON (true), we set useCondensed to FALSE
                 onCheckedChange = { isChecked -> onUseCondensedChange(!isChecked) },
                 modifier = Modifier.padding(start = 16.dp)
             )
@@ -446,7 +494,7 @@ fun HistoryDetailSheet(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 48.dp) // Added bottom padding for nav bar
+            .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 48.dp)
             .navigationBarsPadding()
     ) {
         // --- Header ---
@@ -551,7 +599,6 @@ fun HistoryDetailSheet(
     }
 }
 
-// New Compact Helper
 @Composable
 fun CompactDetailItem(label: String, value: String) {
     Column {
@@ -585,6 +632,10 @@ fun ItemHistoryTab(
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
     val useCondensed by historyViewModel.useCondensed.collectAsState()
 
+    // Type Filters (Traps Removed)
+    val showProgression by historyViewModel.showProgression.collectAsState()
+    val showUseful by historyViewModel.showUseful.collectAsState()
+
     val historyFilter by historyViewModel.historyFilter.collectAsState()
     val activeRoomIds by historyViewModel.activeRoomIds.collectAsState()
     val archivedRoomIds by historyViewModel.archivedRoomIds.collectAsState()
@@ -599,7 +650,10 @@ fun ItemHistoryTab(
     val finishedColor = if (isDark) Color(0xFF81C784) else Color(0xFF0E8A0E)
 
     // Filter Logic
-    val itemsToShow = remember(fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, historyFilter, activeRoomIds, archivedRoomIds) {
+    val itemsToShow = remember(
+        fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, historyFilter,
+        activeRoomIds, archivedRoomIds, showProgression, showUseful
+    ) {
         fullHistory.filter { item ->
             val matchesSearch = searchQuery.isBlank() ||
                     item.playerName.contains(searchQuery, ignoreCase = true) ||
@@ -621,7 +675,23 @@ fun ItemHistoryTab(
             }
             val matchesFinished = showFinished || !isFinished
 
-            matchesSearch && matchesRoom && matchesPlayer && matchesFinished
+            // --- TYPE CHECK (Traps Removed) ---
+            val isProgression = (item.itemFlags and 1) != 0
+            val isUseful = (item.itemFlags and 2) != 0
+
+            // Logic: If it's Progression, check that flag. If Useful, check that flag.
+            // If it's neither (flags=0 or 4), we assume it's clutter or unintended if strict flags are used,
+            // but to be safe, we only hide it if it affirmatively conflicts with a disabled toggle.
+            // However, typically "Show Progression" means "Show ONLY Progression" if others are off.
+            // With Traps removed, we simply check:
+            val matchesType = (isProgression && showProgression) ||
+                    (isUseful && showUseful)
+
+            // NOTE: If an item is neither Progression nor Useful, it will now be HIDDEN.
+            // If you want "Other" items to always show, change to:
+            // val matchesType = (isProgression && showProgression) || (isUseful && showUseful) || (!isProgression && !isUseful)
+
+            matchesSearch && matchesRoom && matchesPlayer && matchesFinished && matchesType
         }
     }
 
@@ -788,7 +858,6 @@ fun RoomFilterChip(
         is HistoryFilter.Specific -> availableRooms.find { it.first == currentFilter.roomId }?.second ?: "Unknown Room"
     }
 
-    // Use a different color for "Meta" filters (Active/Archived/All) vs "Specific Room"
     val isMetaFilter = currentFilter !is HistoryFilter.Specific
 
     Box {
@@ -871,6 +940,10 @@ fun HintHistoryTab(
     val showFinished by historyViewModel.showFinished.collectAsState()
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
 
+    // Type Filters
+    val showProgression by historyViewModel.showProgression.collectAsState()
+    val showUseful by historyViewModel.showUseful.collectAsState()
+
     val availablePlayers by historyViewModel.availableHintPlayers.collectAsState()
     val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
 
@@ -887,11 +960,27 @@ fun HintHistoryTab(
     var isForYouExpanded by rememberSaveable { mutableStateOf(true) }
     var isByYouExpanded by rememberSaveable { mutableStateOf(true) }
 
-    val filteredHintsForYou = remember(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer, historyFilter, activeRoomIds, archivedRoomIds) {
-        filterHints(hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer, historyFilter, activeRoomIds, archivedRoomIds)
+    val filteredHintsForYou = remember(
+        hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
+        historyFilter, activeRoomIds, archivedRoomIds,
+        showProgression, showUseful
+    ) {
+        filterHints(
+            hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
+            historyFilter, activeRoomIds, archivedRoomIds,
+            showProgression, showUseful
+        )
     }
-    val filteredHintsByYou = remember(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer, historyFilter, activeRoomIds, archivedRoomIds) {
-        filterHints(hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer, historyFilter, activeRoomIds, archivedRoomIds)
+    val filteredHintsByYou = remember(
+        hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
+        historyFilter, activeRoomIds, archivedRoomIds,
+        showProgression, showUseful
+    ) {
+        filterHints(
+            hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
+            historyFilter, activeRoomIds, archivedRoomIds,
+            showProgression, showUseful
+        )
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1024,22 +1113,15 @@ fun HintCard(
     useCondensed: Boolean,
     onClick: () -> Unit
 ) {
-    // 1. Define the colors.
-    // Found: Use SecondaryContainer for the dynamic "pop" (works in Light/Dark).
-    // Unfound: Use DEFAULT colors. This restores the default tonal elevation
-    //          that matches your "Item" cards, ensuring they stand out from the background.
     val cardColors = if (hint.isFound) {
         CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer,
             contentColor = MaterialTheme.colorScheme.onSecondaryContainer
         )
     } else {
-        CardDefaults.cardColors() // Falls back to default 'Surface Container' tone
+        CardDefaults.cardColors()
     }
 
-    // 2. Define the icon tint.
-    // If we are on the colored background (Found), use the "OnSecondaryContainer" color.
-    // If we are on the default background (Unfound), use the standard primary color to stand out.
     val iconTint = if (hint.isFound) {
         MaterialTheme.colorScheme.onSecondaryContainer
     } else {
@@ -1051,7 +1133,7 @@ fun HintCard(
             .fillMaxWidth()
             .clickable(onClick = onClick),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = cardColors // Apply our conditional colors
+        colors = cardColors
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -1067,7 +1149,6 @@ fun HintCard(
             Spacer(modifier = Modifier.width(16.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                // ... (Item Color Logic)
                 val itemColor = when {
                     (hint.itemFlags and 1) != 0 -> APTheme.colors.progression
                     (hint.itemFlags and 2) != 0 -> APTheme.colors.useful
@@ -1116,8 +1197,6 @@ fun HintCard(
                         append(formatTimestamp(hint.timestamp, formatter))
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    // Use standard "onSurfaceVariant" for text color, but make it slightly transparent
-                    // so it blends nicely on both the colored and default backgrounds.
                     color = LocalContentColor.current.copy(alpha = 0.7f)
                 )
             }
@@ -1198,7 +1277,9 @@ private fun filterHints(
     selectedPlayer: String?,
     historyFilter: HistoryFilter,
     activeRoomIds: Set<Int>,
-    archivedRoomIds: Set<Int>
+    archivedRoomIds: Set<Int>,
+    showProgression: Boolean,
+    showUseful: Boolean
 ): List<HintEntity> {
     return hints.filter { hint ->
         // 1. Room Check
@@ -1228,7 +1309,14 @@ private fun filterHints(
             }
         }
 
-        matchesRoom && matchesQuery && matchesFinished && matchesPlayer
+        // --- TYPE CHECK (Traps Removed) ---
+        val isProgression = (hint.itemFlags and 1) != 0
+        val isUseful = (hint.itemFlags and 2) != 0
+
+        val matchesType = (isProgression && showProgression) ||
+                (isUseful && showUseful)
+
+        matchesRoom && matchesQuery && matchesFinished && matchesPlayer && matchesType
     }
 }
 
@@ -1277,7 +1365,6 @@ private fun formatTimestamp(isoString: String, formatter: DateTimeFormatter): St
         instant.atZone(ZoneId.systemDefault()).format(formatter)
     } catch (e: Exception) {
         Log.e("TimestampFormat", "Failed to parse timestamp: '$isoString'", e)
-
         "Invalid date"
     }
 }

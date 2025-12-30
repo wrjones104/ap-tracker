@@ -10,7 +10,6 @@ import com.jones.aptracker.network.CheeseAuthRequest
 import com.jones.aptracker.network.IgnoreItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
-import com.jones.aptracker.network.UpdateGlobalPrefsRequest
 import com.jones.aptracker.network.UpdateSlotPrefsRequest
 import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.repository.UserRepository
@@ -59,7 +58,6 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _knownGames = MutableStateFlow<List<String>>(emptyList())
     val knownGames = _knownGames.asStateFlow()
 
-    // Default to Newest, will be overwritten by loadSortPreference() in init
     private val _ignoreSortOption = MutableStateFlow(IgnoreSortOption.NEWEST)
     val ignoreSortOption = _ignoreSortOption.asStateFlow()
 
@@ -67,7 +65,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         fetchUserProfile()
         fetchTrackedSlots()
         fetchIgnoreList()
-        loadSortPreference() // Load saved sort order on startup
+        loadSortPreference()
     }
 
     // ============================================================================================
@@ -80,9 +78,6 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Updates the sort option in StateFlow and persists it to SharedPreferences
-     */
     fun setIgnoreSortOption(option: IgnoreSortOption) {
         _ignoreSortOption.value = option
         saveSortPreference(option)
@@ -135,14 +130,14 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         remoteHints: Boolean? = null,
         finished: Boolean? = null,
         useCondensed: Boolean? = null,
-        uiShowFinished: Boolean? = null,
-        uiShowFoundHints: Boolean? = null
+        suppressOwn: Boolean? = null,
+        combine: Boolean? = null,
+        removeEmojis: Boolean? = null,
+        suppressSelfFound: Boolean? = null
     ) {
         viewModelScope.launch {
             try {
-                // Create a Map to ensure we ONLY send the fields that are changing.
-                // This prevents Gson from sending "null" for the other fields,
-                // which would accidentally turn them off.
+                // Using a Map allows us to send only the fields that changed.
                 val params = mutableMapOf<String, Boolean>()
 
                 progression?.let { params["notify_progression"] = it }
@@ -151,10 +146,10 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 remoteHints?.let { params["notify_hints_remote_items"] = it }
                 finished?.let { params["notify_finished"] = it }
                 useCondensed?.let { params["use_condensed_messages"] = it }
-
-                // Map the camelCase arguments to the snake_case keys the API expects
-                uiShowFinished?.let { params["ui_show_finished"] = it }
-                uiShowFoundHints?.let { params["ui_show_found_hints"] = it }
+                suppressOwn?.let { params["suppress_own_events"] = it }
+                combine?.let { params["combine_notifications"] = it }
+                removeEmojis?.let { params["remove_emojis"] = it }
+                suppressSelfFound?.let { params["suppress_self_found"] = it }
 
                 if (params.isNotEmpty()) {
                     RetrofitClient.instance.updateUserPreferences(params)
@@ -169,28 +164,30 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateSlotPreferences(
-        roomId: Int,
-        slotId: Int,
-        progression: Boolean?,
-        useful: Boolean?,
-        hints: Boolean?,
-        remoteHints: Boolean?,
-        finished: Boolean?,
-        useCondensed: Boolean?
-    ) {
+    fun updateSlotPreferences(roomId: Int, slotId: Int, key: String, value: Boolean?) {
         viewModelScope.launch {
             try {
-                val request = UpdateSlotPrefsRequest(
-                    notify_progression = progression,
-                    notify_useful = useful,
-                    notify_hints = hints,
-                    notify_hints_remote_items = remoteHints,
-                    notify_finished = finished,
-                    use_condensed_messages = useCondensed
-                )
-                RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
-                fetchTrackedSlots()
+                // We construct a request object with only the specific field set.
+                // We rely on Gson (default behavior) to NOT serialize the null fields,
+                // effectively acting as a partial update (PATCH).
+                val request = when (key) {
+                    "notify_progression" -> UpdateSlotPrefsRequest(notify_progression = value, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
+                    "notify_useful" -> UpdateSlotPrefsRequest(notify_useful = value, notify_progression = null, notify_hints = null, notify_hints_remote_items = null)
+                    "notify_hints" -> UpdateSlotPrefsRequest(notify_hints = value, notify_progression = null, notify_useful = null, notify_hints_remote_items = null)
+                    "notify_hints_remote_items" -> UpdateSlotPrefsRequest(notify_hints_remote_items = value, notify_progression = null, notify_useful = null, notify_hints = null)
+                    "notify_finished" -> UpdateSlotPrefsRequest(notify_finished = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
+                    "use_condensed_messages" -> UpdateSlotPrefsRequest(use_condensed_messages = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
+                    "suppress_own_events" -> UpdateSlotPrefsRequest(suppress_own_events = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
+                    "combine_notifications" -> UpdateSlotPrefsRequest(combine_notifications = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
+                    "remove_emojis" -> UpdateSlotPrefsRequest(remove_emojis = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
+                    "suppress_self_found" -> UpdateSlotPrefsRequest(suppress_self_found = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
+                    else -> null
+                }
+
+                if (request != null) {
+                    RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
+                    fetchTrackedSlots() // Refresh UI with new state
+                }
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to save slot settings."
                 e.printStackTrace()
