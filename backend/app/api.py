@@ -407,6 +407,9 @@ def add_room(current_user):
     alias = data.get('alias', '').strip()
     icon_name = data.get('icon_name')
 
+    if room_url and not room_url.startswith(('http://', 'https://')):
+        room_url = f"https://{room_url}"
+
     if not room_url or len(room_url) > 512:
         return jsonify({'error': 'Invalid or missing room_url.'}), 400
     if not alias or len(alias) > 128:
