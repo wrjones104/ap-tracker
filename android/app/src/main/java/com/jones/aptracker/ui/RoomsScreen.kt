@@ -92,6 +92,9 @@ import com.jones.aptracker.network.Room
 import com.jones.aptracker.network.UserProfile
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.ui.window.Dialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -532,25 +535,124 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
     var roomUrl by remember { mutableStateOf("") }
     var alias by remember { mutableStateOf("") }
     var selectedIconName by remember { mutableStateOf("default_icon") }
+    var showUrlHelp by remember { mutableStateOf(false) }
+
+    // --- VALIDATION LOGIC ---
+    // Detects "domain:port" format common in game clients (e.g., archipelago.gg:12345)
+    // Logic: No "http", no slashes (implies no path/room ID), and ends in :digits
+    val isSocketFormat = remember(roomUrl) {
+        val trimmed = roomUrl.trim()
+        !trimmed.startsWith("http") && Regex("""^[^/]+:\d+$""").matches(trimmed)
+    }
+
+    // Basic sanity check: Is it not blank, and does it look like a domain/url?
+    // We check for a dot (e.g. .com, .gg) or localhost
+    val isValidUrlFormat = remember(roomUrl) {
+        val trimmed = roomUrl.trim()
+        trimmed.isNotBlank() && (trimmed.contains(".") || trimmed.contains("localhost"))
+    }
+
+    // Button is enabled only if URL looks valid, is NOT a socket string, and alias is set
+    val canAdd = isValidUrlFormat && !isSocketFormat && alias.isNotBlank()
+
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add New Room") },
         text = {
             Column {
-                TextField(value = roomUrl, onValueChange = { roomUrl = it }, label = { Text("Room URL") }, modifier = Modifier.fillMaxWidth())
+                TextField(
+                    value = roomUrl,
+                    onValueChange = { roomUrl = it },
+                    label = { Text("Room URL") },
+                    placeholder = { Text("archipelago.gg/room/...") },
+                    singleLine = true,
+                    // Highlight error state if user enters socket format
+                    isError = isSocketFormat,
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        IconButton(onClick = { showUrlHelp = true }) {
+                            Icon(
+                                // Use Warning icon if error, otherwise Info
+                                imageVector = if (isSocketFormat) Icons.Default.Warning else Icons.Default.Info,
+                                contentDescription = "Show URL Help",
+                                tint = if (isSocketFormat) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                )
+
+                if (isSocketFormat) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "It looks like you entered a Game Connection string (host:port). please use the Room URL from your browser instead.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+
                 Spacer(Modifier.height(8.dp))
-                TextField(value = alias, onValueChange = { alias = it }, label = { Text("Room Name") }, modifier = Modifier.fillMaxWidth())
+
+                TextField(
+                    value = alias,
+                    onValueChange = { alias = it },
+                    label = { Text("Room Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
                 Spacer(Modifier.height(16.dp))
                 Text("Select Icon", style = MaterialTheme.typography.labelMedium)
                 IconPicker(selected = selectedIconName, onSelect = { selectedIconName = it })
             }
         },
         confirmButton = {
-            TextButton(onClick = { onAdd(roomUrl, alias, selectedIconName) }, enabled = roomUrl.isNotBlank() && alias.isNotBlank()) { Text("Add") }
+            TextButton(
+                enabled = canAdd,
+                onClick = { onAdd(roomUrl, alias, selectedIconName) }
+            ) { Text("Add") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
     )
+
+    // --- Visual Help Popup ---
+    if (showUrlHelp) {
+        Dialog(onDismissRequest = { showUrlHelp = false }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(vertical = 16.dp, horizontal = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Where to find the URL",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    Image(
+                        painter = painterResource(id = R.drawable.room_url_help),
+                        contentDescription = "URL Location Example",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = { showUrlHelp = false }) {
+                        Text("Got it")
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

@@ -117,8 +117,17 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             _errorMessage.value = null
+
+            // 1. Trim whitespace
+            // 2. Auto-prepend https:// if protocol is missing
+            var cleanUrl = roomUrl.trim()
+            if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+                cleanUrl = "https://$cleanUrl"
+            }
+
             try {
-                val request = AddRoomRequest(room_url = roomUrl, alias = alias, icon_name = iconName)
+                // Use cleanUrl in the request
+                val request = AddRoomRequest(room_url = cleanUrl, alias = alias, icon_name = iconName)
                 val response = RetrofitClient.instance.addRoom(request)
 
                 if (response.isSuccessful) {
