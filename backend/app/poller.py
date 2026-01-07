@@ -1012,23 +1012,55 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                     # C. Migrate to Real Room
                     existing_real_room.cheese_tracker_id = ct_id_val
                     
-                    for p_sub in pending_subs:
-                        real_sub = session.query(UserRoomSubscription).filter_by(
-                            user_id=p_sub.user_id, room_id=existing_real_room.id
-                        ).first()
-                        if not real_sub: p_sub.room_id = existing_real_room.id
-                        else: session.delete(p_sub)
-                    
-                    for p_slot in pending_slots:
-                        real_slot = session.query(UserTrackedSlot).filter_by(
-                             user_id=p_slot.user_id, room_id=existing_real_room.id, slot_id=p_slot.slot_id
-                        ).first()
-                        if not real_slot: p_slot.room_id = existing_real_room.id
-                        else: session.delete(p_slot)
+                    # Group pending slots by user for easier processing
+                    slots_by_user = {}
+                    for s in pending_slots:
+                        slots_by_user.setdefault(s.user_id, []).append(s)
 
+                    for p_sub in pending_subs:
+                        user_id = p_sub.user_id
+                        
+                        # 1. Ensure a Subscription exists for the NEW room
+                        real_sub = session.query(UserRoomSubscription).filter_by(
+                            user_id=user_id, room_id=existing_real_room.id
+                        ).first()
+                        
+                        if not real_sub:
+                            # If it doesn't exist, we must create it so slots have a valid parent
+                            # We copy relevant settings (alias, etc) from the pending subscription
+                            real_sub = UserRoomSubscription(
+                                user_id=user_id, 
+                                room_id=existing_real_room.id,
+                                alias=p_sub.alias,
+                                is_archived=p_sub.is_archived
+                            )
+                            session.add(real_sub)
+                            # CRITICAL: Flush so the DB knows this ID exists before we move slots to it
+                            session.flush()
+
+                        # 2. Move Slots to the New Room
+                        user_slots = slots_by_user.get(user_id, [])
+                        for p_slot in user_slots:
+                            # Check if the destination already has this slot tracked (prevent duplicates)
+                            conflict_slot = session.query(UserTrackedSlot).filter_by(
+                                 user_id=user_id, room_id=existing_real_room.id, slot_id=p_slot.slot_id
+                            ).first()
+                            
+                            if conflict_slot:
+                                # Duplicate detected: Delete the pending one, keep the existing one
+                                session.delete(p_slot)
+                            else:
+                                # Safe to move: Update the room_id
+                                p_slot.room_id = existing_real_room.id
+
+                        # 3. Delete the Old Subscription
+                        # Now that slots are moved/deleted, p_sub has no children and can be safely removed.
+                        session.delete(p_sub)
+                    
+                    # Finally, delete the old Pending Room
                     session.delete(room)
                     session.commit() 
-                    room = existing_real_room 
+                    room = existing_real_room
                 else:
                     logging.info(f"[POLLER_HEAL] Updating Pending Room {room.id} to UUID {real_uuid}")
                     room.room_id = real_uuid
