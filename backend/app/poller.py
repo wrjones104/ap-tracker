@@ -6,6 +6,7 @@ import websockets
 import os
 import random
 import fnmatch
+import time
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
@@ -28,6 +29,12 @@ load_dotenv()
 # Limit concurrent requests to Cheese Tracker API to avoid rate limits
 CHEESE_POLL_SEMAPHORE_LIMIT = 3
 cheese_semaphore = asyncio.Semaphore(CHEESE_POLL_SEMAPHORE_LIMIT)
+
+# Limit concurrent requests to Archipelago API
+AP_POLL_SEMAPHORE_LIMIT = 5 
+ap_poll_semaphore = asyncio.Semaphore(AP_POLL_SEMAPHORE_LIMIT)
+
+SEMAPHORE_WAIT_WARNING_THRESHOLD = 60
 
 # =============================================================================
 # CORE HELPERS & SETUP
@@ -139,6 +146,11 @@ async def fetch_json(url):
     session = get_aiohttp_session()
     try:
         async with session.get(url, timeout=15) as response:
+            if response.status == 429:
+                retry_after = response.headers.get("Retry-After", "unknown")
+                logging.warning(f"[HTTP_429] Rate limited on {url}. Retry-After: {retry_after}")
+                return None
+            
             response.raise_for_status()
             return await response.json()
     except Exception as e:
@@ -1165,9 +1177,25 @@ async def run_room_poll(room_info, loop):
 
     if not tracker_id: return
 
-    tracker_data = await fetch_json(f"https://{hostname}/api/tracker/{tracker_id}")
+    start_wait_time = time.time()
+
+    # Wrap the fetch in the AP semaphore
+    async with ap_poll_semaphore:
+        wait_duration = time.time() - start_wait_time
+        if wait_duration > SEMAPHORE_WAIT_WARNING_THRESHOLD:
+            logging.warning(
+                f"[HIGH_LOAD] Room {db_id} waited {wait_duration:.2f}s for AP Semaphore. "
+                f"Active tasks might be exceeding capacity."
+            )
+        tracker_data = await fetch_json(f"https://{hostname}/api/tracker/{tracker_id}")
+
+    # If the fetch failed (e.g. 429 or 404), stop here
+    if not tracker_data:
+        return
 
     try:
+        # Database processing is CPU bound, not Network bound, so we do it OUTSIDE the 
+        # ap_poll_semaphore to free up the network slot for other rooms immediately.
         notifications_to_send = await loop.run_in_executor(
             None, db_process_poll_data, db_id, room_uuid, tracker_data, room_data 
         )

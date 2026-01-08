@@ -45,7 +45,7 @@ logging.info(f"Logging level set to {logging.getLevelName(log_level)} for '{FLAS
 # ==============================================================================
 
 DATABASE_URL = os.environ.get('DATABASE_URL', "sqlite:///./ap_tracker.db")
-POLLING_INTERVAL_SECONDS = 180
+POLLING_INTERVAL_SECONDS = 300
 SUPERVISOR_INTERVAL_SECONDS = 60
 FIREBASE_KEY_FILE = "service-account-key.json"
 
