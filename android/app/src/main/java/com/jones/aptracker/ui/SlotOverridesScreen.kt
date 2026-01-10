@@ -67,9 +67,20 @@ fun SlotOverridesScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    // State for the bottom sheet
+    // State for the bottom sheet: Store IDs instead of the object to avoid stale state
     var selectedSlotRoomId by remember { mutableStateOf<Int?>(null) }
-    var selectedSlotDetail by remember { mutableStateOf<TrackedSlotDetail?>(null) }
+    var selectedSlotId by remember { mutableStateOf<Int?>(null) }
+
+    // Derive the "Live" slot detail from the fresh list based on the stored IDs
+    val selectedSlotDetail = remember(activeRooms, selectedSlotRoomId, selectedSlotId) {
+        if (selectedSlotRoomId != null && selectedSlotId != null) {
+            activeRooms.find { it.room_db_id == selectedSlotRoomId }
+                ?.tracked_slots
+                ?.find { it.slot_id == selectedSlotId }
+        } else {
+            null
+        }
+    }
 
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
@@ -107,37 +118,42 @@ fun SlotOverridesScreen(
                     .padding(top = padding.calculateTopPadding())
             ) {
                 items(activeRooms) { room ->
-                    // Room Header
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = getIconByName(room.icon_name),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = room.room_alias,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    // FIX 1: Wrap the content in a Column to prevent Z-stacking overlap
+                    Column {
+                        // Room Header
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Assuming getIconByName is available in your project as per your original code
+                            Icon(
+                                imageVector = getIconByName(room.icon_name),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = room.room_alias,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
 
-                    // Slots List
-                    room.tracked_slots.forEach { slot ->
-                        SlotOverrideItem(
-                            slot = slot,
-                            onClick = {
-                                selectedSlotRoomId = room.room_db_id
-                                selectedSlotDetail = slot
-                            }
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(start = 52.dp))
+                        // Slots List
+                        room.tracked_slots.forEach { slot ->
+                            SlotOverrideItem(
+                                slot = slot,
+                                onClick = {
+                                    // FIX 2: Store IDs to reference the live object
+                                    selectedSlotRoomId = room.room_db_id
+                                    selectedSlotId = slot.slot_id
+                                }
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(start = 52.dp))
+                        }
                     }
                 }
 
@@ -152,18 +168,16 @@ fun SlotOverridesScreen(
     if (selectedSlotDetail != null && selectedSlotRoomId != null && userProfile != null) {
         ModalBottomSheet(
             onDismissRequest = {
-                selectedSlotDetail = null
                 selectedSlotRoomId = null
+                selectedSlotId = null
             },
             sheetState = sheetState
         ) {
             SlotSettingsSheet(
-                slot = selectedSlotDetail!!,
+                slot = selectedSlotDetail, // Always passes the fresh "live" object
                 profile = userProfile!!,
                 onUpdate = { key, value ->
-                    userViewModel.updateSlotPreferences(selectedSlotRoomId!!, selectedSlotDetail!!.slot_id, key, value)
-                    // Optimistically update local state to reflect change immediately in UI
-                    // (Real app would rely on flow update, but this makes UI snappy)
+                    userViewModel.updateSlotPreferences(selectedSlotRoomId!!, selectedSlotDetail.slot_id, key, value)
                 }
             )
         }
@@ -270,7 +284,6 @@ fun SlotSettingsSheet(
             // 2. BEHAVIOR SECTION
             item { SectionHeader("Behavior") }
             item {
-                // NEW TOGGLE
                 OverrideToggle(
                     title = "Suppress locally found items",
                     currentValue = slot.suppress_self_found,

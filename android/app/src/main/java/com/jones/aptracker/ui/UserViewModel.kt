@@ -167,26 +167,38 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun updateSlotPreferences(roomId: Int, slotId: Int, key: String, value: Boolean?) {
         viewModelScope.launch {
             try {
-                // We construct a request object with only the specific field set.
-                // We rely on Gson (default behavior) to NOT serialize the null fields,
-                // effectively acting as a partial update (PATCH).
-                val request = when (key) {
-                    "notify_progression" -> UpdateSlotPrefsRequest(notify_progression = value, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
-                    "notify_useful" -> UpdateSlotPrefsRequest(notify_useful = value, notify_progression = null, notify_hints = null, notify_hints_remote_items = null)
-                    "notify_hints" -> UpdateSlotPrefsRequest(notify_hints = value, notify_progression = null, notify_useful = null, notify_hints_remote_items = null)
-                    "notify_hints_remote_items" -> UpdateSlotPrefsRequest(notify_hints_remote_items = value, notify_progression = null, notify_useful = null, notify_hints = null)
-                    "notify_finished" -> UpdateSlotPrefsRequest(notify_finished = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
-                    "use_condensed_messages" -> UpdateSlotPrefsRequest(use_condensed_messages = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
-                    "suppress_own_events" -> UpdateSlotPrefsRequest(suppress_own_events = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
-                    "combine_notifications" -> UpdateSlotPrefsRequest(combine_notifications = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
-                    "remove_emojis" -> UpdateSlotPrefsRequest(remove_emojis = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
-                    "suppress_self_found" -> UpdateSlotPrefsRequest(suppress_self_found = value, notify_progression = null, notify_useful = null, notify_hints = null, notify_hints_remote_items = null)
-                    else -> null
+                // 1. Find the current state of the slot from your local list
+                //    This ensures we preserve existing overrides instead of resetting them.
+                val currentRoom = _trackedSlotsByRoom.value.find { it.room_db_id == roomId }
+                val currentSlot = currentRoom?.tracked_slots?.find { it.slot_id == slotId }
+
+                if (currentSlot == null) {
+                    // Safety check: If data is missing, don't attempt an update
+                    return@launch
                 }
 
-                if (request != null) {
-                    RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
+                // 2. Construct the request using the NEW value for the target key,
+                //    and the EXISTING values for everything else.
+                val request = UpdateSlotPrefsRequest(
+                    notify_progression = if (key == "notify_progression") value else currentSlot.notify_progression,
+                    notify_useful = if (key == "notify_useful") value else currentSlot.notify_useful,
+                    notify_hints = if (key == "notify_hints") value else currentSlot.notify_hints,
+                    notify_hints_remote_items = if (key == "notify_hints_remote_items") value else currentSlot.notify_hints_remote_items,
+                    notify_finished = if (key == "notify_finished") value else currentSlot.notify_finished,
+                    combine_notifications = if (key == "combine_notifications") value else currentSlot.combine_notifications,
+                    suppress_own_events = if (key == "suppress_own_events") value else currentSlot.suppress_own_events,
+                    remove_emojis = if (key == "remove_emojis") value else currentSlot.remove_emojis,
+                    suppress_self_found = if (key == "suppress_self_found") value else currentSlot.suppress_self_found,
+                    use_condensed_messages = if (key == "use_condensed_messages") value else currentSlot.use_condensed_messages
+                )
+
+                // 3. Send the complete update object
+                val response = RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
+
+                if (response.isSuccessful) {
                     fetchTrackedSlots() // Refresh UI with new state
+                } else {
+                    _errorMessage.value = "Failed to update settings: ${response.code()}"
                 }
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to save slot settings."
