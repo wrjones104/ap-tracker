@@ -465,10 +465,13 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids):
     """
     Fetches names from DB in chunks and constructs final notification payloads.
-    Applies filtering, backfill checks, ignore lists, and alias/condensed formatting.
+    Applies filtering, backfill checks, ignore lists, alias/condensed formatting, and snooze logic.
     """
     notifications_by_user = {}
     name_lookup_map = {}
+    
+    # We capture the current time once at the start of the batch for consistent comparison
+    now_utc = datetime.now(timezone.utc)
 
     # 1. Fetch Names from DatapackageCache
     if cache_keys_to_fetch:
@@ -525,6 +528,18 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
                 
                 if not user_prefs or not slot_prefs: continue
+
+                # --- SNOOZE LOGIC START ---
+                # Check Global Snooze
+                if user_prefs.global_snooze_until and user_prefs.global_snooze_until > now_utc:
+                    logging.debug(f"[NOTIFY_SNOOZE] User {user_id} is globally snoozed. Suppressing item.")
+                    continue
+
+                # Check Slot Snooze (Using the RECEIVING slot, as that's who we are tracking)
+                if slot_prefs.snooze_until and slot_prefs.snooze_until > now_utc:
+                    logging.debug(f"[NOTIFY_SNOOZE] User {user_id} has snoozed Slot {rid}. Suppressing item.")
+                    continue
+                # --- SNOOZE LOGIC END ---
 
                 # Helper to resolve overrides
                 def get_pref(attr, default_attr):
@@ -652,8 +667,20 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 user_prefs = users_by_id.get(user_id)
                 if not user_prefs: continue
                 
+                # --- SNOOZE LOGIC START (HINT) ---
+                if user_prefs.global_snooze_until and user_prefs.global_snooze_until > now_utc:
+                     logging.debug(f"[NOTIFY_SNOOZE] User {user_id} is globally snoozed. Suppressing hint.")
+                     continue
+                # --- SNOOZE LOGIC END (HINT) ---
+
                 relevant_slot = io_id if is_for_us else lo_id
                 relevant_slot_prefs = prefs_by_user_slot.get(user_id, {}).get(relevant_slot)
+
+                # --- SNOOZE LOGIC START (SLOT HINT) ---
+                if relevant_slot_prefs and relevant_slot_prefs.snooze_until and relevant_slot_prefs.snooze_until > now_utc:
+                    logging.debug(f"[NOTIFY_SNOOZE] User {user_id} has snoozed Slot {relevant_slot} (Hint).")
+                    continue
+                # --- SNOOZE LOGIC END (SLOT HINT) ---
 
                 # Check Finished
                 wants_finished_notifs = user_prefs.notify_finished_default

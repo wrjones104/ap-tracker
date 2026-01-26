@@ -1839,3 +1839,94 @@ def remove_ignore_item(current_user, item_id):
         raise e
     finally:
         Session.remove()
+
+# =============================================================================
+# SNOOZE MANAGEMENT (NEW)
+# =============================================================================
+
+@bp.route('/users/me/snooze', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def set_global_snooze(current_user):
+    """
+    Sets a global snooze timer for the current user.
+    Payload: { "duration_minutes": 60 }
+    Sending 0 or negative clears the snooze.
+    """
+    data = request.json or {}
+    duration = data.get('duration_minutes')
+
+    if duration is None or not isinstance(duration, int):
+        return jsonify({'error': 'duration_minutes (int) is required'}), 400
+
+    session = Session()
+    try:
+        user = session.query(User).filter_by(id=current_user.id).first()
+        
+        if duration <= 0:
+            user.global_snooze_until = None
+            logging.info(f"[API] User {user.id} disabled global snooze.")
+            message = "Global snooze disabled."
+        else:
+            # Calculate expiration time (UTC)
+            snooze_until = datetime.utcnow() + timedelta(minutes=duration)
+            user.global_snooze_until = snooze_until
+            logging.info(f"[API] User {user.id} snoozed all notifications for {duration} mins.")
+            message = f"App snoozed for {duration} minutes."
+
+        session.commit()
+        
+        # Return the ISO timestamp so the UI can update its countdown if needed
+        return jsonify({
+            'message': message,
+            'snooze_until': format_iso_z(user.global_snooze_until)
+        })
+    finally:
+        Session.remove()
+
+
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/snooze', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def set_slot_snooze(current_user, room_db_id, slot_id):
+    """
+    Sets a snooze timer for a specific tracked slot.
+    Payload: { "duration_minutes": 60 }
+    """
+    data = request.json or {}
+    duration = data.get('duration_minutes')
+
+    if duration is None or not isinstance(duration, int):
+        return jsonify({'error': 'duration_minutes (int) is required'}), 400
+
+    session = Session()
+    try:
+        slot = session.query(UserTrackedSlot).filter_by(
+            user_id=current_user.id,
+            room_db_id=room_db_id,
+            slot_id=slot_id
+        ).first()
+
+        if not slot:
+            return jsonify({'error': 'Tracked slot not found'}), 404
+
+        if duration <= 0:
+            slot.snooze_until = None
+            logging.info(f"[API] User {current_user.id} unsnoozed slot {slot_id} in room {room_db_id}.")
+            message = "Slot snooze disabled."
+        else:
+            snooze_until = datetime.utcnow() + timedelta(minutes=duration)
+            slot.snooze_until = snooze_until
+            logging.info(f"[API] User {current_user.id} snoozed slot {slot_id} for {duration} mins.")
+            message = f"Player snoozed for {duration} minutes."
+
+        session.commit()
+
+        return jsonify({
+            'message': message,
+            'snooze_until': format_iso_z(slot.snooze_until)
+        })
+    finally:
+        Session.remove()
