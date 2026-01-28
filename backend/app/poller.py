@@ -7,6 +7,7 @@ import os
 import random
 import fnmatch
 import time
+import re
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
@@ -36,9 +37,26 @@ ap_poll_semaphore = asyncio.Semaphore(AP_POLL_SEMAPHORE_LIMIT)
 
 SEMAPHORE_WAIT_WARNING_THRESHOLD = 60
 
+
 # =============================================================================
 # CORE HELPERS & SETUP
 # =============================================================================
+
+def get_app_version():
+    try:
+        gradle_path = os.path.join(os.path.dirname(__file__), '../../android/app/build.gradle.kts')
+        if os.path.exists(gradle_path):
+            with open(gradle_path, 'r') as f:
+                content = f.read()
+                match = re.search(r'versionName\s*=\s*"([^"]+)"', content)
+                if match:
+                    return match.group(1)
+    except Exception:
+        pass
+    return "1.0.0"
+
+APP_VERSION = get_app_version()
+APP_USER_AGENT = f"ArchipelagoAlerts/{APP_VERSION} (+https://github.com/wrjones104/ap-tracker)"
 
 async def close_aiohttp_session():
     session = getattr(thread_local_data, "aiohttp_session", None)
@@ -50,8 +68,13 @@ async def close_aiohttp_session():
 
 def get_aiohttp_session():
     if not hasattr(thread_local_data, "aiohttp_session") or thread_local_data.aiohttp_session.closed:
-        # Use DummyCookieJar to prevent memory leak from accumulating cookies across thousands of rooms
-        thread_local_data.aiohttp_session = aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar())
+        headers = {
+            "User-Agent": APP_USER_AGENT
+        }
+        thread_local_data.aiohttp_session = aiohttp.ClientSession(
+            headers=headers, 
+            cookie_jar=aiohttp.DummyCookieJar()
+        )
     return thread_local_data.aiohttp_session
 
 def log_resource_usage(app):

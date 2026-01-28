@@ -4,6 +4,7 @@ import threading
 import os
 import json
 import time
+import re
 from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import IntegrityError
@@ -19,8 +20,26 @@ load_dotenv()
 
 bp = Blueprint('api_cheese', __name__)
 
+def get_app_version():
+    """Extracts version from the Android build.gradle.kts file."""
+    try:
+        gradle_path = os.path.join(os.path.dirname(__file__), '../../android/app/build.gradle.kts')
+        if os.path.exists(gradle_path):
+            with open(gradle_path, 'r') as f:
+                content = f.read()
+                match = re.search(r'versionName\s*=\s*"([^"]+)"', content)
+                if match:
+                    return match.group(1)
+    except Exception as e:
+        logging.warning(f"[VERSION] Could not read version from gradle: {e}")
+    
+    return "1.0.0" # Fallback
+
 CHEESE_BASE_URL = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.theincrediblewheelofchee.se/api')
-CHEESE_DELAY = 1.0
+CHEESE_DELAY = 60.0
+
+APP_VERSION = get_app_version()
+APP_USER_AGENT = f"ArchipelagoAlerts/{APP_VERSION} (+https://github.com/wrjones104/ap-tracker)"
 
 def _extract_ap_room_id(url_string):
     """
@@ -79,10 +98,13 @@ def setup_cheese_user_task(app, user_id):
 
             # --- REQUESTS SESSION START ---
             with requests.Session() as req_session:
-                headers = {"Authorization": f"Bearer {api_key}"}
+                req_session.headers.update({
+                    "Authorization": f"Bearer {api_key}",
+                    "User-Agent": APP_USER_AGENT 
+                })
 
                 try:
-                    me_resp = req_session.get(f"{CHEESE_BASE_URL}/user/self", headers=headers, timeout=10)
+                    me_resp = req_session.get(f"{CHEESE_BASE_URL}/user/self", timeout=10)
                     if me_resp.ok:
                         me_data = me_resp.json()
                         if me_data.get('id'):
@@ -95,7 +117,7 @@ def setup_cheese_user_task(app, user_id):
                 
                 # 2. Fetch User's Trackers List
                 try:
-                    resp = req_session.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=headers, timeout=15)
+                    resp = req_session.get(f"{CHEESE_BASE_URL}/dashboard/tracker", timeout=15)
                     resp.raise_for_status()
                     trackers_list = resp.json()
                 except Exception as e:
@@ -262,8 +284,6 @@ def setup_cheese_user_task(app, user_id):
         finally:
             Session.remove()
 
-# ... imports ...
-
 @bp.route('/auth', methods=['POST'])
 @handle_db_errors
 @log_api_call
@@ -283,7 +303,10 @@ def connect_cheese_account(current_user):
 
     # 1. Validate Key & Fetch Identity
     try:
-        test_headers = {"Authorization": f"Bearer {api_key}"}
+        test_headers = {
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": APP_USER_AGENT
+        }
         test_resp = requests.get(f"{CHEESE_BASE_URL}/user/self", headers=test_headers, timeout=10)
         
         if test_resp.status_code == 401:
@@ -404,7 +427,11 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
     # === 2. NETWORK PHASE: No DB session open! ===
     cheese_tracker_id = None
     try:
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {api_key}", 
+            "Content-Type": "application/json",
+            "User-Agent": APP_USER_AGENT
+        }
         
         # Step 1: POST to create/get the tracker
         payload = {"url": tracker_url}
@@ -570,7 +597,8 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
     
     base_headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "User-Agent": APP_USER_AGENT
     }
 
     try: 
@@ -691,7 +719,10 @@ def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):
             if not api_key:
                 return
 
-            headers = {"Authorization": f"Bearer {api_key}"}
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": APP_USER_AGENT
+            }
             
             # Endpoint: PUT /tracker/{tracker_id}/dashboard_override
             url = f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}/dashboard_override"
