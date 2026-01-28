@@ -12,7 +12,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("com.google.gms.google-services")
-    id("kotlin-kapt")
+    id("com.google.devtools.ksp") version "2.1.0-1.0.29"
 }
 
 android {
@@ -119,7 +119,7 @@ dependencies {
     implementation("com.google.accompanist:accompanist-swiperefresh:0.28.0")
     val room_version = "2.6.1"
     implementation("androidx.room:room-runtime:$room_version")
-    kapt("androidx.room:room-compiler:$room_version")
+    ksp("androidx.room:room-compiler:$room_version")
     implementation("androidx.room:room-ktx:$room_version")
     implementation("net.openid:appauth:0.11.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
