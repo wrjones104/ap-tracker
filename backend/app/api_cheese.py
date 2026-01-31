@@ -15,47 +15,14 @@ from . import Session
 from .models import User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
 from .api import token_required, log_api_call, handle_db_errors
 from .encryption import encrypt_api_key, decrypt_api_key
+from .utils import get_cheese_headers, extract_ap_room_id
 
 load_dotenv()
 
 bp = Blueprint('api_cheese', __name__)
 
-def get_app_version():
-    """Extracts version from the Android build.gradle.kts file."""
-    try:
-        gradle_path = os.path.join(os.path.dirname(__file__), '../../android/app/build.gradle.kts')
-        if os.path.exists(gradle_path):
-            with open(gradle_path, 'r') as f:
-                content = f.read()
-                match = re.search(r'versionName\s*=\s*"([^"]+)"', content)
-                if match:
-                    return match.group(1)
-    except Exception as e:
-        logging.warning(f"[VERSION] Could not read version from gradle: {e}")
-    
-    return "1.0.0" # Fallback
-
 CHEESE_BASE_URL = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.theincrediblewheelofchee.se/api')
 CHEESE_DELAY = 60.0
-
-APP_VERSION = get_app_version()
-APP_USER_AGENT = f"ArchipelagoAlerts/{APP_VERSION} (+https://github.com/wrjones104/ap-tracker)"
-
-def _extract_ap_room_id(url_string):
-    """
-    Helper to extract the room ID (UUID) from an Archipelago URL.
-    Example: https://archipelago.gg/room/12345 -> 12345
-    """
-    if not url_string:
-        return None
-    try:
-        parsed = urlparse(url_string)
-        parts = parsed.path.strip('/').split('/')
-        if len(parts) >= 2 and parts[0] == 'room':
-            return parts[1]
-    except Exception:
-        pass
-    return None
 
 def setup_cheese_user_task(app, user_id):
     """
@@ -98,11 +65,8 @@ def setup_cheese_user_task(app, user_id):
 
             # --- REQUESTS SESSION START ---
             with requests.Session() as req_session:
-                req_session.headers.update({
-                    "Authorization": f"Bearer {api_key}",
-                    "User-Agent": APP_USER_AGENT 
-                })
-
+                req_session.headers.update(get_cheese_headers())
+                req_session.headers['Authorization'] = f"Bearer {api_key}"
                 try:
                     me_resp = req_session.get(f"{CHEESE_BASE_URL}/user/self", timeout=10)
                     if me_resp.ok:
@@ -150,7 +114,7 @@ def setup_cheese_user_task(app, user_id):
 
                     # B. Fallback: Try to find by AP Room ID
                     if not room and room_link:
-                        ap_room_id = _extract_ap_room_id(room_link)
+                        ap_room_id = extract_ap_room_id(room_link)
                         if ap_room_id:
                             room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
                             if room and not room.cheese_tracker_id:
@@ -160,7 +124,7 @@ def setup_cheese_user_task(app, user_id):
                     # Fetch details needed for Slot Syncing
                     # Use req_session here for efficiency
                     try:
-                        detail_resp = req_session.get(f"{CHEESE_BASE_URL}/tracker/{ct_id}", headers=headers, timeout=10)
+                        detail_resp = req_session.get(f"{CHEESE_BASE_URL}/tracker/{ct_id}", timeout=10)
                         if detail_resp.ok:
                             full_data = detail_resp.json()
                     except Exception as e:
@@ -169,7 +133,7 @@ def setup_cheese_user_task(app, user_id):
 
                     # C. If still no room, Create it
                     if not room and full_data:
-                        ap_room_id_extracted = _extract_ap_room_id(room_link) or "PENDING_DISCOVERY_" + ct_id[:8]
+                        ap_room_id_extracted = extract_ap_room_id(room_link) or "PENDING_DISCOVERY_" + ct_id[:8]
                         hostname = "archipelago.gg"
                         try:
                             if room_link:
@@ -264,7 +228,40 @@ def setup_cheese_user_task(app, user_id):
                         logging.info(f"[CHEESE_SETUP] Pruning stale subscription for user {user.id}: Room {sub.room_id}")
                         session.delete(sub)
                         stats['pruned'] += 1
-            # --- REQUESTS SESSION END ---
+                # --- REQUESTS SESSION END ---
+
+                try:
+                    orphaned_subs = session.query(UserRoomSubscription)\
+                        .join(TrackedRoom)\
+                        .filter(UserRoomSubscription.user_id == user.id)\
+                        .filter(TrackedRoom.cheese_tracker_id.is_(None))\
+                        .filter(~TrackedRoom.room_id.startswith("PENDING_DISCOVERY"))\
+                        .all()
+
+                    for sub in orphaned_subs:
+                        room = sub.room
+                        # Only push if we have enough info to create a valid tracker
+                        if room.tracker_id and room.hostname: 
+                            logging.info(f"[CHEESE_SETUP] Healing orphaned room: {room.room_id}")
+                            
+                            # Re-construct the necessary URLs for the push function
+                            tracker_url = f"https://{room.hostname}/tracker/{room.tracker_id}"
+                            room_url = f"https://{room.hostname}/room/{room.room_id}"
+                            
+                            # We call this synchronously. Since we are already in a background thread,
+                            # blocking here is acceptable. 
+                            # Note: Each call might add ~60s (CHEESE_DELAY) to the sync time.
+                            push_new_room_to_cheese(
+                                app, 
+                                user.id, 
+                                tracker_url, 
+                                room.room_id, 
+                                room_url, 
+                                sub.alias
+                            )
+                except Exception as e:
+                    logging.error(f"[CHEESE_SETUP] Error during healing phase: {e}", exc_info=True)
+                    # We do not return/abort here; we want to finish the unlock process below.
             
             # Unlock and Complete
             user.is_syncing_cheese = False
@@ -303,10 +300,9 @@ def connect_cheese_account(current_user):
 
     # 1. Validate Key & Fetch Identity
     try:
-        test_headers = {
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": APP_USER_AGENT
-        }
+        test_headers = get_cheese_headers() 
+        test_headers["Authorization"] = f"Bearer {api_key}"
+
         test_resp = requests.get(f"{CHEESE_BASE_URL}/user/self", headers=test_headers, timeout=10)
         
         if test_resp.status_code == 401:
@@ -427,11 +423,8 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
     # === 2. NETWORK PHASE: No DB session open! ===
     cheese_tracker_id = None
     try:
-        headers = {
-            "Authorization": f"Bearer {api_key}", 
-            "Content-Type": "application/json",
-            "User-Agent": APP_USER_AGENT
-        }
+        headers = get_cheese_headers()
+        headers["Authorization"] = f"Bearer {api_key}"
         
         # Step 1: POST to create/get the tracker
         payload = {"url": tracker_url}
@@ -595,11 +588,8 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
 
     # === 2. BACKGROUND WORKER ===
     
-    base_headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "User-Agent": APP_USER_AGENT
-    }
+    base_headers = get_cheese_headers()
+    base_headers["Authorization"] = f"Bearer {api_key}"
 
     try: 
         threading.Thread(
@@ -719,10 +709,8 @@ def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):
             if not api_key:
                 return
 
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "User-Agent": APP_USER_AGENT
-            }
+            headers = get_cheese_headers()
+            headers["Authorization"] = f"Bearer {api_key}"
             
             # Endpoint: PUT /tracker/{tracker_id}/dashboard_override
             url = f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}/dashboard_override"

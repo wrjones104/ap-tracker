@@ -21,7 +21,7 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint
 )
-
+from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
 thread_local_data = local()
@@ -51,12 +51,9 @@ def get_app_version():
                 match = re.search(r'versionName\s*=\s*"([^"]+)"', content)
                 if match:
                     return match.group(1)
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning(f"[VERSION] Could not read version from gradle: {e}")
     return "1.0.0"
-
-APP_VERSION = get_app_version()
-APP_USER_AGENT = f"ArchipelagoAlerts/{APP_VERSION} (+https://github.com/wrjones104/ap-tracker)"
 
 async def close_aiohttp_session():
     session = getattr(thread_local_data, "aiohttp_session", None)
@@ -68,9 +65,11 @@ async def close_aiohttp_session():
 
 def get_aiohttp_session():
     if not hasattr(thread_local_data, "aiohttp_session") or thread_local_data.aiohttp_session.closed:
+        
         headers = {
-            "User-Agent": APP_USER_AGENT
+            "User-Agent": get_user_agent_string()
         }
+
         thread_local_data.aiohttp_session = aiohttp.ClientSession(
             headers=headers, 
             cookie_jar=aiohttp.DummyCookieJar()
@@ -165,7 +164,7 @@ def db_remove_invalid_tokens(tokens_to_remove):
     finally:
         Session.remove()
 
-async def fetch_json(url):
+async def fetch_json(url, headers=None):
     session = get_aiohttp_session()
     try:
         async with session.get(url, timeout=15) as response:
@@ -1028,7 +1027,7 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         # 1. SELF-HEALING & MERGE LOGIC (Existing)
         # =========================================================================
         if room.room_id.startswith("PENDING_DISCOVERY") and new_tracker_data.get('room_link'):
-            real_uuid = _extract_ap_room_id(new_tracker_data['room_link'])
+            real_uuid = extract_ap_room_id(new_tracker_data['room_link'])
             if real_uuid:
                 # CHECK CONFLICT
                 existing_real_room = session.query(TrackedRoom).filter_by(room_id=real_uuid).first()
@@ -1245,7 +1244,7 @@ async def run_cheese_poll(room_info, loop):
 
     # Use semaphore to limit concurrent requests to Cheese API
     async with cheese_semaphore:
-        new_data = await fetch_json(url)
+        new_data = await fetch_json(url, headers=get_cheese_headers())
     
     if not new_data: 
         return
