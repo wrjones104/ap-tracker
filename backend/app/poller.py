@@ -15,6 +15,7 @@ from threading import local
 from sqlalchemy import or_, exc, tuple_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
+from email.utils import parsedate_to_datetime
 
 from . import Session, get_firebase_app, process
 from .models import (
@@ -750,7 +751,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     return notifications_by_user
 
 
-def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
+def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activity_ts=None, updated_address=None):
     """
     Synchronously processes tracker data and updates the database.
     """
@@ -769,6 +770,15 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
         room.failed_poll_count = 0
         room.last_successful_poll = datetime.utcnow()
+
+        if remote_activity_ts:
+            room.last_remote_activity = remote_activity_ts
+
+        if updated_address:
+            # Only log if it's actually different to avoid noise
+            if room.cached_full_address != updated_address:
+                logging.info(f"[POLLER_PORT] Updating address for Room {db_id}: {room.cached_full_address} -> {updated_address}")
+                room.cached_full_address = updated_address
         
         cached_players_json_str = room_data['cached_players_json_str']
         game_checksums_json_str = room_data['game_checksums_json_str']
@@ -1191,35 +1201,97 @@ async def run_room_poll(room_info, loop):
     db_id = room_info['db_id']
     hostname = room_info['hostname']
     
+    # 1. Read local state from DB
     room_data = await loop.run_in_executor(None, db_read_room_poll_state, db_id)
     if not room_data: return
         
     tracker_id = room_data['tracker_id']
     room_uuid = room_data['room_uuid']
+    last_known_activity = room_data['last_remote_activity']
+    cached_address = room_data.get('cached_full_address')
 
     if not tracker_id: return
 
+    # --- GATEKEEPER START ---
+    status_url = f"https://{hostname}/api/room_status/{room_uuid}"
+    status_data = await fetch_json(status_url)
+
+    # Variables to track what we find
+    current_remote_activity = None
+    new_full_address = None
+    
+    # Default to TRUE (Poll) for safety. We only set to False if we prove nothing changed.
+    should_fetch_tracker = True
+
+    if status_data:
+        # We assume we can skip, then check for any reason to force a poll
+        should_fetch_tracker = False
+        
+        # Reason 1: Tracker ID Mismatch (Re-gen)
+        remote_tracker_id = status_data.get('tracker')
+        if remote_tracker_id and remote_tracker_id != tracker_id:
+            logging.info(f"[POLLER_GATE] Tracker ID mismatch for room {db_id}. Forcing poll.")
+            should_fetch_tracker = True
+
+        # Reason 2: Port Mismatch
+        remote_port = status_data.get('last_port')
+        if remote_port:
+            check_address = f"{hostname}:{remote_port}"
+            if check_address != cached_address:
+                logging.info(f"[POLLER_GATE] Port changed for Room {db_id} ({cached_address} -> {check_address}). Forcing poll.")
+                new_full_address = check_address
+                should_fetch_tracker = True
+
+        # Reason 3: Timestamp is New (or we can't read it)
+        remote_activity_str = status_data.get('last_activity')
+        if remote_activity_str:
+            try:
+                dt_aware = parsedate_to_datetime(remote_activity_str)
+                current_remote_activity = dt_aware.astimezone(timezone.utc).replace(tzinfo=None)
+                
+                # If remote is NEWER than local, we must poll.
+                # If remote is OLDER or SAME, we don't need to poll (unless reasons 1 or 2 triggered)
+                if not last_known_activity or current_remote_activity > last_known_activity:
+                    # Only log debug if it's purely an activity update to avoid spam
+                    if not should_fetch_tracker: 
+                        logging.debug(f"[POLLER_GATE] New activity detected for Room {db_id}.")
+                    should_fetch_tracker = True
+            except Exception as e:
+                logging.warning(f"[POLLER_GATE] Date parse error for room {db_id}: {e}")
+                should_fetch_tracker = True # Safety Fallback
+        else:
+            # Timestamp missing? Safety Fallback.
+            should_fetch_tracker = True
+    else:
+        # Status endpoint failed (404/500)? Safety Fallback.
+        should_fetch_tracker = True
+
+    # FINAL DECISION
+    if not should_fetch_tracker:
+        return
+    # --- GATEKEEPER END ---
+
     start_wait_time = time.time()
 
-    # Wrap the fetch in the AP semaphore
     async with ap_poll_semaphore:
         wait_duration = time.time() - start_wait_time
         if wait_duration > SEMAPHORE_WAIT_WARNING_THRESHOLD:
-            logging.warning(
-                f"[HIGH_LOAD] Room {db_id} waited {wait_duration:.2f}s for AP Semaphore. "
-                f"Active tasks might be exceeding capacity."
-            )
+            logging.warning(f"[HIGH_LOAD] Room {db_id} waited {wait_duration:.2f}s for semaphore.")
         tracker_data = await fetch_json(f"https://{hostname}/api/tracker/{tracker_id}")
 
-    # If the fetch failed (e.g. 429 or 404), stop here
     if not tracker_data:
         return
 
     try:
-        # Database processing is CPU bound, not Network bound, so we do it OUTSIDE the 
-        # ap_poll_semaphore to free up the network slot for other rooms immediately.
         notifications_to_send = await loop.run_in_executor(
-            None, db_process_poll_data, db_id, room_uuid, tracker_data, room_data 
+            None, 
+            db_process_poll_data, 
+            db_id, 
+            room_uuid, 
+            tracker_data, 
+            room_data, 
+            current_remote_activity,
+            new_full_address
         )
         
         if notifications_to_send:
@@ -1287,7 +1359,10 @@ def db_read_room_poll_state(db_id):
             'tracker_id': room.tracker_id,
             'cached_players_json_str': room.cached_players_json,
             'game_checksums_json_str': room.game_checksums_json,
-            'is_complete_status': room.is_complete
+            'is_complete_status': room.is_complete,
+            'last_remote_activity': room.last_remote_activity,
+            'cached_full_address': room.cached_full_address,
+            'hostname': room.hostname
         }
     except Exception as e:
         return None
