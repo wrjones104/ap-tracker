@@ -1,4 +1,4 @@
-"""Add last_remote_activity for TrackeRoom
+"""Add last_remote_activity for TrackedRoom
 
 Revision ID: 2a96c4d3bd18
 Revises: 97763127e09f
