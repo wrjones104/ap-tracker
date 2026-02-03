@@ -15,6 +15,7 @@ from threading import local
 from sqlalchemy import or_, exc, tuple_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
+from email.utils import parsedate_to_datetime
 
 from . import Session, get_firebase_app, process
 from .models import (
@@ -750,7 +751,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     return notifications_by_user
 
 
-def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
+def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activity_ts=None, updated_address=None):
     """
     Synchronously processes tracker data and updates the database.
     """
@@ -769,6 +770,15 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
         room.failed_poll_count = 0
         room.last_successful_poll = datetime.utcnow()
+
+        if remote_activity_ts:
+            room.last_remote_activity = remote_activity_ts
+
+        if updated_address:
+            # Only log if it's actually different to avoid noise
+            if room.cached_full_address != updated_address:
+                logging.info(f"[POLLER_PORT] Updating address for Room {db_id}: {room.cached_full_address} -> {updated_address}")
+                room.cached_full_address = updated_address
         
         cached_players_json_str = room_data['cached_players_json_str']
         game_checksums_json_str = room_data['game_checksums_json_str']
@@ -1196,8 +1206,57 @@ async def run_room_poll(room_info, loop):
         
     tracker_id = room_data['tracker_id']
     room_uuid = room_data['room_uuid']
+    last_known_activity = room_data['last_remote_activity']
 
     if not tracker_id: return
+
+    # --- GATEKEEPER START ---
+    # 1. Check the lightweight status endpoint first
+    status_url = f"https://{hostname}/api/room_status/{room_uuid}"
+    status_data = await fetch_json(status_url)
+
+    current_remote_activity = None
+    should_fetch_tracker = True
+    new_full_address = None
+
+    if status_data:
+        remote_port = status_data.get('last_port')
+        if remote_port:
+            check_address = f"{hostname}:{remote_port}"
+            
+            if check_address != room_data.get('cached_full_address'):
+                logging.info(f"[POLLER_PORT] Port changed for Room {db_id}. New: {check_address}")
+                new_full_address = check_address
+                should_fetch_tracker = True
+        # Check if Tracker ID changed (Re-generation event)
+        remote_tracker_id = status_data.get('tracker')
+        if remote_tracker_id and remote_tracker_id != tracker_id:
+            logging.info(f"[POLLER_GATE] Tracker ID mismatch for room {db_id}. Forcing refresh.")
+            should_fetch_tracker = True
+        else:
+            # Check Timestamp
+            remote_activity_str = status_data.get('last_activity')
+            if remote_activity_str:
+                try:
+                    # Parse RFC 1123 format (e.g. "Tue, 03 Feb 2026...") into a datetime
+                    dt_aware = parsedate_to_datetime(remote_activity_str)
+                    # Convert to naive UTC to match standard DB storage (if your DB uses naive)
+                    current_remote_activity = dt_aware.astimezone(timezone.utc).replace(tzinfo=None)
+
+                    if last_known_activity and current_remote_activity <= last_known_activity:
+                        logging.debug(f"[POLLER_GATE] Room {db_id} is idle. Skipping.") 
+                        return 
+                except Exception as e:
+                    logging.warning(f"[POLLER_GATE] Date parse error for room {db_id}: {e}")
+                    # If we can't parse date, default to fetching to be safe
+                    should_fetch_tracker = True
+    else:
+        # If status check fails (404/Error), fall back to old behavior
+        should_fetch_tracker = True
+
+    if not should_fetch_tracker:
+        return
+    # --- GATEKEEPER END ---
 
     start_wait_time = time.time()
 
@@ -1216,10 +1275,16 @@ async def run_room_poll(room_info, loop):
         return
 
     try:
-        # Database processing is CPU bound, not Network bound, so we do it OUTSIDE the 
-        # ap_poll_semaphore to free up the network slot for other rooms immediately.
+        # Pass current_remote_activity to the DB processor
         notifications_to_send = await loop.run_in_executor(
-            None, db_process_poll_data, db_id, room_uuid, tracker_data, room_data 
+            None, 
+            db_process_poll_data, 
+            db_id, 
+            room_uuid, 
+            tracker_data, 
+            room_data, 
+            current_remote_activity,
+            new_full_address
         )
         
         if notifications_to_send:
@@ -1287,7 +1352,10 @@ def db_read_room_poll_state(db_id):
             'tracker_id': room.tracker_id,
             'cached_players_json_str': room.cached_players_json,
             'game_checksums_json_str': room.game_checksums_json,
-            'is_complete_status': room.is_complete
+            'is_complete_status': room.is_complete,
+            'last_remote_activity': room.last_remote_activity,
+            'cached_full_address': room.cached_full_address,
+            'hostname': room.hostname
         }
     except Exception as e:
         return None
