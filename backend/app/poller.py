@@ -22,7 +22,7 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint
 )
-from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id
+from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
 thread_local_data = local()
@@ -1214,7 +1214,7 @@ async def run_room_poll(room_info, loop):
 
     # --- GATEKEEPER START ---
     status_url = f"https://{hostname}/api/room_status/{room_uuid}"
-    status_data = await fetch_json(status_url)
+    status_data, status_code = await fetch_json_with_status(status_url)
 
     # Variables to track what we find
     current_remote_activity = None
@@ -1223,48 +1223,59 @@ async def run_room_poll(room_info, loop):
     # Default to TRUE (Poll) for safety. We only set to False if we prove nothing changed.
     should_fetch_tracker = True
 
-    if status_data:
-        # We assume we can skip, then check for any reason to force a poll
-        should_fetch_tracker = False
-        
-        # Reason 1: Tracker ID Mismatch (Re-gen)
-        remote_tracker_id = status_data.get('tracker')
-        if remote_tracker_id and remote_tracker_id != tracker_id:
-            logging.info(f"[POLLER_GATE] Tracker ID mismatch for room {db_id}. Forcing poll.")
-            should_fetch_tracker = True
+    if status_code == 404:
+        await loop.run_in_executor(None, db_suspend_room, db_id, "404 Not Found (Gatekeeper)")
+        return # STOP POLLING IMMEDIATELY
 
-        # Reason 2: Port Mismatch
-        remote_port = status_data.get('last_port')
-        if remote_port:
-            check_address = f"{hostname}:{remote_port}"
-            if check_address != cached_address:
-                logging.info(f"[POLLER_GATE] Port changed for Room {db_id} ({cached_address} -> {check_address}). Forcing poll.")
-                new_full_address = check_address
+    # 2. HANDLE NETWORK FAILURE
+    if not status_data:
+        # If 404 is handled, any other 'False' means network error or non-200
+        # We fail open (poll safely) or skip. For gatekeeper, skipping is safer if we can't check status.
+        # But to be safe against "stuck" rooms, we often default to True (Poll) if check fails.
+        should_fetch_tracker = True 
+    else:
+        if status_data:
+            # We assume we can skip, then check for any reason to force a poll
+            should_fetch_tracker = False
+            
+            # Reason 1: Tracker ID Mismatch (Re-gen)
+            remote_tracker_id = status_data.get('tracker')
+            if remote_tracker_id and remote_tracker_id != tracker_id:
+                logging.info(f"[POLLER_GATE] Tracker ID mismatch for room {db_id}. Forcing poll.")
                 should_fetch_tracker = True
 
-        # Reason 3: Timestamp is New (or we can't read it)
-        remote_activity_str = status_data.get('last_activity')
-        if remote_activity_str:
-            try:
-                dt_aware = parsedate_to_datetime(remote_activity_str)
-                current_remote_activity = dt_aware.astimezone(timezone.utc).replace(tzinfo=None)
-                
-                # If remote is NEWER than local, we must poll.
-                # If remote is OLDER or SAME, we don't need to poll (unless reasons 1 or 2 triggered)
-                if not last_known_activity or current_remote_activity > last_known_activity:
-                    # Only log debug if it's purely an activity update to avoid spam
-                    if not should_fetch_tracker: 
-                        logging.debug(f"[POLLER_GATE] New activity detected for Room {db_id}.")
+            # Reason 2: Port Mismatch
+            remote_port = status_data.get('last_port')
+            if remote_port:
+                check_address = f"{hostname}:{remote_port}"
+                if check_address != cached_address:
+                    logging.info(f"[POLLER_GATE] Port changed for Room {db_id} ({cached_address} -> {check_address}). Forcing poll.")
+                    new_full_address = check_address
                     should_fetch_tracker = True
-            except Exception as e:
-                logging.warning(f"[POLLER_GATE] Date parse error for room {db_id}: {e}")
-                should_fetch_tracker = True # Safety Fallback
+
+            # Reason 3: Timestamp is New (or we can't read it)
+            remote_activity_str = status_data.get('last_activity')
+            if remote_activity_str:
+                try:
+                    dt_aware = parsedate_to_datetime(remote_activity_str)
+                    current_remote_activity = dt_aware.astimezone(timezone.utc).replace(tzinfo=None)
+                    
+                    # If remote is NEWER than local, we must poll.
+                    # If remote is OLDER or SAME, we don't need to poll (unless reasons 1 or 2 triggered)
+                    if not last_known_activity or current_remote_activity > last_known_activity:
+                        # Only log debug if it's purely an activity update to avoid spam
+                        if not should_fetch_tracker: 
+                            logging.debug(f"[POLLER_GATE] New activity detected for Room {db_id}.")
+                        should_fetch_tracker = True
+                except Exception as e:
+                    logging.warning(f"[POLLER_GATE] Date parse error for room {db_id}: {e}")
+                    should_fetch_tracker = True # Safety Fallback
+            else:
+                # Timestamp missing? Safety Fallback.
+                should_fetch_tracker = True
         else:
-            # Timestamp missing? Safety Fallback.
+            # Status endpoint failed (404/500)? Safety Fallback.
             should_fetch_tracker = True
-    else:
-        # Status endpoint failed (404/500)? Safety Fallback.
-        should_fetch_tracker = True
 
     # FINAL DECISION
     if not should_fetch_tracker:
@@ -1729,15 +1740,22 @@ async def poller_supervisor(app, loop):
                             logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup.")
                             rooms_in_setup.add(room.id)
                             await setup_queue.put(room_info)
+                            # THROTTLE: Stagger setup queuing
+                            await asyncio.sleep(0.02)
+
                         elif room.id in running_tasks and room.id not in rooms_in_setup:
                             logging.info(f"[SUPERVISOR] Re-queuing running room {room.id} for metadata repair.")
                             rooms_in_setup.add(room.id)
                             await setup_queue.put(room_info)
+                            # THROTTLE: Stagger setup repair
+                            await asyncio.sleep(0.02)
                     else:
                         if room.id not in running_tasks:
                             logging.info(f"[SUPERVISOR] Starting AP poller for room {room.id}")
                             task = asyncio.create_task(poll_room_with_interval(room_info, loop))
                             running_tasks[room.id] = task
+                            # THROTTLE: Stagger poller startup (Thundering Herd Fix)
+                            await asyncio.sleep(0.02)
                 
                 # --- 2. Cheese Task ---
                 # We run this regardless of AP status (even if Pending!)
@@ -1748,6 +1766,8 @@ async def poller_supervisor(app, loop):
                         logging.info(f"[SUPERVISOR] Starting Cheese poller for room {room.id}")
                         c_task = asyncio.create_task(poll_cheese_with_interval(room_info, loop))
                         running_tasks[cheese_task_key] = c_task
+                        # THROTTLE: Stagger cheese startup
+                        await asyncio.sleep(0.02)
                 else:
                     if cheese_task_key in running_tasks:
                         running_tasks[cheese_task_key].cancel()
