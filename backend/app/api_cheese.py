@@ -494,11 +494,15 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         try:
             local_room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
             if local_room:
-                local_room.cheese_tracker_id = cheese_tracker_id
-                session.commit()
-                logging.info(f"[CHEESE_PUSH_NEW] Successfully created/linked {ap_room_id} to Cheese ID {cheese_tracker_id}.")
-                # Check if the user has already tracked slots locally while we were pushing the room.
-                # This ensures they get claimed immediately, reducing reliance on the poller grace period.
+                try:
+                    local_room.cheese_tracker_id = cheese_tracker_id
+                    session.commit()
+                    logging.info(f"[CHEESE_PUSH_NEW] Successfully created/linked {ap_room_id} to Cheese ID {cheese_tracker_id}.")
+                
+                except IntegrityError:
+                    session.rollback()
+                    logging.warning(f"[CHEESE_PUSH_NEW] Collision: Cheese ID {cheese_tracker_id} is already assigned to another room. Deferring merge to Poller.")
+                    return                 
                 try:
                     slots_to_claim = session.query(UserTrackedSlot.slot_id).filter_by(
                         user_id=user_id, 
