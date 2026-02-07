@@ -142,9 +142,9 @@ fun ProfileScreen(
 
             Spacer(Modifier.height(32.dp))
 
-            val snoozeSubtitle = if (userProfile?.global_snooze_until != null)
-                "Active until ${formatIsoDate(userProfile!!.global_snooze_until!!)}"
-            else "Silence all notifications temporarily"
+            val snoozeSubtitle = userProfile?.global_snooze_until?.let { snoozeTime ->
+                "Active until ${formatIsoDate(snoozeTime)}"
+            } ?: "Silence all notifications temporarily"
 
             // --- Menu Options ---
 
