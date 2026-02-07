@@ -7,6 +7,7 @@ import os
 import random
 import fnmatch
 import time
+import re
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
@@ -14,13 +15,14 @@ from threading import local
 from sqlalchemy import or_, exc, tuple_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
+from email.utils import parsedate_to_datetime
 
 from . import Session, get_firebase_app, process
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint
 )
-from .utils import is_snoozed
+from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -37,9 +39,23 @@ ap_poll_semaphore = asyncio.Semaphore(AP_POLL_SEMAPHORE_LIMIT)
 
 SEMAPHORE_WAIT_WARNING_THRESHOLD = 60
 
+
 # =============================================================================
 # CORE HELPERS & SETUP
 # =============================================================================
+
+def get_app_version():
+    try:
+        gradle_path = os.path.join(os.path.dirname(__file__), '../../android/app/build.gradle.kts')
+        if os.path.exists(gradle_path):
+            with open(gradle_path, 'r') as f:
+                content = f.read()
+                match = re.search(r'versionName\s*=\s*"([^"]+)"', content)
+                if match:
+                    return match.group(1)
+    except Exception as e:
+        logging.warning(f"[VERSION] Could not read version from gradle: {e}")
+    return "1.0.0"
 
 async def close_aiohttp_session():
     session = getattr(thread_local_data, "aiohttp_session", None)
@@ -51,8 +67,15 @@ async def close_aiohttp_session():
 
 def get_aiohttp_session():
     if not hasattr(thread_local_data, "aiohttp_session") or thread_local_data.aiohttp_session.closed:
-        # Use DummyCookieJar to prevent memory leak from accumulating cookies across thousands of rooms
-        thread_local_data.aiohttp_session = aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar())
+        
+        headers = {
+            "User-Agent": get_user_agent_string()
+        }
+
+        thread_local_data.aiohttp_session = aiohttp.ClientSession(
+            headers=headers, 
+            cookie_jar=aiohttp.DummyCookieJar()
+        )
     return thread_local_data.aiohttp_session
 
 def log_resource_usage(app):
@@ -143,7 +166,7 @@ def db_remove_invalid_tokens(tokens_to_remove):
     finally:
         Session.remove()
 
-async def fetch_json(url):
+async def fetch_json(url, headers=None):
     session = get_aiohttp_session()
     try:
         async with session.get(url, timeout=15) as response:
@@ -738,7 +761,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     return notifications_by_user
 
 
-def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
+def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activity_ts=None, updated_address=None):
     """
     Synchronously processes tracker data and updates the database.
     """
@@ -757,6 +780,15 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data):
 
         room.failed_poll_count = 0
         room.last_successful_poll = datetime.utcnow()
+
+        if remote_activity_ts:
+            room.last_remote_activity = remote_activity_ts
+
+        if updated_address:
+            # Only log if it's actually different to avoid noise
+            if room.cached_full_address != updated_address:
+                logging.info(f"[POLLER_PORT] Updating address for Room {db_id}: {room.cached_full_address} -> {updated_address}")
+                room.cached_full_address = updated_address
         
         cached_players_json_str = room_data['cached_players_json_str']
         game_checksums_json_str = room_data['game_checksums_json_str']
@@ -1015,7 +1047,7 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         # 1. SELF-HEALING & MERGE LOGIC (Existing)
         # =========================================================================
         if room.room_id.startswith("PENDING_DISCOVERY") and new_tracker_data.get('room_link'):
-            real_uuid = _extract_ap_room_id(new_tracker_data['room_link'])
+            real_uuid = extract_ap_room_id(new_tracker_data['room_link'])
             if real_uuid:
                 # CHECK CONFLICT
                 existing_real_room = session.query(TrackedRoom).filter_by(room_id=real_uuid).first()
@@ -1179,35 +1211,108 @@ async def run_room_poll(room_info, loop):
     db_id = room_info['db_id']
     hostname = room_info['hostname']
     
+    # 1. Read local state from DB
     room_data = await loop.run_in_executor(None, db_read_room_poll_state, db_id)
     if not room_data: return
         
     tracker_id = room_data['tracker_id']
     room_uuid = room_data['room_uuid']
+    last_known_activity = room_data['last_remote_activity']
+    cached_address = room_data.get('cached_full_address')
 
     if not tracker_id: return
 
+    # --- GATEKEEPER START ---
+    status_url = f"https://{hostname}/api/room_status/{room_uuid}"
+    status_data, status_code = await fetch_json_with_status(status_url)
+
+    # Variables to track what we find
+    current_remote_activity = None
+    new_full_address = None
+    
+    # Default to TRUE (Poll) for safety. We only set to False if we prove nothing changed.
+    should_fetch_tracker = True
+
+    if status_code == 404:
+        await loop.run_in_executor(None, db_suspend_room, db_id, "404 Not Found (Gatekeeper)")
+        return # STOP POLLING IMMEDIATELY
+
+    # 2. HANDLE NETWORK FAILURE
+    if not status_data:
+        # If 404 is handled, any other 'False' means network error or non-200
+        # We fail open (poll safely) or skip. For gatekeeper, skipping is safer if we can't check status.
+        # But to be safe against "stuck" rooms, we often default to True (Poll) if check fails.
+        should_fetch_tracker = True 
+    else:
+        if status_data:
+            # We assume we can skip, then check for any reason to force a poll
+            should_fetch_tracker = False
+            
+            # Reason 1: Tracker ID Mismatch (Re-gen)
+            remote_tracker_id = status_data.get('tracker')
+            if remote_tracker_id and remote_tracker_id != tracker_id:
+                logging.info(f"[POLLER_GATE] Tracker ID mismatch for room {db_id}. Forcing poll.")
+                should_fetch_tracker = True
+
+            # Reason 2: Port Mismatch
+            remote_port = status_data.get('last_port')
+            if remote_port:
+                check_address = f"{hostname}:{remote_port}"
+                if check_address != cached_address:
+                    logging.info(f"[POLLER_GATE] Port changed for Room {db_id} ({cached_address} -> {check_address}). Forcing poll.")
+                    new_full_address = check_address
+                    should_fetch_tracker = True
+
+            # Reason 3: Timestamp is New (or we can't read it)
+            remote_activity_str = status_data.get('last_activity')
+            if remote_activity_str:
+                try:
+                    dt_aware = parsedate_to_datetime(remote_activity_str)
+                    current_remote_activity = dt_aware.astimezone(timezone.utc).replace(tzinfo=None)
+                    
+                    # If remote is NEWER than local, we must poll.
+                    # If remote is OLDER or SAME, we don't need to poll (unless reasons 1 or 2 triggered)
+                    if not last_known_activity or current_remote_activity > last_known_activity:
+                        # Only log debug if it's purely an activity update to avoid spam
+                        if not should_fetch_tracker: 
+                            logging.debug(f"[POLLER_GATE] New activity detected for Room {db_id}.")
+                        should_fetch_tracker = True
+                except Exception as e:
+                    logging.warning(f"[POLLER_GATE] Date parse error for room {db_id}: {e}")
+                    should_fetch_tracker = True # Safety Fallback
+            else:
+                # Timestamp missing? Safety Fallback.
+                should_fetch_tracker = True
+        else:
+            # Status endpoint failed (404/500)? Safety Fallback.
+            should_fetch_tracker = True
+
+    # FINAL DECISION
+    if not should_fetch_tracker:
+        return
+    # --- GATEKEEPER END ---
+
     start_wait_time = time.time()
 
-    # Wrap the fetch in the AP semaphore
     async with ap_poll_semaphore:
         wait_duration = time.time() - start_wait_time
         if wait_duration > SEMAPHORE_WAIT_WARNING_THRESHOLD:
-            logging.warning(
-                f"[HIGH_LOAD] Room {db_id} waited {wait_duration:.2f}s for AP Semaphore. "
-                f"Active tasks might be exceeding capacity."
-            )
+            logging.warning(f"[HIGH_LOAD] Room {db_id} waited {wait_duration:.2f}s for semaphore.")
         tracker_data = await fetch_json(f"https://{hostname}/api/tracker/{tracker_id}")
 
-    # If the fetch failed (e.g. 429 or 404), stop here
     if not tracker_data:
         return
 
     try:
-        # Database processing is CPU bound, not Network bound, so we do it OUTSIDE the 
-        # ap_poll_semaphore to free up the network slot for other rooms immediately.
         notifications_to_send = await loop.run_in_executor(
-            None, db_process_poll_data, db_id, room_uuid, tracker_data, room_data 
+            None, 
+            db_process_poll_data, 
+            db_id, 
+            room_uuid, 
+            tracker_data, 
+            room_data, 
+            current_remote_activity,
+            new_full_address
         )
         
         if notifications_to_send:
@@ -1232,7 +1337,7 @@ async def run_cheese_poll(room_info, loop):
 
     # Use semaphore to limit concurrent requests to Cheese API
     async with cheese_semaphore:
-        new_data = await fetch_json(url)
+        new_data = await fetch_json(url, headers=get_cheese_headers())
     
     if not new_data: 
         return
@@ -1275,7 +1380,10 @@ def db_read_room_poll_state(db_id):
             'tracker_id': room.tracker_id,
             'cached_players_json_str': room.cached_players_json,
             'game_checksums_json_str': room.game_checksums_json,
-            'is_complete_status': room.is_complete
+            'is_complete_status': room.is_complete,
+            'last_remote_activity': room.last_remote_activity,
+            'cached_full_address': room.cached_full_address,
+            'hostname': room.hostname
         }
     except Exception as e:
         return None
@@ -1642,15 +1750,22 @@ async def poller_supervisor(app, loop):
                             logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup.")
                             rooms_in_setup.add(room.id)
                             await setup_queue.put(room_info)
+                            # THROTTLE: Stagger setup queuing
+                            await asyncio.sleep(0.02)
+
                         elif room.id in running_tasks and room.id not in rooms_in_setup:
                             logging.info(f"[SUPERVISOR] Re-queuing running room {room.id} for metadata repair.")
                             rooms_in_setup.add(room.id)
                             await setup_queue.put(room_info)
+                            # THROTTLE: Stagger setup repair
+                            await asyncio.sleep(0.02)
                     else:
                         if room.id not in running_tasks:
                             logging.info(f"[SUPERVISOR] Starting AP poller for room {room.id}")
                             task = asyncio.create_task(poll_room_with_interval(room_info, loop))
                             running_tasks[room.id] = task
+                            # THROTTLE: Stagger poller startup (Thundering Herd Fix)
+                            await asyncio.sleep(0.02)
                 
                 # --- 2. Cheese Task ---
                 # We run this regardless of AP status (even if Pending!)
@@ -1661,6 +1776,8 @@ async def poller_supervisor(app, loop):
                         logging.info(f"[SUPERVISOR] Starting Cheese poller for room {room.id}")
                         c_task = asyncio.create_task(poll_cheese_with_interval(room_info, loop))
                         running_tasks[cheese_task_key] = c_task
+                        # THROTTLE: Stagger cheese startup
+                        await asyncio.sleep(0.02)
                 else:
                     if cheese_task_key in running_tasks:
                         running_tasks[cheese_task_key].cancel()
