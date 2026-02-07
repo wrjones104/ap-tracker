@@ -22,7 +22,8 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint
 )
-from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room
+from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed
+
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
 thread_local_data = local()
@@ -488,10 +489,13 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids):
     """
     Fetches names from DB in chunks and constructs final notification payloads.
-    Applies filtering, backfill checks, ignore lists, and alias/condensed formatting.
+    Applies filtering, backfill checks, ignore lists, alias/condensed formatting, and snooze logic.
     """
     notifications_by_user = {}
     name_lookup_map = {}
+    
+    # We capture the current time once at the start of the batch for consistent comparison
+    now_utc = datetime.now(timezone.utc)
 
     # 1. Fetch Names from DatapackageCache
     if cache_keys_to_fetch:
@@ -548,6 +552,9 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 slot_prefs = prefs_by_user_slot.get(user_id, {}).get(rid)
                 
                 if not user_prefs or not slot_prefs: continue
+
+                if is_snoozed(user_prefs, slot_prefs, now_utc, user_id, rid, "item"):
+                    continue
 
                 # Helper to resolve overrides
                 def get_pref(attr, default_attr):
@@ -677,6 +684,9 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 
                 relevant_slot = io_id if is_for_us else lo_id
                 relevant_slot_prefs = prefs_by_user_slot.get(user_id, {}).get(relevant_slot)
+
+                if is_snoozed(user_prefs, relevant_slot_prefs, now_utc, user_id, relevant_slot, "hint"):
+                    continue
 
                 # Check Finished
                 wants_finished_notifs = user_prefs.notify_finished_default

@@ -15,8 +15,9 @@ from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.orm import selectinload, aliased
 from sqlalchemy import or_, desc, tuple_
+from firebase_admin import messaging
 
-from . import Session
+from . import Session, get_firebase_app
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
     DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist, UserIgnoreItem
@@ -1154,7 +1155,8 @@ def get_current_user(current_user):
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
-            'is_guest': True
+            'is_guest': True,
+            'global_snooze_until': format_iso_z(current_user.global_snooze_until)
         })
 
     else:
@@ -1186,7 +1188,8 @@ def get_current_user(current_user):
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
-            'is_guest': False
+            'is_guest': False,
+            'global_snooze_until': format_iso_z(current_user.global_snooze_until)
         })
 
 @bp.route('/users/me/tracked-slots', methods=['GET'])
@@ -1242,7 +1245,8 @@ def get_user_tracked_slots(current_user):
                     'combine_notifications': slot.combine_notifications,
                     'suppress_own_events': slot.suppress_own_events,
                     'remove_emojis': slot.remove_emojis,
-                    'suppress_self_found': slot.suppress_self_found
+                    'suppress_self_found': slot.suppress_self_found,
+                    'snooze_until': format_iso_z(slot.snooze_until)
                 })
 
             response_data.append({
@@ -1837,5 +1841,131 @@ def remove_ignore_item(current_user, item_id):
     except Exception as e:
         session.rollback()
         raise e
+    finally:
+        Session.remove()
+
+# =============================================================================
+# SNOOZE MANAGEMENT (NEW)
+# =============================================================================
+
+@bp.route('/users/me/snooze', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def set_global_snooze(current_user):
+    """
+    Sets a global snooze timer for the current user.
+    Payload: { "duration_minutes": 60 }
+    Sending 0 or negative clears the snooze.
+    """
+    data = request.json or {}
+    duration = data.get('duration_minutes')
+
+    if duration is None or not isinstance(duration, int):
+        return jsonify({'error': 'duration_minutes (int) is required'}), 400
+
+    session = Session()
+    
+    user = session.query(User).filter_by(id=current_user.id).first()
+    
+    if duration <= 0:
+        user.global_snooze_until = None
+        logging.info(f"[API] User {user.id} disabled global snooze.")
+        message = "Global snooze disabled."
+    else:
+        # Calculate expiration time (UTC)
+        snooze_until = datetime.utcnow() + timedelta(minutes=duration)
+        user.global_snooze_until = snooze_until
+        logging.info(f"[API] User {user.id} snoozed all notifications for {duration} mins.")
+        message = f"App snoozed for {duration} minutes."
+
+    session.commit()
+    
+    return jsonify({
+        'message': message,
+        'snooze_until': format_iso_z(user.global_snooze_until)
+    })
+
+
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/snooze', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def set_slot_snooze(current_user, room_db_id, slot_id):
+    """
+    Sets a snooze timer for a specific tracked slot.
+    Payload: { "duration_minutes": 60 }
+    """
+    data = request.json or {}
+    duration = data.get('duration_minutes')
+
+    if duration is None or not isinstance(duration, int):
+        return jsonify({'error': 'duration_minutes (int) is required'}), 400
+
+    session = Session()
+    
+    # [REFACTORED] Removed manual try/finally block
+    slot = session.query(UserTrackedSlot).filter_by(
+        user_id=current_user.id,
+        room_id=room_db_id, # Ensure this matches your fixed model attribute (room_id)
+        slot_id=slot_id
+    ).first()
+
+    if not slot:
+        return jsonify({'error': 'Tracked slot not found'}), 404
+
+    if duration <= 0:
+        slot.snooze_until = None
+        logging.info(f"[API] User {current_user.id} unsnoozed slot {slot_id} in room {room_db_id}.")
+        message = "Slot snooze disabled."
+    else:
+        snooze_until = datetime.utcnow() + timedelta(minutes=duration)
+        slot.snooze_until = snooze_until
+        logging.info(f"[API] User {current_user.id} snoozed slot {slot_id} for {duration} mins.")
+        message = f"Player snoozed for {duration} minutes."
+
+    session.commit()
+
+    return jsonify({
+        'message': message,
+        'snooze_until': format_iso_z(slot.snooze_until)
+    })
+
+@bp.route('/users/me/test-notification', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def send_test_notification(current_user):
+    """
+    Triggers a fake push notification to all of the user's registered devices.
+    Useful for debugging FCM and Notification Actions.
+    """
+    get_firebase_app()
+    session = Session()
+    try:
+        # 1. Get user's devices
+        devices = session.query(Device).filter_by(user_id=current_user.id).all()
+        if not devices:
+            return jsonify({'error': 'No devices registered. Open the app to register.'}), 404
+
+        tokens = [d.fcm_token for d in devices]
+        success_count = 0
+        
+        # 2. Send a message to each token
+        for token in tokens:
+            try:
+                message = messaging.Message(
+                    notification=messaging.Notification(
+                        title="Test Notification",
+                        body="This is a test from the Debug menu!"
+                    ),
+                    token=token
+                )
+                messaging.send(message)
+                success_count += 1
+            except Exception as e:
+                logging.error(f"[API_WARN] Failed to send test push to token {token[:10]}...: {e}")
+
+        return jsonify({'message': f'Sent test notification to {success_count} devices.'})
     finally:
         Session.remove()

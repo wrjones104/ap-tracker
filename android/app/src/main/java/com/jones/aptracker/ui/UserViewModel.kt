@@ -12,6 +12,7 @@ import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.UpdateSlotPrefsRequest
 import com.jones.aptracker.network.UserProfile
+import com.jones.aptracker.network.SnoozeRequest
 import com.jones.aptracker.repository.UserRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,6 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 class UserViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -356,6 +359,138 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e("UserViewModel", "Failed to remove rule", e)
                 _errorMessage.value = "Failed to remove rule."
                 fetchIgnoreList() // Revert UI on failure
+            }
+        }
+    }
+
+    // ============================================================================================
+    // SNOOZE LOGIC
+    // ============================================================================================
+
+    fun setGlobalSnooze(durationMinutes: Int) {
+        // 1. CALCULATE LOCALLY (Optimistic)
+        val optimisticTime = if (durationMinutes > 0) {
+            Instant.now().plus(durationMinutes.toLong(), ChronoUnit.MINUTES).toString()
+        } else {
+            null
+        }
+
+        // 2. SAVE OLD STATE (In case we need to revert)
+        val oldProfile = _userProfile.value
+
+        // 3. UPDATE UI IMMEDIATELY
+        _userProfile.value = oldProfile?.copy(global_snooze_until = optimisticTime)
+
+        val status = if (durationMinutes > 0) "App snoozed." else "App active."
+        _integrationMessage.value = status
+
+        viewModelScope.launch {
+            try {
+                // 4. NETWORK CALL (Happens in background)
+                val request = SnoozeRequest(durationMinutes)
+                val response = RetrofitClient.instance.setGlobalSnooze(request)
+
+                // 5. CONFIRMATION (Update with authoritative server time)
+                _userProfile.value = _userProfile.value?.copy(
+                    global_snooze_until = response.snooze_until
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+                // 6. REVERT ON FAILURE
+                _userProfile.value = oldProfile
+                _errorMessage.value = "Failed to set snooze. Check connection."
+            }
+        }
+    }
+
+    fun setSlotSnooze(roomId: Int, slotId: Int, durationMinutes: Int) {
+        // 1. CALCULATE LOCALLY
+        val optimisticTime = if (durationMinutes > 0) {
+            Instant.now().plus(durationMinutes.toLong(), ChronoUnit.MINUTES).toString()
+        } else {
+            null
+        }
+
+        // 2. SAVE OLD STATE
+        val oldRooms = _trackedSlotsByRoom.value
+
+        // 3. UPDATE UI IMMEDIATELY (Complex List Mapping)
+        val optimisticRooms = oldRooms.map { room ->
+            if (room.room_db_id == roomId) {
+                val updatedSlots = room.tracked_slots.map { slot ->
+                    if (slot.slot_id == slotId) {
+                        slot.copy(snooze_until = optimisticTime)
+                    } else {
+                        slot
+                    }
+                }
+                room.copy(tracked_slots = updatedSlots)
+            } else {
+                room
+            }
+        }
+        _trackedSlotsByRoom.value = optimisticRooms
+
+        val status = if (durationMinutes > 0) "Player snoozed." else "Player active."
+        _integrationMessage.value = status
+
+        viewModelScope.launch {
+            try {
+                // 4. NETWORK CALL
+                val request = SnoozeRequest(durationMinutes)
+                // We don't strictly need to parse the response here because we already updated the UI,
+                // but doing so ensures our local clock matches the server clock eventually.
+                val response = RetrofitClient.instance.setSlotSnooze(roomId, slotId, request)
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                // 5. REVERT ON FAILURE
+                _trackedSlotsByRoom.value = oldRooms
+                _errorMessage.value = "Failed to snooze player."
+            }
+        }
+    }
+
+    fun wakeUpEverything() {
+        viewModelScope.launch {
+            // 1. Clear Global Snooze
+            setGlobalSnooze(0)
+
+            // 2. Find all currently snoozed slots
+            val currentRooms = _trackedSlotsByRoom.value
+            val snoozedSlots = currentRooms.flatMap { room ->
+                room.tracked_slots.map { slot -> room.room_db_id to slot }
+            }.filter { (_, slot) ->
+                slot.snooze_until != null
+            }
+
+            if (snoozedSlots.isNotEmpty()) {
+                Log.d("UserViewModel", "Waking up ${snoozedSlots.size} slots...")
+
+                // 3. Clear each slot (Launching parallel jobs for speed)
+                snoozedSlots.forEach { (roomId, slot) ->
+                    launch {
+                        // reuse existing setSlotSnooze logic but send 0
+                        setSlotSnooze(roomId, slot.slot_id, 0)
+                    }
+                }
+                _integrationMessage.value = "All snoozes cleared."
+            }
+        }
+    }
+
+    fun sendTestNotification() {
+        viewModelScope.launch {
+            try {
+                val response = RetrofitClient.instance.sendTestNotification()
+                if (response.isSuccessful) {
+                    _integrationMessage.value = "Test Notification Sent!"
+                } else {
+                    _errorMessage.value = "Failed to trigger test: ${response.code()}"
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Connection failed."
             }
         }
     }

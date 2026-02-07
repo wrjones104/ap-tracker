@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -109,6 +110,7 @@ fun HistoryScreen(
     roomId: Int?,
     roomAlias: String?,
     historyViewModel: HistoryViewModel = viewModel(),
+    userViewModel: UserViewModel = viewModel(),
     onBackClick: () -> Unit
 ) {
     Scaffold(
@@ -126,6 +128,7 @@ fun HistoryScreen(
         HistoryContent(
             roomId = roomId,
             historyViewModel = historyViewModel,
+            userViewModel = userViewModel,
             modifier = Modifier.padding(padding)
         )
     }
@@ -137,6 +140,7 @@ fun HistoryScreen(
 fun HistoryContent(
     roomId: Int?,
     historyViewModel: HistoryViewModel,
+    userViewModel: UserViewModel,
     modifier: Modifier = Modifier
 ) {
     LaunchedEffect(key1 = roomId) {
@@ -162,6 +166,7 @@ fun HistoryContent(
     var selectedItem by remember { mutableStateOf<HistoryItem?>(null) }
     var selectedHint by remember { mutableStateOf<HintEntity?>(null) }
     var showFilterSheet by remember { mutableStateOf(false) }
+    var showSnoozeDialogForSlot by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -284,6 +289,19 @@ fun HistoryContent(
         }
     }
 
+    showSnoozeDialogForSlot?.let { (snoozeRoomId, snoozeSlotId) ->
+        SnoozeDialog(
+            title = "Snooze Player",
+            currentSnoozeUntil = null,
+            activeSnoozeDetails = emptyList(), // Pass empty list if not using details here
+            onDismiss = { showSnoozeDialogForSlot = null },
+            onSnoozeSelected = { minutes ->
+                userViewModel.setSlotSnooze(snoozeRoomId, snoozeSlotId, minutes)
+                showSnoozeDialogForSlot = null
+            }
+        )
+    }
+
     // --- DETAIL SHEETS ---
     if (selectedItem != null) {
         val itemRoomName = selectedItem!!.db_id?.let { roomNames[it] } ?: "Unknown Room"
@@ -302,6 +320,17 @@ fun HistoryContent(
                 onIgnoreItem = { game ->
                     historyViewModel.ignoreItem(selectedItem!!.itemName, game)
                     selectedItem = null
+                },
+                onSnoozePlayer = {
+                    // Only trigger if we have valid IDs
+                    selectedItem?.let { item ->
+                        val dbId = item.db_id
+                        val slotId = item.slot_id
+                        if (dbId != null && slotId != null) {
+                            showSnoozeDialogForSlot = dbId to slotId
+                            selectedItem = null // Close sheet
+                        }
+                    }
                 }
             )
         }
@@ -322,7 +351,6 @@ fun HistoryFilterSheet(
     onShowFoundHintsChange: (Boolean) -> Unit,
     useCondensed: Boolean,
     onUseCondensedChange: (Boolean) -> Unit,
-    // New Type Filters (Traps Removed)
     showProgression: Boolean,
     onShowProgressionChange: (Boolean) -> Unit,
     showUseful: Boolean,
@@ -480,7 +508,8 @@ fun HistoryDetailSheet(
     item: HistoryItem,
     roomName: String,
     onOpenTracker: () -> Unit,
-    onIgnoreItem: (String?) -> Unit
+    onIgnoreItem: (String?) -> Unit,
+    onSnoozePlayer: () -> Unit
 ) {
     val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
@@ -572,6 +601,19 @@ fun HistoryDetailSheet(
         }
 
         Spacer(Modifier.height(8.dp))
+
+        if (item.slot_id != null && item.db_id != null) {
+            OutlinedButton(
+                onClick = onSnoozePlayer,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.secondary)
+            ) {
+                Icon(Icons.Default.NotificationsPaused, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Snooze Player")
+            }
+            Spacer(Modifier.height(8.dp))
+        }
 
         // Ignore Actions
         if (!item.receivingGame.isNullOrBlank()) {

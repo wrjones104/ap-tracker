@@ -39,6 +39,7 @@ class User(Base):
     use_condensed_messages_default = Column(Boolean, default=False, nullable=False)
     ui_show_finished_default = Column(Boolean, default=True, nullable=False)
     ui_show_found_hints_default = Column(Boolean, default=False, nullable=False)
+    global_snooze_until = Column(DateTime, nullable=True)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
 
 class Device(Base):
@@ -103,6 +104,8 @@ class UserTrackedSlot(Base):
     remove_emojis = Column(Boolean, nullable=True, default=None)
     suppress_self_found = Column(Boolean, nullable=True, default=None)
     use_condensed_messages = Column(Boolean, nullable=True, default=None)
+    snooze_until = Column(DateTime, nullable=True)
+    snooze_wake_on_slot_id = Column(Integer, nullable=True)
     user = relationship("User", viewonly=True)    
     
     __table_args__ = (
