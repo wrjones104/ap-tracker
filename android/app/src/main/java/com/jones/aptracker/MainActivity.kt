@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var authService: AuthorizationService
     lateinit var tokenManager: TokenManager // Made public for composables
     private val authViewModel: AuthViewModel by viewModels()
+    private var isLoggingOut = false
     private var currentCodeVerifier: String? = null
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -128,6 +129,11 @@ class MainActivity : ComponentActivity() {
     private fun observeLogoutEvents() {
         SessionManager.logoutEvent
             .onEach { reason ->
+                // CHECK: If we are already handling a logout, ignore this new event.
+                if (isLoggingOut) return@onEach
+
+                // LOCK: Set the flag to true so subsequent events are blocked
+                isLoggingOut = true
 
                 if (reason == SessionManager.LogoutReason.SESSION_EXPIRED) {
                     Toast.makeText(
