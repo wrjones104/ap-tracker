@@ -1,13 +1,10 @@
 package com.jones.aptracker.ui
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.Person
@@ -20,6 +17,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,7 +26,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -36,6 +33,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import java.time.Instant
+import kotlinx.coroutines.delay
 
 sealed class BottomNavItem(val route: String, val icon: ImageVector, val label: String) {
     object Rooms : BottomNavItem("rooms_tab", Icons.Default.Home, "Rooms")
@@ -63,22 +61,29 @@ fun MainScreen(
     val userProfile by userViewModel.userProfile.collectAsState()
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
     var showUnSnoozeDialog by remember { mutableStateOf(false) }
+    var now by remember { mutableStateOf(Instant.now()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L) // Wait 1 minute
+            now = Instant.now() // Update time, forcing recomposition of dependent blocks
+        }
+    }
 
     // Hoisted State for Add Room Dialog
     var showAddRoomDialog by remember { mutableStateOf(false) }
 
     // Check if snooze is active
-    val isGlobalSnoozeActive = remember(userProfile) {
+    val isGlobalSnoozeActive = remember(userProfile, now) {
         val snoozeTime = userProfile?.global_snooze_until
         if (snoozeTime == null) false else {
             try {
-                // Parse ISO string and check if it's in the future
-                Instant.parse(snoozeTime).isAfter(Instant.now())
+                Instant.parse(snoozeTime).isAfter(now)
             } catch (e: Exception) { false }
         }
     }
 
-    // Check Slots (New Logic)
+    // Check Slots
     val activeSlotSnoozes = remember(trackedSlotsByRoom) {
         trackedSlotsByRoom.flatMap { it.tracked_slots }.filter { slot ->
             val snoozeTime = slot.snooze_until
@@ -90,9 +95,8 @@ fun MainScreen(
         }
     }
 
-    val activeSnoozeDetails = remember(trackedSlotsByRoom) {
+    val activeSnoozeDetails = remember(trackedSlotsByRoom, now) {
         val details = mutableListOf<String>()
-        val now = Instant.now()
 
         trackedSlotsByRoom.forEach { room ->
             room.tracked_slots.forEach { slot ->

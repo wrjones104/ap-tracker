@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 class UserViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -366,63 +368,84 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     // ============================================================================================
 
     fun setGlobalSnooze(durationMinutes: Int) {
+        // 1. CALCULATE LOCALLY (Optimistic)
+        val optimisticTime = if (durationMinutes > 0) {
+            Instant.now().plus(durationMinutes.toLong(), ChronoUnit.MINUTES).toString()
+        } else {
+            null
+        }
+
+        // 2. SAVE OLD STATE (In case we need to revert)
+        val oldProfile = _userProfile.value
+
+        // 3. UPDATE UI IMMEDIATELY
+        _userProfile.value = oldProfile?.copy(global_snooze_until = optimisticTime)
+
+        val status = if (durationMinutes > 0) "App snoozed." else "App active."
+        _integrationMessage.value = status
+
         viewModelScope.launch {
             try {
+                // 4. NETWORK CALL (Happens in background)
                 val request = SnoozeRequest(durationMinutes)
-                // 1. Call API
                 val response = RetrofitClient.instance.setGlobalSnooze(request)
 
-                // 2. INSTANT UPDATE: Patch the local profile immediately
+                // 5. CONFIRMATION (Update with authoritative server time)
                 _userProfile.value = _userProfile.value?.copy(
                     global_snooze_until = response.snooze_until
                 )
-
-                // 3. Background Refresh (Optional consistency check)
-                fetchUserProfile()
-
-                val status = if (durationMinutes > 0) "App snoozed." else "App active."
-                _integrationMessage.value = status
             } catch (e: Exception) {
                 e.printStackTrace()
-                _errorMessage.value = "Failed to set snooze."
+                // 6. REVERT ON FAILURE
+                _userProfile.value = oldProfile
+                _errorMessage.value = "Failed to set snooze. Check connection."
             }
         }
     }
 
     fun setSlotSnooze(roomId: Int, slotId: Int, durationMinutes: Int) {
-        viewModelScope.launch {
-            try {
-                val request = SnoozeRequest(durationMinutes)
-                // 1. Call API
-                val response = RetrofitClient.instance.setSlotSnooze(roomId, slotId, request)
+        // 1. CALCULATE LOCALLY
+        val optimisticTime = if (durationMinutes > 0) {
+            Instant.now().plus(durationMinutes.toLong(), ChronoUnit.MINUTES).toString()
+        } else {
+            null
+        }
 
-                // 2. INSTANT UPDATE: Manually patch the specific slot in our local list
-                // This triggers the MainScreen FAB immediately without waiting for a fetch.
-                val currentRooms = _trackedSlotsByRoom.value
-                val updatedRooms = currentRooms.map { room ->
-                    if (room.room_db_id == roomId) {
-                        // Found the room, now find and patch the slot
-                        val updatedSlots = room.tracked_slots.map { slot ->
-                            if (slot.slot_id == slotId) {
-                                slot.copy(snooze_until = response.snooze_until)
-                            } else {
-                                slot
-                            }
-                        }
-                        room.copy(tracked_slots = updatedSlots)
+        // 2. SAVE OLD STATE
+        val oldRooms = _trackedSlotsByRoom.value
+
+        // 3. UPDATE UI IMMEDIATELY (Complex List Mapping)
+        val optimisticRooms = oldRooms.map { room ->
+            if (room.room_db_id == roomId) {
+                val updatedSlots = room.tracked_slots.map { slot ->
+                    if (slot.slot_id == slotId) {
+                        slot.copy(snooze_until = optimisticTime)
                     } else {
-                        room
+                        slot
                     }
                 }
-                _trackedSlotsByRoom.value = updatedRooms
+                room.copy(tracked_slots = updatedSlots)
+            } else {
+                room
+            }
+        }
+        _trackedSlotsByRoom.value = optimisticRooms
 
-                // 3. Background Refresh (Keeps data in sync with server)
-                fetchTrackedSlots()
+        val status = if (durationMinutes > 0) "Player snoozed." else "Player active."
+        _integrationMessage.value = status
 
-                val status = if (durationMinutes > 0) "Player snoozed." else "Player active."
-                _integrationMessage.value = status
+        viewModelScope.launch {
+            try {
+                // 4. NETWORK CALL
+                val request = SnoozeRequest(durationMinutes)
+                // We don't strictly need to parse the response here because we already updated the UI,
+                // but doing so ensures our local clock matches the server clock eventually.
+                val response = RetrofitClient.instance.setSlotSnooze(roomId, slotId, request)
+
             } catch (e: Exception) {
                 e.printStackTrace()
+                // 5. REVERT ON FAILURE
+                _trackedSlotsByRoom.value = oldRooms
                 _errorMessage.value = "Failed to snooze player."
             }
         }

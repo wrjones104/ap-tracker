@@ -21,10 +21,10 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +57,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
+import java.time.Instant
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,11 +78,28 @@ fun ProfileScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     var showSnoozeDialog by remember { mutableStateOf(false) }
+    var now by remember { mutableStateOf(Instant.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L)
+            now = Instant.now()
+        }
+    }
+
+    val globalSnoozeRaw = userProfile?.global_snooze_until
+    val isGlobalSnoozeActive = remember(globalSnoozeRaw, now) {
+        if (globalSnoozeRaw == null) false else {
+            try {
+                Instant.parse(globalSnoozeRaw).isAfter(now)
+            } catch (e: Exception) { false }
+        }
+    }
 
     if (showSnoozeDialog) {
         SnoozeDialog(
             title = "Global Snooze",
-            currentSnoozeUntil = userProfile?.global_snooze_until,
+            currentSnoozeUntil = if (isGlobalSnoozeActive) globalSnoozeRaw else null,
+            activeSnoozeDetails = emptyList(),
             onDismiss = { showSnoozeDialog = false },
             onSnoozeSelected = { minutes ->
                 userViewModel.setGlobalSnooze(minutes)
@@ -151,7 +171,11 @@ fun ProfileScreen(
             ProfileMenuItem(
                 icon = Icons.Default.NotificationsPaused,
                 title = "Snooze All Notifications",
-                subtitle = snoozeSubtitle,
+                subtitle = if (isGlobalSnoozeActive) {
+                    "Active until ${formatIsoDate(globalSnoozeRaw ?: "")}"
+                } else {
+                    null
+                },
                 onClick = { showSnoozeDialog = true }
             )
 
