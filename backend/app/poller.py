@@ -20,6 +20,7 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint
 )
+from .utils import is_snoozed
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -529,29 +530,8 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 
                 if not user_prefs or not slot_prefs: continue
 
-                # --- SNOOZE LOGIC START ---
-                # 1. Normalize Global Snooze
-                global_snooze = user_prefs.global_snooze_until
-                if global_snooze:
-                    # If DB returned naive time, force it to be UTC aware
-                    if global_snooze.tzinfo is None:
-                        global_snooze = global_snooze.replace(tzinfo=timezone.utc)
-                    
-                    if global_snooze > now_utc:
-                        logging.debug(f"[NOTIFY_SNOOZE] User {user_id} is globally snoozed. Suppressing item.")
-                        continue
-
-                # 2. Normalize Slot Snooze
-                slot_snooze = slot_prefs.snooze_until
-                if slot_snooze:
-                    # If DB returned naive time, force it to be UTC aware
-                    if slot_snooze.tzinfo is None:
-                        slot_snooze = slot_snooze.replace(tzinfo=timezone.utc)
-
-                    if slot_snooze > now_utc:
-                        logging.debug(f"[NOTIFY_SNOOZE] User {user_id} has snoozed Slot {rid}. Suppressing item.")
-                        continue
-                # --- SNOOZE LOGIC END ---
+                if is_snoozed(user_prefs, slot_prefs, now_utc, user_id, rid, "item"):
+                    continue
 
                 # Helper to resolve overrides
                 def get_pref(attr, default_attr):
@@ -679,31 +659,11 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 user_prefs = users_by_id.get(user_id)
                 if not user_prefs: continue
                 
-                # --- SNOOZE LOGIC START (HINT) ---
-                global_snooze = user_prefs.global_snooze_until
-                if global_snooze:
-                    if global_snooze.tzinfo is None:
-                        global_snooze = global_snooze.replace(tzinfo=timezone.utc)
-                    
-                    if global_snooze > now_utc:
-                        logging.debug(f"[NOTIFY_SNOOZE] User {user_id} is globally snoozed. Suppressing hint.")
-                        continue
-                # --- SNOOZE LOGIC END (HINT) ---
-
                 relevant_slot = io_id if is_for_us else lo_id
                 relevant_slot_prefs = prefs_by_user_slot.get(user_id, {}).get(relevant_slot)
 
-                # --- SNOOZE LOGIC START (SLOT HINT) ---
-                if relevant_slot_prefs:
-                    slot_snooze = relevant_slot_prefs.snooze_until
-                    if slot_snooze:
-                        if slot_snooze.tzinfo is None:
-                            slot_snooze = slot_snooze.replace(tzinfo=timezone.utc)
-                            
-                        if slot_snooze > now_utc:
-                            logging.debug(f"[NOTIFY_SNOOZE] User {user_id} has snoozed Slot {relevant_slot} (Hint).")
-                            continue
-                # --- SNOOZE LOGIC END (SLOT HINT) ---
+                if is_snoozed(user_prefs, relevant_slot_prefs, now_utc, user_id, relevant_slot, "hint"):
+                    continue
 
                 # Check Finished
                 wants_finished_notifs = user_prefs.notify_finished_default

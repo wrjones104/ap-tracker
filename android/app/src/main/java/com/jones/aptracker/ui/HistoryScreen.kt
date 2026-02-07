@@ -289,11 +289,11 @@ fun HistoryContent(
         }
     }
 
-    if (showSnoozeDialogForSlot != null) {
-        val (snoozeRoomId, snoozeSlotId) = showSnoozeDialogForSlot!!
+    showSnoozeDialogForSlot?.let { (snoozeRoomId, snoozeSlotId) ->
         SnoozeDialog(
             title = "Snooze Player",
             currentSnoozeUntil = null,
+            activeSnoozeDetails = emptyList(), // Pass empty list if not using details here
             onDismiss = { showSnoozeDialogForSlot = null },
             onSnoozeSelected = { minutes ->
                 userViewModel.setSlotSnooze(snoozeRoomId, snoozeSlotId, minutes)
@@ -323,9 +323,13 @@ fun HistoryContent(
                 },
                 onSnoozePlayer = {
                     // Only trigger if we have valid IDs
-                    if (selectedItem!!.db_id != null && selectedItem!!.slot_id != null) {
-                        showSnoozeDialogForSlot = selectedItem!!.db_id!! to selectedItem!!.slot_id!!
-                        selectedItem = null // Close sheet
+                    selectedItem?.let { item ->
+                        val dbId = item.db_id
+                        val slotId = item.slot_id
+                        if (dbId != null && slotId != null) {
+                            showSnoozeDialogForSlot = dbId to slotId
+                            selectedItem = null // Close sheet
+                        }
                     }
                 }
             )
