@@ -12,6 +12,7 @@ import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.UpdateSlotPrefsRequest
 import com.jones.aptracker.network.UserProfile
+import com.jones.aptracker.network.SnoozeRequest
 import com.jones.aptracker.repository.UserRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -356,6 +357,117 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e("UserViewModel", "Failed to remove rule", e)
                 _errorMessage.value = "Failed to remove rule."
                 fetchIgnoreList() // Revert UI on failure
+            }
+        }
+    }
+
+    // ============================================================================================
+    // SNOOZE LOGIC
+    // ============================================================================================
+
+    fun setGlobalSnooze(durationMinutes: Int) {
+        viewModelScope.launch {
+            try {
+                val request = SnoozeRequest(durationMinutes)
+                // 1. Call API
+                val response = RetrofitClient.instance.setGlobalSnooze(request)
+
+                // 2. INSTANT UPDATE: Patch the local profile immediately
+                _userProfile.value = _userProfile.value?.copy(
+                    global_snooze_until = response.snooze_until
+                )
+
+                // 3. Background Refresh (Optional consistency check)
+                fetchUserProfile()
+
+                val status = if (durationMinutes > 0) "App snoozed." else "App active."
+                _integrationMessage.value = status
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Failed to set snooze."
+            }
+        }
+    }
+
+    fun setSlotSnooze(roomId: Int, slotId: Int, durationMinutes: Int) {
+        viewModelScope.launch {
+            try {
+                val request = SnoozeRequest(durationMinutes)
+                // 1. Call API
+                val response = RetrofitClient.instance.setSlotSnooze(roomId, slotId, request)
+
+                // 2. INSTANT UPDATE: Manually patch the specific slot in our local list
+                // This triggers the MainScreen FAB immediately without waiting for a fetch.
+                val currentRooms = _trackedSlotsByRoom.value
+                val updatedRooms = currentRooms.map { room ->
+                    if (room.room_db_id == roomId) {
+                        // Found the room, now find and patch the slot
+                        val updatedSlots = room.tracked_slots.map { slot ->
+                            if (slot.slot_id == slotId) {
+                                slot.copy(snooze_until = response.snooze_until)
+                            } else {
+                                slot
+                            }
+                        }
+                        room.copy(tracked_slots = updatedSlots)
+                    } else {
+                        room
+                    }
+                }
+                _trackedSlotsByRoom.value = updatedRooms
+
+                // 3. Background Refresh (Keeps data in sync with server)
+                fetchTrackedSlots()
+
+                val status = if (durationMinutes > 0) "Player snoozed." else "Player active."
+                _integrationMessage.value = status
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Failed to snooze player."
+            }
+        }
+    }
+
+    fun wakeUpEverything() {
+        viewModelScope.launch {
+            // 1. Clear Global Snooze
+            setGlobalSnooze(0)
+
+            // 2. Find all currently snoozed slots
+            val currentRooms = _trackedSlotsByRoom.value
+            val snoozedSlots = currentRooms.flatMap { room ->
+                room.tracked_slots.map { slot -> room.room_db_id to slot }
+            }.filter { (_, slot) ->
+                slot.snooze_until != null
+            }
+
+            if (snoozedSlots.isNotEmpty()) {
+                Log.d("UserViewModel", "Waking up ${snoozedSlots.size} slots...")
+
+                // 3. Clear each slot (Launching parallel jobs for speed)
+                snoozedSlots.forEach { (roomId, slot) ->
+                    launch {
+                        // reuse existing setSlotSnooze logic but send 0
+                        setSlotSnooze(roomId, slot.slot_id, 0)
+                    }
+                }
+                _integrationMessage.value = "All snoozes cleared."
+            }
+        }
+    }
+
+    fun sendTestNotification() {
+        viewModelScope.launch {
+            try {
+                val response = RetrofitClient.instance.sendTestNotification()
+                if (response.isSuccessful) {
+                    _integrationMessage.value = "Test Notification Sent!"
+                } else {
+                    _errorMessage.value = "Failed to trigger test: ${response.code()}"
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Connection failed."
             }
         }
     }

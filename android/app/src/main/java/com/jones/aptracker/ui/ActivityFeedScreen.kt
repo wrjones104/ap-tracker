@@ -14,10 +14,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActivityFeedScreen(
-    // We instantiate the viewModel here so it survives tab switches
-    // within the MainScreen scope if using proper scoping,
-    // or just let it recreate (it's lightweight).
-    historyViewModel: HistoryViewModel = viewModel()
+    historyViewModel: HistoryViewModel = viewModel(),
+    // 1. Accept the UserViewModel (defaults to a new instance if not passed)
+    userViewModel: UserViewModel = viewModel()
 ) {
     Scaffold(
         topBar = {
@@ -31,11 +30,10 @@ fun ActivityFeedScreen(
                 .fillMaxSize()
                 .padding(top = padding.calculateTopPadding())
         ) {
-            // Reusing the refactored content!
-            // roomId = null signals "Global History"
             HistoryContent(
                 roomId = null,
-                historyViewModel = historyViewModel
+                historyViewModel = historyViewModel,
+                userViewModel = userViewModel
             )
         }
     }

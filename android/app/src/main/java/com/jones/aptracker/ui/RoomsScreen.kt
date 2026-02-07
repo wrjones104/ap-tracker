@@ -137,7 +137,6 @@ fun RoomsScreen(
     }
 
     // --- State Variables ---
-    var showAddDialog by remember { mutableStateOf(false) }
     var roomToDelete by remember { mutableStateOf<Room?>(null) }
     var roomToEdit by remember { mutableStateOf<Room?>(null) }
     var roomToArchive by remember { mutableStateOf<Room?>(null) }
@@ -170,15 +169,14 @@ fun RoomsScreen(
                 }
             )
         },
-        floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Add Room")
-            }
-        }
     ) { innerPadding ->
         SwipeRefresh(
             state = rememberSwipeRefreshState(isRefreshing = isLoading),
-            onRefresh = { roomsViewModel.refreshAll(isCheeseConnected = userProfile?.is_cheese_connected == true) },
+            onRefresh = {
+                roomsViewModel.refreshAll(isCheeseConnected = userProfile?.is_cheese_connected == true)
+                userViewModel.fetchTrackedSlots()
+                userViewModel.fetchUserProfile()
+            },
             modifier = Modifier.padding(top = innerPadding.calculateTopPadding())
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -392,16 +390,6 @@ fun RoomsScreen(
                     }
                 )
             }
-        }
-
-        if (showAddDialog) {
-            AddRoomDialog(
-                onDismiss = { showAddDialog = false },
-                onAdd = { url, alias, icon ->
-                    roomsViewModel.addRoom(url, alias, icon) { newRoomAliasToFind = alias }
-                    showAddDialog = false
-                }
-            )
         }
 
         roomToEdit?.let { room ->

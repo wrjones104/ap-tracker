@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -72,6 +73,20 @@ fun ProfileScreen(
 
     // State for Delete Dialog
     var showDeleteDialog by remember { mutableStateOf(false) }
+
+    var showSnoozeDialog by remember { mutableStateOf(false) }
+
+    if (showSnoozeDialog) {
+        SnoozeDialog(
+            title = "Global Snooze",
+            currentSnoozeUntil = userProfile?.global_snooze_until,
+            onDismiss = { showSnoozeDialog = false },
+            onSnoozeSelected = { minutes ->
+                userViewModel.setGlobalSnooze(minutes)
+                showSnoozeDialog = false
+            }
+        )
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Profile") }) }
@@ -127,7 +142,18 @@ fun ProfileScreen(
 
             Spacer(Modifier.height(32.dp))
 
+            val snoozeSubtitle = if (userProfile?.global_snooze_until != null)
+                "Active until ${formatIsoDate(userProfile!!.global_snooze_until!!)}"
+            else "Silence all notifications temporarily"
+
             // --- Menu Options ---
+
+            ProfileMenuItem(
+                icon = Icons.Default.NotificationsPaused,
+                title = "Snooze All Notifications",
+                subtitle = snoozeSubtitle,
+                onClick = { showSnoozeDialog = true }
+            )
 
             ProfileMenuItem(
                 icon = Icons.Default.Settings,
@@ -199,6 +225,34 @@ fun ProfileScreen(
                 Text("Delete Account",
                     fontWeight = FontWeight.Bold)
             }
+            Spacer(Modifier.height(48.dp))
+
+            // --- DEBUG SECTION ---
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            Text(
+                "Debug Options",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = { userViewModel.sendTestNotification() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.NotificationsPaused, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Trigger Test Notification")
+            }
+
+            Text(
+                "Sends a push notification to this device immediately to test layout and actions.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
+            )
         }
     }
 

@@ -113,6 +113,19 @@ interface ApiService {
         @Path("id") itemId: Int,
         @Body request: AddIgnoreItemRequest
     ): Response<Unit>
+
+    @POST("users/me/snooze")
+    suspend fun setGlobalSnooze(@Body request: SnoozeRequest): SnoozeResponse
+
+    @POST("rooms/{id}/slots/{slot_id}/snooze")
+    suspend fun setSlotSnooze(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int,
+        @Body request: SnoozeRequest
+    ): SnoozeResponse
+
+    @POST("users/me/test-notification")
+    suspend fun sendTestNotification(): Response<Unit>
 }
 
 data class Room(
@@ -210,7 +223,8 @@ data class UserProfile(
     val use_condensed_messages_default: Boolean,
     val ui_show_finished_default: Boolean = true,
     val ui_show_found_hints_default: Boolean = false,
-    val is_cheese_connected: Boolean = false
+    val is_cheese_connected: Boolean = false,
+    val global_snooze_until: String? = null
 )
 
 data class UpdateGlobalPrefsRequest(
@@ -263,7 +277,8 @@ data class TrackedSlotDetail(
     val remove_emojis: Boolean? = null,
     val suppress_self_found: Boolean? = null,
     val notify_finished: Boolean?,
-    val use_condensed_messages: Boolean?
+    val use_condensed_messages: Boolean?,
+    val snooze_until: String? = null
 )
 
 data class HintHistoryResponse(
@@ -299,4 +314,13 @@ data class CheeseAuthRequest(
 data class CheeseSyncResponse(
     val message: String,
     val is_connected: Boolean? = null
+)
+
+data class SnoozeRequest(
+    val duration_minutes: Int
+)
+
+data class SnoozeResponse(
+    val message: String,
+    val snooze_until: String?
 )
