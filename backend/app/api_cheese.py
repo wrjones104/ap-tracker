@@ -231,42 +231,52 @@ def setup_cheese_user_task(app, user_id):
                 # --- REQUESTS SESSION END ---
 
                 try:
+                    # Use selectinload to eagerly load the room data, preventing lazy load errors
+                    from sqlalchemy.orm import selectinload
                     orphaned_subs = session.query(UserRoomSubscription)\
+                        .options(selectinload(UserRoomSubscription.room))\
                         .join(TrackedRoom)\
                         .filter(UserRoomSubscription.user_id == user.id)\
                         .filter(TrackedRoom.cheese_tracker_id.is_(None))\
                         .filter(~TrackedRoom.room_id.startswith("PENDING_DISCOVERY"))\
                         .all()
 
+                    # Gather all static data while the DB session is fully alive
+                    rooms_to_push = []
                     for sub in orphaned_subs:
                         room = sub.room
-                        # Only push if we have enough info to create a valid tracker
-                        if room.tracker_id and room.hostname: 
-                            logging.info(f"[CHEESE_SETUP] Healing orphaned room: {room.room_id}")
-                            
-                            # Re-construct the necessary URLs for the push function
-                            tracker_url = f"https://{room.hostname}/tracker/{room.tracker_id}"
-                            room_url = f"https://{room.hostname}/room/{room.room_id}"
-                            
-                            # We call this synchronously. Since we are already in a background thread,
-                            # blocking here is acceptable. 
-                            # Note: Each call might add ~60s (CHEESE_DELAY) to the sync time.
-                            push_new_room_to_cheese(
-                                app, 
-                                user.id, 
-                                tracker_url, 
-                                room.room_id, 
-                                room_url, 
-                                sub.alias
-                            )
+                        if room and room.tracker_id and room.hostname: 
+                            rooms_to_push.append({
+                                'room_id': room.room_id,
+                                'tracker_url': f"https://{room.hostname}/tracker/{room.tracker_id}",
+                                'room_url': f"https://{room.hostname}/room/{room.room_id}",
+                                'alias': sub.alias
+                            })
+                    
+                    # Execute network calls safely using the extracted dictionaries
+                    for data in rooms_to_push:
+                        logging.info(f"[CHEESE_SETUP] Healing orphaned room: {data['room_id']}")
+                        push_new_room_to_cheese(
+                            app, 
+                            user_id, # Safely pass the raw ID, not user.id 
+                            data['tracker_url'], 
+                            data['room_id'], 
+                            data['room_url'], 
+                            data['alias']
+                        )
+
                 except Exception as e:
                     logging.error(f"[CHEESE_SETUP] Error during healing phase: {e}", exc_info=True)
                     # We do not return/abort here; we want to finish the unlock process below.
             
-            # Unlock and Complete
-            user.is_syncing_cheese = False
-            user.cheese_last_sync = datetime.utcnow()
-            session.commit()
+            # --- RE-FETCH USER TO UNLOCK ---
+            session = Session()
+            fresh_user = session.query(User).get(user_id)
+            if fresh_user:
+                fresh_user.is_syncing_cheese = False
+                fresh_user.cheese_last_sync = datetime.utcnow()
+                session.commit()
+                
             logging.info(f"[CHEESE_SETUP] User {user_id} setup complete. {stats}")
 
         except Exception as e:
@@ -485,9 +495,13 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         logging.error(f"[CHEESE_PUSH_NEW] Error during network phase: {e}", exc_info=True)
         return
 
-    # === 3. DATABASE PHASE: Now we link the ID ===
+    # === 3. DATABASE PHASE ===
     if not cheese_tracker_id:
         return # Should have already returned, but as a safeguard
+
+    # Variables to hold extracted data so we can trigger the slot push outside the DB block
+    room_db_id_for_slots = None
+    slot_ids_to_claim = []
 
     with app.app_context():
         session = Session()
@@ -498,11 +512,16 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
                     local_room.cheese_tracker_id = cheese_tracker_id
                     session.commit()
                     logging.info(f"[CHEESE_PUSH_NEW] Successfully created/linked {ap_room_id} to Cheese ID {cheese_tracker_id}.")
+                    
+                    # Extract the ID for the slot check
+                    room_db_id_for_slots = local_room.id
                 
                 except IntegrityError:
                     session.rollback()
                     logging.warning(f"[CHEESE_PUSH_NEW] Collision: Cheese ID {cheese_tracker_id} is already assigned to another room. Deferring merge to Poller.")
                     return                 
+                
+                # Fetch the slots we need to push while the session is alive
                 try:
                     slots_to_claim = session.query(UserTrackedSlot.slot_id).filter_by(
                         user_id=user_id, 
@@ -510,24 +529,28 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
                     ).all()
                     
                     if slots_to_claim:
-                        slot_ids = [s[0] for s in slots_to_claim]
-                        logging.info(f"[CHEESE_PUSH_NEW] Found {len(slot_ids)} slots waiting to be claimed. Triggering push.")
-                        # Release the session before starting a new thread/task to avoid deadlocks
-                        session.commit() 
-                        
-                        # Call the existing slot push function
-                        # We use a daemon thread or direct call depending on your preference, 
-                        # but direct call here is safe as we are already in a background thread.
-                        push_slot_changes_to_cheese(app, user_id, local_room.id, slot_ids, [])
+                        slot_ids_to_claim = [s[0] for s in slots_to_claim]
                 except Exception as e:
-                     logging.error(f"[CHEESE_PUSH_NEW] Error during catch-up claim: {e}")
+                     logging.error(f"[CHEESE_PUSH_NEW] Error querying catch-up claim: {e}")
             else:
                 logging.error(f"[CHEESE_PUSH_NEW] Race condition: Could not find local room {ap_room_id} to link.")
         except Exception as e:
             session.rollback()
             logging.error(f"[CHEESE_PUSH_NEW] Error in database phase: {e}", exc_info=True)
         finally:
+            # This safely drops the connection back to the pool
             Session.remove()
+
+    # === 4. TRIGGER SLOT CATCH-UP (Safely outside the DB block) ===
+    if room_db_id_for_slots and slot_ids_to_claim:
+        logging.info(f"[CHEESE_PUSH_NEW] Found {len(slot_ids_to_claim)} slots waiting to be claimed. Triggering push.")
+        
+        try:
+            # Now this can safely create and destroy its own temp sessions 
+            # without interfering with the parent's state.
+            push_slot_changes_to_cheese(app, user_id, room_db_id_for_slots, slot_ids_to_claim, [])
+        except Exception as e:
+            logging.error(f"[CHEESE_PUSH_NEW] Error triggering slot push: {e}")
 
 def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots, my_ct_id, base_headers):
     """
