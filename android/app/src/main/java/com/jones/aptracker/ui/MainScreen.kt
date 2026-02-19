@@ -62,11 +62,16 @@ fun MainScreen(
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
     var showUnSnoozeDialog by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(Instant.now()) }
+    val rooms by roomsViewModel.rooms.collectAsState()
+    var newRoomAliasToFind by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(60_000L) // Wait 1 minute
-            now = Instant.now() // Update time, forcing recomposition of dependent blocks
+    LaunchedEffect(rooms, newRoomAliasToFind) {
+        if (newRoomAliasToFind != null) {
+            val addedRoom = rooms.find { it.alias == newRoomAliasToFind }
+            if (addedRoom != null) {
+                onNavigateToPlayers(addedRoom.id, addedRoom.alias)
+                newRoomAliasToFind = null // Reset state after navigation
+            }
         }
     }
 
@@ -146,6 +151,8 @@ fun MainScreen(
             onDismiss = { showAddRoomDialog = false },
             onAdd = { url, alias, icon ->
                 roomsViewModel.addRoom(url, alias, icon) {
+                    // Trigger the effect above once the room is successfully added
+                    newRoomAliasToFind = alias
                 }
                 showAddRoomDialog = false
             }

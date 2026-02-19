@@ -141,23 +141,12 @@ fun RoomsScreen(
     var roomToEdit by remember { mutableStateOf<Room?>(null) }
     var roomToArchive by remember { mutableStateOf<Room?>(null) }
     var roomForOptions by remember { mutableStateOf<Room?>(null) }
-    var newRoomAliasToFind by remember { mutableStateOf<String?>(null) }
 
     // --- Drag and Drop State ---
     var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
     var draggingItemOffset by remember { mutableStateOf(0f) }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-
-    LaunchedEffect(rooms, newRoomAliasToFind) {
-        if (newRoomAliasToFind != null) {
-            val addedRoom = rooms.find { it.alias == newRoomAliasToFind }
-            if (addedRoom != null) {
-                onManageSlotsClick(addedRoom.id, addedRoom.alias)
-                newRoomAliasToFind = null
-            }
-        }
-    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
