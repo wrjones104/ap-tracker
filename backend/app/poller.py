@@ -1468,36 +1468,56 @@ async def run_room_setup(room_info, loop):
         checksums = {}
 
         if port:
-            uri = f"wss://{hostname}:{port}"
-            max_ws_retries = 3
+            uris_to_try = [
+                f"wss://{hostname}:{port}",
+                f"ws://{hostname}:{port}"
+            ]
+            
+            # If it's a subdomain (e.g., ap.mishugashu.com), add the base domain as a fallback
+            parts = hostname.split('.')
+            if len(parts) > 2:
+                base_domain = ".".join(parts[1:])
+                uris_to_try.extend([
+                    f"wss://{base_domain}:{port}",
+                    f"ws://{base_domain}:{port}"
+                ])
+
+            max_ws_retries = 2
             ws_success = False
 
-            for attempt in range(1, max_ws_retries + 1):
-                try:
-                    logging.debug(f"[POLLER_SETUP] WebSocket attempt {attempt}/{max_ws_retries} for {uri}")
-                    async with websockets.connect(uri, open_timeout=5) as ws:
-                        msg_str = await asyncio.wait_for(ws.recv(), timeout=5)
-                        room_info_msg = json.loads(msg_str)
-                        checksums = room_info_msg[0].get('datapackage_checksums', {})
-                        ws_success = True
-                        break
-                except (OSError, asyncio.TimeoutError, websockets.InvalidURI, websockets.InvalidHandshake, ConnectionRefusedError) as ws_e:
-                    logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket attempt {attempt} failed: {ws_e}")
+            for uri in uris_to_try:
+                if ws_success:
+                    break
                     
-                    if attempt < max_ws_retries:
-                        # Try to wake the room
-                        await _attempt_room_wake(hostname, room_uuid)
-                        logging.info(f"[POLLER_SETUP] Waiting 8 seconds for room to wake up...")
-                        await asyncio.sleep(8)
-                    else:
-                        logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] All WebSocket attempts failed.")
+                for attempt in range(1, max_ws_retries + 1):
+                    try:
+                        logging.debug(f"[POLLER_SETUP] WebSocket attempt {attempt}/{max_ws_retries} for {uri}")
+                        async with websockets.connect(uri, open_timeout=5) as ws:
+                            msg_str = await asyncio.wait_for(ws.recv(), timeout=5)
+                            room_info_msg = json.loads(msg_str)
+                            checksums = room_info_msg[0].get('datapackage_checksums', {})
+                            ws_success = True
+                            
+                            # Optional: Update the room's cached address if the fallback domain worked
+                            if uri.startswith("wss://" + base_domain) or uri.startswith("ws://" + base_domain):
+                                setup_data['cached_full_address'] = f"{base_domain}:{port}"
+                                
+                            break 
+                            
+                    except (OSError, asyncio.TimeoutError, websockets.InvalidURI, websockets.InvalidHandshake, ConnectionRefusedError) as ws_e:
+                        logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket attempt {attempt} failed for {uri}: {ws_e}")
+                        
+                        # Only wait to wake the room if we are on the final attempt of the CURRENT uri
+                        if attempt < max_ws_retries:
+                            await _attempt_room_wake(hostname, room_uuid)
+                            logging.info(f"[POLLER_SETUP] Waiting 8 seconds for room to wake up...")
+                            await asyncio.sleep(8)
+                        else:
+                            logging.info(f"[POLLER_SETUP_INFO][RoomDBID:{db_id}] Exhausted attempts for {uri}.")
 
-            # Fallback to HTTP if WS failed
             if not ws_success:
                  logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Falling back to HTTP checksums.")
                  checksums = room_status.get('datapackage_checksums', {})
-        else:
-            checksums = room_status.get('datapackage_checksums', {})
 
         if not checksums:
             logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] No checksums found (WS and HTTP failed). Aborting setup.")
