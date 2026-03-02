@@ -1473,8 +1473,9 @@ async def run_room_setup(room_info, loop):
                 f"ws://{hostname}:{port}"
             ]
             
-            # If it's a subdomain (e.g., ap.mishugashu.com), add the base domain as a fallback
             parts = hostname.split('.')
+            base_domain = None 
+            
             if len(parts) > 2:
                 base_domain = ".".join(parts[1:])
                 uris_to_try.extend([
@@ -1498,8 +1499,8 @@ async def run_room_setup(room_info, loop):
                             checksums = room_info_msg[0].get('datapackage_checksums', {})
                             ws_success = True
                             
-                            # Optional: Update the room's cached address if the fallback domain worked
-                            if uri.startswith("wss://" + base_domain) or uri.startswith("ws://" + base_domain):
+                            # Safely check if base_domain exists before using it
+                            if base_domain and (uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}")):
                                 setup_data['cached_full_address'] = f"{base_domain}:{port}"
                                 
                             break 
