@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,7 +18,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -66,6 +69,7 @@ fun SlotOverridesScreen(
     val errorMessage by userViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var showApplyAllDialog by remember { mutableStateOf(false) }
 
     // State for the bottom sheet: Store IDs instead of the object to avoid stale state
     var selectedSlotRoomId by remember { mutableStateOf<Int?>(null) }
@@ -174,13 +178,36 @@ fun SlotOverridesScreen(
             sheetState = sheetState
         ) {
             SlotSettingsSheet(
-                slot = selectedSlotDetail, // Always passes the fresh "live" object
+                slot = selectedSlotDetail,
                 profile = userProfile!!,
                 onUpdate = { key, value ->
                     userViewModel.updateSlotPreferences(selectedSlotRoomId!!, selectedSlotDetail.slot_id, key, value)
-                }
+                },
+                onApplyToAll = { showApplyAllDialog = true }
             )
         }
+    }
+
+    // Confirmation Dialog
+    if (showApplyAllDialog && selectedSlotRoomId != null && selectedSlotDetail != null) {
+        AlertDialog(
+            onDismissRequest = { showApplyAllDialog = false },
+            title = { Text("Apply to All?") },
+            text = { Text("Copy these settings to ALL other slots in this room?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        userViewModel.applySlotSettingsToAll(selectedSlotRoomId!!, selectedSlotDetail!!.slot_id)
+                        showApplyAllDialog = false
+                        selectedSlotRoomId = null
+                        selectedSlotId = null
+                    }
+                ) { Text("Apply") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showApplyAllDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 
@@ -215,14 +242,16 @@ fun SlotOverrideItem(
 fun SlotSettingsSheet(
     slot: TrackedSlotDetail,
     profile: UserProfile,
-    onUpdate: (String, Boolean?) -> Unit
+    onUpdate: (String, Boolean?) -> Unit,
+    onApplyToAll: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
-            .padding(bottom = 32.dp) // extra padding for nav bar
+            .padding(bottom = 32.dp)
             .navigationBarsPadding()
+            .imePadding()
     ) {
         Text(
             text = "Override Settings",
@@ -237,6 +266,23 @@ fun SlotSettingsSheet(
         )
 
         LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+
+            // --- APPLY TO ALL BUTTON ---
+            item {
+                androidx.compose.material3.Button(
+                    onClick = onApplyToAll,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                ) {
+                    Icon(androidx.compose.material.icons.Icons.Default.ContentCopy, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Apply to all slots in room")
+                }
+                HorizontalDivider(modifier = Modifier.padding(bottom = 16.dp))
+            }
 
             // 1. EVENTS SECTION
             item { SectionHeader("Events") }

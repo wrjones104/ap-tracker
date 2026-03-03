@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -304,7 +306,7 @@ fun IgnoreListScreen(
                 showSheet = false
                 editingItem = null
             },
-            sheetState = sheetState
+            sheetState = sheetState,
         ) {
             IgnoreRuleSheet(
                 existingItem = editingItem,
@@ -583,6 +585,7 @@ fun IgnoreRuleSheet(
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .navigationBarsPadding()
+            .imePadding()
             .fillMaxHeight(0.85f)
     ) {
         Text(

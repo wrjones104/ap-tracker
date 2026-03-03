@@ -24,8 +24,8 @@ android {
         applicationId = "com.jones.aptracker"
         minSdk = 26
         targetSdk = 36
-        versionCode = 37
-        versionName = "1.4.1"
+        versionCode = 38
+        versionName = "1.4.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "com.jones.aptracker"
         buildConfigField(
@@ -96,7 +96,7 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
+    implementation("androidx.compose.material3:material3:1.2.1")
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
     testImplementation(libs.junit)

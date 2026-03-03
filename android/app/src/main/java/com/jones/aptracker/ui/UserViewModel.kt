@@ -494,4 +494,41 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    fun applySlotSettingsToAll(roomId: Int, sourceSlotId: Int) {
+        viewModelScope.launch {
+            try {
+                // 1. Get source data
+                val room = _trackedSlotsByRoom.value.find { it.room_db_id == roomId } ?: return@launch
+                val sourceSlot = room.tracked_slots.find { it.slot_id == sourceSlotId } ?: return@launch
+
+                // 2. Loop through targets
+                room.tracked_slots.forEach { targetSlot ->
+                    if (targetSlot.slot_id != sourceSlotId) {
+                        // Create request with SOURCE values
+                        val request = UpdateSlotPrefsRequest(
+                            notify_progression = sourceSlot.notify_progression,
+                            notify_useful = sourceSlot.notify_useful,
+                            notify_hints = sourceSlot.notify_hints,
+                            notify_hints_remote_items = sourceSlot.notify_hints_remote_items,
+                            notify_finished = sourceSlot.notify_finished,
+                            combine_notifications = sourceSlot.combine_notifications,
+                            suppress_own_events = sourceSlot.suppress_own_events,
+                            remove_emojis = sourceSlot.remove_emojis,
+                            suppress_self_found = sourceSlot.suppress_self_found,
+                            use_condensed_messages = sourceSlot.use_condensed_messages
+                        )
+                        RetrofitClient.instance.updateSlotPreferences(roomId, targetSlot.slot_id, request)
+                    }
+                }
+
+                fetchTrackedSlots() // Refresh UI
+                _integrationMessage.value = "Settings applied to all slots."
+
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to apply settings."
+                e.printStackTrace()
+            }
+        }
+    }
 }
