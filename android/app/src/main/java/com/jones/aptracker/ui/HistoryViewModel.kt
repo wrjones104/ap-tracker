@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -59,12 +61,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             .toList()
             .sortedBy { it.second }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    private val _hintsForYou = MutableStateFlow<List<HintEntity>>(emptyList())
-    val hintsForYou: StateFlow<List<HintEntity>> = _hintsForYou
-
-    private val _hintsByYou = MutableStateFlow<List<HintEntity>>(emptyList())
-    val hintsByYou: StateFlow<List<HintEntity>> = _hintsByYou
 
     val searchQuery = mutableStateOf("")
     val isLoading = MutableStateFlow(true)
@@ -127,9 +123,61 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             .sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // --- HINTS PIPELINE ---
+    // Reactive valid slots flow instead of static variable
+    private val _validTrackedSlots = MutableStateFlow<Set<Pair<Int, Int>>>(emptySet())
+    val validTrackedSlots: StateFlow<Set<Pair<Int, Int>>> = _validTrackedSlots
+
+    // Reactive Hint flows matching the toggle + DB flow
+    val hintsForYou: StateFlow<List<HintEntity>> = combine(
+        _historyFilter,
+        _showFoundHints,
+        _validTrackedSlots
+    ) { filter, showFound, validSlots ->
+        Triple(filter, showFound, validSlots)
+    }.flatMapLatest { (filter, showFound, validSlots) ->
+        val sourceFlow = when (filter) {
+            is HistoryFilter.Specific -> repository.getHintsForRoom(filter.roomId, "for_you")
+            else -> repository.getGlobalHints("for_you")
+        }
+
+        sourceFlow.map { hintList ->
+            hintList.filter { hint ->
+                (showFound || !hint.isFound) && validSlots.contains(hint.roomDbId to hint.itemOwnerId)
+            }
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val hintsByYou: StateFlow<List<HintEntity>> = combine(
+        _historyFilter,
+        _showFoundHints,
+        _validTrackedSlots
+    ) { filter, showFound, validSlots ->
+        Triple(filter, showFound, validSlots)
+    }.flatMapLatest { (filter, showFound, validSlots) ->
+        val sourceFlow = when (filter) {
+            is HistoryFilter.Specific -> repository.getHintsForRoom(filter.roomId, "by_you")
+            else -> repository.getGlobalHints("by_you")
+        }
+
+        sourceFlow.map { hintList ->
+            hintList.filter { hint ->
+                (showFound || !hint.isFound) && validSlots.contains(hint.roomDbId to hint.locationOwnerId)
+            }
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     val availableHintPlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
-        _hintsForYou,
-        _hintsByYou,
+        hintsForYou,
+        hintsByYou,
         _historyFilter,
         _activeRoomIds,
         _archivedRoomIds
@@ -162,7 +210,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage
-    private var validTrackedSlots: Set<Pair<Int, Int>> = emptySet()
 
     init {
         val db = AppDatabase.getInstance(application)
@@ -221,7 +268,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         if (_showFoundHints.value != show) {
             _showFoundHints.value = show
             saveViewPreferences(showFoundHints = show)
-            refreshAllHistory()
+
+            // The reactive combine flow above automatically handles the UI update locally!
+            // But we launch a silent background request here to fetch any new hints from the API
+            viewModelScope.launch {
+                repository.refreshHintHistory(currentRoomId, show)
+            }
         }
     }
 
@@ -251,6 +303,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
+                // --- STEP 1: Metadata & Room Setup (Fast) ---
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
 
                 val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
@@ -287,13 +340,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 _roomNames.value = roomNameMap
-                validTrackedSlots = validSlotsSet
+                _validTrackedSlots.value = validSlotsSet
                 _liveAliases.value = aliasMap
                 _confirmedFinishedPlayers.value = finishedPlayerNames
-
                 _activeRoomIds.value = activeIds
                 _archivedRoomIds.value = archivedIds
 
+                // --- STEP 2: Item History (Priority 1) ---
                 repository.refreshItemHistory()
 
                 val rawItemEntities = if (currentRoomId != null) {
@@ -304,7 +357,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
                 _itemHistory.value = rawItemEntities.mapNotNull { entity ->
                     if (entity.roomId != null && entity.slot_id != null) {
-                        if (!validTrackedSlots.contains(entity.roomId to entity.slot_id)) {
+                        if (!validSlotsSet.contains(entity.roomId to entity.slot_id)) {
                             return@mapNotNull null
                         }
                     }
@@ -342,28 +395,26 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
 
-                val includeFound = _showFoundHints.value
-                repository.refreshHintHistory(currentRoomId, includeFound)
+                // --- STEP 3: UNBLOCK UI HERE ---
+                // The Item list is ready. Let the user see it immediately!
+                isLoading.value = false
 
-                val (rawForYou, rawByYou) = if (currentRoomId != null) {
-                    repository.getHintsForRoom(currentRoomId!!, includeFound)
-                } else {
-                    repository.getGlobalHints(includeFound)
-                }
-
-                _hintsForYou.value = rawForYou.filter { hint ->
-                    validTrackedSlots.contains(hint.roomDbId to hint.itemOwnerId)
-                }
-
-                _hintsByYou.value = rawByYou.filter { hint ->
-                    validTrackedSlots.contains(hint.roomDbId to hint.locationOwnerId)
+                // --- STEP 4: Hint History (Background Priority) ---
+                // We launch this in a separate non-blocking way (or just sequentially after flipping the flag)
+                // The UI will update automatically via Flows when this finishes.
+                try {
+                    val includeFound = _showFoundHints.value
+                    repository.refreshHintHistory(currentRoomId, includeFound)
+                } catch (e: Exception) {
+                    Log.e("HistoryViewModel", "Background hint refresh failed", e)
+                    // We don't show an error message to the user here because
+                    // the main content (Items) loaded successfully.
                 }
 
             } catch (e: Exception) {
                 errorMessage.value = "History Refresh failed: ${e.message}"
                 Log.e("HistoryViewModel", "Error during full history refresh", e)
-            } finally {
-                isLoading.value = false
+                isLoading.value = false // Ensure loading stops on error
             }
         }
     }

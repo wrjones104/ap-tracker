@@ -70,6 +70,8 @@ class AuthViewModel : ViewModel() {
     }
 
     fun onLoginSuccess() {
+        // Reset the 401 lockout state so it's ready for the new session
+        SessionManager.resetLogoutState()
         _isLoggedIn.value = true
     }
 

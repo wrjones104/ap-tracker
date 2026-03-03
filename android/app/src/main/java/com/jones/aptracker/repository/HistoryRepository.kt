@@ -6,10 +6,8 @@ import com.jones.aptracker.network.HintDao
 import com.jones.aptracker.network.HintDetail
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryDao
-import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.HistoryItemEntity
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
 
 class HistoryRepository(
     private val apiService: ApiService,
@@ -17,19 +15,21 @@ class HistoryRepository(
     private val hintDao: HintDao
 ) {
     suspend fun getHistoryForRoom(roomId: Int): List<HistoryItemEntity> {
-        return historyDao.getHistoryForRoom(roomId) 
+        return historyDao.getHistoryForRoom(roomId)
     }
 
     suspend fun getGlobalHistory(): List<HistoryItemEntity> {
         return historyDao.getGlobalHistory()
     }
 
+    // --- ITEM HISTORY (Safe to use 'since' optimization) ---
     suspend fun refreshItemHistory() {
         Log.d("HISTORY_DEBUG", "Starting ITEM history refresh...")
         val latestTimestamp = historyDao.getLatestGlobalTimestamp()
         try {
             val newItems = apiService.getGlobalItemHistory(since = latestTimestamp)
-            Log.d("HISTORY_DEBUG", "Received ${newItems.size} new items from the API.")
+            Log.d("HISTORY_DEBUG", "Received ${newItems.size} new items from the API (since $latestTimestamp).")
+
             if (newItems.isNotEmpty()) {
                 val entities = newItems.mapNotNull { item ->
                     try {
@@ -51,16 +51,13 @@ class HistoryRepository(
                             icon_name = item.icon_name,
                             host = item.host
                         )
-                        Log.d("HISTORY_DEBUG", "Successfully parsed item: ${entity.playerName} received ${entity.itemName}")
                         entity
                     } catch (e: Exception) {
-                        Log.e("HISTORY_DEBUG", "!!! FAILED to process history item. Error: ${e.message}")
-                        Log.e("HISTORY_DEBUG", "Problematic Item Data: $item")
+                        Log.e("HISTORY_DEBUG", "!!! FAILED to process history item: ${e.message}")
                         null
                     }
                 }
                 if (entities.isNotEmpty()) {
-                    Log.d("HISTORY_DEBUG", "Inserting ${entities.size} new item entities.")
                     historyDao.insertHistoryItems(entities)
                 }
             }
@@ -69,47 +66,22 @@ class HistoryRepository(
         }
     }
 
-    suspend fun getHintsForRoom(roomId: Int, includeFound: Boolean): Pair<List<HintEntity>, List<HintEntity>> {
-        Log.d("HintToggleDebug", "Repo: getHintsForRoom (DAO Read) | includeFound: $includeFound")
-
-        val hintsForYou = if (includeFound) {
-            hintDao.getAllHintsForRoom(roomId, "for_you")
-        } else {
-            hintDao.getUnfoundHintsForRoom(roomId, "for_you")
-        }
-
-        val hintsByYou = if (includeFound) {
-            hintDao.getAllHintsForRoom(roomId, "by_you")
-        } else {
-            hintDao.getUnfoundHintsForRoom(roomId, "by_you")
-        }
-
-        return Pair(hintsForYou, hintsByYou)
+    // --- HINT FLOWS ---
+    fun getHintsForRoom(roomId: Int, type: String): Flow<List<HintEntity>> {
+        return hintDao.getAllHintsForRoom(roomId, type)
     }
 
-    suspend fun getGlobalHints(includeFound: Boolean): Pair<List<HintEntity>, List<HintEntity>> {
-        Log.d("HintToggleDebug", "Repo: getGlobalHints (DAO Read) | includeFound: $includeFound")
-
-        val hintsForYou = if (includeFound) {
-            hintDao.getAllGlobalHints("for_you")
-        } else {
-            hintDao.getUnfoundGlobalHints("for_you")
-        }
-
-        val hintsByYou = if (includeFound) {
-            hintDao.getAllGlobalHints("by_you")
-        } else {
-            hintDao.getUnfoundGlobalHints("by_you")
-        }
-
-        return Pair(hintsForYou, hintsByYou)
+    fun getGlobalHints(type: String): Flow<List<HintEntity>> {
+        return hintDao.getAllGlobalHints(type)
     }
 
+    // --- HINT REFRESH (Always Full Sync to catch Status Updates) ---
     suspend fun refreshHintHistory(roomId: Int? = null, includeFound: Boolean) {
-        Log.d("HINT_SYNC", "Forcing full hint refresh (since=null)")
+        // We purposefully pass `since = null` here.
+        // If we used a timestamp, we would miss hints that were created long ago
+        // but were recently marked as "Found", because their creation timestamp didn't change.
 
         try {
-            // Pass null for 'since' to fetch everything
             val response = if (roomId != null) {
                 apiService.getRoomHintHistory(roomId, since = null, includeFound = includeFound)
             } else {
@@ -128,8 +100,8 @@ class HistoryRepository(
             }
 
             if (entitiesToInsert.isNotEmpty()) {
-                // Because DAO uses OnConflictStrategy.REPLACE, this will update isFound status
-                // for existing hints and insert new ones.
+                // OnConflictStrategy.REPLACE ensures the old 'Unfound' record is overwritten
+                // by this new 'Found' record, even if the ID is the same.
                 hintDao.insertHints(entitiesToInsert)
                 Log.d("HINT_DEBUG", "Insertion/Update complete.")
             }
@@ -158,6 +130,7 @@ class HistoryRepository(
             itemFlags = detail.item_flags
         )
     }
+
     suspend fun pruneSlotData(roomId: Int, slotIds: Set<Int>) {
         if (slotIds.isEmpty()) return
         Log.d("PRUNING", "Pruning data for room $roomId, slots: $slotIds")
