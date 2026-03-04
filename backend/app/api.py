@@ -1152,6 +1152,7 @@ def get_current_user(current_user):
             'suppress_own_events_default': current_user.suppress_own_events_default,
             'remove_emojis_default': current_user.remove_emojis_default,
             'suppress_self_found_default': current_user.suppress_self_found_default,
+            'suppress_connected_default': current_user.suppress_connected_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
@@ -1185,6 +1186,7 @@ def get_current_user(current_user):
             'suppress_own_events_default': current_user.suppress_own_events_default,
             'remove_emojis_default': current_user.remove_emojis_default,
             'suppress_self_found_default': current_user.suppress_self_found_default,
+            'suppress_connected_default': current_user.suppress_connected_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
@@ -1246,6 +1248,7 @@ def get_user_tracked_slots(current_user):
                     'suppress_own_events': slot.suppress_own_events,
                     'remove_emojis': slot.remove_emojis,
                     'suppress_self_found': slot.suppress_self_found,
+                    'suppress_connected': slot.suppress_connected,
                     'snooze_until': format_iso_z(slot.snooze_until)
                 })
 
@@ -1297,6 +1300,8 @@ def update_user_preferences(current_user):
             setattr(user, 'remove_emojis_default', bool(data['remove_emojis']))
         if 'suppress_self_found' in data:
             setattr(user, 'suppress_self_found_default', bool(data['suppress_self_found']))
+        if 'suppress_connected' in data:
+            setattr(user, 'suppress_connected_default', bool(data['suppress_connected']))
         session.commit()
         return jsonify({'message': 'Preferences updated successfully'}), 200
     except Exception as e:
@@ -1343,6 +1348,8 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
             tracked_slot.remove_emojis = data['remove_emojis']
         if 'suppress_self_found' in data: # <--- NEW
             tracked_slot.suppress_self_found = data['suppress_self_found']
+        if 'suppress_connected' in data:
+            tracked_slot.suppress_connected = data['suppress_connected']
         session.commit()
         return jsonify({'message': 'Slot preferences updated successfully'}), 200
     except Exception as e:
@@ -1957,8 +1964,11 @@ def send_test_notification(current_user):
                 message = messaging.Message(
                     notification=messaging.Notification(
                         title="Test Notification",
-                        body="This is a test from the Debug menu!"
+                        body="This is a test bundle! Click me to see the sheet."
                     ),
+                    data={
+                        'bundled_items': json.dumps(["Test Sword", "Debug Shield", "Potion of Coding"])
+                    },
                     token=token
                 )
                 messaging.send(message)

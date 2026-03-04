@@ -19,11 +19,7 @@ fun ActivityFeedScreen(
     userViewModel: UserViewModel = viewModel()
 ) {
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Activity Feed") }
-            )
-        }
+
     ) { padding ->
         Column(
             modifier = Modifier

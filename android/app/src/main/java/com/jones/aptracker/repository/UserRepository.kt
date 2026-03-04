@@ -3,6 +3,7 @@ package com.jones.aptracker.repository
 import com.jones.aptracker.network.AddIgnoreItemRequest
 import com.jones.aptracker.network.ApiService
 import com.jones.aptracker.network.IgnoreItem
+import com.jones.aptracker.network.UserProfile
 
 class UserRepository(private val apiService: ApiService) {
 
@@ -24,5 +25,9 @@ class UserRepository(private val apiService: ApiService) {
         if (!response.isSuccessful) {
             throw Exception("Failed to delete item: ${response.code()}")
         }
+    }
+
+    suspend fun getUserProfile(): UserProfile {
+        return apiService.getUserProfile()
     }
 }

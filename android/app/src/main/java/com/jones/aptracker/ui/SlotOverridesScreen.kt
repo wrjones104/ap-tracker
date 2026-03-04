@@ -331,6 +331,15 @@ fun SlotSettingsSheet(
             item { SectionHeader("Behavior") }
             item {
                 OverrideToggle(
+                    title = "Suppress if I'm connected",
+                    currentValue = slot.suppress_connected,
+                    defaultValue = profile.suppress_connected_default,
+                    onValueChange = { onUpdate("suppress_connected", it) }
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+            item {
+                OverrideToggle(
                     title = "Suppress locally found items",
                     currentValue = slot.suppress_self_found,
                     defaultValue = profile.suppress_self_found_default,

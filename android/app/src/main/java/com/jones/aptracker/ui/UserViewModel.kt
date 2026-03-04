@@ -136,7 +136,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         suppressOwn: Boolean? = null,
         combine: Boolean? = null,
         removeEmojis: Boolean? = null,
-        suppressSelfFound: Boolean? = null
+        suppressSelfFound: Boolean? = null,
+        suppressConnected: Boolean? = null
     ) {
         viewModelScope.launch {
             try {
@@ -153,6 +154,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 combine?.let { params["combine_notifications"] = it }
                 removeEmojis?.let { params["remove_emojis"] = it }
                 suppressSelfFound?.let { params["suppress_self_found"] = it }
+                suppressConnected?.let { params["suppress_connected"] = it }
 
                 if (params.isNotEmpty()) {
                     RetrofitClient.instance.updateUserPreferences(params)
@@ -192,7 +194,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                     suppress_own_events = if (key == "suppress_own_events") value else currentSlot.suppress_own_events,
                     remove_emojis = if (key == "remove_emojis") value else currentSlot.remove_emojis,
                     suppress_self_found = if (key == "suppress_self_found") value else currentSlot.suppress_self_found,
-                    use_condensed_messages = if (key == "use_condensed_messages") value else currentSlot.use_condensed_messages
+                    use_condensed_messages = if (key == "use_condensed_messages") value else currentSlot.use_condensed_messages,
+                    suppress_connected = if (key == "suppress_connected") value else currentSlot.suppress_connected
                 )
 
                 // 3. Send the complete update object

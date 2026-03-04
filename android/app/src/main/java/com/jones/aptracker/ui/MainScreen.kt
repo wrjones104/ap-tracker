@@ -1,21 +1,33 @@
 package com.jones.aptracker.ui
 
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -25,15 +37,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import coil.compose.AsyncImage
 import java.time.Instant
-import kotlinx.coroutines.delay
 
 sealed class BottomNavItem(val route: String, val icon: ImageVector, val label: String) {
     object Rooms : BottomNavItem("rooms_tab", Icons.Default.Home, "Rooms")
@@ -41,6 +57,7 @@ sealed class BottomNavItem(val route: String, val icon: ImageVector, val label: 
     object Profile : BottomNavItem("profile_tab", Icons.Default.Person, "Me")
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     onLogoutClick: () -> Unit,
@@ -56,69 +73,55 @@ fun MainScreen(
     roomsViewModel: RoomsViewModel = viewModel()
 ) {
     val bottomNavController = rememberNavController()
-
-    // OBSERVE PROFILE FOR SNOOZE STATE
     val userProfile by userViewModel.userProfile.collectAsState()
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
+    val isSyncingCheese by roomsViewModel.isSyncingCheese.collectAsState()
+    val rooms by roomsViewModel.rooms.collectAsState()
+
     var showUnSnoozeDialog by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(Instant.now()) }
-    val rooms by roomsViewModel.rooms.collectAsState()
     var newRoomAliasToFind by remember { mutableStateOf<String?>(null) }
+    var showAddRoomDialog by remember { mutableStateOf(false) }
 
+    // --- NAVIGATION EFFECT ---
     LaunchedEffect(rooms, newRoomAliasToFind) {
         if (newRoomAliasToFind != null) {
             val addedRoom = rooms.find { it.alias == newRoomAliasToFind }
             if (addedRoom != null) {
                 onNavigateToPlayers(addedRoom.id, addedRoom.alias)
-                newRoomAliasToFind = null // Reset state after navigation
+                newRoomAliasToFind = null
             }
         }
     }
 
-    // Hoisted State for Add Room Dialog
-    var showAddRoomDialog by remember { mutableStateOf(false) }
-
-    // Check if snooze is active
+    // --- SNOOZE LOGIC ---
     val isGlobalSnoozeActive = remember(userProfile, now) {
         val snoozeTime = userProfile?.global_snooze_until
         if (snoozeTime == null) false else {
-            try {
-                Instant.parse(snoozeTime).isAfter(now)
-            } catch (e: Exception) { false }
+            try { Instant.parse(snoozeTime).isAfter(now) } catch (e: Exception) { false }
         }
     }
 
-    // Check Slots
     val activeSlotSnoozes = remember(trackedSlotsByRoom) {
         trackedSlotsByRoom.flatMap { it.tracked_slots }.filter { slot ->
             val snoozeTime = slot.snooze_until
             if (snoozeTime == null) false else {
-                try {
-                    Instant.parse(snoozeTime).isAfter(Instant.now())
-                } catch (e: Exception) { false }
+                try { Instant.parse(snoozeTime).isAfter(Instant.now()) } catch (e: Exception) { false }
             }
         }
     }
 
     val activeSnoozeDetails = remember(trackedSlotsByRoom, now) {
         val details = mutableListOf<String>()
-
         trackedSlotsByRoom.forEach { room ->
             room.tracked_slots.forEach { slot ->
                 if (slot.snooze_until != null) {
                     try {
                         if (Instant.parse(slot.snooze_until).isAfter(now)) {
-                            // Check for alias
-                            val displayName = if (!slot.player_alias.isNullOrBlank()) {
-                                "${slot.player_alias} (${slot.player_name})"
-                            } else {
-                                slot.player_name
-                            }
-
-                            // Format: "RoomAlias: Alias (OriginalName)"
+                            val displayName = if (!slot.player_alias.isNullOrBlank()) "${slot.player_alias} (${slot.player_name})" else slot.player_name
                             details.add("${room.room_alias}: $displayName")
                         }
-                    } catch (e: Exception) { /* ignore parse errors */ }
+                    } catch (e: Exception) { }
                 }
             }
         }
@@ -129,18 +132,13 @@ fun MainScreen(
 
     if (showUnSnoozeDialog) {
         val dialogTitle = if (isGlobalSnoozeActive) "Global Snooze Active" else "Active Snoozes"
-
         SnoozeDialog(
             title = dialogTitle,
             currentSnoozeUntil = userProfile?.global_snooze_until,
-            activeSnoozeDetails = activeSnoozeDetails, // <--- PASS THE LIST HERE
+            activeSnoozeDetails = activeSnoozeDetails,
             onDismiss = { showUnSnoozeDialog = false },
             onSnoozeSelected = { minutes ->
-                if (minutes == 0) {
-                    userViewModel.wakeUpEverything()
-                } else {
-                    userViewModel.setGlobalSnooze(minutes)
-                }
+                if (minutes == 0) userViewModel.wakeUpEverything() else userViewModel.setGlobalSnooze(minutes)
                 showUnSnoozeDialog = false
             }
         )
@@ -150,26 +148,89 @@ fun MainScreen(
         AddRoomDialog(
             onDismiss = { showAddRoomDialog = false },
             onAdd = { url, alias, icon ->
-                roomsViewModel.addRoom(url, alias, icon) {
-                    // Trigger the effect above once the room is successfully added
-                    newRoomAliasToFind = alias
-                }
+                roomsViewModel.addRoom(url, alias, icon) { newRoomAliasToFind = alias }
                 showAddRoomDialog = false
             }
         )
     }
 
-    val items = listOf(
-        BottomNavItem.Rooms,
-        BottomNavItem.Activity,
-        BottomNavItem.Profile
-    )
-
-    // Track current route to decide which buttons to show
+    val items = listOf(BottomNavItem.Rooms, BottomNavItem.Activity, BottomNavItem.Profile)
     val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
     Scaffold(
+        // --- UNIFIED TOP APP BAR ---
+        topBar = {
+            // Determine Title based on Route
+            val titleText = when (currentRoute) {
+                BottomNavItem.Rooms.route -> "Tracked Rooms"
+                BottomNavItem.Activity.route -> "Activity Feed"
+                BottomNavItem.Profile.route -> "Profile"
+                else -> "Archipelago Tracker"
+            }
+
+            TopAppBar(
+                title = { Text(titleText) },
+                actions = {
+                    // Show Sync/Avatar/Cheese ONLY on Rooms Screen
+                    if (currentRoute == BottomNavItem.Rooms.route) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+
+                            val profile = userProfile
+                            val isCheeseConnected = profile?.is_cheese_connected == true
+
+                            // 1. AVATAR
+                            if (profile != null && !profile.is_guest) {
+                                if (profile.avatar_url != null) {
+                                    AsyncImage(
+                                        model = profile.avatar_url,
+                                        contentDescription = "Profile",
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                            }
+
+                            // 2. CHEESE & SYNC
+                            if (isCheeseConnected) {
+                                Text("🧀", style = MaterialTheme.typography.titleMedium)
+                                Spacer(modifier = Modifier.width(1.dp))
+
+                                val infiniteTransition = rememberInfiniteTransition(label = "spin")
+                                val angle by infiniteTransition.animateFloat(
+                                    initialValue = 0f,
+                                    targetValue = 360f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(1000, easing = LinearEasing)
+                                    ),
+                                    label = "spinAngle"
+                                )
+
+                                IconButton(
+                                    onClick = {
+                                        roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = true)
+                                    },
+                                    enabled = !isSyncingCheese
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Sync",
+                                        modifier = if (isSyncingCheese) Modifier.rotate(angle) else Modifier
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        },
+
         bottomBar = {
             NavigationBar {
                 items.forEach { item ->
@@ -179,9 +240,7 @@ fun MainScreen(
                         selected = currentRoute == item.route,
                         onClick = {
                             bottomNavController.navigate(item.route) {
-                                popUpTo(bottomNavController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
+                                popUpTo(bottomNavController.graph.findStartDestination().id) { saveState = true }
                                 launchSingleTop = true
                                 restoreState = true
                             }
@@ -191,14 +250,10 @@ fun MainScreen(
             }
         },
         floatingActionButton = {
-            // STACKED FABs (Column)
             Column(horizontalAlignment = Alignment.End) {
-
-                // 1. "Snoozed" Indicator (Top)
                 if (isAnySnoozeActive) {
                     ExtendedFloatingActionButton(
                         text = {
-                            // Optional: Show count
                             if (activeSlotSnoozes.isNotEmpty() && !isGlobalSnoozeActive) {
                                 Text("Snoozed (${activeSlotSnoozes.size})")
                             } else {
@@ -212,7 +267,6 @@ fun MainScreen(
                     )
                 }
 
-                // 2. "Add Room" Button (Bottom - Only on Rooms Tab)
                 if (currentRoute == BottomNavItem.Rooms.route) {
                     FloatingActionButton(onClick = { showAddRoomDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = "Add Room")
@@ -224,7 +278,8 @@ fun MainScreen(
         NavHost(
             navController = bottomNavController,
             startDestination = BottomNavItem.Rooms.route,
-            modifier = Modifier.padding(bottom = innerPadding.calculateBottomPadding())
+            // Apply padding to the NavHost so ALL screens sit correctly between bars
+            modifier = Modifier.padding(innerPadding)
         ) {
             composable(BottomNavItem.Rooms.route) {
                 RoomsScreen(
@@ -235,13 +290,11 @@ fun MainScreen(
                 )
             }
             composable(BottomNavItem.Activity.route) {
-                ActivityFeedScreen(
-                    userViewModel = userViewModel
-                )
+                ActivityFeedScreen(userViewModel = userViewModel)
             }
             composable(BottomNavItem.Profile.route) {
                 ProfileScreen(
-                    userViewModel = userViewModel, // Ensures Profile uses the same VM
+                    userViewModel = userViewModel,
                     onLogoutClick = onLogoutClick,
                     onGuestUpgradeClick = onGuestUpgradeClick,
                     onIgnoreListClick = onNavigateToIgnoreList,
