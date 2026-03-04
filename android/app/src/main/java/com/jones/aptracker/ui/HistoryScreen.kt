@@ -96,6 +96,7 @@ import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
+import com.jones.aptracker.network.IgnoreItem
 import com.jones.aptracker.ui.theme.APTheme
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -160,6 +161,10 @@ fun HistoryContent(
     // New Type Filter States (Traps Removed)
     val showProgression by historyViewModel.showProgression.collectAsState()
     val showUseful by historyViewModel.showUseful.collectAsState()
+
+    // Ignored Items filter
+    val showIgnoredItems by historyViewModel.showIgnoredItems.collectAsState()
+    val ignoreList by userViewModel.ignoreList.collectAsState()
 
     val roomNames by historyViewModel.roomNames.collectAsState()
 
@@ -246,13 +251,17 @@ fun HistoryContent(
                             historyViewModel = historyViewModel,
                             searchQuery = searchQuery,
                             onItemClick = { selectedItem = it },
-                            showRoomFilter = showRoomFilter
+                            showRoomFilter = showRoomFilter,
+                            showIgnoredItems = showIgnoredItems,
+                            ignoreList = ignoreList
                         )
                         1 -> HintHistoryTab(
                             historyViewModel = historyViewModel,
                             searchQuery = searchQuery,
                             onHintClick = { selectedHint = it },
-                            showRoomFilter = showRoomFilter
+                            showRoomFilter = showRoomFilter,
+                            showIgnoredItems = showIgnoredItems,
+                            ignoreList = ignoreList
                         )
                     }
                 }
@@ -283,6 +292,8 @@ fun HistoryContent(
                 showUseful = showUseful,
                 onShowUsefulChange = { historyViewModel.setShowUseful(it) },
                 // ---
+                showIgnoredItems = showIgnoredItems,
+                onShowIgnoredItemsChange = { historyViewModel.setShowIgnoredItems(it) },
                 isHintTabSelected = pagerState.currentPage == 1,
                 onDismiss = { showFilterSheet = false }
             )
@@ -355,6 +366,8 @@ fun HistoryFilterSheet(
     onShowProgressionChange: (Boolean) -> Unit,
     showUseful: Boolean,
     onShowUsefulChange: (Boolean) -> Unit,
+    showIgnoredItems: Boolean,
+    onShowIgnoredItemsChange: (Boolean) -> Unit,
 
     isHintTabSelected: Boolean,
     onDismiss: () -> Unit
@@ -490,6 +503,35 @@ fun HistoryFilterSheet(
                     )
                 }
             }
+        }
+
+        HorizontalDivider()
+
+        // Toggle 4: Ignored Items
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onShowIgnoredItemsChange(!showIgnoredItems) }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Show Ignored Items",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = "Include items/hints that match your ignore list.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = showIgnoredItems,
+                onCheckedChange = onShowIgnoredItemsChange,
+                modifier = Modifier.padding(start = 16.dp)
+            )
         }
 
         Spacer(Modifier.height(24.dp))
@@ -665,7 +707,9 @@ fun ItemHistoryTab(
     historyViewModel: HistoryViewModel,
     searchQuery: String,
     onItemClick: (HistoryItem) -> Unit,
-    showRoomFilter: Boolean
+    showRoomFilter: Boolean,
+    showIgnoredItems: Boolean,
+    ignoreList: List<IgnoreItem>
 ) {
     val fullHistory by historyViewModel.itemHistory.collectAsState()
     val availablePlayers by historyViewModel.availablePlayers.collectAsState()
@@ -694,7 +738,7 @@ fun ItemHistoryTab(
     // Filter Logic
     val itemsToShow = remember(
         fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, historyFilter,
-        activeRoomIds, archivedRoomIds, showProgression, showUseful
+        activeRoomIds, archivedRoomIds, showProgression, showUseful, showIgnoredItems, ignoreList
     ) {
         fullHistory.filter { item ->
             val matchesSearch = searchQuery.isBlank() ||
@@ -732,7 +776,13 @@ fun ItemHistoryTab(
                 false
             }
 
-            matchesSearch && matchesRoom && matchesPlayer && matchesFinished && matchesType
+            val isIgnored = ignoreList.any { ignoreRule ->
+                ignoreRule.itemName.equals(item.itemName, ignoreCase = true) &&
+                        (ignoreRule.gameName.isNullOrBlank() || ignoreRule.gameName.equals(item.receivingGame, ignoreCase = true))
+            }
+            val matchesIgnored = showIgnoredItems || !isIgnored
+
+            matchesSearch && matchesRoom && matchesPlayer && matchesFinished && matchesType && matchesIgnored
         }
     }
 
@@ -973,7 +1023,9 @@ fun HintHistoryTab(
     historyViewModel: HistoryViewModel,
     searchQuery: String,
     onHintClick: (HintEntity) -> Unit,
-    showRoomFilter: Boolean
+    showRoomFilter: Boolean,
+    showIgnoredItems: Boolean,
+    ignoreList: List<IgnoreItem>
 ) {
     val hintsForYou by historyViewModel.hintsForYou.collectAsState()
     val hintsByYou by historyViewModel.hintsByYou.collectAsState()
@@ -1004,23 +1056,23 @@ fun HintHistoryTab(
     val filteredHintsForYou = remember(
         hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
         historyFilter, activeRoomIds, archivedRoomIds,
-        showProgression, showUseful
+        showProgression, showUseful, showIgnoredItems, ignoreList
     ) {
         filterHints(
             hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
             historyFilter, activeRoomIds, archivedRoomIds,
-            showProgression, showUseful
+            showProgression, showUseful, showIgnoredItems, ignoreList
         )
     }
     val filteredHintsByYou = remember(
         hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
         historyFilter, activeRoomIds, archivedRoomIds,
-        showProgression, showUseful
+        showProgression, showUseful, showIgnoredItems, ignoreList
     ) {
         filterHints(
             hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
             historyFilter, activeRoomIds, archivedRoomIds,
-            showProgression, showUseful
+            showProgression, showUseful, showIgnoredItems, ignoreList
         )
     }
 
@@ -1320,7 +1372,9 @@ private fun filterHints(
     activeRoomIds: Set<Int>,
     archivedRoomIds: Set<Int>,
     showProgression: Boolean,
-    showUseful: Boolean
+    showUseful: Boolean,
+    showIgnoredItems: Boolean,
+    ignoreList: List<IgnoreItem>
 ): List<HintEntity> {
     return hints.filter { hint ->
         // 1. Room Check
@@ -1362,7 +1416,13 @@ private fun filterHints(
             false
         }
 
-        matchesRoom && matchesQuery && matchesFinished && matchesPlayer && matchesType
+        // Note: HintEntity does not have receivingGame, so we just match on itemName
+        val isIgnored = ignoreList.any { ignoreRule ->
+            ignoreRule.itemName.equals(hint.itemName, ignoreCase = true)
+        }
+        val matchesIgnored = showIgnoredItems || !isIgnored
+
+        matchesRoom && matchesQuery && matchesFinished && matchesPlayer && matchesType && matchesIgnored
     }
 }
 
