@@ -215,6 +215,7 @@ def setup_cheese_user_task(app, user_id):
                     stale_subs = session.query(UserRoomSubscription)\
                         .join(TrackedRoom)\
                         .filter(UserRoomSubscription.user_id == user.id)\
+                        .filter(UserRoomSubscription.is_archived == False) \
                         .filter(TrackedRoom.cheese_tracker_id.isnot(None))\
                         .filter(TrackedRoom.cheese_tracker_id.notin_(found_cheese_tracker_ids))\
                         .all()
