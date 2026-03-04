@@ -149,7 +149,7 @@ fun RoomsScreen(
         SwipeRefresh(
             state = rememberSwipeRefreshState(isRefreshing = isLoading),
             onRefresh = {
-                roomsViewModel.refreshAll(isCheeseConnected = userProfile?.is_cheese_connected == true)
+                roomsViewModel.fetchRooms()
                 userViewModel.fetchTrackedSlots()
                 userViewModel.fetchUserProfile()
             },
