@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
     private var isLoggingOut = false
     private var currentCodeVerifier: String? = null
 
+    // State for the summary sheet
     private val bundledItemsState = mutableStateOf<List<String>?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -134,7 +135,6 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                // Observe the items state
                 val summaryItems = bundledItemsState.value
 
                 VersionGate(
@@ -145,12 +145,10 @@ class MainActivity : ComponentActivity() {
                     onGuestUpgradeClick = onGuestUpgradeClick
                 )
 
-                // Show the sheet if we have items
                 if (summaryItems != null) {
                     BundleSummarySheet(
                         items = summaryItems,
                         onDismiss = {
-                            // Clear state AND the intent extra so it doesn't reappear on rotate
                             bundledItemsState.value = null
                             intent?.removeExtra("bundled_items")
                         }
@@ -165,7 +163,6 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
 
         lifecycleScope.launch {
-            // Tiny delay to let the Activity transition settle
             delay(150)
             handleIntent(intent)
         }
@@ -261,7 +258,6 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 var errorDetails = e.toString()
 
-                // Specific handling for 409 Conflict (Guest Merge)
                 if (e is HttpException) {
                     if (e.code() == 409) {
                         try {
@@ -269,7 +265,6 @@ class MainActivity : ComponentActivity() {
                             val errorResponse = Gson().fromJson(errorJson, AuthErrorResponse::class.java)
 
                             if (errorResponse.error == "account_conflict") {
-                                // Trigger the merge flow in ViewModel
                                 authViewModel.onMergeConflict(code, codeVerifier)
                             } else {
                                 errorDetails = "An unknown conflict occurred."
@@ -308,6 +303,7 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Log.e("GUEST_LOGIN_ERROR", "Failed to login as guest", e)
                 Toast.makeText(this@MainActivity, "Guest Login Failed.", Toast.LENGTH_LONG).show()
+            } finally {
                 authViewModel.setLoading(false)
             }
         }
@@ -403,7 +399,6 @@ fun BundleSummarySheet(
     items: List<String>,
     onDismiss: () -> Unit
 ) {
-    // Force the sheet to open fully so it doesn't get confused during app animation
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
