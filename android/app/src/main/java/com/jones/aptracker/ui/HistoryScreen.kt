@@ -740,6 +740,19 @@ fun ItemHistoryTab(
         fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, historyFilter,
         activeRoomIds, archivedRoomIds, showProgression, showUseful, showIgnoredItems, ignoreList
     ) {
+        val globalIgnoredItems = ignoreList
+            .filter { it.gameName.isNullOrBlank() }
+            .map { it.itemName.lowercase() }
+            .toSet()
+
+        val gameSpecificIgnoredItems = ignoreList
+            .filter { !it.gameName.isNullOrBlank() }
+            .groupBy(
+                keySelector = { it.gameName!!.lowercase() },
+                valueTransform = { it.itemName.lowercase() }
+            )
+            .mapValues { it.value.toSet() }
+
         fullHistory.filter { item ->
             val matchesSearch = searchQuery.isBlank() ||
                     item.playerName.contains(searchQuery, ignoreCase = true) ||
@@ -776,10 +789,12 @@ fun ItemHistoryTab(
                 false
             }
 
-            val isIgnored = ignoreList.any { ignoreRule ->
-                ignoreRule.itemName.equals(item.itemName, ignoreCase = true) &&
-                        (ignoreRule.gameName.isNullOrBlank() || ignoreRule.gameName.equals(item.receivingGame, ignoreCase = true))
-            }
+            val lowerCaseItemName = item.itemName.lowercase()
+            val lowerCaseGameName = item.receivingGame?.lowercase()
+
+            val isIgnored = lowerCaseItemName in globalIgnoredItems ||
+                    (lowerCaseGameName != null && gameSpecificIgnoredItems[lowerCaseGameName]?.contains(lowerCaseItemName) == true)
+
             val matchesIgnored = showIgnoredItems || !isIgnored
 
             matchesSearch && matchesRoom && matchesPlayer && matchesFinished && matchesType && matchesIgnored
@@ -1376,6 +1391,8 @@ private fun filterHints(
     showIgnoredItems: Boolean,
     ignoreList: List<IgnoreItem>
 ): List<HintEntity> {
+    val ignoredItemNames = ignoreList.map { it.itemName.lowercase() }.toSet()
+
     return hints.filter { hint ->
         // 1. Room Check
         val matchesRoom = when (val f = historyFilter) {
@@ -1417,9 +1434,7 @@ private fun filterHints(
         }
 
         // Note: HintEntity does not have receivingGame, so we just match on itemName
-        val isIgnored = ignoreList.any { ignoreRule ->
-            ignoreRule.gameName.isNullOrBlank() && ignoreRule.itemName.equals(hint.itemName, ignoreCase = true)
-        }
+        val isIgnored = hint.itemName.lowercase() in ignoredItemNames
         val matchesIgnored = showIgnoredItems || !isIgnored
 
         matchesRoom && matchesQuery && matchesFinished && matchesPlayer && matchesType && matchesIgnored
