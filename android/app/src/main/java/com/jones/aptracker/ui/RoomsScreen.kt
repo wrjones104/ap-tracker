@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -144,7 +145,7 @@ fun RoomsScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-
+        contentWindowInsets = WindowInsets(0.dp)
     ) { innerPadding ->
         SwipeRefresh(
             state = rememberSwipeRefreshState(isRefreshing = isLoading),
@@ -153,7 +154,7 @@ fun RoomsScreen(
                 userViewModel.fetchTrackedSlots()
                 userViewModel.fetchUserProfile()
             },
-            modifier = Modifier.padding(top = innerPadding.calculateTopPadding())
+            modifier = Modifier.padding(innerPadding)
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 if (isLoading && rooms.isEmpty()) {
