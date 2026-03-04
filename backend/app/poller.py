@@ -2056,16 +2056,12 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
             room_suffix = first_title.split(" - [")[-1]
             room_suffix = " - [" + room_suffix
 
-        # Extract item names using the new context we added
         item_strings = []
         for n in notif_list:
             if 'item_context' in n:
                 ctx = n['item_context']
                 # Format: "Item Name [Alias (Original)]"
-                if ctx['alias'] == ctx['original']:
-                    formatted = f"{ctx['item_name']} [{ctx['original']}]"
-                else:
-                    formatted = f"{ctx['item_name']} [{ctx['alias']} ({ctx['original']})]"
+                formatted = f"{ctx['item_name']} [{ctx['original']}]"
                 item_strings.append(formatted)
             else:
                 # Fallback to old parsing if context is missing (safety net)
