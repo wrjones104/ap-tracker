@@ -20,20 +20,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -82,7 +77,6 @@ class MainActivity : ComponentActivity() {
     private var isLoggingOut = false
     private var currentCodeVerifier: String? = null
 
-    // State for the summary sheet
     private val bundledItemsState = mutableStateOf<List<String>?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -91,7 +85,7 @@ class MainActivity : ComponentActivity() {
         if (isGranted) {
             Toast.makeText(this, "Notifications enabled!", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(this, "Notifications are disabled.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Notifications are disabled. You can enable them in app settings.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -187,7 +181,6 @@ class MainActivity : ComponentActivity() {
         Log.d("BUNDLE_DEBUG", "Found bundled_items JSON: $jsonStr")
 
         try {
-            // FIX: Use Gson for robust parsing
             val type = object : TypeToken<List<String>>() {}.type
             val items: List<String> = Gson().fromJson(jsonStr, type)
 
@@ -202,7 +195,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ... (rest of authentication and logout methods remain the same) ...
     private fun observeLogoutEvents() {
         SessionManager.logoutEvent
             .onEach { reason ->
@@ -256,14 +248,46 @@ class MainActivity : ComponentActivity() {
                 val redirectUri = "com.jones.aptracker:/oauth2redirect"
                 val authRequest = AuthRequest(code, redirectUri, codeVerifier)
                 val response = RetrofitClient.instance.exchangeCodeForToken(authRequest)
+
                 tokenManager.saveToken(response.token)
                 authViewModel.onLoginSuccess()
                 Toast.makeText(this@MainActivity, "Login Successful!", Toast.LENGTH_SHORT).show()
+
                 val intent = Intent(this@MainActivity, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 }
                 startActivity(intent)
+
             } catch (e: Exception) {
+                var errorDetails = e.toString()
+
+                // Specific handling for 409 Conflict (Guest Merge)
+                if (e is HttpException) {
+                    if (e.code() == 409) {
+                        try {
+                            val errorJson = e.response()?.errorBody()?.string()
+                            val errorResponse = Gson().fromJson(errorJson, AuthErrorResponse::class.java)
+
+                            if (errorResponse.error == "account_conflict") {
+                                // Trigger the merge flow in ViewModel
+                                authViewModel.onMergeConflict(code, codeVerifier)
+                            } else {
+                                errorDetails = "An unknown conflict occurred."
+                                Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                            }
+                        } catch (parseError: Exception) {
+                            errorDetails = "This Discord account is already in use by another user."
+                            Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        errorDetails = "Exchange Failed: ${e.code()} ${e.message()}"
+                        Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    Log.e("LOGIN_ERROR", "Failed to exchange token", e)
+                    Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                }
+            } finally {
                 authViewModel.setLoading(false)
             }
         }
@@ -282,6 +306,8 @@ class MainActivity : ComponentActivity() {
                 }
                 startActivity(intent)
             } catch (e: Exception) {
+                Log.e("GUEST_LOGIN_ERROR", "Failed to login as guest", e)
+                Toast.makeText(this@MainActivity, "Guest Login Failed.", Toast.LENGTH_LONG).show()
                 authViewModel.setLoading(false)
             }
         }
@@ -293,7 +319,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// ... (VersionGate, UpdateRequiredScreen, ErrorScreen remain unchanged) ...
 @Composable
 fun VersionGate(
     authViewModel: AuthViewModel,
@@ -391,7 +416,6 @@ fun BundleSummarySheet(
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp)
                 .navigationBarsPadding()
-            // Removed imePadding() because this sheet has no input fields
         ) {
             Text(
                 text = "New Items Received",
@@ -399,7 +423,7 @@ fun BundleSummarySheet(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
             Text(
-                text = "You received a bundle of ${items.size} items.",
+                text = "You just received a bundle of ${items.size} items.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 16.dp)
@@ -417,7 +441,7 @@ fun BundleSummarySheet(
                     ) {
                         Text(
                             text = item,
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = MaterialTheme.typography.bodyLarge
                         )
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
