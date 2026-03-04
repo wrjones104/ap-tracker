@@ -62,7 +62,10 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.allRooms
                 .map { roomEntities -> roomEntities.map { RoomMapper.toDomain(it) } }
-                .catch { /* error handling */ }
+                .catch { e ->
+                    _errorMessage.value = "Failed to load rooms from database."
+                    Log.e("RoomsViewModel", "Error loading rooms from DB", e)
+                }
                 .collect { roomList -> _rooms.value = roomList }
         }
 
