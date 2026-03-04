@@ -1,5 +1,8 @@
+// In com.jones.aptracker.repository.RoomsRepository.kt
+
 package com.jones.aptracker.repository
 
+import com.jones.aptracker.network.AddRoomRequest
 import com.jones.aptracker.network.ApiService
 import com.jones.aptracker.network.RoomDao
 import com.jones.aptracker.network.RoomEntity
@@ -13,26 +16,16 @@ class RoomsRepository(
     val allRooms: Flow<List<RoomEntity>> = roomDao.getAllRooms()
 
     suspend fun refreshRooms() {
-        // This gets the "Active" rooms (since archived=false by default)
         val networkRooms = apiService.getRooms()
 
-        // 1. Fetch current local rooms to see existing sort orders
         val localRooms = roomDao.getAllRoomsOneShot()
         val sortOrderMap = localRooms.associate { it.room_id to it.sort_order }
 
-        // 2. Find the highest sort order currently used (for new rooms)
         var nextSortOrder = (localRooms.maxOfOrNull { it.sort_order } ?: 0) + 1
 
         val roomEntities = networkRooms.map { networkRoom ->
-            // 3. Preserve existing order if known, else append to end
             val currentOrder = sortOrderMap[networkRoom.room_id]
-            val finalOrder = if (currentOrder != null) {
-                currentOrder
-            } else {
-                val newOrder = nextSortOrder
-                nextSortOrder++
-                newOrder
-            }
+            val finalOrder = currentOrder ?: nextSortOrder++
 
             RoomEntity(
                 id = networkRoom.id,
@@ -51,5 +44,15 @@ class RoomsRepository(
 
     suspend fun updateRoomOrder(rooms: List<RoomEntity>) {
         roomDao.updateRooms(rooms)
+    }
+
+    suspend fun addRoom(request: AddRoomRequest) {
+        val response = apiService.addRoom(request)
+        if (!response.isSuccessful) throw Exception("Failed to add room")
+        refreshRooms()
+    }
+
+    suspend fun refreshArchivedRooms(): List<com.jones.aptracker.network.Room> {
+        return apiService.getRooms(archived = true)
     }
 }

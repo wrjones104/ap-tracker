@@ -2,6 +2,7 @@ package com.jones.aptracker.ui
 
 import android.app.Application
 import android.util.Log
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.SettingsManager
@@ -11,6 +12,8 @@ import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.Room
 import com.jones.aptracker.network.UpdateRoomRequest
 import com.jones.aptracker.repository.RoomsRepository
+import com.jones.aptracker.repository.UserRepository // Import this!
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +26,7 @@ import kotlinx.coroutines.launch
 class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: RoomsRepository
+    private val userRepository: UserRepository // Add this
     private val settingsManager = SettingsManager(application)
 
     private val _isSyncingCheese = MutableStateFlow(false)
@@ -38,7 +42,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     val rooms: StateFlow<List<Room>> = _rooms
 
     private val _isLoadingRooms = MutableStateFlow(true)
-
     val isLoading = _isLoadingRooms.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -52,44 +55,40 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val roomDao = AppDatabase.getInstance(application).roomDao()
-        repository = RoomsRepository(RetrofitClient.instance, roomDao)
+        val api = RetrofitClient.instance
+        repository = RoomsRepository(api, roomDao)
+        userRepository = UserRepository(api)
 
         viewModelScope.launch {
             repository.allRooms
-                .map { roomEntities ->
-                    roomEntities.map { RoomMapper.toDomain(it) }
-                }
-                .catch {
+                .map { roomEntities -> roomEntities.map { RoomMapper.toDomain(it) } }
+                .catch { e ->
                     _errorMessage.value = "Failed to load rooms from database."
-                    it.printStackTrace()
+                    Log.e("RoomsViewModel", "Error loading rooms from DB", e)
                 }
-                .collect { roomList ->
-                    _rooms.value = roomList
-                }
+                .collect { roomList -> _rooms.value = roomList }
         }
 
-        fetchRooms()
+        fetchRooms() // Regular fetch
+
+        viewModelScope.launch {
+            delay(1000)
+            val isAutoSync = isAutoSyncEnabled.value
+            if (isAutoSync) {
+                triggerBackgroundSync()
+            }
+        }
     }
 
     fun reorderRooms(fromIndex: Int, toIndex: Int) {
         val currentList = _rooms.value.toMutableList()
+        if (fromIndex == toIndex || fromIndex !in currentList.indices || toIndex !in currentList.indices) return
 
-        // Safety checks
-        if (fromIndex == toIndex ||
-            fromIndex !in currentList.indices ||
-            toIndex !in currentList.indices
-        ) return
-
-        // 1. Move item in memory immediately for UI responsiveness
         val item = currentList.removeAt(fromIndex)
         currentList.add(toIndex, item)
-
-        // 2. Update StateFlow immediately
         _rooms.value = currentList.toList()
 
-        // 3. Persist new order to DB using Mapper
         viewModelScope.launch {
-            // The Mapper.toEntityList helper will assign sort_order based on list index
             val updatedEntities = RoomMapper.toEntityList(currentList)
             repository.updateRoomOrder(updatedEntities)
         }
@@ -109,33 +108,20 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addRoom(
-        roomUrl: String,
-        alias: String,
-        iconName: String,
-        onSuccess: () -> Unit
-    ) {
+    fun addRoom(roomUrl: String, alias: String, iconName: String, onSuccess: () -> Unit) {
         viewModelScope.launch {
             _errorMessage.value = null
-
-            // 1. Trim whitespace
-            // 2. Auto-prepend https:// if protocol is missing
             var cleanUrl = roomUrl.trim()
             if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
                 cleanUrl = "https://$cleanUrl"
             }
 
             try {
-                // Use cleanUrl in the request
                 val request = AddRoomRequest(room_url = cleanUrl, alias = alias, icon_name = iconName)
-                val response = RetrofitClient.instance.addRoom(request)
 
-                if (response.isSuccessful) {
-                    repository.refreshRooms()
-                    onSuccess()
-                } else {
-                    _errorMessage.value = "Failed to add room. Check URL or connection."
-                }
+                // FIXED: Use Repository method we just added
+                repository.addRoom(request)
+                onSuccess()
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to add room. Check connection."
                 e.printStackTrace()
@@ -158,7 +144,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     fun updateRoom(roomId: Int, newAlias: String, iconName: String) {
         viewModelScope.launch {
             try {
-                // Explicitly set is_archived to null so we don't accidentally unarchive
                 val request = UpdateRoomRequest(alias = newAlias, icon_name = iconName, is_archived = null)
                 RetrofitClient.instance.updateRoom(roomId, request)
                 repository.refreshRooms()
@@ -168,12 +153,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
     fun fetchArchivedRooms() {
         _isLoadingArchived.value = true
         viewModelScope.launch {
             try {
-                // Call API with archived=true
-                val result = RetrofitClient.instance.getRooms(archived = true)
+                // FIXED: Use Repository method we just added
+                val result = repository.refreshArchivedRooms()
                 _archivedRooms.value = result
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to load archived rooms."
@@ -184,18 +170,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- Archive a Room ---
     fun archiveRoom(roomId: Int) {
         viewModelScope.launch {
             try {
-                // We send ONLY the is_archived flag.
-                // We pass null for alias/icon so they don't change.
                 val request = UpdateRoomRequest(is_archived = true)
                 RetrofitClient.instance.updateRoom(roomId, request)
-
-                // Refresh both lists to update UI
-                repository.refreshRooms() // Updates active list
-                fetchArchivedRooms()      // Updates archived list
+                repository.refreshRooms()
+                fetchArchivedRooms()
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to archive room."
                 e.printStackTrace()
@@ -203,13 +184,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- Unarchive a Room ---
     fun unarchiveRoom(roomId: Int) {
         viewModelScope.launch {
             try {
                 val request = UpdateRoomRequest(is_archived = false)
                 RetrofitClient.instance.updateRoom(roomId, request)
-
                 repository.refreshRooms()
                 fetchArchivedRooms()
             } catch (e: Exception) {
@@ -223,15 +202,31 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         _errorMessage.value = null
     }
 
+    // --- CHEESE SYNC LOGIC (The new feature) ---
     private fun triggerBackgroundSync() {
         if (_isSyncingCheese.value) return
         _isSyncingCheese.value = true
 
         viewModelScope.launch {
             try {
+                // 1. Tell backend to START syncing
                 RetrofitClient.instance.syncCheeseTracker()
+
+                // 2. Poll until backend says "Done"
+                var retries = 0
+                while (retries < 15) { // Check for 30 seconds
+                    delay(2000)
+                    val profile = userRepository.getUserProfile()
+                    if (!profile.is_syncing_cheese) {
+                        break // Sync complete
+                    }
+                    retries++
+                }
+
                 _isSyncingCheese.value = false
                 fetchRooms()
+                Toast.makeText(getApplication(), "Cheese Sync Complete!", Toast.LENGTH_SHORT).show()
+
             } catch (e: Exception) {
                 e.printStackTrace()
                 Log.w("RoomsViewModel", "Background sync failed: ${e.message}")

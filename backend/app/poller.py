@@ -117,19 +117,30 @@ async def send_push_notifications(notifications, device_tokens, loop):
     if not firebase_app or not notifications or not device_tokens: return
 
     from firebase_admin import messaging
-
+  
     messages = []
     for content in notifications:
         try:
             logging.info(f"[NOTIFIER] Preparing notification for {len(device_tokens)} devices. Title: {content['title']} | Body: {content['body']}")
         except Exception as e:
             logging.error(f"[NOTIFIER] Error creating log message: {e}")
+            
+        # We check if the 'bundled_items' key exists (created by our bundling logic)
+        # FCM 'data' fields must be strings, so we ensure it's passed correctly.
+        data_payload = {}
+        if 'bundled_items' in content:
+            data_payload['bundled_items'] = content['bundled_items']
+
         for token in device_tokens:
             android_config = messaging.AndroidConfig(priority='high')
+            
             messages.append(messaging.Message(
                 notification=messaging.Notification(title=content['title'], body=content['body']),
-                token=token, android=android_config
+                token=token,
+                android=android_config,
+                data=data_payload if data_payload else None
             ))
+
     if not messages: return
 
     for i in range(0, len(messages), 10):
@@ -151,6 +162,7 @@ async def send_push_notifications(notifications, device_tokens, loop):
                 
         except Exception as e:
             logging.error(f"[FCM] A critical error occurred while sending a chunk: {e}", exc_info=True)
+        
         if i + 10 < len(messages):
             await asyncio.sleep(1)
 
@@ -486,7 +498,7 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 
     return hints_to_add, new_hints_for_notify, cache_keys_to_fetch, just_found_hint_item_loc_pairs
 
-def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids):
+def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids, connected_slots_set):  
     """
     Fetches names from DB in chunks and constructs final notification payloads.
     Applies filtering, backfill checks, ignore lists, alias/condensed formatting, and snooze logic.
@@ -565,6 +577,12 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
                 suppress_own = get_pref('suppress_own_events', 'suppress_own_events_default')
                 suppress_self = get_pref('suppress_self_found', 'suppress_self_found_default')
+                should_suppress_connected = get_pref('suppress_connected', 'suppress_connected_default')
+                
+                if should_suppress_connected and (rid in connected_slots_set):
+                    logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Slot {rid} is connected.")
+                    continue
+                
                 remove_emojis = get_pref('remove_emojis', 'remove_emojis_default')
 
                 # 2. Suppression Logic
@@ -579,7 +597,15 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                         logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Cross-slot item (From {send_id} to {rid}).")
                         continue
                 
-                alias = aliases_by_user.get(user_id, "Unknown Room")
+                # Resolving Aliases for Display and Context
+                # 'alias' is the User's custom name for this Room
+                room_alias = aliases_by_user.get(user_id, "Unknown Room")
+
+                # 'receiver_alias' is the User's custom name for this specific SLOT (if set), or fall back to full name
+                receiver_alias = short_name_map.get(rid, f"Slot {rid}")
+                # 'receiver_original' is the actual player name from the server
+                receiver_original = full_name_map.get(rid, f"Slot {rid}")
+
 
                 # Check Finished Suppression
                 wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
@@ -650,11 +676,21 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 if is_a_found_hint:
                     title_prefix = icon_bulb + title_prefix
                 
-                title = f"{title_prefix} - [{alias}]"
+                title = f"{title_prefix} - [{room_alias}]"
                 
                 if should_notify:
                     notifications_by_user.setdefault(user_id, []).append({
-                        'title': title, 'body': body, 'type': item_type, 'details': item_data['item_key_batch']
+                        'title': title, 
+                        'body': body, 
+                        'type': item_type, 
+                        'details': item_data['item_key_batch'],
+                        
+                        # --- Context for clean bundle formatting ---
+                        'item_context': {
+                            'item_name': item_name,
+                            'alias': receiver_alias,
+                            'original': receiver_original
+                        }
                     })
 
     # 3. Notify Hints
@@ -712,7 +748,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 if is_at_our_location and not should_send_notification:
                     wants_local = user_prefs.notify_hints_default
                     if relevant_slot_prefs and relevant_slot_prefs.notify_hints is not None:
-                         wants_local = relevant_slot_prefs.notify_hints
+                          wants_local = relevant_slot_prefs.notify_hints
                     if wants_local:
                         should_send_notification = True
                 
@@ -737,7 +773,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 current_name_map = short_name_map if use_condensed else full_name_map
                 
                 # --- BUILD NOTIFICATION ---
-                alias = aliases_by_user.get(user_id, "Unknown Room")
+                room_alias = aliases_by_user.get(user_id, "Unknown Room")
                 
                 icon_bulb = "" if remove_emojis else "💡 "
                 hint_sub_icon = ""
@@ -745,9 +781,9 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     hint_sub_icon = "🏆" if (hint_data.get('flags', 0) & 1) else "✅"
                 
                 if hint_sub_icon:
-                     title = f"{icon_bulb}{hint_sub_icon} New Hint! - [{alias}]"
+                      title = f"{icon_bulb}{hint_sub_icon} New Hint! - {item_name} - [{room_alias}]"
                 else:
-                     title = f"{icon_bulb}New Hint! - [{alias}]"
+                      title = f"{icon_bulb}New Hint! - {item_name} - [{room_alias}]"
                 
                 item_owner_name = current_name_map.get(io_id, f'P{io_id}')
                 location_owner_name = current_name_map.get(lo_id, f'P{lo_id}')
@@ -761,10 +797,11 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     return notifications_by_user
 
 
-def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activity_ts=None, updated_address=None):
+def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activity_ts=None, updated_address=None, connected_slots=None):
     """
     Synchronously processes tracker data and updates the database.
     """
+    connected_slots_set = set(connected_slots) if connected_slots else set()
     session = Session()
     try:
         room = session.query(TrackedRoom).filter_by(id=db_id).first()
@@ -956,7 +993,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
             session, db_id, all_cache_keys, new_items_notif, new_hints_notif,
             users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, 
             full_name_map, short_name_map,
-            backfill_check_set, just_found_hints, finished_player_ids
+            backfill_check_set, just_found_hints, finished_player_ids, connected_slots_set
         )
 
         # Combine notifications (Finished + Items + Hints)
@@ -1293,16 +1330,36 @@ async def run_room_poll(room_info, loop):
     # --- GATEKEEPER END ---
 
     start_wait_time = time.time()
+    start_wait_time = time.time()
 
     async with ap_poll_semaphore:
         wait_duration = time.time() - start_wait_time
         if wait_duration > SEMAPHORE_WAIT_WARNING_THRESHOLD:
             logging.warning(f"[HIGH_LOAD] Room {db_id} waited {wait_duration:.2f}s for semaphore.")
+            
+        # 1. FETCH THE DATA
         tracker_data = await fetch_json(f"https://{hostname}/api/tracker/{tracker_id}")
 
+    # 2. CHECK IF DATA EXISTS
     if not tracker_data:
         return
 
+    # 3. NOW CALCULATE CONNECTED SLOTS (Paste the new logic here)
+    connected_slots = set()
+    player_statuses_raw = tracker_data.get('player_status', {})
+
+    if isinstance(player_statuses_raw, dict):
+        for slot_id, status in player_statuses_raw.items():
+            if status == 5:
+                connected_slots.add(int(slot_id))
+    elif isinstance(player_statuses_raw, list):
+        for entry in player_statuses_raw:
+            if isinstance(entry, dict) and entry.get('status') == 5:
+                pid = entry.get('player')
+                if pid is not None:
+                    connected_slots.add(int(pid))
+
+    # 4. PASS TO DB PROCESSOR
     try:
         notifications_to_send = await loop.run_in_executor(
             None, 
@@ -1312,7 +1369,8 @@ async def run_room_poll(room_info, loop):
             tracker_data, 
             room_data, 
             current_remote_activity,
-            new_full_address
+            new_full_address,
+            list(connected_slots) 
         )
         
         if notifications_to_send:
@@ -1998,18 +2056,29 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
             room_suffix = first_title.split(" - [")[-1]
             room_suffix = " - [" + room_suffix
 
-        # Extract item names (naive parse)
-        # Title format: "🏆 Item Name - [Room]"
-        item_names = []
+        # Extract item names using the new context we added
+        item_strings = []
         for n in notif_list:
-            raw = n['title'].split(" - [")[0]
-            # Remove emoji
-            clean = raw.replace("🏆 ", "").replace("✅ ", "").replace("💡 ", "")
-            item_names.append(clean)
+            if 'item_context' in n:
+                ctx = n['item_context']
+                # Format: "Item Name [Alias (Original)]"
+                if ctx['alias'] == ctx['original']:
+                    formatted = f"{ctx['item_name']} [{ctx['original']}]"
+                else:
+                    formatted = f"{ctx['item_name']} [{ctx['alias']} ({ctx['original']})]"
+                item_strings.append(formatted)
+            else:
+                # Fallback to old parsing if context is missing (safety net)
+                raw = n['title'].split(" - [")[0]
+                clean = raw.replace("🏆 ", "").replace("✅ ", "").replace("💡 ", "")
+                item_strings.append(clean)
 
-        count = len(item_names)
-        display_names = item_names[:2]
-        remainder = count - 2
+        count = len(item_strings)
+        
+        # Show up to 5 items in the collapsed body text
+        VISIBLE_LIMIT = 5 
+        display_names = item_strings[:VISIBLE_LIMIT]
+        remainder = count - VISIBLE_LIMIT
         
         body_str = ", ".join(display_names)
         if remainder > 0:
@@ -2020,7 +2089,8 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
         compressed.append({
             'title': final_title,
             'body': body_str,
-            'type': notif_list[0]['type'] # Keep type for icon logic if needed
+            'type': notif_list[0]['type'],
+            'bundled_items': json.dumps(item_strings) 
         })
 
     t_items = "New Items" if remove_emojis else "📦 New Items"

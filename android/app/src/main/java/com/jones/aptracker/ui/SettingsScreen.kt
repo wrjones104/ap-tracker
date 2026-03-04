@@ -140,6 +140,14 @@ fun SettingsScreen(
                         SectionHeader("Behavior")
 
                         NotificationToggle(
+                            text = "Suppress if I'm connected",
+                            description = "Don't notify me for slots I'm currently playing",
+                            checked = profile.suppress_connected_default,
+                            onCheckedChange = { userViewModel.updateGlobalPreferences(suppressConnected = it) }
+                        )
+                        HorizontalDivider()
+
+                        NotificationToggle(
                             text = "Suppress locally found items",
                             description = "Don't notify for items found in the same slot that I'm playing.",
                             checked = profile.suppress_self_found_default,

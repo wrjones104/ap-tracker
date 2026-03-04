@@ -61,7 +61,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -122,12 +121,6 @@ fun RoomsScreen(
         }
     }
 
-    LaunchedEffect(userProfile, isAutoSyncEnabled) {
-        if (userProfile?.is_cheese_connected == true && isAutoSyncEnabled) {
-            roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = false)
-        }
-    }
-
     LaunchedEffect(snackbarHostState, roomsViewModel) {
         snapshotFlow { errorMessage }
             .filterNotNull()
@@ -151,19 +144,12 @@ fun RoomsScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = { Text("Tracked Rooms") },
-                actions = {
-                    TopBarStatus(userProfile = userProfile, isSyncingCheese = isSyncingCheese)
-                }
-            )
-        },
+
     ) { innerPadding ->
         SwipeRefresh(
             state = rememberSwipeRefreshState(isRefreshing = isLoading),
             onRefresh = {
-                roomsViewModel.refreshAll(isCheeseConnected = userProfile?.is_cheese_connected == true)
+                roomsViewModel.fetchRooms()
                 userViewModel.fetchTrackedSlots()
                 userViewModel.fetchUserProfile()
             },
@@ -437,38 +423,6 @@ fun RoomsScreen(
 }
 
 // --- Sub-Composables ---
-
-@Composable
-fun TopBarStatus(userProfile: UserProfile?, isSyncingCheese: Boolean) {
-    if (userProfile == null || userProfile.is_guest) return
-
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 16.dp)) {
-        if (userProfile.avatar_url != null) {
-            AsyncImage(
-                model = userProfile.avatar_url,
-                contentDescription = "Profile",
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
-                contentScale = ContentScale.Crop
-            )
-        } else {
-            Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        if (userProfile.is_cheese_connected || isSyncingCheese) {
-            Spacer(modifier = Modifier.width(6.dp))
-        }
-
-        if (isSyncingCheese) {
-            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-        } else if (userProfile.is_cheese_connected) {
-            Icon(Icons.Default.Link, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-            Text("🧀", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 4.dp))
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

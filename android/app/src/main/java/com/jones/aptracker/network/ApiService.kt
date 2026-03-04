@@ -221,10 +221,12 @@ data class UserProfile(
     val suppress_self_found_default: Boolean = true,
     val notify_finished_default: Boolean,
     val use_condensed_messages_default: Boolean,
+    val suppress_connected_default: Boolean,
     val ui_show_finished_default: Boolean = true,
     val ui_show_found_hints_default: Boolean = false,
     val is_cheese_connected: Boolean = false,
-    val global_snooze_until: String? = null
+    val global_snooze_until: String? = null,
+    val is_syncing_cheese: Boolean = false
 )
 
 data class UpdateGlobalPrefsRequest(
@@ -252,7 +254,8 @@ data class UpdateSlotPrefsRequest(
     val remove_emojis: Boolean? = null,
     val suppress_self_found: Boolean? = null,
     val notify_finished: Boolean? = null,
-    val use_condensed_messages: Boolean? = null
+    val use_condensed_messages: Boolean? = null,
+    val suppress_connected: Boolean? = null
 )
 
 data class RoomWithTrackedSlots(
@@ -278,7 +281,8 @@ data class TrackedSlotDetail(
     val suppress_self_found: Boolean? = null,
     val notify_finished: Boolean?,
     val use_condensed_messages: Boolean?,
-    val snooze_until: String? = null
+    val snooze_until: String? = null,
+    val suppress_connected: Boolean?
 )
 
 data class HintHistoryResponse(
