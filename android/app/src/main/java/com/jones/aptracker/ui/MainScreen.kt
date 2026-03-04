@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalUriHandler //
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -73,6 +74,10 @@ fun MainScreen(
     roomsViewModel: RoomsViewModel = viewModel()
 ) {
     val bottomNavController = rememberNavController()
+
+    // --- 1. Get URI Handler for links ---
+    val uriHandler = LocalUriHandler.current
+
     val userProfile by userViewModel.userProfile.collectAsState()
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
     val isSyncingCheese by roomsViewModel.isSyncingCheese.collectAsState()
@@ -159,9 +164,7 @@ fun MainScreen(
     val currentRoute = navBackStackEntry?.destination?.route
 
     Scaffold(
-        // --- UNIFIED TOP APP BAR ---
         topBar = {
-            // Determine Title based on Route
             val titleText = when (currentRoute) {
                 BottomNavItem.Rooms.route -> "Tracked Rooms"
                 BottomNavItem.Activity.route -> "Activity Feed"
@@ -172,7 +175,6 @@ fun MainScreen(
             TopAppBar(
                 title = { Text(titleText) },
                 actions = {
-                    // Show Sync/Avatar/Cheese ONLY on Rooms Screen
                     if (currentRoute == BottomNavItem.Rooms.route) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
 
@@ -197,11 +199,18 @@ fun MainScreen(
                                 Spacer(modifier = Modifier.width(12.dp))
                             }
 
-                            // 2. CHEESE & SYNC
+                            // 2. CHEESE EMOJI & SYNC
                             if (isCheeseConnected) {
-                                Text("🧀", style = MaterialTheme.typography.titleMedium)
-                                Spacer(modifier = Modifier.width(1.dp))
+                                // --- 2a. Clickable Cheese Link ---
+                                IconButton(
+                                    onClick = {
+                                        uriHandler.openUri("https://cheesetrackers.theincrediblewheelofchee.se/")
+                                    }
+                                ) {
+                                    Text("🧀", style = MaterialTheme.typography.titleMedium)
+                                }
 
+                                // --- 2b. Sync Button ---
                                 val infiniteTransition = rememberInfiniteTransition(label = "spin")
                                 val angle by infiniteTransition.animateFloat(
                                     initialValue = 0f,
@@ -278,7 +287,6 @@ fun MainScreen(
         NavHost(
             navController = bottomNavController,
             startDestination = BottomNavItem.Rooms.route,
-            // Apply padding to the NavHost so ALL screens sit correctly between bars
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(BottomNavItem.Rooms.route) {

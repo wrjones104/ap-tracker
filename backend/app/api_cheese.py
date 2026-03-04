@@ -37,20 +37,15 @@ def setup_cheese_user_task(app, user_id):
                 logging.warning(f"[CHEESE_SETUP] User {user_id} has no API key. Aborting.")
                 return
 
-            # --- 1. CONCURRENCY LOCK ---
-            if user.is_syncing_cheese:
-                if user.cheese_sync_started_at and (datetime.utcnow() - user.cheese_sync_started_at) < timedelta(minutes=15):
-                    logging.warning(f"[CHEESE_SETUP] Sync already in progress for user {user_id}. Aborting.")
-                    return
-            
+            # --- REMOVED LOCK CHECK HERE ---
+            # The API Route now sets the flag to True synchronously to prevent race conditions.
+            # We just update the timestamp to be safe.
             user.is_syncing_cheese = True
             user.cheese_sync_started_at = datetime.utcnow()
             session.commit()
-            # ---------------------------
+            # -------------------------------
 
-            user = session.query(User).get(user_id)
-            if not user or not user.cheese_api_key: return
-
+            # Re-fetch user to ensure fresh state if needed (though session.get does this)
             api_key = decrypt_api_key(user.cheese_api_key)
             if not api_key:
                 logging.error(f"[CHEESE_SETUP] Failed to decrypt key for user {user_id}.")
@@ -122,7 +117,6 @@ def setup_cheese_user_task(app, user_id):
                                 logging.info(f"[CHEESE_SETUP] Linked existing AP room {ap_room_id} to Cheese ID {ct_id}")
 
                     # Fetch details needed for Slot Syncing
-                    # Use req_session here for efficiency
                     try:
                         detail_resp = req_session.get(f"{CHEESE_BASE_URL}/tracker/{ct_id}", timeout=10)
                         if detail_resp.ok:
@@ -267,7 +261,6 @@ def setup_cheese_user_task(app, user_id):
 
                 except Exception as e:
                     logging.error(f"[CHEESE_SETUP] Error during healing phase: {e}", exc_info=True)
-                    # We do not return/abort here; we want to finish the unlock process below.
             
             # --- RE-FETCH USER TO UNLOCK ---
             session = Session()
@@ -332,7 +325,7 @@ def connect_cheese_account(current_user):
         logging.error(f"[CHEESE_AUTH] Network error testing key: {e}")
         return jsonify({'error': 'Could not verify key with Cheese Tracker.'}), 502
 
-    # 2. Save Data
+    # 2. Save Data & SET SYNC FLAG SYNCHRONOUSLY
     session = Session()
     user = session.merge(current_user)
     
@@ -340,8 +333,10 @@ def connect_cheese_account(current_user):
     user.cheese_api_key = encrypted_key
     user.cheese_user_id = cheese_id
     
-    # CRITICAL: If guest, assume the Discord identity from Cheese
-    # This allows the rest of the app (slot matching, history names) to work
+    # Set flags so subsequent polls see "Syncing" immediately
+    user.is_syncing_cheese = True
+    user.cheese_sync_started_at = datetime.utcnow()
+    
     if user.is_guest and cheese_discord_name:
         user.discord_username = cheese_discord_name
         logging.info(f"[CHEESE_AUTH] Guest user {user.id} identified as '{cheese_discord_name}' via Cheese.")
@@ -371,13 +366,11 @@ def disconnect_cheese_account(current_user):
     """
     Removes the Cheese API key and ID.
     """
-    
     session = Session()
     user = session.merge(current_user)
     user.cheese_api_key = None
     user.cheese_user_id = None 
-    # Optional: If guest, maybe clear discord_username? 
-    # For now, keeping it is safer so they don't lose identity.
+    user.is_syncing_cheese = False # Reset flag just in case
     session.commit()
     
     return jsonify({'message': 'Disconnected from Cheese Tracker.'})
@@ -389,15 +382,29 @@ def disconnect_cheese_account(current_user):
 def trigger_manual_sync(current_user):
     """
     Manually triggers discovery/linking.
+    Sets the flag SYNCHRONOUSLY to avoid race conditions.
     """
     if not current_user.cheese_api_key:
         return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
 
-    app_context = current_app._get_current_object()
+    # 1. LOCK & SET FLAG
+    session = Session()
+    user = session.merge(current_user)
+    
+    # Optional: Rate Limit (15 mins)
+    if user.is_syncing_cheese:
+        if user.cheese_sync_started_at and (datetime.utcnow() - user.cheese_sync_started_at) < timedelta(minutes=15):
+            return jsonify({'error': 'Sync already in progress.'}), 429
+    
+    user.is_syncing_cheese = True
+    user.cheese_sync_started_at = datetime.utcnow()
+    session.commit()
 
+    # 2. START THREAD
+    app_context = current_app._get_current_object()
     threading.Thread(
         target=setup_cheese_user_task, 
-        args=(app_context, current_user.id,)
+        args=(app_context, user.id,)
     ).start()
         
     return jsonify({'message': 'Sync started.'})
