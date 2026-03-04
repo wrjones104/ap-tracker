@@ -1192,7 +1192,8 @@ def get_current_user(current_user):
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
             'is_guest': False,
-            'global_snooze_until': format_iso_z(current_user.global_snooze_until)
+            'global_snooze_until': format_iso_z(current_user.global_snooze_until),
+            'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False)
         })
 
 @bp.route('/users/me/tracked-slots', methods=['GET'])

@@ -23,11 +23,10 @@ bp = Blueprint('api_cheese', __name__)
 
 CHEESE_BASE_URL = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.theincrediblewheelofchee.se/api')
 CHEESE_DELAY = 60.0
-
+    
 def setup_cheese_user_task(app, user_id):
     """
     The 'First-Time Setup' & 'Manual Sync' task.
-    Refactored to use requests.Session() for efficient connection reuse.
     """
     with app.app_context():
         session = Session()
@@ -37,18 +36,17 @@ def setup_cheese_user_task(app, user_id):
                 logging.warning(f"[CHEESE_SETUP] User {user_id} has no API key. Aborting.")
                 return
 
-            # --- REMOVED LOCK CHECK HERE ---
-            # The API Route now sets the flag to True synchronously to prevent race conditions.
-            # We just update the timestamp to be safe.
             user.is_syncing_cheese = True
             user.cheese_sync_started_at = datetime.utcnow()
             session.commit()
-            # -------------------------------
+            
+            # Re-fetch is redundant but safe
+            user = session.query(User).get(user_id)
 
-            # Re-fetch user to ensure fresh state if needed (though session.get does this)
+            # --- KEY DECRYPTION ---
             api_key = decrypt_api_key(user.cheese_api_key)
             if not api_key:
-                logging.error(f"[CHEESE_SETUP] Failed to decrypt key for user {user_id}.")
+                logging.error(f"[CHEESE_DEBUG] Failed to decrypt key for user {user_id}.")
                 user.is_syncing_cheese = False
                 session.commit()
                 return
@@ -56,31 +54,33 @@ def setup_cheese_user_task(app, user_id):
             my_cheese_id = user.cheese_user_id
             discord_username = user.discord_username.strip().lower() if user.discord_username else None
 
-            logging.info(f"[CHEESE_SETUP] Starting discovery for user {user_id}...")
-
             # --- REQUESTS SESSION START ---
             with requests.Session() as req_session:
                 req_session.headers.update(get_cheese_headers())
                 req_session.headers['Authorization'] = f"Bearer {api_key}"
+                
+                # 1. Verify Self
                 try:
                     me_resp = req_session.get(f"{CHEESE_BASE_URL}/user/self", timeout=10)
                     if me_resp.ok:
                         me_data = me_resp.json()
                         if me_data.get('id'):
                             found_id = me_data['id']
-                            logging.info(f"[CHEESE_SETUP] Resolved Cheese User ID: {found_id}")
+                            logging.info(f"[CHEESE_DEBUG] Resolved Cheese User ID: {found_id}")
                             user.cheese_user_id = found_id
-                            session.commit() # Save immediately
+                            session.commit()
                 except Exception as e:
-                    logging.warning(f"[CHEESE_SETUP] Failed to fetch /user/self: {e}")
+                    logging.warning(f"[CHEESE_DEBUG] Failed to fetch /user/self: {e}")
                 
                 # 2. Fetch User's Trackers List
                 try:
+                    logging.info(f"[CHEESE_DEBUG] Fetching dashboard for user {user_id}...")
                     resp = req_session.get(f"{CHEESE_BASE_URL}/dashboard/tracker", timeout=15)
                     resp.raise_for_status()
                     trackers_list = resp.json()
+                    logging.info(f"[CHEESE_DEBUG] Dashboard returned {len(trackers_list)} trackers.")
                 except Exception as e:
-                    logging.error(f"[CHEESE_SETUP] Network error fetching dashboard: {e}")
+                    logging.error(f"[CHEESE_DEBUG] Network error fetching dashboard: {e}")
                     user.is_syncing_cheese = False
                     session.commit()
                     return
@@ -114,7 +114,7 @@ def setup_cheese_user_task(app, user_id):
                             room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
                             if room and not room.cheese_tracker_id:
                                 room.cheese_tracker_id = ct_id
-                                logging.info(f"[CHEESE_SETUP] Linked existing AP room {ap_room_id} to Cheese ID {ct_id}")
+                                logging.info(f"[CHEESE_DEBUG] Linked existing AP room {ap_room_id} to Cheese ID {ct_id}")
 
                     # Fetch details needed for Slot Syncing
                     try:
@@ -122,7 +122,7 @@ def setup_cheese_user_task(app, user_id):
                         if detail_resp.ok:
                             full_data = detail_resp.json()
                     except Exception as e:
-                        logging.error(f"[CHEESE_SETUP] Failed to fetch details for {ct_id}: {e}")
+                        logging.error(f"[CHEESE_DEBUG] Failed to fetch details for {ct_id}: {e}")
                         continue
 
                     # C. If still no room, Create it
@@ -140,6 +140,7 @@ def setup_cheese_user_task(app, user_id):
                                 updated_at_dt = datetime.fromisoformat(full_data.get('updated_at').replace('Z', '+00:00'))
                             except ValueError: pass
 
+                        logging.info(f"[CHEESE_DEBUG] Creating new room: {ap_room_id_extracted}")
                         room = TrackedRoom(
                             room_id=ap_room_id_extracted,
                             hostname=hostname,
@@ -189,7 +190,7 @@ def setup_cheese_user_task(app, user_id):
                                     # HEAL: If we didn't know our Cheese ID, save it now
                                     found_ct_id = game.get('claimed_by_ct_user_id')
                                     if found_ct_id and not my_cheese_id:
-                                        logging.info(f"[CHEESE_SETUP] Learned Cheese User ID: {found_ct_id}")
+                                        logging.info(f"[CHEESE_DEBUG] Learned Cheese User ID: {found_ct_id}")
                                         user.cheese_user_id = found_ct_id
                                         my_cheese_id = found_ct_id
 
@@ -219,13 +220,18 @@ def setup_cheese_user_task(app, user_id):
                         .all()
 
                     for sub in stale_subs:
-                        logging.info(f"[CHEESE_SETUP] Pruning stale subscription for user {user.id}: Room {sub.room_id}")
+                        logging.info(f"[CHEESE_DEBUG] Pruning stale subscription for user {user.id}: Room {sub.room_id}")
                         session.delete(sub)
                         stats['pruned'] += 1
+                
+                # Commit updates from the loop before starting the Healing phase
+                session.commit()
+                logging.info(f"[CHEESE_DEBUG] Initial sync loop complete. Stats: {stats}")
+
                 # --- REQUESTS SESSION END ---
 
                 try:
-                    # Use selectinload to eagerly load the room data, preventing lazy load errors
+                    # HEALING PHASE: Pushing orphaned rooms back to Cheese
                     from sqlalchemy.orm import selectinload
                     orphaned_subs = session.query(UserRoomSubscription)\
                         .options(selectinload(UserRoomSubscription.room))\
@@ -235,7 +241,6 @@ def setup_cheese_user_task(app, user_id):
                         .filter(~TrackedRoom.room_id.startswith("PENDING_DISCOVERY"))\
                         .all()
 
-                    # Gather all static data while the DB session is fully alive
                     rooms_to_push = []
                     for sub in orphaned_subs:
                         room = sub.room
@@ -247,30 +252,40 @@ def setup_cheese_user_task(app, user_id):
                                 'alias': sub.alias
                             })
                     
-                    # Execute network calls safely using the extracted dictionaries
-                    for data in rooms_to_push:
-                        logging.info(f"[CHEESE_SETUP] Healing orphaned room: {data['room_id']}")
-                        push_new_room_to_cheese(
-                            app, 
-                            user_id, # Safely pass the raw ID, not user.id 
-                            data['tracker_url'], 
-                            data['room_id'], 
-                            data['room_url'], 
-                            data['alias']
-                        )
+                    if rooms_to_push:
+                        logging.info(f"[CHEESE_DEBUG] Found {len(rooms_to_push)} orphaned rooms to heal. Closing DB session for network operations.")
+                        
+                        # Close the session before starting the synchronous push loop
+                        # This ensures push_new_room_to_cheese (which opens its own session)
+                        # doesn't conflict with the current one.
+                        Session.remove()
+
+                        # Execute network calls safely
+                        for data in rooms_to_push:
+                            logging.info(f"[CHEESE_DEBUG] Healing orphaned room: {data['room_id']}")
+                            push_new_room_to_cheese(
+                                app, 
+                                user_id, 
+                                data['tracker_url'], 
+                                data['room_id'], 
+                                data['room_url'], 
+                                data['alias']
+                            )
+                    else:
+                        logging.info("[CHEESE_DEBUG] No orphaned rooms found.")
 
                 except Exception as e:
-                    logging.error(f"[CHEESE_SETUP] Error during healing phase: {e}", exc_info=True)
+                    logging.error(f"[CHEESE_DEBUG] Error during healing phase: {e}", exc_info=True)
             
             # --- RE-FETCH USER TO UNLOCK ---
+            logging.info(f"[CHEESE_DEBUG] Sync task finished. Unlocking user {user_id}...")
             session = Session()
             fresh_user = session.query(User).get(user_id)
             if fresh_user:
                 fresh_user.is_syncing_cheese = False
                 fresh_user.cheese_last_sync = datetime.utcnow()
                 session.commit()
-                
-            logging.info(f"[CHEESE_SETUP] User {user_id} setup complete. {stats}")
+            logging.info(f"[CHEESE_DEBUG] User {user_id} unlocked.")
 
         except Exception as e:
             session.rollback()
@@ -280,7 +295,7 @@ def setup_cheese_user_task(app, user_id):
                     user.is_syncing_cheese = False
                     session.commit()
             except: pass
-            logging.error(f"[CHEESE_SETUP] Critical failure for user {user_id}: {e}", exc_info=True)
+            logging.error(f"[CHEESE_DEBUG] Critical failure for user {user_id}: {e}", exc_info=True)
         finally:
             Session.remove()
 
@@ -382,25 +397,23 @@ def disconnect_cheese_account(current_user):
 def trigger_manual_sync(current_user):
     """
     Manually triggers discovery/linking.
-    Sets the flag SYNCHRONOUSLY to avoid race conditions.
+    Sets flag SYNCHRONOUSLY to prevent race conditions.
     """
     if not current_user.cheese_api_key:
         return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
 
-    # 1. LOCK & SET FLAG
     session = Session()
     user = session.merge(current_user)
     
-    # Optional: Rate Limit (15 mins)
     if user.is_syncing_cheese:
         if user.cheese_sync_started_at and (datetime.utcnow() - user.cheese_sync_started_at) < timedelta(minutes=15):
             return jsonify({'error': 'Sync already in progress.'}), 429
     
+    # LOCK IMMEDIATELY
     user.is_syncing_cheese = True
     user.cheese_sync_started_at = datetime.utcnow()
     session.commit()
 
-    # 2. START THREAD
     app_context = current_app._get_current_object()
     threading.Thread(
         target=setup_cheese_user_task, 
@@ -413,31 +426,30 @@ def trigger_manual_sync(current_user):
 def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, alias):
     """
     (V4 Refactored) Pushes a new room to Cheese Tracker.
-    Fixes self-deadlock by not holding a DB session during network calls.
     """
+    logging.info(f"[CHEESE_DEBUG] push_new_room_to_cheese called for {ap_room_id}")
     api_key = None
     
-    # === 1. PRE-FLIGHT: Get API key ===
-    # Use a *temporary* session just to get the key
+    # === 1. PRE-FLIGHT ===
     with app.app_context():
         temp_session = Session()
         try:
             user = temp_session.query(User).filter_by(id=user_id).first()
             if not user or not user.cheese_api_key:
-                logging.warning(f"[CHEESE_PUSH_NEW] Aborting push for {tracker_url}: No API key.")
+                logging.warning(f"[CHEESE_DEBUG] Aborting push for {tracker_url}: No API key.")
                 return
 
             api_key = decrypt_api_key(user.cheese_api_key)
             if not api_key:
-                logging.error(f"[CHEESE_PUSH_NEW] Failed to decrypt API key for user {user_id}. Aborting push.")
+                logging.error(f"[CHEESE_DEBUG] Failed to decrypt API key for user {user_id}. Aborting push.")
                 return
         except Exception as e:
-            logging.error(f"[CHEESE_PUSH_NEW] Error in pre-flight: {e}", exc_info=True)
+            logging.error(f"[CHEESE_DEBUG] Error in pre-flight: {e}", exc_info=True)
             return
         finally:
-            Session.remove() # Close the temp session
+            Session.remove() 
 
-    # === 2. NETWORK PHASE: No DB session open! ===
+    # === 2. NETWORK PHASE ===
     cheese_tracker_id = None
     try:
         headers = get_cheese_headers()
@@ -448,14 +460,14 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         response_post = requests.post(f"{CHEESE_BASE_URL}/tracker", json=payload, headers=headers, timeout=10)
 
         if not (response_post.status_code == 200 or response_post.status_code == 201):
-            logging.warning(f"[CHEESE_PUSH_NEW] Failed (POST) to create tracker for {tracker_url}: {response_post.status_code} {response_post.text}")
+            logging.warning(f"[CHEESE_DEBUG] Failed (POST) to create tracker for {tracker_url}: {response_post.status_code} {response_post.text}")
             return
             
         data = response_post.json()
         cheese_tracker_id = data.get('tracker_id')
         
         if not cheese_tracker_id:
-            logging.error(f"[CHEESE_PUSH_NEW] Succeeded POST, but no tracker_id in response for {tracker_url}.")
+            logging.error(f"[CHEESE_DEBUG] Succeeded POST, but no tracker_id in response for {tracker_url}.")
             return
 
         time.sleep(CHEESE_DELAY)
@@ -493,20 +505,19 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         response_put = requests.put(f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}", json=put_payload, headers=put_headers, timeout=10)
         
         if not (response_put.status_code == 200 or response_put.status_code == 204):
-            logging.warning(f"[CHEESE_PUSH_NEW] Failed (PUT) to update title/room_link for {cheese_tracker_id}: {response_put.status_code} {response_put.text}")
+            logging.warning(f"[CHEESE_DEBUG] Failed (PUT) to update title/room_link for {cheese_tracker_id}: {response_put.status_code} {response_put.text}")
 
     except requests.exceptions.ReadTimeout:
-        logging.error(f"[CHEESE_PUSH_NEW] Network timeout connecting to {CHEESE_BASE_URL}. Is local server running and responsive?", exc_info=True)
+        logging.error(f"[CHEESE_DEBUG] Network timeout connecting to {CHEESE_BASE_URL}.", exc_info=True)
         return
     except Exception as e:
-        logging.error(f"[CHEESE_PUSH_NEW] Error during network phase: {e}", exc_info=True)
+        logging.error(f"[CHEESE_DEBUG] Error during network phase: {e}", exc_info=True)
         return
 
     # === 3. DATABASE PHASE ===
     if not cheese_tracker_id:
-        return # Should have already returned, but as a safeguard
+        return 
 
-    # Variables to hold extracted data so we can trigger the slot push outside the DB block
     room_db_id_for_slots = None
     slot_ids_to_claim = []
 
@@ -518,14 +529,12 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
                 try:
                     local_room.cheese_tracker_id = cheese_tracker_id
                     session.commit()
-                    logging.info(f"[CHEESE_PUSH_NEW] Successfully created/linked {ap_room_id} to Cheese ID {cheese_tracker_id}.")
-                    
-                    # Extract the ID for the slot check
+                    logging.info(f"[CHEESE_DEBUG] Successfully created/linked {ap_room_id} to Cheese ID {cheese_tracker_id}.")
                     room_db_id_for_slots = local_room.id
                 
                 except IntegrityError:
                     session.rollback()
-                    logging.warning(f"[CHEESE_PUSH_NEW] Collision: Cheese ID {cheese_tracker_id} is already assigned to another room. Deferring merge to Poller.")
+                    logging.warning(f"[CHEESE_DEBUG] Collision: Cheese ID {cheese_tracker_id} is already assigned to another room.")
                     return                 
                 
                 # Fetch the slots we need to push while the session is alive
@@ -538,31 +547,28 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
                     if slots_to_claim:
                         slot_ids_to_claim = [s[0] for s in slots_to_claim]
                 except Exception as e:
-                     logging.error(f"[CHEESE_PUSH_NEW] Error querying catch-up claim: {e}")
+                     logging.error(f"[CHEESE_DEBUG] Error querying catch-up claim: {e}")
             else:
-                logging.error(f"[CHEESE_PUSH_NEW] Race condition: Could not find local room {ap_room_id} to link.")
+                logging.error(f"[CHEESE_DEBUG] Race condition: Could not find local room {ap_room_id} to link.")
         except Exception as e:
             session.rollback()
-            logging.error(f"[CHEESE_PUSH_NEW] Error in database phase: {e}", exc_info=True)
+            logging.error(f"[CHEESE_DEBUG] Error in database phase: {e}", exc_info=True)
         finally:
-            # This safely drops the connection back to the pool
             Session.remove()
 
-    # === 4. TRIGGER SLOT CATCH-UP (Safely outside the DB block) ===
+    # === 4. TRIGGER SLOT CATCH-UP ===
     if room_db_id_for_slots and slot_ids_to_claim:
-        logging.info(f"[CHEESE_PUSH_NEW] Found {len(slot_ids_to_claim)} slots waiting to be claimed. Triggering push.")
-        
+        logging.info(f"[CHEESE_DEBUG] Found {len(slot_ids_to_claim)} slots waiting to be claimed. Triggering synchronous push.")
         try:
-            # Now this can safely create and destroy its own temp sessions 
-            # without interfering with the parent's state.
             push_slot_changes_to_cheese(app, user_id, room_db_id_for_slots, slot_ids_to_claim, [])
         except Exception as e:
-            logging.error(f"[CHEESE_PUSH_NEW] Error triggering slot push: {e}")
+            logging.error(f"[CHEESE_DEBUG] Error triggering slot push: {e}")
 
 def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots, my_ct_id, base_headers):
     """
-    Dedicated worker thread function to handle multiple slot pushes with a single DB session.
+    Dedicated worker function to handle multiple slot pushes with a single DB session.
     """
+    logging.info(f"[CHEESE_DEBUG_WORKER] Starting synchronous slot push for user {user_id} on tracker {tracker_id}")
     with app.app_context():
         session = Session()
         try:
@@ -575,82 +581,72 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
                 send_state(session, app, slot_id, True, user_id, my_ct_id, tracker_id, base_headers)
 
             session.commit()
+            logging.info(f"[CHEESE_DEBUG_WORKER] Finished slot push.")
         except Exception as e:
             session.rollback()
-            logging.error(f"[CHEESE_PUSH_WORKER] Worker failed for user {user_id}: {e}")
+            logging.error(f"[CHEESE_DEBUG_WORKER] Worker failed for user {user_id}: {e}")
         finally:
             Session.remove()
 
 def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_slots):
     """
     Pushes changes to Cheese Tracker.
-    Fixes self-deadlock by not holding a DB session during network calls.
-    Refactored to use a dedicated worker thread with efficient session management.
+    NOW RUNS SYNCHRONOUSLY.
     """
     api_key = None
     tracker_id = None
     my_ct_id = None
     
-    # === 1. PRE-FLIGHT: Get API key & Tracker ID ===
-    # Use a *temporary* session just to get info
+    # === 1. PRE-FLIGHT ===
     with app.app_context():
         temp_session = Session()
         try:
             user = temp_session.query(User).filter_by(id=user_id).first()
             if not user or not user.cheese_api_key:
-                logging.warning("[CHEESE_PUSH] Aborting: No user or API key.")
+                logging.warning("[CHEESE_DEBUG] Aborting: No user or API key.")
                 return
 
             api_key = decrypt_api_key(user.cheese_api_key)
             if not api_key:
-                logging.warning("[CHEESE_PUSH] Aborting: Could not decrypt API key.")
+                logging.warning("[CHEESE_DEBUG] Aborting: Could not decrypt API key.")
                 return
             
             my_ct_id = user.cheese_user_id
 
             local_room = temp_session.query(TrackedRoom.cheese_tracker_id).filter_by(id=room_db_id).first()
             if not local_room or not local_room.cheese_tracker_id:
-                logging.warning(f"[CHEESE_PUSH] Aborting: No cheese_tracker_id for room {room_db_id}.")
+                logging.warning(f"[CHEESE_DEBUG] Aborting: No cheese_tracker_id for room {room_db_id}.")
                 return
                 
             tracker_id = local_room.cheese_tracker_id
         except Exception as e:
-            logging.error(f"[CHEESE_PUSH] Error in pre-flight: {e}", exc_info=True)
+            logging.error(f"[CHEESE_DEBUG] Error in pre-flight: {e}", exc_info=True)
             return
         finally:
             Session.remove()
 
-    # === 2. BACKGROUND WORKER ===
+    # === 2. BACKGROUND WORKER (Synchronous) ===
     
     base_headers = get_cheese_headers()
     base_headers["Authorization"] = f"Bearer {api_key}"
 
     try: 
-        threading.Thread(
-            target=_background_push_worker, 
-            args=(app, user_id, tracker_id, added_slots, removed_slots, my_ct_id, base_headers)
-        ).start()
+        # Called directly to block execution until finished
+        _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots, my_ct_id, base_headers)
     except Exception as e:
-        logging.error(f"Failed to start push thread for user {user_id}: {e}")
+        logging.error(f"Failed to run push worker for user {user_id}: {e}")
 
-# Helper function to send the state
 def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread, initial_ct_id, tracker_id, base_headers):
     """
     Helper function to send the state to Cheese Tracker.
-    Refactored to accept an existing DB session to prevent DB connection churn.
     """
     try:
-        # We pass the initial_ct_id so we don't need to re-fetch the user
-        # *unless* we are learning the ID.
         my_ct_id = initial_ct_id
 
         # 1. FETCH LATEST STATE
-        # Note: We create a transient requests call here. 
-        # If very high volume, you could pass a requests.Session() here too, 
-        # but the DB Session is the main bottleneck we are solving.
         detail_resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=base_headers, timeout=10)
         if not detail_resp.ok:
-            logging.warning(f"[CHEESE_PUSH] Failed to fetch details for {tracker_id} before push.")
+            logging.warning(f"[CHEESE_DEBUG] Failed to fetch details for {tracker_id} before push.")
             return
         
         details = detail_resp.json()
@@ -664,7 +660,7 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                 break 
 
         if not game_object:
-            logging.warning(f"[CHEESE_PUSH] No game_object for position {ap_position} in {tracker_id}.")
+            logging.warning(f"[CHEESE_DEBUG] No game_object for position {ap_position} in {tracker_id}.")
             return
 
         cheese_game_id = game_object.get('id')
@@ -672,17 +668,17 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
         current_owner_id = game_object.get('claimed_by_ct_user_id')
 
         if not cheese_game_id or not updated_at_timestamp:
-            logging.error(f"[CHEESE_PUSH] Fetched details for {tracker_id} are invalid.")
+            logging.error(f"[CHEESE_DEBUG] Fetched details for {tracker_id} are invalid.")
             return
 
         # 3. Guardrail Check
         if is_tracked:
             if current_owner_id is not None and (my_ct_id is None or current_owner_id != my_ct_id):
-                logging.warning(f"[CHEESE_PUSH] Aborting claim for pos {ap_position}: Slot is claimed by user {current_owner_id}.")
+                logging.warning(f"[CHEESE_DEBUG] Aborting claim for pos {ap_position}: Slot is claimed by user {current_owner_id}.")
                 return
         else: # is_tracked is False (un-claiming)
             if current_owner_id is not None and (my_ct_id is None or current_owner_id != my_ct_id):
-                logging.warning(f"[CHEESE_PUSH] Aborting un-claim for pos {ap_position}: We don't own it.")
+                logging.warning(f"[CHEESE_DEBUG] Aborting un-claim for pos {ap_position}: We don't own it.")
                 return
 
         # 4. Prepare URL and Payload
@@ -708,29 +704,26 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
         response = requests.put(url, json=payload, headers=put_headers, timeout=5)
         
         if response.status_code in [200, 204]:
-            logging.debug(f"[CHEESE_PUSH] Success for pos {ap_position} (game {cheese_game_id})")
+            logging.debug(f"[CHEESE_DEBUG] Success for pos {ap_position} (game {cheese_game_id})")
             
             if is_tracked and my_ct_id is None:
                 response_data = response.json()
                 new_ct_id = response_data.get('claimed_by_ct_user_id')
                 if new_ct_id:
-                    logging.info(f"[CHEESE_PUSH] LEARNED new ct_user_id: {new_ct_id}")
-                    # Now we need to fetch the user to save it using the SHARED session
+                    logging.info(f"[CHEESE_DEBUG] LEARNED new ct_user_id: {new_ct_id}")
                     thread_user = session.query(User).filter_by(id=current_user_id_for_thread).first()
                     if thread_user:
                         thread_user.cheese_user_id = new_ct_id
                         # We do NOT commit here; we let the parent worker commit once at the end
         else:
-            logging.warning(f"[CHEESE_PUSH] Failed to set pos {ap_position} (game {cheese_game_id}): {response.status_code} {response.text}")
+            logging.warning(f"[CHEESE_DEBUG] Failed to set pos {ap_position} (game {cheese_game_id}): {response.status_code} {response.text}")
 
     except Exception as e:
-        # We do NOT rollback here; we let the parent worker handle it
-        logging.error(f"[CHEESE_PUSH] Error pushing pos {ap_position}: {e}", exc_info=True)
+        logging.error(f"[CHEESE_DEBUG] Error pushing pos {ap_position}: {e}", exc_info=True)
 
 def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):
     """
     Sets the dashboard visibility override for a specific tracker.
-    Used to hide a room from the sync list when a user unsubscribes locally.
     """
     with app.app_context():
         session = Session()
@@ -746,7 +739,6 @@ def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):
             headers = get_cheese_headers()
             headers["Authorization"] = f"Bearer {api_key}"
             
-            # Endpoint: PUT /tracker/{tracker_id}/dashboard_override
             url = f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}/dashboard_override"
             payload = {"visibility": visibility}
             

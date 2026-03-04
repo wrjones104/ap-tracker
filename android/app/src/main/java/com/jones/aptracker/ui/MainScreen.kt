@@ -2,6 +2,7 @@ package com.jones.aptracker.ui
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -176,7 +177,10 @@ fun MainScreen(
                 title = { Text(titleText) },
                 actions = {
                     if (currentRoute == BottomNavItem.Rooms.route) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(end = 16.dp) // Right margin
+                        ) {
 
                             val profile = userProfile
                             val isCheeseConnected = profile?.is_cheese_connected == true
@@ -194,23 +198,30 @@ fun MainScreen(
                                         contentScale = ContentScale.Crop
                                     )
                                 } else {
-                                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Icon(
+                                        Icons.Default.AccountCircle,
+                                        null,
+                                        modifier = Modifier.size(32.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
-                                Spacer(modifier = Modifier.width(12.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
                             }
 
-                            // 2. CHEESE EMOJI & SYNC
+                            // 2. CHEESE ICONS
                             if (isCheeseConnected) {
-                                // --- 2a. Clickable Cheese Link ---
-                                IconButton(
-                                    onClick = {
-                                        uriHandler.openUri("https://cheesetrackers.theincrediblewheelofchee.se/")
-                                    }
-                                ) {
-                                    Text("🧀", style = MaterialTheme.typography.titleMedium)
-                                }
 
-                                // --- 2b. Sync Button ---
+                                Text(
+                                    text = "🧀",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier
+                                        .clickable { uriHandler.openUri("https://cheesetrackers.theincrediblewheelofchee.se/") }
+                                        .padding(1.dp) // Small hit target padding
+                                )
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                // Sync Button (Direct Clickable Icon)
                                 val infiniteTransition = rememberInfiniteTransition(label = "spin")
                                 val angle by infiniteTransition.animateFloat(
                                     initialValue = 0f,
@@ -221,18 +232,17 @@ fun MainScreen(
                                     label = "spinAngle"
                                 )
 
-                                IconButton(
-                                    onClick = {
-                                        roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = true)
-                                    },
-                                    enabled = !isSyncingCheese
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Refresh,
-                                        contentDescription = "Sync",
-                                        modifier = if (isSyncingCheese) Modifier.rotate(angle) else Modifier
-                                    )
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Sync",
+                                    modifier = Modifier
+                                        .size(24.dp) // Standard Icon size
+                                        .then(if (isSyncingCheese) Modifier.rotate(angle) else Modifier)
+                                        .clickable(enabled = !isSyncingCheese) {
+                                            roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = true)
+                                        }
+                                        .padding(2.dp) // Minimal padding
+                                )
                             }
                         }
                     }

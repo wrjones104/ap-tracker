@@ -202,7 +202,6 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         _errorMessage.value = null
     }
 
-    // --- CHEESE SYNC LOGIC (The new feature) ---
     private fun triggerBackgroundSync() {
         if (_isSyncingCheese.value) return
         _isSyncingCheese.value = true
