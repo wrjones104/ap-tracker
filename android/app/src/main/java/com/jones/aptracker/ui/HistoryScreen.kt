@@ -1418,7 +1418,7 @@ private fun filterHints(
 
         // Note: HintEntity does not have receivingGame, so we just match on itemName
         val isIgnored = ignoreList.any { ignoreRule ->
-            ignoreRule.itemName.equals(hint.itemName, ignoreCase = true)
+            ignoreRule.gameName.isNullOrBlank() && ignoreRule.itemName.equals(hint.itemName, ignoreCase = true)
         }
         val matchesIgnored = showIgnoredItems || !isIgnored
 
