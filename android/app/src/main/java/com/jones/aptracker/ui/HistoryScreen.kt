@@ -741,8 +741,19 @@ fun ItemHistoryTab(
         activeRoomIds, archivedRoomIds, showProgression, showUseful, showIgnoredItems, ignoreList
     ) {
         fun String.toWildcardRegex(): Regex {
-            val escaped = Regex.escape(this).replace("\\*", ".*").replace("\\?", ".")
-            return Regex("^$escaped$", RegexOption.IGNORE_CASE)
+            val parts = this.split("*")
+            val sb = StringBuilder()
+            for (i in parts.indices) {
+                if (i > 0) sb.append(".*")
+                val subParts = parts[i].split("?")
+                for (j in subParts.indices) {
+                    if (j > 0) sb.append(".")
+                    if (subParts[j].isNotEmpty()) {
+                        sb.append(Regex.escape(subParts[j]))
+                    }
+                }
+            }
+            return Regex("^${sb.toString()}$", RegexOption.IGNORE_CASE)
         }
 
         val globalExact = mutableSetOf<String>()
@@ -1411,8 +1422,19 @@ private fun filterHints(
     ignoreList: List<IgnoreItem>
 ): List<HintEntity> {
     fun String.toWildcardRegex(): Regex {
-        val escaped = Regex.escape(this).replace("\\*", ".*").replace("\\?", ".")
-        return Regex("^$escaped$", RegexOption.IGNORE_CASE)
+        val parts = this.split("*")
+        val sb = StringBuilder()
+        for (i in parts.indices) {
+            if (i > 0) sb.append(".*")
+            val subParts = parts[i].split("?")
+            for (j in subParts.indices) {
+                if (j > 0) sb.append(".")
+                if (subParts[j].isNotEmpty()) {
+                    sb.append(Regex.escape(subParts[j]))
+                }
+            }
+        }
+        return Regex("^${sb.toString()}$", RegexOption.IGNORE_CASE)
     }
 
     val exactNames = mutableSetOf<String>()
