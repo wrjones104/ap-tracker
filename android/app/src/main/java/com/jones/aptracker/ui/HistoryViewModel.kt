@@ -83,6 +83,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _useCondensed = MutableStateFlow(prefs.getBoolean("ui_use_condensed", false))
     val useCondensed: StateFlow<Boolean> = _useCondensed
 
+    // Add toggle for Ignored Items (Default to false/OFF)
+    private val _showIgnoredItems = MutableStateFlow(prefs.getBoolean("ui_show_ignored_items", false))
+    val showIgnoredItems: StateFlow<Boolean> = _showIgnoredItems
+
     private val _liveAliases = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
     private val _confirmedFinishedPlayers = MutableStateFlow<Set<Pair<Int, String>>>(emptySet())
 
@@ -251,6 +255,15 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 _showFoundHints.value = profile.ui_show_found_hints_default
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to load user profile for settings", e)
+            }
+        }
+    }
+
+    fun setShowIgnoredItems(show: Boolean) {
+        if (_showIgnoredItems.value != show) {
+            _showIgnoredItems.value = show
+            prefs.edit {
+                putBoolean("ui_show_ignored_items", show)
             }
         }
     }
