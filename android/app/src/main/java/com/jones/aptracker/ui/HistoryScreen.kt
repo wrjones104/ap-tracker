@@ -740,18 +740,30 @@ fun ItemHistoryTab(
         fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, historyFilter,
         activeRoomIds, archivedRoomIds, showProgression, showUseful, showIgnoredItems, ignoreList
     ) {
-        val globalIgnoredItems = ignoreList
-            .filter { it.gameName.isNullOrBlank() }
-            .map { it.itemName.lowercase() }
-            .toSet()
+        fun String.toWildcardRegex(): Regex {
+            val escaped = Regex.escape(this).replace("\\*", ".*").replace("\\?", ".")
+            return Regex("^$escaped$", RegexOption.IGNORE_CASE)
+        }
 
-        val gameSpecificIgnoredItems = ignoreList
-            .filter { !it.gameName.isNullOrBlank() }
-            .groupBy(
-                keySelector = { it.gameName!!.lowercase() },
-                valueTransform = { it.itemName.lowercase() }
-            )
-            .mapValues { it.value.toSet() }
+        val globalExact = mutableSetOf<String>()
+        val globalPatterns = mutableListOf<Regex>()
+        val gameExact = mutableMapOf<String, MutableSet<String>>()
+        val gamePatterns = mutableMapOf<String, MutableList<Regex>>()
+
+        ignoreList.forEach { rule ->
+            val isWildcard = rule.itemName.contains("*") || rule.itemName.contains("?")
+            if (rule.gameName.isNullOrBlank()) {
+                if (isWildcard) globalPatterns.add(rule.itemName.toWildcardRegex())
+                else globalExact.add(rule.itemName.lowercase())
+            } else {
+                val gameLower = rule.gameName.lowercase()
+                if (isWildcard) {
+                    gamePatterns.getOrPut(gameLower) { mutableListOf() }.add(rule.itemName.toWildcardRegex())
+                } else {
+                    gameExact.getOrPut(gameLower) { mutableSetOf() }.add(rule.itemName.lowercase())
+                }
+            }
+        }
 
         fullHistory.filter { item ->
             val matchesSearch = searchQuery.isBlank() ||
@@ -792,8 +804,15 @@ fun ItemHistoryTab(
             val lowerCaseItemName = item.itemName.lowercase()
             val lowerCaseGameName = item.receivingGame?.lowercase()
 
-            val isIgnored = lowerCaseItemName in globalIgnoredItems ||
-                    (lowerCaseGameName != null && gameSpecificIgnoredItems[lowerCaseGameName]?.contains(lowerCaseItemName) == true)
+            var isIgnored = lowerCaseItemName in globalExact || globalPatterns.any { it.matches(item.itemName) }
+
+            if (!isIgnored && lowerCaseGameName != null) {
+                if (gameExact[lowerCaseGameName]?.contains(lowerCaseItemName) == true) {
+                    isIgnored = true
+                } else if (gamePatterns[lowerCaseGameName]?.any { it.matches(item.itemName) } == true) {
+                    isIgnored = true
+                }
+            }
 
             val matchesIgnored = showIgnoredItems || !isIgnored
 
@@ -1391,7 +1410,19 @@ private fun filterHints(
     showIgnoredItems: Boolean,
     ignoreList: List<IgnoreItem>
 ): List<HintEntity> {
-    val ignoredItemNames = ignoreList.map { it.itemName.lowercase() }.toSet()
+    fun String.toWildcardRegex(): Regex {
+        val escaped = Regex.escape(this).replace("\\*", ".*").replace("\\?", ".")
+        return Regex("^$escaped$", RegexOption.IGNORE_CASE)
+    }
+
+    val exactNames = mutableSetOf<String>()
+    val patternNames = mutableListOf<Regex>()
+
+    ignoreList.forEach { rule ->
+        val isWildcard = rule.itemName.contains("*") || rule.itemName.contains("?")
+        if (isWildcard) patternNames.add(rule.itemName.toWildcardRegex())
+        else exactNames.add(rule.itemName.lowercase())
+    }
 
     return hints.filter { hint ->
         // 1. Room Check
@@ -1434,7 +1465,7 @@ private fun filterHints(
         }
 
         // Note: HintEntity does not have receivingGame, so we just match on itemName
-        val isIgnored = hint.itemName.lowercase() in ignoredItemNames
+        val isIgnored = hint.itemName.lowercase() in exactNames || patternNames.any { it.matches(hint.itemName) }
         val matchesIgnored = showIgnoredItems || !isIgnored
 
         matchesRoom && matchesQuery && matchesFinished && matchesPlayer && matchesType && matchesIgnored
