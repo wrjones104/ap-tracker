@@ -272,7 +272,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             // The reactive combine flow above automatically handles the UI update locally!
             // But we launch a silent background request here to fetch any new hints from the API
             viewModelScope.launch {
-                repository.refreshHintHistory(currentRoomId, show)
+                repository.refreshHintHistory(currentRoomId)
             }
         }
     }
@@ -403,8 +403,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 // We launch this in a separate non-blocking way (or just sequentially after flipping the flag)
                 // The UI will update automatically via Flows when this finishes.
                 try {
-                    val includeFound = _showFoundHints.value
-                    repository.refreshHintHistory(currentRoomId, includeFound)
+                    repository.refreshHintHistory(currentRoomId)
                 } catch (e: Exception) {
                     Log.e("HistoryViewModel", "Background hint refresh failed", e)
                     // We don't show an error message to the user here because

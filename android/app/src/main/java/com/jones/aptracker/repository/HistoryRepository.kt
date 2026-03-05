@@ -76,16 +76,20 @@ class HistoryRepository(
     }
 
     // --- HINT REFRESH (Always Full Sync to catch Status Updates) ---
-    suspend fun refreshHintHistory(roomId: Int? = null, includeFound: Boolean) {
+    suspend fun refreshHintHistory(roomId: Int? = null) {
         // We purposefully pass `since = null` here.
         // If we used a timestamp, we would miss hints that were created long ago
         // but were recently marked as "Found", because their creation timestamp didn't change.
+        //
+        // We also always pass `includeFound = true` to ensure the local DB
+        // gets updated with the correct "found" status of existing hints,
+        // even if the user has chosen to hide found hints in the UI.
 
         try {
             val response = if (roomId != null) {
-                apiService.getRoomHintHistory(roomId, since = null, includeFound = includeFound)
+                apiService.getRoomHintHistory(roomId, since = null, includeFound = true)
             } else {
-                apiService.getGlobalHintHistory(since = null, includeFound = includeFound)
+                apiService.getGlobalHintHistory(since = null, includeFound = true)
             }
 
             Log.d("HINT_DEBUG", "Received ${response.hints_for_you.size} 'for_you' and ${response.hints_by_you.size} 'by_you' hints.")
