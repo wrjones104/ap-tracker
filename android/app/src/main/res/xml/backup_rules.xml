@@ -6,8 +6,6 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Exclude encrypted preferences because the Keystore key to decrypt them is hardware-bound and not backed up -->
+    <exclude domain="sharedpref" path="secret_user_prefs.xml"/>
 </full-backup-content>
