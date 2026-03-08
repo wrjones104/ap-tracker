@@ -11,11 +11,17 @@ class TokenManager(private val context: Context) {
     private val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
     private val PREFS_FILE_NAME = "secret_user_prefs"
 
-    private val sharedPreferences: SharedPreferences by lazy {
+    private val sharedPreferences: SharedPreferences? by lazy {
         initializeSharedPreferences()
     }
 
-    private fun initializeSharedPreferences(): SharedPreferences {
+    private var inMemoryToken: String? = null
+
+    companion object {
+        private var inMemoryToken: String? = null
+    }
+
+    private fun initializeSharedPreferences(): SharedPreferences? {
         return try {
             createEncryptedSharedPreferences()
         } catch (e: Exception) {
@@ -24,8 +30,9 @@ class TokenManager(private val context: Context) {
             try {
                 createEncryptedSharedPreferences()
             } catch (retryException: Exception) {
-                Log.e("TokenManager", "Failed to recreate EncryptedSharedPreferences after clearing.", retryException)
-                throw RuntimeException("Could not initialize secure storage", retryException)
+                Log.e("TokenManager", "Failed to recreate EncryptedSharedPreferences. Falling back to memory-only.", retryException)
+                // Returning null prevents the crash loop WITHOUT compromising security
+                null
             }
         }
     }
@@ -45,7 +52,7 @@ class TokenManager(private val context: Context) {
             if (context.deleteSharedPreferences(PREFS_FILE_NAME)) {
                 Log.d("TokenManager", "Corrupted preferences file deleted successfully.")
             } else {
-                Log.w("TokenManager", "Corrupted preferences file could not be deleted (it may not have existed).")
+                Log.w("TokenManager", "Corrupted preferences file could not be deleted.")
             }
         } catch (e: Exception) {
             Log.e("TokenManager", "Failed to delete corrupted preferences file", e)
@@ -53,14 +60,17 @@ class TokenManager(private val context: Context) {
     }
 
     fun saveToken(token: String) {
-        sharedPreferences.edit().putString("auth_token", token).apply()
+        sharedPreferences?.edit()?.putString("auth_token", token)?.apply() ?: run {
+            inMemoryToken = token
+        }
     }
 
     fun getToken(): String? {
-        return sharedPreferences.getString("auth_token", null)
+        return sharedPreferences?.getString("auth_token", null) ?: inMemoryToken
     }
 
     fun deleteToken() {
-        sharedPreferences.edit().remove("auth_token").apply()
+        sharedPreferences?.edit()?.remove("auth_token")?.apply()
+        inMemoryToken = null
     }
 }
