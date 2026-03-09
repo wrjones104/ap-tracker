@@ -131,6 +131,11 @@ async def send_push_notifications(notifications, device_tokens, loop):
         if 'bundled_items' in content:
             data_payload['bundled_items'] = content['bundled_items']
 
+        if 'pin_id' in content:
+            data_payload['pin_id'] = content['pin_id']
+        if 'pin_type' in content:
+            data_payload['pin_type'] = content['pin_type']
+
         for token in device_tokens:
             android_config = messaging.AndroidConfig(priority='high')
             
@@ -389,7 +394,8 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
                     'receiver_game': receiver_game,
                     'game_checksum': game_checksum,
                     'sender_game': sender_game,
-                    'sender_checksum': sender_checksum
+                    'sender_checksum': sender_checksum,
+                    'db_obj': new_item_obj
                 })
             else:
                 items_skipped_backfill += 1
@@ -476,7 +482,8 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                         'io_id': io_id, 'lo_id': lo_id, 'item_id': item_id, 'loc_id': loc_id,
                         'io_game': io_game, 'lo_game': lo_game,
                         'io_checksum': io_checksum, 'lo_checksum': lo_checksum,
-                        'flags': flags
+                        'flags': flags,
+                        'db_obj': new_hint_obj
                     })
                     
                     if is_found_from_tracker:
@@ -690,7 +697,11 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                             'item_name': item_name,
                             'alias': receiver_alias,
                             'original': receiver_original
-                        }
+                        },
+
+                        # --- Pinning data ---
+                        'pin_id': str(item_data['db_obj'].id),
+                        'pin_type': 'item'
                     })
 
     # 3. Notify Hints
@@ -791,7 +802,12 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 body = f"{item_owner_name}'s {item_name} is at {loc_name} in {location_owner_name}'s World"
                 
                 notifications_by_user.setdefault(user_id, []).append({
-                    'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']
+                    'title': title,
+                    'body': body,
+                    'type': 'hint',
+                    'details': hint_data['hint_key_batch'],
+                    'pin_id': str(hint_data['db_obj'].id),
+                    'pin_type': 'hint'
                 })
     
     return notifications_by_user
@@ -2046,6 +2062,8 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
     def squash(notif_list, title_base):
         if not notif_list: return
         if len(notif_list) == 1:
+            # Add pin data manually if it wasn't a bundle, though we already have it in the dict.
+            # But let's make sure it's passed through unchanged.
             compressed.append(notif_list[0])
             return
         
