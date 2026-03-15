@@ -426,18 +426,6 @@ def add_room(current_user):
     if not hostname or not room_id:
         return jsonify({'error': 'Could not parse hostname or room_id from URL'}), 400
 
-    try:
-        parsed_ip = ip_address(hostname)
-        logging.warning(f"[API_WARN] User {current_user.id} tried to add a room using an IP address: {hostname}")
-        return jsonify({'error': 'Adding rooms by IP address is not permitted.'}), 403
-    except ValueError:
-        pass # It's not an IP, so it's a valid hostname
-
-    ALLOWED_HOSTNAMES = current_app.config.get('ALLOWED_HOSTNAMES', [])
-    if hostname not in ALLOWED_HOSTNAMES:
-        logging.warning(f"[API_WARN] User {current_user.id} tried to add a room with a disallowed hostname: {hostname}")
-        return jsonify({'error': f"Hostname '{hostname}' is not in the list of allowed servers."}), 403
-
     session = Session()
     room = session.query(TrackedRoom).filter_by(room_id=room_id).first()
 
@@ -446,35 +434,29 @@ def add_room(current_user):
     if not room:
         logging.info(f"[API] First time seeing room {room_id}. Creating global record.")
         try:
-            status_url = f"https://{hostname}/api/room_status/{room_id}"
-            response = requests.get(status_url, timeout=10)
-            response.raise_for_status()
-            status_data = response.json()
-            if not isinstance(status_data, dict):
-                raise ValueError("Unexpected response format from room status API.")
-            port = status_data.get('last_port', '')
+            from .utils import verify_ap_server
+            import asyncio
             
-            ap_tracker_id = status_data.get('tracker')
+            # Verify the room uses the secure async handshake
+            # asyncio.run blocks the worker, which is acceptable here as there's a 5s timeout.
+            room_data = asyncio.run(verify_ap_server(hostname, room_id))
             
-            players_raw = status_data.get('players', [])
-            player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players_raw)]
-            players_json = json.dumps(player_list)
-            total_slots = len(player_list)
+            ap_tracker_id = room_data['ap_tracker_id']
 
             room = TrackedRoom(
-                room_id=room_id,
-                hostname=hostname,
-                cached_full_address=f"{hostname}:{port}",
-                cached_players_json=players_json,
-                cached_total_slots=total_slots,
+                room_id=room_data['room_id'],
+                hostname=room_data['hostname'],
+                cached_full_address=room_data['cached_full_address'],
+                cached_players_json=room_data['cached_players_json'],
+                cached_total_slots=room_data['cached_total_slots'],
                 tracker_id=ap_tracker_id
             )
             session.add(room)
             session.flush()
         
-        except requests.exceptions.RequestException as e:
-            logging.error(f"[API_ERROR] Failed to fetch initial room status for {room_id}: {e}")
-            return jsonify({'error': 'Could not connect to the room to verify its status.'}), 404
+        except ValueError as e:
+            logging.warning(f"[API_WARN] User {current_user.id} failed to add room: {e}")
+            return jsonify({'error': str(e)}), 400
         except Exception as e:
             session.rollback()
             logging.error(f"[API_ERROR] Failed to process room status for {room_id}: {e}", exc_info=True)

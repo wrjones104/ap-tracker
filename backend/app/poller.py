@@ -2,7 +2,6 @@ import asyncio
 import logging
 import aiohttp
 import json
-import websockets
 import os
 import random
 import fnmatch
@@ -22,7 +21,7 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint
 )
-from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed
+from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -73,6 +72,7 @@ def get_aiohttp_session():
         }
 
         thread_local_data.aiohttp_session = aiohttp.ClientSession(
+            connector=SSRFProtectedTCPConnector(),
             headers=headers, 
             cookie_jar=aiohttp.DummyCookieJar()
         )
@@ -1551,19 +1551,21 @@ async def run_room_setup(room_info, loop):
                 for attempt in range(1, max_ws_retries + 1):
                     try:
                         logging.debug(f"[POLLER_SETUP] WebSocket attempt {attempt}/{max_ws_retries} for {uri}")
-                        async with websockets.connect(uri, open_timeout=5) as ws:
-                            msg_str = await asyncio.wait_for(ws.recv(), timeout=5)
-                            room_info_msg = json.loads(msg_str)
-                            checksums = room_info_msg[0].get('datapackage_checksums', {})
-                            ws_success = True
+                        session = get_aiohttp_session()
+                        async with session.ws_connect(uri, timeout=5) as ws:
+                            msg = await ws.receive(timeout=5)
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                room_info_msg = json.loads(msg.data)
+                                checksums = room_info_msg[0].get('datapackage_checksums', {})
+                                ws_success = True
                             
-                            # Safely check if base_domain exists before using it
-                            if base_domain and (uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}")):
-                                setup_data['cached_full_address'] = f"{base_domain}:{port}"
-                                
-                            break 
+                                # Safely check if base_domain exists before using it
+                                if base_domain and (uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}")):
+                                    setup_data['cached_full_address'] = f"{base_domain}:{port}"
+
+                                break
                             
-                    except (OSError, asyncio.TimeoutError, websockets.InvalidURI, websockets.InvalidHandshake, ConnectionRefusedError) as ws_e:
+                    except Exception as ws_e:
                         logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket attempt {attempt} failed for {uri}: {ws_e}")
                         
                         # Only wait to wake the room if we are on the final attempt of the CURRENT uri
