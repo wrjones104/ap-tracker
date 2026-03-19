@@ -76,8 +76,10 @@ def callback():
         return jsonify({'error': 'Malformed request. Missing required fields.'}), 400
 
     expected_redirect_uri = current_app.config.get('DISCORD_REDIRECT_URI')
-    if redirect_uri != expected_redirect_uri:
-        logging.warning(f"[AUTH_WARN] Redirect URI mismatch. Expected '{expected_redirect_uri}', got '{redirect_uri}'.")
+    expected_native_redirect_uri = f"discord-{current_app.config['DISCORD_CLIENT_ID']}://authorize/callback"
+
+    if redirect_uri not in [expected_redirect_uri, expected_native_redirect_uri]:
+        logging.warning(f"[AUTH_WARN] Redirect URI mismatch. Expected '{expected_redirect_uri}' or '{expected_native_redirect_uri}', got '{redirect_uri}'.")
         return jsonify({'error': 'Redirect URI mismatch.'}), 400
 
     token_url = current_app.config['DISCORD_TOKEN_URL']

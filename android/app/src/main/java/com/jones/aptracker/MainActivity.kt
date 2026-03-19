@@ -229,7 +229,7 @@ class MainActivity : ComponentActivity() {
             Uri.parse("https://discord.com/api/oauth2/token")
         )
         val clientId = BuildConfig.DISCORD_CLIENT_ID
-        val redirectUri = Uri.parse("com.jones.aptracker:/oauth2redirect")
+        val redirectUri = Uri.parse("discord-$clientId://authorize/callback")
         val request = AuthorizationRequest.Builder(
             serviceConfig, clientId, ResponseTypeValues.CODE, redirectUri
         ).setScope("identify").build()
@@ -242,7 +242,8 @@ class MainActivity : ComponentActivity() {
         authViewModel.setLoading(true)
         lifecycleScope.launch {
             try {
-                val redirectUri = "com.jones.aptracker:/oauth2redirect"
+                val clientId = BuildConfig.DISCORD_CLIENT_ID
+                val redirectUri = "discord-$clientId://authorize/callback"
                 val authRequest = AuthRequest(code, redirectUri, codeVerifier)
                 val response = RetrofitClient.instance.exchangeCodeForToken(authRequest)
 

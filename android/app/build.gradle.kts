@@ -27,11 +27,13 @@ android {
         versionCode = 40
         versionName = "1.5.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        manifestPlaceholders["appAuthRedirectScheme"] = "com.jones.aptracker"
+        val discordClientIdValue = localProperties.getProperty("DISCORD_CLIENT_ID", "ABCXYZ")
+        manifestPlaceholders["appAuthRedirectScheme"] = "discord-$discordClientIdValue"
+        manifestPlaceholders["discordClientId"] = discordClientIdValue
         buildConfigField(
             "String",
             "DISCORD_CLIENT_ID",
-            "\"${localProperties.getProperty("DISCORD_CLIENT_ID", "ABCXYZ")}\""
+            "\"$discordClientIdValue\""
         )
     }
 
