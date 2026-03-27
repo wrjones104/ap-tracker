@@ -18,6 +18,7 @@ from sqlalchemy import or_, desc, tuple_
 from firebase_admin import messaging
 
 from . import Session, get_firebase_app
+from .utils import verify_ap_server
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
     DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist, UserIgnoreItem
@@ -434,9 +435,6 @@ def add_room(current_user):
     if not room:
         logging.info(f"[API] First time seeing room {room_id}. Creating global record.")
         try:
-            from .utils import verify_ap_server
-            import asyncio
-            
             # Verify the room uses the secure async handshake
             # asyncio.run blocks the worker, which is acceptable here as there's a 5s timeout.
             room_data = asyncio.run(verify_ap_server(hostname, room_id))

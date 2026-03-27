@@ -40,15 +40,19 @@ def get_cheese_headers():
 from ipaddress import ip_address
 import json
 
+def _validate_ip(ip):
+    """Checks if an IP address is safe to connect to."""
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or not ip.is_global:
+        raise ValueError(f"Blocked request to forbidden IP: {ip}")
+    if str(ip) == "169.254.169.254":
+        raise ValueError("Blocked request to Cloud Metadata IP")
+
 class SSRFProtectedResolver(aiohttp.DefaultResolver):
     async def resolve(self, host: str, port: int, family: int) -> list[dict]:
         addresses = await super().resolve(host, port, family)
         for addr in addresses:
             ip = ip_address(addr['host'])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or not ip.is_global:
-                raise ValueError(f"Blocked request to forbidden IP: {ip}")
-            if str(ip) == "169.254.169.254":
-                raise ValueError("Blocked request to Cloud Metadata IP")
+            _validate_ip(ip)
         return addresses
 
 class SSRFProtectedTCPConnector(aiohttp.TCPConnector):
@@ -59,10 +63,7 @@ class SSRFProtectedTCPConnector(aiohttp.TCPConnector):
     async def connect(self, req, traces, timeout):
         try:
             ip = ip_address(req.host)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or not ip.is_global:
-                raise ValueError(f"Blocked request to forbidden IP: {ip}")
-            if str(ip) == "169.254.169.254":
-                raise ValueError("Blocked request to Cloud Metadata IP")
+            _validate_ip(ip)
         except ValueError as e:
             if "Blocked request" in str(e):
                 raise
@@ -139,6 +140,7 @@ async def verify_ap_server(hostname: str, room_id: str):
             ])
 
         ws_success = False
+        successful_hostname = hostname
 
         for uri in uris_to_try:
             if ws_success:
@@ -153,9 +155,11 @@ async def verify_ap_server(hostname: str, room_id: str):
                         if isinstance(room_info_msg, list) and len(room_info_msg) > 0:
                             if room_info_msg[0].get('cmd') == 'RoomInfo':
                                 ws_success = True
+                                # Keep track of which hostname succeeded
+                                if uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}"):
+                                    successful_hostname = base_domain
                                 break
             except Exception as e:
-                logging.debug(f"WebSocket connection to {uri} failed during handshake: {e}")
                 pass
 
         if not ws_success:
@@ -168,14 +172,10 @@ async def verify_ap_server(hostname: str, room_id: str):
         players_json = json.dumps(player_list)
 
         # Extract the correct address format
-        final_address = f"{hostname}:{port}"
-        if base_domain:
-             # Just checking if base domain was the successful one (a bit hacky but works since we try wss then ws)
-             # If we wanted to be perfectly exact we'd save which URI succeeded
-             pass
+        final_address = f"{successful_hostname}:{port}"
 
         return {
-            'hostname': hostname,
+            'hostname': successful_hostname,
             'room_id': room_id,
             'ap_tracker_id': ap_tracker_id,
             'cached_full_address': final_address,
