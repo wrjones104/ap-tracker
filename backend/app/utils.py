@@ -37,6 +37,41 @@ def get_cheese_headers():
         'Content-Type': 'application/json'
     }
 
+from ipaddress import ip_address
+import json
+
+def _validate_ip(ip):
+    """Checks if an IP address is safe to connect to."""
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or not ip.is_global:
+        raise ValueError(f"Blocked request to forbidden IP: {ip}")
+    if str(ip) == "169.254.169.254":
+        raise ValueError("Blocked request to Cloud Metadata IP")
+
+class SSRFProtectedResolver(aiohttp.DefaultResolver):
+    async def resolve(self, host: str, port: int, family: int) -> list[dict]:
+        addresses = await super().resolve(host, port, family)
+        for addr in addresses:
+            ip = ip_address(addr['host'])
+            _validate_ip(ip)
+        return addresses
+
+class SSRFProtectedTCPConnector(aiohttp.TCPConnector):
+    def __init__(self, *args, **kwargs):
+        kwargs['resolver'] = SSRFProtectedResolver()
+        super().__init__(*args, **kwargs)
+
+    async def connect(self, req, traces, timeout):
+        try:
+            ip = ip_address(req.host)
+            _validate_ip(ip)
+        except ValueError as e:
+            if "Blocked request" in str(e):
+                raise
+            pass
+
+        return await super().connect(req, traces, timeout)
+
+
 def extract_ap_room_id(url_string):
     if not url_string: return None
     try:
@@ -48,6 +83,106 @@ def extract_ap_room_id(url_string):
         pass
     return None
 
+async def verify_ap_server(hostname: str, room_id: str):
+    """
+    Verifies that the given Archipelago server URL is valid and reachable.
+    It checks the status endpoint and performs a websocket handshake to verify it's an AP server.
+    Raises ValueError with a user-friendly message if any step fails.
+    """
+    if not hostname or not room_id:
+        raise ValueError("Hostname and room_id are required.")
+
+    connector = SSRFProtectedTCPConnector()
+    async with aiohttp.ClientSession(connector=connector) as session:
+        # Step 1: Check room status endpoint
+        status_url = f"https://{hostname}/api/room_status/{room_id}"
+
+        try:
+            # We enforce a strict timeout of 5 seconds, and payload size limit by reading raw bytes
+            async with session.get(status_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                if response.status == 404:
+                    raise ValueError(f"Room {room_id} not found on server {hostname}.")
+                response.raise_for_status()
+
+                # Limit initial read to 1MB to prevent DoS via memory exhaustion
+                raw_data = await response.content.read(1024 * 1024)
+                if not response.content.at_eof():
+                     raise ValueError("Server response is too large.")
+
+                status_data = json.loads(raw_data)
+
+                if not isinstance(status_data, dict):
+                    raise ValueError("Unexpected response format from room status API.")
+
+                port = status_data.get('last_port', '')
+                ap_tracker_id = status_data.get('tracker')
+
+                if not port:
+                    raise ValueError("Could not find server port from room status.")
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Could not connect to the room to verify its status: {e}")
+
+        # Step 2: Attempt WebSocket handshake
+        uris_to_try = [
+            f"wss://{hostname}:{port}",
+            f"ws://{hostname}:{port}"
+        ]
+
+        parts = hostname.split('.')
+        base_domain = None
+        if len(parts) > 2:
+            base_domain = ".".join(parts[1:])
+            uris_to_try.extend([
+                f"wss://{base_domain}:{port}",
+                f"ws://{base_domain}:{port}"
+            ])
+
+        ws_success = False
+        successful_hostname = hostname
+
+        for uri in uris_to_try:
+            if ws_success:
+                break
+
+            try:
+                # 5-second timeout for websocket connection and read
+                async with session.ws_connect(uri, timeout=5) as ws:
+                    msg = await ws.receive(timeout=5)
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        room_info_msg = json.loads(msg.data)
+                        if isinstance(room_info_msg, list) and len(room_info_msg) > 0:
+                            if room_info_msg[0].get('cmd') == 'RoomInfo':
+                                ws_success = True
+                                # Keep track of which hostname succeeded
+                                if uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}"):
+                                    successful_hostname = base_domain
+                                break
+            except Exception as e:
+                pass
+
+        if not ws_success:
+            raise ValueError("Failed to perform Archipelago server handshake. Ensure the server is running and accessible.")
+
+        # Return relevant data to be used by the caller
+        players_raw = status_data.get('players', [])
+        player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players_raw)]
+        total_slots = len(player_list)
+        players_json = json.dumps(player_list)
+
+        # Extract the correct address format
+        final_address = f"{successful_hostname}:{port}"
+
+        return {
+            'hostname': successful_hostname,
+            'room_id': room_id,
+            'ap_tracker_id': ap_tracker_id,
+            'cached_full_address': final_address,
+            'cached_players_json': players_json,
+            'cached_total_slots': total_slots
+        }
+
 async def fetch_json_with_status(url, session=None, headers=None, timeout=15):
     """
     Fetches JSON and returns a tuple: (json_data, status_code).
@@ -55,7 +190,7 @@ async def fetch_json_with_status(url, session=None, headers=None, timeout=15):
     """
     should_close_session = False
     if not session:
-        session = aiohttp.ClientSession()
+        session = aiohttp.ClientSession(connector=SSRFProtectedTCPConnector())
         should_close_session = True
         
     json_data = None
