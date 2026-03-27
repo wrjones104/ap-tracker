@@ -1565,7 +1565,7 @@ async def run_room_setup(room_info, loop):
 
                                 break
                             
-                    except Exception as ws_e:
+                    except (aiohttp.ClientError, asyncio.TimeoutError) as ws_e:
                         logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket attempt {attempt} failed for {uri}: {ws_e}")
                         
                         # Only wait to wake the room if we are on the final attempt of the CURRENT uri
