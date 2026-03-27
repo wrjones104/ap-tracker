@@ -155,6 +155,7 @@ async def verify_ap_server(hostname: str, room_id: str):
                                 ws_success = True
                                 break
             except Exception as e:
+                logging.debug(f"WebSocket connection to {uri} failed during handshake: {e}")
                 pass
 
         if not ws_success:
