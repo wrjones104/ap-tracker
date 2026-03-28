@@ -42,6 +42,9 @@ import json
 
 def _validate_ip(ip):
     """Checks if an IP address is safe to connect to."""
+    if os.environ.get('FLASK_ENV', 'production') == 'development':
+        return
+
     if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or not ip.is_global:
         raise ValueError(f"Blocked request to forbidden IP: {ip}")
     if str(ip) == "169.254.169.254":
