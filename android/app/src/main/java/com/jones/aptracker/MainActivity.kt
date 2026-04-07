@@ -75,7 +75,6 @@ class MainActivity : ComponentActivity() {
     lateinit var tokenManager: TokenManager
     private val authViewModel: AuthViewModel by viewModels()
     private var isLoggingOut = false
-    private var currentCodeVerifier: String? = null
 
     // State for the summary sheet
     private val bundledItemsState = mutableStateOf<List<String>?>(null)
@@ -104,23 +103,41 @@ class MainActivity : ComponentActivity() {
         val authLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
+            // Handle the user manually closing the browser or backing out
+            if (result.resultCode == RESULT_CANCELED) {
+                Log.d("LOGIN_CANCELED", "User backed out of the login flow.")
+                authViewModel.setLoading(false)
+                return@registerForActivityResult
+            }
+
             val data = result.data
             if (result.resultCode == RESULT_OK && data != null) {
                 val response = AuthorizationResponse.fromIntent(data)
                 val ex = AuthorizationException.fromIntent(data)
-                val savedCodeVerifier = currentCodeVerifier
+
+                // Retrieve the code verifier from SharedPreferences
+                val prefs = getSharedPreferences("auth_prefs", MODE_PRIVATE)
+                val savedCodeVerifier = prefs.getString("code_verifier", null)
+
+                // Clean it up immediately so it doesn't linger
+                prefs.edit().remove("code_verifier").apply()
 
                 if (response?.authorizationCode != null && savedCodeVerifier != null) {
+                    // Success! Exchange the code.
                     exchangeCodeForToken(
                         code = response.authorizationCode!!,
                         codeVerifier = savedCodeVerifier
                     )
                 } else {
-                    val errorDetails = ex?.errorDescription ?: "Authorization cancelled"
+                    // Something went wrong (e.g. Discord rejected it, or we somehow lost the verifier again)
+                    val errorDetails = ex?.errorDescription ?: "Authorization cancelled or verifier lost"
                     Log.e("LOGIN_FAILED", "Auth failed: $errorDetails")
                     Toast.makeText(this, "Login Failed: $errorDetails", Toast.LENGTH_LONG).show()
                     authViewModel.setLoading(false)
                 }
+            } else {
+                // Fallback for any other weird result codes
+                authViewModel.setLoading(false)
             }
         }
 
@@ -234,7 +251,13 @@ class MainActivity : ComponentActivity() {
             serviceConfig, clientId, ResponseTypeValues.CODE, redirectUri
         ).setScope("identify").build()
 
-        currentCodeVerifier = request.codeVerifier
+        // Save the verifier to SharedPreferences to survive Activity process death
+        val codeVerifier = request.codeVerifier
+        getSharedPreferences("auth_prefs", MODE_PRIVATE)
+            .edit()
+            .putString("code_verifier", codeVerifier)
+            .apply()
+
         launcher.launch(authService.getAuthorizationRequestIntent(request))
     }
 
