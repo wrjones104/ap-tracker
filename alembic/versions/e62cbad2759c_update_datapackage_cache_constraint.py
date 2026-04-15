@@ -27,10 +27,16 @@ def upgrade() -> None:
     conn = op.get_bind()
     conn.execute(sa.text("""
         DELETE FROM datapackage_cache
-        WHERE id NOT IN (
-            SELECT MIN(id)
-            FROM datapackage_cache
-            GROUP BY checksum, entity_type, entity_id
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY checksum, entity_type, entity_id
+                           ORDER BY id
+                       ) as row_num
+                FROM datapackage_cache
+            ) t
+            WHERE t.row_num > 1
         )
     """))
 
