@@ -819,12 +819,12 @@ def get_item_history(current_user, room_db_id):
 
         # A. Resolve Item Name (Uses Receiver's Game)
         if receiver_game and rec_checksum:
-            item_name_key = (receiver_game, rec_checksum, 'item', item.item_id)
+            item_name_key = (rec_checksum, 'item', item.item_id)
             cache_keys_to_find.add(item_name_key)
             
         # B. Resolve Location Name (Uses Sender's Game)
         if sender_game and snd_checksum:
-            location_name_key = (sender_game, snd_checksum, 'location', item.location_id)
+            location_name_key = (snd_checksum, 'location', item.location_id)
             cache_keys_to_find.add(location_name_key)
 
         receiver_name = receiver_obj.get('name', f"Player {receiver_id}") if receiver_obj else f"Player {receiver_id}"
@@ -857,21 +857,19 @@ def get_item_history(current_user, room_db_id):
     name_cache_map = {}
     if cache_keys_to_find:
         cache_query = session.query(
-            DatapackageCache.game,
             DatapackageCache.checksum,
             DatapackageCache.entity_type,
             DatapackageCache.entity_id,
             DatapackageCache.entity_name
         ).filter(
             tuple_(
-                DatapackageCache.game,
                 DatapackageCache.checksum,
                 DatapackageCache.entity_type,
                 DatapackageCache.entity_id
             ).in_(cache_keys_to_find)
         )
         name_cache_map = {
-            (c.game, c.checksum, c.entity_type, c.entity_id): c.entity_name
+            (c.checksum, c.entity_type, c.entity_id): c.entity_name
             for c in cache_query.all()
         }
 
@@ -1023,11 +1021,11 @@ def get_global_item_history(current_user):
             location_name_key = None
 
             if receiver_game and rec_checksum:
-                item_name_key = (receiver_game, rec_checksum, 'item', item.item_id)
+                item_name_key = (rec_checksum, 'item', item.item_id)
                 cache_keys_to_find.add(item_name_key)
 
             if sender_game and snd_checksum:
-                location_name_key = (sender_game, snd_checksum, 'location', item.location_id)
+                location_name_key = (snd_checksum, 'location', item.location_id)
                 cache_keys_to_find.add(location_name_key)
 
             history_pre_cache.append({
@@ -1056,14 +1054,12 @@ def get_global_item_history(current_user):
         name_cache_map = {}
         if cache_keys_to_find:
             cache_query = session.query(
-                DatapackageCache.game,
                 DatapackageCache.checksum,
                 DatapackageCache.entity_type,
                 DatapackageCache.entity_id,
                 DatapackageCache.entity_name
             ).filter(
                 tuple_(
-                    DatapackageCache.game,
                     DatapackageCache.checksum,
                     DatapackageCache.entity_type,
                     DatapackageCache.entity_id
@@ -1071,7 +1067,7 @@ def get_global_item_history(current_user):
             )
 
             name_cache_map = {
-                (c.game, c.checksum, c.entity_type, c.entity_id): c.entity_name
+                (c.checksum, c.entity_type, c.entity_id): c.entity_name
                 for c in cache_query.all()
             }
 
@@ -1498,11 +1494,11 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
         location_name_key = None
 
         if item_owner_game and item_checksum:
-            item_name_key = (item_owner_game, item_checksum, 'item', hint.item_id)
+            item_name_key = (item_checksum, 'item', hint.item_id)
             cache_keys_to_find.add(item_name_key)
             
         if location_owner_game and location_checksum:
-            location_name_key = (location_owner_game, location_checksum, 'location', hint.location_id)
+            location_name_key = (location_checksum, 'location', hint.location_id)
             cache_keys_to_find.add(location_name_key)
 
         temp_hint_data.append({
@@ -1518,21 +1514,19 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
     name_cache_map = {}
     if cache_keys_to_find:
         cache_query = session.query(
-            DatapackageCache.game,
             DatapackageCache.checksum,
             DatapackageCache.entity_type,
             DatapackageCache.entity_id,
             DatapackageCache.entity_name
         ).filter(
             tuple_(
-                DatapackageCache.game,
                 DatapackageCache.checksum,
                 DatapackageCache.entity_type,
                 DatapackageCache.entity_id
             ).in_(cache_keys_to_find)
         )
         name_cache_map = {
-            (c.game, c.checksum, c.entity_type, c.entity_id): c.entity_name
+            (c.checksum, c.entity_type, c.entity_id): c.entity_name
             for c in cache_query.all()
         }
 

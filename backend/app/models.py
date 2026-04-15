@@ -138,7 +138,7 @@ class DatapackageCache(Base):
     entity_type = Column(String, nullable=False)
     entity_id = Column(BigInteger, nullable=False)
     entity_name = Column(String, nullable=False)
-    __table_args__ = (UniqueConstraint('game', 'checksum', 'entity_type', 'entity_id', name='_game_checksum_entity_uc'),)
+    __table_args__ = (UniqueConstraint('checksum', 'entity_type', 'entity_id', name='_checksum_entity_uc'),)
 
 class NotifiedItem(Base):
     __tablename__ = 'notified_items'
