@@ -372,12 +372,12 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
                 receiver_game = game_map.get(rid, "Unknown")
                 game_checksum = game_checksums.get(receiver_game)
                 if game_checksum:
-                    cache_keys_to_fetch.add((receiver_game, game_checksum, 'item', item_id))
+                    cache_keys_to_fetch.add((game_checksum, 'item', item_id))
 
                 sender_game = game_map.get(send_id, "Unknown")
                 sender_checksum = game_checksums.get(sender_game)
                 if sender_checksum:
-                    cache_keys_to_fetch.add((sender_game, sender_checksum, 'location', loc_id))
+                    cache_keys_to_fetch.add((sender_checksum, 'location', loc_id))
                 
                 new_items_for_notify.append({
                     'item_key_batch': item_key_batch,
@@ -467,9 +467,9 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                     lo_checksum = game_checksums.get(lo_game)
 
                     if io_checksum:
-                        cache_keys_to_fetch.add((io_game, io_checksum, 'item', item_id))
+                        cache_keys_to_fetch.add((io_checksum, 'item', item_id))
                     if lo_checksum:
-                        cache_keys_to_fetch.add((lo_game, lo_checksum, 'location', loc_id))
+                        cache_keys_to_fetch.add((lo_checksum, 'location', loc_id))
                     
                     new_hints_for_notify.append({
                         'hint_key_batch': hint_key_batch,
@@ -513,8 +513,8 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     if cache_keys_to_fetch:
         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Fetching {len(cache_keys_to_fetch)} names...")
         try:
-            ids_to_fetch = {k[3] for k in cache_keys_to_fetch}
-            checksums_to_fetch = {k[1] for k in cache_keys_to_fetch}
+            ids_to_fetch = {k[2] for k in cache_keys_to_fetch}
+            checksums_to_fetch = {k[0] for k in cache_keys_to_fetch}
             
             ids_list = list(ids_to_fetch)
             chunk_size = 1000
@@ -523,7 +523,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 id_chunk = ids_list[i:i + chunk_size]
                 
                 results = session.query(
-                    DatapackageCache.game, DatapackageCache.checksum,
+                    DatapackageCache.checksum,
                     DatapackageCache.entity_type, DatapackageCache.entity_id,
                     DatapackageCache.entity_name
                 ).filter(
@@ -531,8 +531,8 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     DatapackageCache.entity_id.in_(id_chunk)
                 ).all()
 
-                for game, chk, etype, eid, name in results:
-                    key = (game, chk, etype, eid)
+                for chk, etype, eid, name in results:
+                    key = (chk, etype, eid)
                     if key in cache_keys_to_fetch:
                         name_lookup_map[key] = name
 
@@ -543,11 +543,11 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     # 2. Notify Items
     for item_data in new_items_for_notify:
         item_name = name_lookup_map.get(
-            (item_data['receiver_game'], item_data['game_checksum'], 'item', item_data['item_id']), 
+            (item_data['game_checksum'], 'item', item_data['item_id']),
             f"ID {item_data['item_id']}"
         )
         loc_name = name_lookup_map.get(
-            (item_data['sender_game'], item_data['sender_checksum'], 'location', item_data['location_id']),
+            (item_data['sender_checksum'], 'location', item_data['location_id']),
             f"ID {item_data['location_id']}"
         )
         
@@ -696,11 +696,11 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     # 3. Notify Hints
     for hint_data in new_hints_for_notify:
         item_name = name_lookup_map.get(
-            (hint_data['io_game'], hint_data['io_checksum'], 'item', hint_data['item_id']),
+            (hint_data['io_checksum'], 'item', hint_data['item_id']),
             f"ID {hint_data['item_id']}"
         )
         loc_name = name_lookup_map.get(
-            (hint_data['lo_game'], hint_data['lo_checksum'], 'location', hint_data['loc_id']),
+            (hint_data['lo_checksum'], 'location', hint_data['loc_id']),
             f"ID {hint_data['loc_id']}"
         )
         io_id, lo_id = hint_data['io_id'], hint_data['lo_id']
