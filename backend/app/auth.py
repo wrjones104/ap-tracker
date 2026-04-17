@@ -43,7 +43,7 @@ def create_guest_user():
 
     jwt_id = str(uuid.uuid4())
     issued_at = datetime.now(timezone.utc)
-    expires_at = issued_at + timedelta(days=30) 
+    expires_at = issued_at + timedelta(days=730) 
 
     payload = {
         'user_id': user_id_for_jwt,
@@ -190,7 +190,7 @@ def callback():
 
     jwt_id = str(uuid.uuid4())
     issued_at = datetime.now(timezone.utc)
-    expires_at = issued_at + timedelta(days=30) 
+    expires_at = issued_at + timedelta(days=90) 
 
     payload = {
         'user_id': user_id_for_jwt,
