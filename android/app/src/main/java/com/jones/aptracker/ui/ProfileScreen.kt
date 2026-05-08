@@ -201,6 +201,49 @@ fun ProfileScreen(
 
             HorizontalDivider(Modifier.padding(vertical = 16.dp))
 
+            // --- Display Options ---
+            Text(
+                "Display Options",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        userViewModel.updateGlobalPreferences(
+                            uiShowHeroImages = !(userProfile?.ui_show_hero_images_default ?: true)
+                        )
+                    }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Show Hero Images",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        "Display game artwork on the rooms screen",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = userProfile?.ui_show_hero_images_default ?: true,
+                    onCheckedChange = { isChecked ->
+                        userViewModel.updateGlobalPreferences(
+                            uiShowHeroImages = isChecked
+                        )
+                    },
+                    modifier = Modifier.padding(start = 16.dp)
+                )
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 16.dp))
+
             // --- Integrations ---
             Text(
                 "Integrations",

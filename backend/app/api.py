@@ -1132,6 +1132,7 @@ def get_current_user(current_user):
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
+            'ui_show_hero_images_default': current_user.ui_show_hero_images_default,
             'is_guest': True,
             'global_snooze_until': format_iso_z(current_user.global_snooze_until),
             'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False)
@@ -1167,6 +1168,7 @@ def get_current_user(current_user):
             'is_cheese_connected': current_user.cheese_api_key is not None,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
+            'ui_show_hero_images_default': current_user.ui_show_hero_images_default,
             'is_guest': False,
             'global_snooze_until': format_iso_z(current_user.global_snooze_until),
             'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False)
@@ -1270,6 +1272,8 @@ def update_user_preferences(current_user):
             setattr(user, 'ui_show_finished_default', bool(data['ui_show_finished']))
         if 'ui_show_found_hints' in data:
             setattr(user, 'ui_show_found_hints_default', bool(data['ui_show_found_hints']))
+        if 'ui_show_hero_images' in data:
+            setattr(user, 'ui_show_hero_images_default', bool(data['ui_show_hero_images']))
         if 'combine_notifications' in data:
             setattr(user, 'combine_notifications_default', bool(data['combine_notifications']))
         if 'suppress_own_events' in data:

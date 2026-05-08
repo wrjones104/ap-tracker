@@ -135,6 +135,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         useCondensed: Boolean? = null,
         suppressOwn: Boolean? = null,
         combine: Boolean? = null,
+        uiShowHeroImages: Boolean? = null,
         removeEmojis: Boolean? = null,
         suppressSelfFound: Boolean? = null,
         suppressConnected: Boolean? = null
@@ -155,6 +156,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 removeEmojis?.let { params["remove_emojis"] = it }
                 suppressSelfFound?.let { params["suppress_self_found"] = it }
                 suppressConnected?.let { params["suppress_connected"] = it }
+                uiShowHeroImages?.let { params["ui_show_hero_images"] = it }
 
                 if (params.isNotEmpty()) {
                     RetrofitClient.instance.updateUserPreferences(params)
