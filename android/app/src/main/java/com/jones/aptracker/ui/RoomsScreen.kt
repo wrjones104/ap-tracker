@@ -95,6 +95,8 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.window.Dialog
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -162,22 +164,55 @@ fun RoomsScreen(
                 } else if (rooms.isEmpty()) {
                     // --- Empty State Banner ---
                     Box(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        val bannerImages = listOf(R.drawable.room_1, R.drawable.room_2, R.drawable.room_3)
-                        val randomBanner by remember { mutableStateOf(bannerImages.random()) }
-                        Image(
-                            painter = painterResource(id = randomBanner),
-                            contentDescription = "Empty Banner",
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth(0.95f)
+                                .height(200.dp)
                                 .padding(bottom = 8.dp)
                                 .align(Alignment.TopCenter)
                                 .clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.FillWidth
-                        )
-                        Text(
-                            text = "No rooms found. Tap the '+' to add a room.",
-                            modifier = Modifier.align(Alignment.Center)
-                        )
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.bg_banner_gradient),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.ap_alerts_icon_3),
+                                    contentDescription = "AP Alerts Icon",
+                                    modifier = Modifier.size(80.dp)
+                                )
+                                Spacer(Modifier.width(16.dp))
+                                Column {
+                                    Box {
+                                        Text(
+                                            text = "Archipelago Alerts",
+                                            style = MaterialTheme.typography.headlineMedium.copy(
+                                                color = Color.Black,
+                                                drawStyle = Stroke(width = 6f, join = StrokeJoin.Round)
+                                            )
+                                        )
+                                        Text(
+                                            text = "Archipelago Alerts",
+                                            style = MaterialTheme.typography.headlineMedium.copy(
+                                                color = Color.White
+                                            )
+                                        )
+                                    }
+                                    Text(
+                                        text = "Click the + button below to add a new room!",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        }
                     }
                 } else {
                     // --- List with Drag & Drop ---
@@ -258,20 +293,46 @@ fun RoomsScreen(
                     ) {
                         // --- Banner (Index 0) ---
                         item {
-                            val bannerImages = listOf(
-                                R.drawable.room_1, R.drawable.room_2, R.drawable.room_3,
-                                R.drawable.room_4, R.drawable.room_5, R.drawable.room_6
-                            )
-                            val randomBanner by remember { mutableStateOf(bannerImages.random()) }
-                            Image(
-                                painter = painterResource(id = randomBanner),
-                                contentDescription = "Room Banner",
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth(0.95f)
+                                    .height(84.dp)
                                     .padding(bottom = 8.dp)
                                     .clip(RoundedCornerShape(8.dp)),
-                                contentScale = ContentScale.FillWidth
-                            )
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.bg_banner_gradient),
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.ap_alerts_icon_3),
+                                        contentDescription = "AP Alerts Icon",
+                                        modifier = Modifier.size(56.dp)
+                                    )
+                                    Spacer(Modifier.width(16.dp))
+                                    Box {
+                                        Text(
+                                            text = "Archipelago Alerts",
+                                            style = MaterialTheme.typography.headlineSmall.copy(
+                                                color = Color.Black,
+                                                drawStyle = Stroke(width = 6f, join = StrokeJoin.Round)
+                                            )
+                                        )
+                                        Text(
+                                            text = "Archipelago Alerts",
+                                            style = MaterialTheme.typography.headlineSmall.copy(
+                                                color = Color.White
+                                            )
+                                        )
+                                    }
+                                }
+                            }
                             Text(
                                 text = "Long-press a room to reorder",
                                 style = MaterialTheme.typography.labelSmall,

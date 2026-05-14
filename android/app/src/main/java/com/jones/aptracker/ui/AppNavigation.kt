@@ -3,13 +3,20 @@ package com.jones.aptracker.ui
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -19,6 +26,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
@@ -175,17 +187,53 @@ fun LoginScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            val bannerImages = listOf(
-                R.drawable.login_1,
-                R.drawable.login_2,
-                R.drawable.login_3,
-            )
-            val randomBanner by remember { mutableStateOf(bannerImages.random()) }
-            Image(
-                painter = painterResource(id = randomBanner),
-                contentDescription = "App Banner",
-                modifier = Modifier.fillMaxWidth(0.8f)
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .height(200.dp)
+                    .clip(RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.bg_banner_gradient),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ap_alerts_icon_3),
+                        contentDescription = "AP Alerts Icon",
+                        modifier = Modifier.size(80.dp)
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column {
+                        Box {
+                            Text(
+                                text = "Archipelago Alerts",
+                                style = MaterialTheme.typography.headlineMedium.copy(
+                                    color = Color.Black,
+                                    drawStyle = Stroke(width = 6f, join = StrokeJoin.Round)
+                                )
+                            )
+                            Text(
+                                text = "Archipelago Alerts",
+                                style = MaterialTheme.typography.headlineMedium.copy(
+                                    color = Color.White
+                                )
+                            )
+                        }
+                        Text(
+                            text = "Please log in below",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White
+                        )
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(32.dp))
             Spacer(modifier = Modifier.height(16.dp))
             if (isLoading) {
