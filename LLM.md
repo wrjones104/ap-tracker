@@ -25,8 +25,8 @@ The system consists of two main parts:
     *   `requirements.txt`: Python dependencies.
 *   `android/`: Contains the Android application code.
     *   `app/src/main/java/com/jones/aptracker/`: Root package for Kotlin source code.
-        *   `network/`: API communication, Data Transfer Objects (DTOs), and session management. Contains `ApiService.kt` (Retrofit endpoints), `TokenManager.kt` (secure token storage), and entity models.
-        *   `database/`: Local data persistence. Contains `AppDatabase.kt` (Room Database setup) and DAOs (Data Access Objects).
+        *   `network/`: API communication, Data Transfer Objects (DTOs), and session management. Contains `ApiService.kt` (Retrofit endpoints), `TokenManager.kt` (secure token storage), DAOs (Data Access Objects), and entity models.
+        *   `database/`: Local data persistence. Contains `AppDatabase.kt` (Room Database setup).
         *   `repository/`: Centralized data fetching strategy mediating between local `database` and remote `network`.
         *   `ui/`: The UI layer organized into features.
             *   Key Screens: `RoomsScreen.kt` (tracked rooms list), `ActivityFeedScreen.kt` (recent notifications/events), `ProfileScreen.kt` (user info & login state), `SettingsScreen.kt` (app preferences).
