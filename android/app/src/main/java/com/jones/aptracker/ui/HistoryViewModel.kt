@@ -226,10 +226,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         fetchUserPreferences()
     }
 
-    fun loadHistoryFor(roomId: Int?) {
+    fun loadHistoryFor(roomId: Int?, initialSearchQuery: String? = null) {
         currentRoomId = roomId
         _selectedPlayerFilter.value = null
-        searchQuery.value = ""
+        searchQuery.value = initialSearchQuery ?: ""
 
         if (roomId != null) {
             _historyFilter.value = HistoryFilter.Specific(roomId)
@@ -404,7 +404,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         senderName = entity.senderName,
                         senderAlias = entity.senderAlias,
                         senderGame = entity.senderGame,
-                        locationName = entity.locationName
+                        locationName = entity.locationName,
+                        receivedCount = entity.receivedCount
                     )
                 }
 

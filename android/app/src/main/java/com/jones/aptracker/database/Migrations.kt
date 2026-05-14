@@ -138,3 +138,9 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
         db.execSQL("ALTER TABLE rooms ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE history_items ADD COLUMN receivedCount INTEGER")
+    }
+}

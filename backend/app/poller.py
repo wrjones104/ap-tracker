@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
 from threading import local
-from sqlalchemy import or_, exc, tuple_
+from sqlalchemy import or_, exc, tuple_, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
 from email.utils import parsedate_to_datetime
@@ -19,7 +19,7 @@ from email.utils import parsedate_to_datetime
 from . import Session, get_firebase_app, process
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
-    DatapackageCache, NotifiedItem, NotifiedHint
+    DatapackageCache, NotifiedItem, NotifiedHint, SlotItemThreshold
 )
 from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector
 
@@ -509,6 +509,24 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     # We capture the current time once at the start of the batch for consistent comparison
     now_utc = datetime.now(timezone.utc)
 
+    # 0. Pre-fetch Thresholds for all slots in this batch
+    thresholds_lookup = {}
+    all_db_slot_ids = []
+    for user_slots in prefs_by_user_slot.values():
+        for slot_obj in user_slots.values():
+            all_db_slot_ids.append(slot_obj.id)
+    
+    if all_db_slot_ids:
+        try:
+            thresholds = session.query(SlotItemThreshold).filter(SlotItemThreshold.user_tracked_slot_id.in_(all_db_slot_ids)).all()
+            for t in thresholds:
+                key = (t.user_tracked_slot_id, t.item_name.lower().strip())
+                if key not in thresholds_lookup:
+                    thresholds_lookup[key] = set()
+                thresholds_lookup[key].add(t.threshold)
+        except Exception as e:
+            logging.error(f"[POLLER_THRESHOLD_ERROR] Failed to fetch thresholds: {e}")
+
     # 1. Fetch Names from DatapackageCache
     if cache_keys_to_fetch:
         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Fetching {len(cache_keys_to_fetch)} names...")
@@ -541,6 +559,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
             return {}
 
     # 2. Notify Items
+    batch_threshold_counts = {} # (slot_db_id, item_name) -> current_batch_count
     for item_data in new_items_for_notify:
         item_name = name_lookup_map.get(
             (item_data['game_checksum'], 'item', item_data['item_id']),
@@ -621,6 +640,39 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 # --- IGNORE LIST CHECK ---
                 normalized_item_name = item_name.lower().strip()
                 should_ignore = False
+
+                # --- THRESHOLD CHECK ---
+                is_threshold_hit = False
+                current_total_count = 0
+                threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
+                if threshold:
+                    # Increment count for this batch
+                    batch_key = (slot_prefs.id, normalized_item_name)
+                    batch_threshold_counts[batch_key] = batch_threshold_counts.get(batch_key, 0) + 1
+                    
+                    try:
+                        db_count = session.query(func.count(NotifiedItem.id)).filter(
+                            NotifiedItem.room_id == item_data['item_key_batch'][0],
+                            NotifiedItem.receiving_slot_id == rid,
+                            NotifiedItem.item_id == item_id
+                        ).scalar()
+                        
+                        current_total_count = db_count + batch_threshold_counts[batch_key]
+                        
+                        logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': DB={db_count}, Batch={batch_threshold_counts[batch_key]}, Total={current_total_count}, Thresholds={threshold}")
+
+                        if current_total_count not in threshold:
+                            logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} hit milestone {current_total_count} (Not in {threshold}) for '{item_name}'. Skipping.")
+                            continue
+                        else:
+                            is_threshold_hit = True
+                            logging.info(f"[THRESHOLD_HIT] User {user_id}: Slot {rid} reached threshold milestone {current_total_count} for '{item_name}'. Notifying!")
+                    except Exception as e:
+                        logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to count items: {e}")
+                else:
+                    # Log if we find no threshold for an item that we might expect one for (optional, very noisy)
+                    # logging.debug(f"[THRESHOLD_NONE] No threshold for {(slot_prefs.id, normalized_item_name)}")
+                    pass
                 
                 if user_prefs.ignore_items:
                     for ignore_rule in user_prefs.ignore_items:
@@ -633,7 +685,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                                 should_ignore = True
                                 break
                 
-                if should_ignore:
+                if should_ignore and not is_threshold_hit:
                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}') for game '{item_data['receiver_game']}'.")
                     continue
 
@@ -660,9 +712,14 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 # Icons
                 icon_prog = "" if remove_emojis else "🏆 "
                 icon_useful = "" if remove_emojis else "✅ "
+                icon_milestone = "" if remove_emojis else "🚩 "
                 icon_bulb = "" if remove_emojis else "💡 "
                 
-                if is_progression:
+                if is_threshold_hit:
+                    title_prefix = f"{icon_milestone}Milestone! {item_name} ({current_total_count})"
+                    item_type = "item_milestone"
+                    should_notify = True # Threshold hits always notify
+                elif is_progression:
                     title_prefix = f"{icon_prog}{item_name}"
                     item_type = "item_progression"
                     notify_override = slot_prefs.notify_progression

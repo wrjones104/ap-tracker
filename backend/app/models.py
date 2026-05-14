@@ -115,6 +115,20 @@ class UserTrackedSlot(Base):
         UniqueConstraint('user_id', 'room_id', 'slot_id', name='_user_room_slot_uc'),
     )
     subscription = relationship("UserRoomSubscription", back_populates="tracked_slots")
+    item_thresholds = relationship("SlotItemThreshold", back_populates="tracked_slot", cascade="all, delete-orphan")
+
+class SlotItemThreshold(Base):
+    __tablename__ = 'slot_item_thresholds'
+    id = Column(Integer, primary_key=True)
+    user_tracked_slot_id = Column(Integer, ForeignKey('user_tracked_slots.id'), nullable=False)
+    item_name = Column(String(255), nullable=False)
+    threshold = Column(Integer, nullable=False, default=1)
+    
+    tracked_slot = relationship("UserTrackedSlot", back_populates="item_thresholds")
+
+    __table_args__ = (
+        UniqueConstraint('user_tracked_slot_id', 'item_name', 'threshold', name='_slot_item_threshold_uc'),
+    )
 
 class UserIgnoreItem(Base):
     __tablename__ = 'user_ignore_items'

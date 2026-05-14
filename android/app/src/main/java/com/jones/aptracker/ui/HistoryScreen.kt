@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.NotificationsPaused
+import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -112,7 +113,9 @@ fun HistoryScreen(
     roomAlias: String?,
     historyViewModel: HistoryViewModel = viewModel(),
     userViewModel: UserViewModel = viewModel(),
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onNavigateToSlotDetail: ((Int, Int) -> Unit)? = null,
+    initialSearchQuery: String? = null
 ) {
     Scaffold(
         topBar = {
@@ -130,7 +133,9 @@ fun HistoryScreen(
             roomId = roomId,
             historyViewModel = historyViewModel,
             userViewModel = userViewModel,
-            modifier = Modifier.padding(padding)
+            modifier = Modifier.padding(padding),
+            onNavigateToSlotDetail = onNavigateToSlotDetail,
+            initialSearchQuery = initialSearchQuery
         )
     }
 }
@@ -142,10 +147,12 @@ fun HistoryContent(
     roomId: Int?,
     historyViewModel: HistoryViewModel,
     userViewModel: UserViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onNavigateToSlotDetail: ((Int, Int) -> Unit)? = null,
+    initialSearchQuery: String? = null
 ) {
-    LaunchedEffect(key1 = roomId) {
-        historyViewModel.loadHistoryFor(roomId)
+    LaunchedEffect(key1 = roomId, key2 = initialSearchQuery) {
+        historyViewModel.loadHistoryFor(roomId, initialSearchQuery)
     }
 
     val isLoading by historyViewModel.isLoading.collectAsState()
@@ -342,7 +349,13 @@ fun HistoryContent(
                             selectedItem = null // Close sheet
                         }
                     }
-                }
+                },
+                onViewSlot = if (onNavigateToSlotDetail != null && selectedItem?.db_id != null && selectedItem?.slot_id != null) {
+                    {
+                        onNavigateToSlotDetail(selectedItem!!.db_id!!, selectedItem!!.slot_id!!)
+                        selectedItem = null
+                    }
+                } else null
             )
         }
     }
@@ -551,7 +564,8 @@ fun HistoryDetailSheet(
     roomName: String,
     onOpenTracker: () -> Unit,
     onIgnoreItem: (String?) -> Unit,
-    onSnoozePlayer: () -> Unit
+    onSnoozePlayer: () -> Unit,
+    onViewSlot: (() -> Unit)? = null
 ) {
     val formatter = remember {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
@@ -583,10 +597,21 @@ fun HistoryDetailSheet(
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold
                 )
+                if ((item.receivedCount ?: 0) > 1) {
+                    Log.d("AP_TRACKER", "HistoryDetail: Showing count ${item.receivedCount} for ${item.itemName}")
+                    Text(
+                        text = "Total Collected: ${item.receivedCount}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
                 Text(
                     text = formatTimestamp(item.timestamp, formatter),
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
             }
         }
@@ -653,6 +678,20 @@ fun HistoryDetailSheet(
                 Icon(Icons.Default.NotificationsPaused, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Snooze Player")
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // View Slot button
+        if (item.slot_id != null && item.db_id != null && onViewSlot != null) {
+            OutlinedButton(
+                onClick = onViewSlot,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+            ) {
+                Icon(Icons.Default.ViewList, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("View Slot")
             }
             Spacer(Modifier.height(8.dp))
         }

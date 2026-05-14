@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.NotificationsPaused
+import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -55,6 +56,7 @@ import java.time.Instant
 
 sealed class BottomNavItem(val route: String, val icon: ImageVector, val label: String) {
     object Rooms : BottomNavItem("rooms_tab", Icons.Default.Home, "Rooms")
+    object Slots : BottomNavItem("slots_tab", Icons.Default.ViewList, "Slots")
     object Activity : BottomNavItem("activity_tab", Icons.Default.List, "Activity")
     object Profile : BottomNavItem("profile_tab", Icons.Default.Person, "Me")
 }
@@ -71,6 +73,7 @@ fun MainScreen(
     onNavigateToCredits: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToArchived: () -> Unit,
+    onNavigateToSlotDetail: (Int, Int) -> Unit,
     userViewModel: UserViewModel = viewModel(),
     roomsViewModel: RoomsViewModel = viewModel()
 ) {
@@ -160,7 +163,7 @@ fun MainScreen(
         )
     }
 
-    val items = listOf(BottomNavItem.Rooms, BottomNavItem.Activity, BottomNavItem.Profile)
+    val items = listOf(BottomNavItem.Rooms, BottomNavItem.Slots, BottomNavItem.Activity, BottomNavItem.Profile)
     val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
@@ -168,6 +171,7 @@ fun MainScreen(
         topBar = {
             val titleText = when (currentRoute) {
                 BottomNavItem.Rooms.route -> "Tracked Rooms"
+                BottomNavItem.Slots.route -> "My Slots"
                 BottomNavItem.Activity.route -> "Activity Feed"
                 BottomNavItem.Profile.route -> "Profile"
                 else -> "Archipelago Tracker"
@@ -305,6 +309,12 @@ fun MainScreen(
                     userViewModel = userViewModel,
                     onRoomClick = onNavigateToRoomHistory,
                     onManageSlotsClick = onNavigateToPlayers,
+                )
+            }
+            composable(BottomNavItem.Slots.route) {
+                SlotsScreen(
+                    userViewModel = userViewModel,
+                    onSlotClick = onNavigateToSlotDetail
                 )
             }
             composable(BottomNavItem.Activity.route) {
