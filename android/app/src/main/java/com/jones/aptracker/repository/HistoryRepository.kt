@@ -49,7 +49,8 @@ class HistoryRepository(
                             tracker_id = item.tracker_id,
                             slot_id = item.slot_id,
                             icon_name = item.icon_name,
-                            host = item.host
+                            host = item.host,
+                            receivedCount = item.receivedCount
                         )
                         entity
                     } catch (e: Exception) {

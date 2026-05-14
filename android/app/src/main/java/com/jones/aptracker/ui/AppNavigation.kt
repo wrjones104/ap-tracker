@@ -96,7 +96,10 @@ fun MainNavHost(
                     navController.navigate("credits")
                 },
                 onNavigateToSettings = { navController.navigate("settings") },
-                onNavigateToArchived = { navController.navigate("archived_rooms") }
+                onNavigateToArchived = { navController.navigate("archived_rooms") },
+                onNavigateToSlotDetail = { roomDbId, slotId ->
+                    navController.navigate("slot_detail/$roomDbId/$slotId")
+                }
             )
         }
 
@@ -134,23 +137,36 @@ fun MainNavHost(
             HistoryScreen(
                 roomId = null,
                 roomAlias = "Global History",
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() },
+                onNavigateToSlotDetail = { roomDbId, slotId ->
+                    navController.navigate("slot_detail/$roomDbId/$slotId")
+                }
             )
         }
 
         composable(
-            route = "history/{roomId}/{roomAlias}",
+            route = "history/{roomId}/{roomAlias}?query={query}",
             arguments = listOf(
                 navArgument("roomId") { type = NavType.IntType },
-                navArgument("roomAlias") { type = NavType.StringType }
+                navArgument("roomAlias") { type = NavType.StringType },
+                navArgument("query") { 
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
             )
         ) { backStackEntry ->
             val roomId = backStackEntry.arguments?.getInt("roomId")!!
             val roomAlias = Uri.decode(backStackEntry.arguments?.getString("roomAlias")!!)
+            val query = backStackEntry.arguments?.getString("query")
             HistoryScreen(
                 roomId = roomId,
                 roomAlias = roomAlias,
-                onBackClick = { navController.popBackStack() }
+                initialSearchQuery = query,
+                onBackClick = { navController.popBackStack() },
+                onNavigateToSlotDetail = { roomDbId, slotId ->
+                    navController.navigate("slot_detail/$roomDbId/$slotId")
+                }
             )
         }
         composable("settings") {
@@ -169,6 +185,31 @@ fun MainNavHost(
         composable("archived_rooms") {
             ArchivedRoomsScreen(
                 onBackClick = { navController.popBackStack()}
+            )
+        }
+
+        composable(
+            route = "slot_detail/{roomDbId}/{slotId}",
+            arguments = listOf(
+                navArgument("roomDbId") { type = NavType.IntType },
+                navArgument("slotId") { type = NavType.IntType }
+            )
+        ) { backStackEntry ->
+            val roomDbId = backStackEntry.arguments?.getInt("roomDbId")!!
+            val slotId = backStackEntry.arguments?.getInt("slotId")!!
+            SlotDetailScreen(
+                roomDbId = roomDbId,
+                slotId = slotId,
+                onBackClick = { navController.popBackStack() },
+                onNavigateToHistory = { roomId, roomAlias, query ->
+                    val encodedAlias = android.net.Uri.encode(roomAlias)
+                    val route = if (query != null) {
+                        "history/$roomId/$encodedAlias?query=${android.net.Uri.encode(query)}"
+                    } else {
+                        "history/$roomId/$encodedAlias"
+                    }
+                    navController.navigate(route)
+                }
             )
         }
     }

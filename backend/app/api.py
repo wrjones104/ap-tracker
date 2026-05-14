@@ -14,14 +14,15 @@ from typing import cast
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.orm import selectinload, aliased
-from sqlalchemy import or_, desc, tuple_
+from sqlalchemy import or_, desc, tuple_, func
 from firebase_admin import messaging
 
 from . import Session, get_firebase_app
 from .utils import verify_ap_server
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
-    DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist, UserIgnoreItem
+    DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist, UserIgnoreItem,
+    SlotItemThreshold
 )
 
 bp = Blueprint('api', __name__)
@@ -777,7 +778,24 @@ def get_item_history(current_user, room_db_id):
 
     items = query.order_by(NotifiedItem.id.desc()).all()
 
-    # 3. Load metadata (Players and Game Checksums)
+    # 3. Calculate counts for each unique item in this history set
+    item_counts = {}
+    if items:
+        count_keys = set((item.room_id, item.receiving_slot_id, item.item_id) for item in items)
+        # We query the DB for the CURRENT total count of each (room, slot, item) triple
+        counts_query = session.query(
+            NotifiedItem.room_id, 
+            NotifiedItem.receiving_slot_id, 
+            NotifiedItem.item_id, 
+            func.count(NotifiedItem.id)
+        ).filter(
+            tuple_(NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id).in_(count_keys)
+        ).group_by(
+            NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id
+        ).all()
+        item_counts = {(r, s, i): c for r, s, i, c in counts_query}
+
+    # 4. Load metadata (Players and Game Checksums)
     try:
         game_checksums = json.loads(room.game_checksums_json or '{}')
         if not isinstance(game_checksums, dict): game_checksums = {}
@@ -850,7 +868,8 @@ def get_item_history(current_user, room_db_id):
             "_item_name_key": item_name_key,
             "_loc_name_key": location_name_key,
             "_raw_item_id": item.item_id,
-            "_raw_loc_id": item.location_id
+            "_raw_loc_id": item.location_id,
+            "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
         })
 
     # 5. Bulk Fetch Names from Cache
@@ -893,7 +912,8 @@ def get_item_history(current_user, room_db_id):
             "timestamp": temp_item["timestamp"],
             "tracker_id": temp_item["tracker_id"],
             "slot_id": temp_item["slot_id"],
-            "host": temp_item["host"]
+            "host": temp_item["host"],
+            "receivedCount": temp_item["receivedCount"]
         })
 
     return jsonify(history)
@@ -972,6 +992,20 @@ def get_global_item_history(current_user):
 
     for batch_items in chunked_iterable(query.yield_per(BATCH_SIZE), BATCH_SIZE):
         
+        # 4a. Pre-calculate counts for this batch
+        count_keys = set((item.room_id, item.receiving_slot_id, item.item_id) for item in batch_items)
+        counts_query = session.query(
+            NotifiedItem.room_id, 
+            NotifiedItem.receiving_slot_id, 
+            NotifiedItem.item_id, 
+            func.count(NotifiedItem.id)
+        ).filter(
+            tuple_(NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id).in_(count_keys)
+        ).group_by(
+            NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id
+        ).all()
+        item_counts = {(r, s, i): c for r, s, i, c in counts_query}
+
         history_pre_cache = []
         cache_keys_to_find = set()
 
@@ -1047,7 +1081,8 @@ def get_global_item_history(current_user):
                 "_raw_item_id": item.item_id,
                 "_raw_loc_id": item.location_id,
                 "isPlayerFinished": is_finished,
-                "itemFlags": item.item_flags or 0
+                "itemFlags": item.item_flags or 0,
+                "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
             })
 
         # Bulk Fetch Names for THIS batch only
@@ -1093,7 +1128,8 @@ def get_global_item_history(current_user):
                 "timestamp": temp_item["timestamp"],
                 "tracker_id": temp_item["tracker_id"],
                 "slot_id": temp_item["slot_id"],
-                "host": temp_item["host"]
+                "host": temp_item["host"],
+                "receivedCount": temp_item["receivedCount"]
             })
         
         del history_pre_cache
@@ -1187,6 +1223,32 @@ def get_user_tracked_slots(current_user):
             selectinload(UserRoomSubscription.tracked_slots)
         ).order_by(UserRoomSubscription.alias).all()
 
+        # --- Batch query: most recent activity per (room_uuid, slot_id) ---
+        # Collect all (room_uuid, slot_id) pairs we need to look up
+        all_room_uuids = set()
+        room_db_to_uuid = {}
+        for sub in subscriptions:
+            if sub.room and not sub.room.room_id.startswith("PENDING_DISCOVERY"):
+                all_room_uuids.add(sub.room.room_id)
+                room_db_to_uuid[sub.room_id] = sub.room.room_id
+
+        # Query max timestamp per (room_uuid, slot_id) from NotifiedItem
+        from sqlalchemy import func as sa_func
+        last_activity_map = {}  # (room_uuid, slot_id) -> datetime
+        if all_room_uuids:
+            activity_rows = session.query(
+                NotifiedItem.room_id,
+                NotifiedItem.receiving_slot_id,
+                sa_func.max(NotifiedItem.timestamp).label('last_ts')
+            ).filter(
+                NotifiedItem.room_id.in_(all_room_uuids)
+            ).group_by(
+                NotifiedItem.room_id,
+                NotifiedItem.receiving_slot_id
+            ).all()
+            for row in activity_rows:
+                last_activity_map[(row.room_id, row.receiving_slot_id)] = row.last_ts
+
         response_data = []
         for sub in subscriptions:
             room_data = sub.room
@@ -1210,12 +1272,18 @@ def get_user_tracked_slots(current_user):
                 p_name = p_obj.get('name', f"Player {slot.slot_id}") if p_obj else f"Player {slot.slot_id}"
                 p_alias = p_obj.get('alias') if p_obj else None
                 p_finished = p_obj.get('is_finished', False) if p_obj else False
+                p_game = p_obj.get('game') if p_obj else None
+
+                # Look up last activity for this specific slot
+                slot_last_activity = last_activity_map.get((room_data.room_id, slot.slot_id))
 
                 tracked_slots_list.append({
                     'slot_id': slot.slot_id,
                     'player_name': p_name,
                     'player_alias': p_alias,
                     'is_finished': p_finished,
+                    'game': p_game,
+                    'last_activity': format_iso_z(slot_last_activity),
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,
                     'notify_hints': slot.notify_hints,
@@ -1235,6 +1303,7 @@ def get_user_tracked_slots(current_user):
                 'room_alias': sub.alias,
                 'icon_name': sub.icon_name,
                 'is_archived': sub.is_archived,
+                'host': room_data.cached_full_address,
                 'tracked_slots': tracked_slots_list
             })
 
@@ -1334,6 +1403,150 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
         session.rollback()
         logging.error(f"Failed to update slot preferences for user {current_user.id} (room {room_db_id}, slot {slot_id}): {e}", exc_info=True)
         return jsonify({'error': 'An internal server error occurred.'}), 500
+    finally:
+        Session.remove()
+
+
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/thresholds', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_slot_thresholds(current_user, room_db_id, slot_id):
+    session = Session()
+    try:
+        tracked_slot = session.query(UserTrackedSlot).filter_by(
+            user_id=current_user.id,
+            room_id=room_db_id,
+            slot_id=slot_id
+        ).first()
+        if not tracked_slot:
+            return jsonify({'error': 'Tracked slot not found'}), 404
+        
+        thresholds = session.query(SlotItemThreshold).filter_by(user_tracked_slot_id=tracked_slot.id).all()
+        return jsonify([{
+            'id': t.id,
+            'item_name': t.item_name,
+            'threshold': t.threshold
+        } for t in thresholds])
+    finally:
+        Session.remove()
+
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/thresholds', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def update_slot_threshold(current_user, room_db_id, slot_id):
+    data = request.json or {}
+    item_name = data.get('item_name')
+    threshold = data.get('threshold')
+    
+    if not item_name or threshold is None:
+        return jsonify({'error': 'Missing item_name or threshold'}), 400
+        
+    session = Session()
+    try:
+        tracked_slot = session.query(UserTrackedSlot).filter_by(
+            user_id=current_user.id,
+            room_id=room_db_id,
+            slot_id=slot_id
+        ).first()
+        if not tracked_slot:
+            return jsonify({'error': 'Tracked slot not found'}), 404
+            
+        # Normalize for search but keep original for display
+        search_name = item_name.lower().strip()
+            
+        obj = session.query(SlotItemThreshold).filter(
+            SlotItemThreshold.user_tracked_slot_id == tracked_slot.id,
+            func.lower(SlotItemThreshold.item_name) == search_name,
+            SlotItemThreshold.threshold == threshold
+        ).first()
+        
+        if not obj:
+            obj = SlotItemThreshold(
+                user_tracked_slot_id=tracked_slot.id,
+                item_name=item_name.strip(), # Keep original casing
+                threshold=threshold
+            )
+            session.add(obj)
+            
+        session.commit()
+        return jsonify({'message': 'Threshold updated', 'item_name': item_name, 'threshold': threshold})
+    finally:
+        Session.remove()
+
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/thresholds/<int:threshold_id>', methods=['DELETE'])
+@handle_db_errors
+@log_api_call
+@token_required
+def delete_slot_threshold(current_user, room_db_id, slot_id, threshold_id):
+    session = Session()
+    try:
+        tracked_slot = session.query(UserTrackedSlot).filter_by(
+            user_id=current_user.id,
+            room_id=room_db_id,
+            slot_id=slot_id
+        ).first()
+        if not tracked_slot:
+            return jsonify({'error': 'Tracked slot not found'}), 404
+            
+        obj = session.query(SlotItemThreshold).filter_by(
+            id=threshold_id,
+            user_tracked_slot_id=tracked_slot.id
+        ).first()
+        
+        if not obj:
+            return jsonify({'error': 'Threshold not found'}), 404
+            
+        session.delete(obj)
+        session.commit()
+        return jsonify({'message': 'Threshold deleted'})
+    finally:
+        Session.remove()
+
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/items', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_slot_available_items(current_user, room_db_id, slot_id):
+    """
+    Returns a list of all item names available for the game associated with this slot.
+    Uses the DatapackageCache for the room's game checksums.
+    """
+    session = Session()
+    try:
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+        if not room:
+            return jsonify({'error': 'Room not found'}), 404
+            
+        try:
+            players = json.loads(room.cached_players_json or '[]')
+        except (json.JSONDecodeError, TypeError):
+            players = []
+            
+        slot_info = next((p for p in players if p.get('slot_id') == slot_id), None)
+        if not slot_info:
+            return jsonify({'error': 'Slot not found in room info'}), 404
+            
+        game = slot_info.get('game')
+        if not game:
+            return jsonify([])
+            
+        try:
+            game_checksums = json.loads(room.game_checksums_json or '{}')
+        except (json.JSONDecodeError, TypeError):
+            game_checksums = {}
+            
+        checksum = game_checksums.get(game)
+        if not checksum:
+            return jsonify([])
+            
+        items = session.query(DatapackageCache.entity_name).filter_by(
+            checksum=checksum,
+            entity_type='item'
+        ).distinct().order_by(DatapackageCache.entity_name).all()
+        
+        return jsonify([i[0] for i in items])
     finally:
         Session.remove()
 

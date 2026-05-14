@@ -59,6 +59,32 @@ interface ApiService {
     @GET("users/me/tracked-slots")
     suspend fun getUserTrackedSlots(): List<RoomWithTrackedSlots>
 
+    @GET("rooms/{id}/slots/{slot_id}/thresholds")
+    suspend fun getSlotThresholds(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int
+    ): List<SlotItemThreshold>
+
+    @POST("rooms/{id}/slots/{slot_id}/thresholds")
+    suspend fun updateSlotThreshold(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int,
+        @Body request: UpdateThresholdRequest
+    ): Response<Unit>
+
+    @DELETE("rooms/{id}/slots/{slot_id}/thresholds/{threshold_id}")
+    suspend fun deleteSlotThreshold(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int,
+        @Path("threshold_id") thresholdId: Int
+    ): Response<Unit>
+
+    @GET("rooms/{id}/slots/{slot_id}/items")
+    suspend fun getAvailableItems(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int
+    ): List<String>
+
     @GET("history/hints")
     suspend fun getGlobalHintHistory(
         @Query("since") since: String?,
@@ -185,7 +211,8 @@ data class HistoryItem(
     val slot_id: Int?,
     val icon_name: String?,
     val db_id: Int?,
-    val host: String?
+    val host: String?,
+    val receivedCount: Int? = null
 )
 
 data class RegisterDeviceRequest(
@@ -263,7 +290,8 @@ data class RoomWithTrackedSlots(
     val room_alias: String,
     val icon_name: String,
     val tracked_slots: List<TrackedSlotDetail>,
-    val is_archived: Boolean = false
+    val is_archived: Boolean = false,
+    val host: String? = null
 )
 
 data class TrackedSlotDetail(
@@ -271,6 +299,8 @@ data class TrackedSlotDetail(
     val player_name: String,
     val player_alias: String?,
     val is_finished: Boolean = false,
+    val game: String? = null,
+    val last_activity: String? = null,
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,
@@ -327,4 +357,15 @@ data class SnoozeRequest(
 data class SnoozeResponse(
     val message: String,
     val snooze_until: String?
+)
+
+data class SlotItemThreshold(
+    val id: Int,
+    val item_name: String,
+    val threshold: Int
+)
+
+data class UpdateThresholdRequest(
+    val item_name: String,
+    val threshold: Int
 )

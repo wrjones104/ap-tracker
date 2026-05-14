@@ -13,6 +13,8 @@ import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.UpdateSlotPrefsRequest
 import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.network.SnoozeRequest
+import com.jones.aptracker.network.SlotItemThreshold
+import com.jones.aptracker.network.UpdateThresholdRequest
 import com.jones.aptracker.repository.UserRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -41,6 +43,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _trackedSlotsByRoom = MutableStateFlow<List<RoomWithTrackedSlots>>(emptyList())
     val trackedSlotsByRoom = _trackedSlotsByRoom.asStateFlow()
+
+    private val _slotThresholds = MutableStateFlow<List<SlotItemThreshold>>(emptyList())
+    val slotThresholds = _slotThresholds.asStateFlow()
+
+    private val _availableItems = MutableStateFlow<List<String>>(emptyList())
+    val availableItems = _availableItems.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
@@ -531,6 +539,65 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to apply settings."
                 e.printStackTrace()
+            }
+        }
+    }
+
+    // ============================================================================================
+    // THRESHOLDS
+    // ============================================================================================
+
+    fun fetchSlotThresholds(roomDbId: Int, slotId: Int) {
+        viewModelScope.launch {
+            try {
+                val thresholds = RetrofitClient.instance.getSlotThresholds(roomDbId, slotId)
+                _slotThresholds.value = thresholds
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to fetch thresholds", e)
+            }
+        }
+    }
+
+    fun saveSlotThreshold(roomDbId: Int, slotId: Int, itemName: String, threshold: Int) {
+        viewModelScope.launch {
+            try {
+                val request = UpdateThresholdRequest(itemName, threshold)
+                val response = RetrofitClient.instance.updateSlotThreshold(roomDbId, slotId, request)
+                if (response.isSuccessful) {
+                    fetchSlotThresholds(roomDbId, slotId) // Refresh
+                } else {
+                    _errorMessage.value = "Failed to save threshold: ${response.code()}"
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to save threshold", e)
+                _errorMessage.value = "Failed to save threshold. Check connection."
+            }
+        }
+    }
+
+    fun deleteSlotThreshold(roomDbId: Int, slotId: Int, thresholdId: Int) {
+        viewModelScope.launch {
+            try {
+                val response = RetrofitClient.instance.deleteSlotThreshold(roomDbId, slotId, thresholdId)
+                if (response.isSuccessful) {
+                    fetchSlotThresholds(roomDbId, slotId) // Refresh
+                } else {
+                    _errorMessage.value = "Failed to delete threshold: ${response.code()}"
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to delete threshold", e)
+                _errorMessage.value = "Failed to delete threshold. Check connection."
+            }
+        }
+    }
+
+    fun fetchAvailableItems(roomDbId: Int, slotId: Int) {
+        viewModelScope.launch {
+            try {
+                val items = RetrofitClient.instance.getAvailableItems(roomDbId, slotId)
+                _availableItems.value = items
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to fetch available items", e)
             }
         }
     }
