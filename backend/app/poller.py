@@ -5,6 +5,7 @@ import json
 import os
 import random
 import fnmatch
+import itertools
 import time
 import re
 from dotenv import load_dotenv
@@ -27,6 +28,15 @@ from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
 thread_local_data = local()
 load_dotenv()
+
+def chunked_iterable(iterable, size):
+    """Yields successive chunks from an iterable."""
+    it = iter(iterable)
+    while True:
+        chunk = tuple(itertools.islice(it, size))
+        if not chunk:
+            break
+        yield chunk
 
 # Limit concurrent requests to Cheese Tracker API to avoid rate limits
 CHEESE_POLL_SEMAPHORE_LIMIT = 3
