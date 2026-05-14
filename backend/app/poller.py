@@ -1862,12 +1862,18 @@ async def setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop):
             room_info = await setup_queue.get()
             async with setup_semaphore:
                 await run_room_setup(room_info, loop)
+        except (asyncio.CancelledError, RuntimeError):
+            # Graceful shutdown or loop closed
+            break
         except Exception as e:
             logging.error(f"[SETUP_WORKER_ERROR] Unhandled error: {e}", exc_info=True)
         finally:
             if room_info:
                 rooms_in_setup.discard(room_info['db_id'])
-                setup_queue.task_done()
+                try:
+                    setup_queue.task_done()
+                except (ValueError, RuntimeError):
+                    pass # Loop might be closing
 
 async def poller_supervisor(app, loop):
     logging.info("[POLLER] Background polling service starting...")
