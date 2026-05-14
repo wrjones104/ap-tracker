@@ -195,7 +195,7 @@ fun RoomsScreen(
                                             text = "Archipelago Alerts",
                                             style = MaterialTheme.typography.headlineMedium.copy(
                                                 color = Color.Black,
-                                                drawStyle = Stroke(width = 6f, join = StrokeJoin.Round)
+                                                drawStyle = Stroke(width = with(androidx.compose.ui.platform.LocalDensity.current) { 2.dp.toPx() }, join = StrokeJoin.Round)
                                             )
                                         )
                                         Text(
