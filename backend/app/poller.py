@@ -673,32 +673,32 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 normalized_item_name = item_name.lower().strip()
                 should_ignore = False
 
-                    # --- THRESHOLD CHECK ---
-                    is_threshold_hit = False
-                    current_total_count = 0
-                    threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
-                    if threshold:
-                        # Increment count for this batch
-                        batch_key = (slot_prefs.id, normalized_item_name)
-                        batch_threshold_counts[batch_key] = batch_threshold_counts.get(batch_key, 0) + 1
+                # --- THRESHOLD CHECK ---
+                is_threshold_hit = False
+                current_total_count = 0
+                threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
+                if threshold:
+                    # Increment count for this batch
+                    batch_key = (slot_prefs.id, normalized_item_name)
+                    batch_threshold_counts[batch_key] = batch_threshold_counts.get(batch_key, 0) + 1
+                    
+                    try:
+                        db_count_key = (item_data['item_key_batch'][0], rid, item_id)
+                        db_count = db_counts_lookup.get(db_count_key, 0)
                         
-                        try:
-                            db_count_key = (item_data['item_key_batch'][0], rid, item_id)
-                            db_count = db_counts_lookup.get(db_count_key, 0)
-                            
-                            current_total_count = db_count + batch_threshold_counts[batch_key]
-                            
-                            logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': DB={db_count}, Batch={batch_threshold_counts[batch_key]}, Total={current_total_count}, Thresholds={threshold}")
-    
-                            if current_total_count not in threshold:
-                                logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} hit milestone {current_total_count} (Not in {threshold}) for '{item_name}'. Skipping.")
-                                continue
-                            else:
-                                is_threshold_hit = True
-                                logging.info(f"[THRESHOLD_HIT] User {user_id}: Slot {rid} reached threshold milestone {current_total_count} for '{item_name}'. Notifying!")
-                        except Exception as e:
-                            logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to count items: {e}")
-                    else:
+                        current_total_count = db_count + batch_threshold_counts[batch_key]
+                        
+                        logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': DB={db_count}, Batch={batch_threshold_counts[batch_key]}, Total={current_total_count}, Thresholds={threshold}")
+
+                        if current_total_count not in threshold:
+                            logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} hit milestone {current_total_count} (Not in {threshold}) for '{item_name}'. Skipping.")
+                            continue
+                        else:
+                            is_threshold_hit = True
+                            logging.info(f"[THRESHOLD_HIT] User {user_id}: Slot {rid} reached threshold milestone {current_total_count} for '{item_name}'. Notifying!")
+                    except Exception as e:
+                        logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to count items: {e}")
+                else:
                     # Log if we find no threshold for an item that we might expect one for (optional, very noisy)
                     # logging.debug(f"[THRESHOLD_NONE] No threshold for {(slot_prefs.id, normalized_item_name)}")
                     pass
