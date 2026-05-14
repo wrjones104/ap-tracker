@@ -31,7 +31,7 @@ android {
         buildConfigField(
             "String",
             "DISCORD_CLIENT_ID",
-            "\"${localProperties.getProperty("DISCORD_CLIENT_ID", "ABCXYZ")}\""`
+            "\"${localProperties.getProperty("DISCORD_CLIENT_ID", "ABCXYZ")}\""
         )
     }
 
