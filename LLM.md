@@ -24,10 +24,26 @@ The system consists of two main parts:
     *   `run.py`: Entry point for the Flask app.
     *   `requirements.txt`: Python dependencies.
 *   `android/`: Contains the Android application code.
-    *   `app/src/main/java/`: Kotlin source code.
+    *   `app/src/main/java/com/jones/aptracker/`: Root package for Kotlin source code.
+        *   `network/`: API communication, Data Transfer Objects (DTOs), and session management. Contains `ApiService.kt` (Retrofit endpoints), `TokenManager.kt` (secure token storage), DAOs (Data Access Objects), and entity models.
+        *   `database/`: Local data persistence. Contains `AppDatabase.kt` (Room Database setup).
+        *   `repository/`: Centralized data fetching strategy mediating between local `database` and remote `network`.
+        *   `ui/`: The UI layer organized into features.
+            *   Key Screens: `RoomsScreen.kt` (tracked rooms list), `ActivityFeedScreen.kt` (recent notifications/events), `ProfileScreen.kt` (user info & login state), `SettingsScreen.kt` (app preferences).
+            *   State management is handled by corresponding ViewModels (e.g., `RoomsViewModel.kt`, `MainViewModel.kt`).
     *   `app/src/main/res/`: Android resources (layouts, strings, etc.).
 
 ## Key Components & Technologies
+
+### Android App
+
+*   **Architecture:** Follows the MVVM (Model-View-ViewModel) architectural pattern combined with the Repository pattern to ensure clean separation of concerns between UI, business logic, and data layers.
+*   **UI Framework:** Developed entirely using Jetpack Compose for declarative UI.
+*   **Networking:** Retrofit for REST API requests with OkHttp interceptors (`AuthInterceptor.kt`) for handling JWT authentication headers.
+*   **Local Storage:**
+    *   Room Database (`androidx.room`) for caching application data locally.
+    *   `EncryptedSharedPreferences` for securely storing JWT authentication tokens (`TokenManager.kt`).
+*   **Authentication:** Integrates with Discord OAuth2 using the `net.openid.appauth` library via deep-linking schemes.
 
 ### Backend
 
