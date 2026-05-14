@@ -598,7 +598,6 @@ fun HistoryDetailSheet(
                     fontWeight = FontWeight.Bold
                 )
                 if ((item.receivedCount ?: 0) > 1) {
-                    Log.d("AP_TRACKER", "HistoryDetail: Showing count ${item.receivedCount} for ${item.itemName}")
                     Text(
                         text = "Total Collected: ${item.receivedCount}",
                         style = MaterialTheme.typography.labelLarge,

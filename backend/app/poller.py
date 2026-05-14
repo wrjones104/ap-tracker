@@ -560,6 +560,38 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
     # 2. Notify Items
     batch_threshold_counts = {} # (slot_db_id, item_name) -> current_batch_count
+
+    # Optimization: Pre-fetch DB counts for all relevant items in this batch to avoid N+1 problem
+    db_counts_lookup = {}
+    if new_items_for_notify:
+        count_keys = set()
+        for item_data in new_items_for_notify:
+            count_keys.add((
+                item_data['item_key_batch'][0], # room_uuid
+                item_data['receiving_slot_id'],
+                item_data['item_id']
+            ))
+        
+        if count_keys:
+            try:
+                # Use chunking if count_keys is very large (unlikely in poller but good practice)
+                for chunk in chunked_iterable(list(count_keys), 1000):
+                    counts_query = session.query(
+                        NotifiedItem.room_id, 
+                        NotifiedItem.receiving_slot_id, 
+                        NotifiedItem.item_id, 
+                        func.count(NotifiedItem.id)
+                    ).filter(
+                        tuple_(NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id).in_(chunk)
+                    ).group_by(
+                        NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id
+                    ).all()
+                    
+                    for r, s, i, c in counts_query:
+                        db_counts_lookup[(r, s, i)] = c
+            except Exception as e:
+                logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to bulk-fetch item counts: {e}")
+
     for item_data in new_items_for_notify:
         item_name = name_lookup_map.get(
             (item_data['game_checksum'], 'item', item_data['item_id']),
@@ -641,35 +673,32 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 normalized_item_name = item_name.lower().strip()
                 should_ignore = False
 
-                # --- THRESHOLD CHECK ---
-                is_threshold_hit = False
-                current_total_count = 0
-                threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
-                if threshold:
-                    # Increment count for this batch
-                    batch_key = (slot_prefs.id, normalized_item_name)
-                    batch_threshold_counts[batch_key] = batch_threshold_counts.get(batch_key, 0) + 1
-                    
-                    try:
-                        db_count = session.query(func.count(NotifiedItem.id)).filter(
-                            NotifiedItem.room_id == item_data['item_key_batch'][0],
-                            NotifiedItem.receiving_slot_id == rid,
-                            NotifiedItem.item_id == item_id
-                        ).scalar()
+                    # --- THRESHOLD CHECK ---
+                    is_threshold_hit = False
+                    current_total_count = 0
+                    threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
+                    if threshold:
+                        # Increment count for this batch
+                        batch_key = (slot_prefs.id, normalized_item_name)
+                        batch_threshold_counts[batch_key] = batch_threshold_counts.get(batch_key, 0) + 1
                         
-                        current_total_count = db_count + batch_threshold_counts[batch_key]
-                        
-                        logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': DB={db_count}, Batch={batch_threshold_counts[batch_key]}, Total={current_total_count}, Thresholds={threshold}")
-
-                        if current_total_count not in threshold:
-                            logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} hit milestone {current_total_count} (Not in {threshold}) for '{item_name}'. Skipping.")
-                            continue
-                        else:
-                            is_threshold_hit = True
-                            logging.info(f"[THRESHOLD_HIT] User {user_id}: Slot {rid} reached threshold milestone {current_total_count} for '{item_name}'. Notifying!")
-                    except Exception as e:
-                        logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to count items: {e}")
-                else:
+                        try:
+                            db_count_key = (item_data['item_key_batch'][0], rid, item_id)
+                            db_count = db_counts_lookup.get(db_count_key, 0)
+                            
+                            current_total_count = db_count + batch_threshold_counts[batch_key]
+                            
+                            logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': DB={db_count}, Batch={batch_threshold_counts[batch_key]}, Total={current_total_count}, Thresholds={threshold}")
+    
+                            if current_total_count not in threshold:
+                                logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} hit milestone {current_total_count} (Not in {threshold}) for '{item_name}'. Skipping.")
+                                continue
+                            else:
+                                is_threshold_hit = True
+                                logging.info(f"[THRESHOLD_HIT] User {user_id}: Slot {rid} reached threshold milestone {current_total_count} for '{item_name}'. Notifying!")
+                        except Exception as e:
+                            logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to count items: {e}")
+                    else:
                     # Log if we find no threshold for an item that we might expect one for (optional, very noisy)
                     # logging.debug(f"[THRESHOLD_NONE] No threshold for {(slot_prefs.id, normalized_item_name)}")
                     pass
