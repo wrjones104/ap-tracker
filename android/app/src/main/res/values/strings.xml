@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Archipelago Alerts</string>
+    <string name="keep_screen_on">Keep Screen On</string>
 </resources>
