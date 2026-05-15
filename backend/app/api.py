@@ -1336,7 +1336,7 @@ def get_room_datapackage(current_user, room_db_id):
         try:
             players_json = json.loads(room.cached_players_json or '[]')
             game_checksums = json.loads(room.game_checksums_json or '{}')
-        except:
+        except (json.JSONDecodeError, TypeError):
             players_json = []
             game_checksums = {}
 
