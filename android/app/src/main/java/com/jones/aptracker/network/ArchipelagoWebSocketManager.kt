@@ -121,7 +121,7 @@ class ArchipelagoWebSocketManager(
                         }
                     }
                     "ConnectionRefused" -> {
-                        listener.onError("Connection Refused: ${packet.type ?: "Check credentials"}")
+                        listener.onError("Connection Refused: ${packet.type ?: "Check your password"}")
                         listener.onStatusChanged(ConnectionStatus.ERROR)
                     }
                 }

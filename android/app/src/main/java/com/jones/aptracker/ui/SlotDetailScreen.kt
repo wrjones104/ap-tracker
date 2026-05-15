@@ -37,6 +37,14 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.scale
+import android.content.Context
+import android.content.ContextWrapper
+import android.app.Activity
+import android.view.WindowManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.jones.aptracker.R
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.jones.aptracker.network.ChatMessage
@@ -76,6 +84,20 @@ fun SlotDetailScreen(
     var isConsoleExpanded by remember { mutableStateOf(false) }
     var showHintDialog by remember { mutableStateOf(false) }
     var showLocationHintDialog by remember { mutableStateOf(false) }
+    var showPasswordDialog by remember { mutableStateOf(false) }
+    var password by remember { mutableStateOf<String?>(null) }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val passwordManager = remember { com.jones.aptracker.network.PasswordManager(context) }
+
+    LaunchedEffect(currentRoom?.host) {
+        currentRoom?.host?.let { host ->
+            val saved = passwordManager.getPassword(host)
+            if (saved != null && password == null) {
+                password = saved
+            }
+        }
+    }
 
     val textClientViewModel: TextClientViewModel = viewModel()
     val messages by textClientViewModel.messages.collectAsState()
@@ -86,7 +108,6 @@ fun SlotDetailScreen(
     val datapackage by textClientViewModel.datapackage.collectAsState()
     val keepScreenOn by textClientViewModel.keepScreenOn.collectAsState()
 
-    val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
 
     DisposableEffect(keepScreenOn, activity) {
@@ -283,7 +304,7 @@ fun SlotDetailScreen(
                                         onCheckedChange = { textClientViewModel.setKeepScreenOn(it) },
                                         modifier = Modifier
                                             .scale(0.6f)
-                                            .size(width = 32.dp, height = 24.dp), // Force a smaller footprint
+                                            .size(width = 32.dp, height = 24.dp),
                                         colors = SwitchDefaults.colors(
                                             checkedThumbColor = MaterialTheme.colorScheme.primary,
                                             checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
@@ -340,15 +361,29 @@ fun SlotDetailScreen(
                                                     host = host,
                                                     slotName = slot.player_name,
                                                     game = slot.game ?: "",
-                                                    password = null
+                                                    password = password
                                                 )
                                             },
                                             shape = RoundedCornerShape(24.dp)
                                         ) {
                                             Text("Connect Console")
                                         }
-                                        TextButton(onClick = { /* Password logic if needed */ }) {
-                                            Text("Use Password", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            TextButton(onClick = { showPasswordDialog = true }) {
+                                                Text(
+                                                    if (password.isNullOrBlank()) "Use Password" else "Change Password",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = if (password.isNullOrBlank()) Color.Gray else MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                            if (!password.isNullOrBlank()) {
+                                                TextButton(onClick = { 
+                                                    password = null 
+                                                    currentRoom.host?.let { passwordManager.deletePassword(it) }
+                                                }) {
+                                                    Text("Clear", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                                                }
+                                            }
                                         }
                                     }
                                 } else {
@@ -389,6 +424,13 @@ fun SlotDetailScreen(
                                             label = { Text("!hint_location", style = MaterialTheme.typography.labelSmall) },
                                             leadingIcon = { Icon(Icons.Default.Place, null, modifier = Modifier.size(16.dp)) },
                                             colors = AssistChipDefaults.assistChipColors(labelColor = MaterialTheme.colorScheme.primary)
+                                        )
+                                        Spacer(Modifier.weight(1f))
+                                        AssistChip(
+                                            onClick = { textClientViewModel.disconnect() },
+                                            label = { Text("Disconnect", style = MaterialTheme.typography.labelSmall) },
+                                            leadingIcon = { Icon(Icons.Default.LinkOff, null, modifier = Modifier.size(16.dp)) },
+                                            colors = AssistChipDefaults.assistChipColors(labelColor = MaterialTheme.colorScheme.error)
                                         )
                                     }
                                     
@@ -473,6 +515,25 @@ fun SlotDetailScreen(
             options = availableLocations,
             onDismiss = { showLocationHintDialog = false },
             onConfirm = { textClientViewModel.sendMessage("!hint_location $it"); showLocationHintDialog = false }
+        )
+    }
+
+    if (showPasswordDialog) {
+        PasswordInputDialog(
+            initialValue = password ?: "",
+            onDismiss = { showPasswordDialog = false },
+            onConfirm = { newPassword, shouldSave ->
+                password = if (newPassword.isBlank()) null else newPassword
+                val host = currentRoom?.host
+                if (host != null) {
+                    if (shouldSave && !newPassword.isBlank()) {
+                        passwordManager.savePassword(host, newPassword)
+                    } else {
+                        passwordManager.deletePassword(host)
+                    }
+                }
+                showPasswordDialog = false 
+            }
         )
     }
 }
@@ -702,4 +763,63 @@ fun formatTimestamp(isoString: String?): String {
     } catch (e: DateTimeParseException) {
         isoString
     }
+}
+
+@Composable
+fun PasswordInputDialog(
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String, Boolean) -> Unit
+) {
+    var text by remember { mutableStateOf(initialValue) }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var shouldSave by remember { mutableStateOf(true) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Enter Password") },
+        text = {
+            Column {
+                Text(
+                    "Enter the password for the Archipelago server.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("Password") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = if (passwordVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
+                    trailingIcon = {
+                        val image = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(image, contentDescription = if (passwordVisible) "Hide password" else "Show password")
+                        }
+                    }
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable { shouldSave = !shouldSave }
+                ) {
+                    Checkbox(checked = shouldSave, onCheckedChange = { shouldSave = it })
+                    Text("Save password on device", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(text, shouldSave) }) {
+                Text("Confirm")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }

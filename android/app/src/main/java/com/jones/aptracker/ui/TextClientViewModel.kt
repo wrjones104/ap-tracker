@@ -41,8 +41,14 @@ class TextClientViewModel : ViewModel() {
     private var wsManager: ArchipelagoWebSocketManager? = null
     private var backgroundJob: Job? = null
     private var isAppInBackground = false
+    private val _keepScreenOn = MutableStateFlow(false)
+    val keepScreenOn = _keepScreenOn.asStateFlow()
 
     private val TAG = "TextClientVM"
+
+    fun setKeepScreenOn(enabled: Boolean) {
+        _keepScreenOn.value = enabled
+    }
 
     fun connect(host: String, slotName: String, game: String, password: String?) {
         wsManager?.disconnect()
