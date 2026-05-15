@@ -377,7 +377,7 @@ fun SlotDetailScreen(
             availableItems = availableItems,
             onDismiss = { showAddThresholdDialog = false },
             onConfirm = { itemName, threshold ->
-                userViewModel.saveSlotThreshold(roomDbId, slotId, itemName, threshold)
+                userViewModel.saveSlotThreshold(roomDbId, slotId, itemName.replace(" (Group)", ""), threshold)
                 showAddThresholdDialog = false
             }
         )
@@ -388,7 +388,7 @@ fun SlotDetailScreen(
             title = "Hint Item",
             options = availableItems,
             onDismiss = { showHintDialog = false },
-            onConfirm = { textClientViewModel.sendMessage("!hint $it"); showHintDialog = false }
+            onConfirm = { textClientViewModel.sendMessage("!hint ${it.replace(" (Group)", "")}"); showHintDialog = false }
         )
     }
 
@@ -397,7 +397,7 @@ fun SlotDetailScreen(
             title = "Hint Location",
             options = availableLocations,
             onDismiss = { showLocationHintDialog = false },
-            onConfirm = { textClientViewModel.sendMessage("!hint_location $it"); showLocationHintDialog = false }
+            onConfirm = { textClientViewModel.sendMessage("!hint_location ${it.replace(" (Group)", "")}"); showLocationHintDialog = false }
         )
     }
 }

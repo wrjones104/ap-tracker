@@ -1340,7 +1340,7 @@ def get_room_datapackage(current_user, room_db_id):
             players_json = []
             game_checksums = {}
 
-        player_map = {str(p['slot_id']): (p.get('alias') or p.get('name') or f"Player {p['slot_id']}") for p in players_json}
+        player_map = {str(p['slot_id']): (p.get('alias') or p.get('name') or f"Player {p['slot_id']}") for p in players_json if 'slot_id' in p}
         # Add "Archipelago" (Slot 0)
         player_map["0"] = "Archipelago"
         
@@ -1364,9 +1364,12 @@ def get_room_datapackage(current_user, room_db_id):
             for entry in entries:
                 if entry.entity_type == 'item':
                     items_map[f"{entry.checksum}_{entry.entity_id}"] = entry.entity_name
-                    item_flags[f"{entry.checksum}_{entry.entity_id}"] = entry.flags or 0
+                elif entry.entity_type == 'item_group':
+                    items_map[f"{entry.checksum}_{entry.entity_id}"] = f"{entry.entity_name} (Group)"
                 elif entry.entity_type == 'location':
                     locations_map[f"{entry.checksum}_{entry.entity_id}"] = entry.entity_name
+                elif entry.entity_type == 'location_group':
+                    locations_map[f"{entry.checksum}_{entry.entity_id}"] = f"{entry.entity_name} (Group)"
 
         logging.debug(f"[DATAPACKAGE] Returning {len(items_map)} items and {len(locations_map)} locations for room {room_db_id}")
 
@@ -1611,12 +1614,20 @@ def get_slot_available_items(current_user, room_db_id, slot_id):
         if not checksum:
             return jsonify([])
             
-        items = session.query(DatapackageCache.entity_name).filter_by(
-            checksum=checksum,
-            entity_type='item'
-        ).distinct().order_by(DatapackageCache.entity_name).all()
+        items_query = session.query(DatapackageCache.entity_name, DatapackageCache.entity_type).filter(
+            DatapackageCache.checksum == checksum,
+            DatapackageCache.entity_type.in_(['item', 'item_group'])
+        ).distinct().all()
         
-        return jsonify([i[0] for i in items])
+        results = []
+        for name, etype in items_query:
+            if etype == 'item_group':
+                results.append(f"{name} (Group)")
+            else:
+                results.append(name)
+        
+        results.sort()
+        return jsonify(results)
     finally:
         Session.remove()
 
@@ -1660,12 +1671,20 @@ def get_slot_available_locations(current_user, room_db_id, slot_id):
         if not checksum:
             return jsonify([])
             
-        locations = session.query(DatapackageCache.entity_name).filter_by(
-            checksum=checksum,
-            entity_type='location'
-        ).distinct().order_by(DatapackageCache.entity_name).all()
+        locations_query = session.query(DatapackageCache.entity_name, DatapackageCache.entity_type).filter(
+            DatapackageCache.checksum == checksum,
+            DatapackageCache.entity_type.in_(['location', 'location_group'])
+        ).distinct().all()
         
-        return jsonify([l[0] for l in locations])
+        results = []
+        for name, etype in locations_query:
+            if etype == 'location_group':
+                results.append(f"{name} (Group)")
+            else:
+                results.append(name)
+        
+        results.sort()
+        return jsonify(results)
     finally:
         Session.remove()
 
