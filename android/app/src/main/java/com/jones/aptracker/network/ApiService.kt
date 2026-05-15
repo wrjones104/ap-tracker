@@ -251,6 +251,7 @@ data class UserProfile(
     val suppress_connected_default: Boolean,
     val ui_show_finished_default: Boolean = true,
     val ui_show_found_hints_default: Boolean = false,
+    val ui_show_progression_default: Boolean = true,
     val is_cheese_connected: Boolean = false,
     val global_snooze_until: String? = null,
     val is_syncing_cheese: Boolean = false

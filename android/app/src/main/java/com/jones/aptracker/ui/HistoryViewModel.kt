@@ -253,6 +253,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 // We no longer sync condensed preference from API for the UI view
                 _showFinished.value = profile.ui_show_finished_default
                 _showFoundHints.value = profile.ui_show_found_hints_default
+                _showProgression.value = profile.ui_show_progression_default
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to load user profile for settings", e)
             }
@@ -291,8 +292,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setShowProgression(show: Boolean) {
-        _showProgression.value = show
-        // Note: Not saving these to API/Prefs yet, but could be added to saveViewPreferences if desired
+        if (_showProgression.value != show) {
+            _showProgression.value = show
+            saveViewPreferences(showProgression = show)
+        }
     }
 
     fun setShowUseful(show: Boolean) {
@@ -465,13 +468,15 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun saveViewPreferences(
         showFinished: Boolean? = null,
-        showFoundHints: Boolean? = null
+        showFoundHints: Boolean? = null,
+        showProgression: Boolean? = null
     ) {
         viewModelScope.launch {
             try {
                 val params = mutableMapOf<String, Boolean>()
                 showFinished?.let { params["ui_show_finished"] = it }
                 showFoundHints?.let { params["ui_show_found_hints"] = it }
+                showProgression?.let { params["ui_show_progression"] = it }
                 // No longer sending use_condensed_messages to API
 
                 if (params.isNotEmpty()) {
