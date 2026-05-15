@@ -27,8 +27,18 @@ class ArchipelagoWebSocketManager(
         fun onError(error: String)
     }
 
+    private fun isLocalHost(host: String): Boolean {
+        val h = host.lowercase().split(":")[0]
+        return h == "localhost" || 
+               h == "127.0.0.1" || 
+               h.startsWith("192.168.") || 
+               h.startsWith("10.") || 
+               h.startsWith("172.") || 
+               !h.contains(".")
+    }
+
     fun connect() {
-        val protocol = if (host.startsWith("archipelago.gg")) "wss" else "ws"
+        val protocol = if (isLocalHost(host)) "ws" else "wss"
         val url = if (host.contains("://")) host else "$protocol://$host"
         
         Log.d(TAG, "Connecting to $url as $slotName ($game)")
