@@ -54,7 +54,7 @@ class TextClientViewModel : ViewModel() {
 
                 override fun onMessageReceived(message: ChatMessage) {
                     // Limit message history to 500 to avoid memory/performance issues
-                    _messages.value = _messages.value.takeLast(499) + message
+_messages.update { it.takeLast(499) + message }
                 }
 
                 override fun onError(error: String) {
