@@ -18,8 +18,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import android.content.Context
+import android.content.ContextWrapper
+import android.app.Activity
+import android.view.WindowManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.jones.aptracker.R
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -42,6 +50,12 @@ import com.jones.aptracker.ui.theme.*
 import java.time.Duration
 import java.time.Instant
 import java.time.format.DateTimeParseException
+
+fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,6 +84,21 @@ fun SlotDetailScreen(
     val availableLocations by textClientViewModel.availableLocations.collectAsState()
     val availableItems by textClientViewModel.availableItems.collectAsState()
     val datapackage by textClientViewModel.datapackage.collectAsState()
+    val keepScreenOn by textClientViewModel.keepScreenOn.collectAsState()
+
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+
+    DisposableEffect(keepScreenOn, activity) {
+        if (keepScreenOn) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     LaunchedEffect(roomDbId, slotId) {
         userViewModel.fetchSlotThresholds(roomDbId, slotId)
@@ -236,8 +265,38 @@ fun SlotDetailScreen(
                         ) {
                             Icon(Icons.Default.Terminal, null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.width(16.dp))
-                            Text("Text Client", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.weight(1f))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Text Client", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                
+                                // Keep Screen On Toggle
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .padding(top = 2.dp)
+                                        .clickable(
+                                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                            indication = null
+                                        ) { textClientViewModel.setKeepScreenOn(!keepScreenOn) }
+                                ) {
+                                    Switch(
+                                        checked = keepScreenOn,
+                                        onCheckedChange = { textClientViewModel.setKeepScreenOn(it) },
+                                        modifier = Modifier
+                                            .scale(0.6f)
+                                            .size(width = 32.dp, height = 24.dp), // Force a smaller footprint
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                            checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                                        )
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        stringResource(R.string.keep_screen_on),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (keepScreenOn) MaterialTheme.colorScheme.primary else Color.Gray
+                                    )
+                                }
+                            }
                             
                             if (connectionStatus == ConnectionStatus.CONNECTED) {
                                 Surface(
