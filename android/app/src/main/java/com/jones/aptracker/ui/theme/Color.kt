@@ -17,3 +17,12 @@ val AP_Trap_Light = Color(0xFFB00020)
 val AP_Progression_Dark = Color(0xFFD0BCFF)
 val AP_Useful_Dark = Color(0xFF69C4FF)
 val AP_Trap_Dark = Color(0xFFFFB4AB)
+
+// Archipelago Standard Colors
+val AP_Cyan = Color(0xFF00E5FF)
+val AP_Plum = Color(0xFFDDA0DD)
+val AP_SlateBlue = Color(0xFF7986CB)
+val AP_Salmon = Color(0xFFFA8072)
+val AP_Blue = Color(0xFF2979FF)
+val AP_Tan = Color(0xFFEECCAA)
+val AP_Green = Color(0xFF2ECC71)

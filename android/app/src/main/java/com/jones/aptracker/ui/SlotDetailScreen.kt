@@ -37,6 +37,7 @@ import com.jones.aptracker.network.RoomDatapackage
 import com.jones.aptracker.network.TrackedSlotDetail
 import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.network.SlotItemThreshold
+import com.jones.aptracker.ui.theme.*
 import java.time.Duration
 import java.time.Instant
 import java.time.format.DateTimeParseException
@@ -58,6 +59,8 @@ fun SlotDetailScreen(
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showAddThresholdDialog by remember { mutableStateOf(false) }
     var isConsoleExpanded by remember { mutableStateOf(false) }
+    var showHintDialog by remember { mutableStateOf(false) }
+    var showLocationHintDialog by remember { mutableStateOf(false) }
 
     val textClientViewModel: TextClientViewModel = viewModel()
     val messages by textClientViewModel.messages.collectAsState()
@@ -91,19 +94,20 @@ fun SlotDetailScreen(
                     }
                 )
             },
-            containerColor = Color(0xFF121216) // Darker background as per screenshot
+            containerColor = MaterialTheme.colorScheme.background
         ) { padding ->
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .imePadding()
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
                 // 1. MAIN INFO CARD
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
@@ -111,7 +115,7 @@ fun SlotDetailScreen(
                             text = slot.player_name,
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(20.dp))
                         
@@ -131,7 +135,7 @@ fun SlotDetailScreen(
                 }
 
                 Spacer(Modifier.height(24.dp))
-                Text("Quick Actions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Quick Actions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
                 Spacer(Modifier.height(12.dp))
 
                 // 2. QUICK ACTIONS
@@ -158,7 +162,7 @@ fun SlotDetailScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Item Notification Thresholds", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Item Notification Thresholds", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
                     TextButton(onClick = { showAddThresholdDialog = true }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
@@ -170,7 +174,7 @@ fun SlotDetailScreen(
                 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(modifier = Modifier.padding(vertical = 8.dp)) {
@@ -203,7 +207,7 @@ fun SlotDetailScreen(
                 // 4. TEXT CLIENT (CONSOLE)
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column {
@@ -214,9 +218,9 @@ fun SlotDetailScreen(
                                 .padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Terminal, null, modifier = Modifier.size(24.dp), tint = Color.White)
+                            Icon(Icons.Default.Terminal, null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.width(16.dp))
-                            Text("Text Client", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Text("Text Client", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.weight(1f))
                             
                             if (connectionStatus == ConnectionStatus.CONNECTED) {
@@ -283,7 +287,7 @@ fun SlotDetailScreen(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(300.dp)
-                                            .background(Color(0xFF0A0A0C), RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
                                             .padding(8.dp)
                                     ) {
                                         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -294,6 +298,24 @@ fun SlotDetailScreen(
                                     }
                                     
                                     Spacer(Modifier.height(12.dp))
+                                    
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        AssistChip(
+                                            onClick = { showHintDialog = true },
+                                            label = { Text("!hint", style = MaterialTheme.typography.labelSmall) },
+                                            leadingIcon = { Icon(Icons.Default.Help, null, modifier = Modifier.size(16.dp)) },
+                                            colors = AssistChipDefaults.assistChipColors(labelColor = MaterialTheme.colorScheme.primary)
+                                        )
+                                        AssistChip(
+                                            onClick = { showLocationHintDialog = true },
+                                            label = { Text("!hint_location", style = MaterialTheme.typography.labelSmall) },
+                                            leadingIcon = { Icon(Icons.Default.Place, null, modifier = Modifier.size(16.dp)) },
+                                            colors = AssistChipDefaults.assistChipColors(labelColor = MaterialTheme.colorScheme.primary)
+                                        )
+                                    }
                                     
                                     var inputText by remember { mutableStateOf("") }
                                     OutlinedTextField(
@@ -318,9 +340,8 @@ fun SlotDetailScreen(
                                         }),
                                         shape = RoundedCornerShape(12.dp),
                                         colors = OutlinedTextFieldDefaults.colors(
-                                            unfocusedBorderColor = Color.DarkGray,
-                                            focusedTextColor = Color.White,
-                                            unfocusedTextColor = Color.White
+                                            focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     )
                                     Spacer(Modifier.height(8.dp))
@@ -361,13 +382,31 @@ fun SlotDetailScreen(
             }
         )
     }
+
+    if (showHintDialog) {
+        SearchableSelectDialog(
+            title = "Hint Item",
+            options = availableItems,
+            onDismiss = { showHintDialog = false },
+            onConfirm = { textClientViewModel.sendMessage("!hint $it"); showHintDialog = false }
+        )
+    }
+
+    if (showLocationHintDialog) {
+        SearchableSelectDialog(
+            title = "Hint Location",
+            options = availableLocations,
+            onDismiss = { showLocationHintDialog = false },
+            onConfirm = { textClientViewModel.sendMessage("!hint_location $it"); showLocationHintDialog = false }
+        )
+    }
 }
 
 @Composable
 fun InfoItem(modifier: Modifier = Modifier, label: String, value: String) {
     Column(modifier = modifier) {
         Text(text = label, style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
-        Text(text = value, style = MaterialTheme.typography.bodyLarge, color = Color.White, fontWeight = FontWeight.Medium)
+        Text(text = value, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -375,7 +414,7 @@ fun InfoItem(modifier: Modifier = Modifier, label: String, value: String) {
 fun ActionCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(16.dp)
     ) {
         Row(
@@ -386,11 +425,11 @@ fun ActionCard(icon: ImageVector, title: String, subtitle: String, onClick: () -
                 modifier = Modifier.size(40.dp).background(Color.White.copy(alpha = 0.05f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(icon, null, modifier = Modifier.size(20.dp), tint = Color.White)
+                Icon(icon, null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
             Icon(Icons.Default.ChevronRight, null, tint = Color.Gray)
@@ -407,7 +446,7 @@ fun ThresholdRow(threshold: SlotItemThreshold, onDelete: () -> Unit) {
         Icon(Icons.Outlined.Notifications, null, modifier = Modifier.size(20.dp), tint = Color.Gray)
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(threshold.item_name, style = MaterialTheme.typography.bodyLarge, color = Color.White)
+            Text(threshold.item_name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("Notify at ${threshold.threshold} received", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
         }
         IconButton(onClick = onDelete) {
@@ -464,47 +503,106 @@ fun AddThresholdDialog(availableItems: List<String>, onDismiss: () -> Unit, onCo
     )
 }
 
+@Composable
+fun SearchableSelectDialog(
+    title: String,
+    options: List<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var filter by remember { mutableStateOf("") }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = filter, 
+                    onValueChange = { filter = it }, 
+                    label = { Text("Search...") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                    val filtered = options.filter { it.contains(filter, ignoreCase = true) }.take(100)
+                    items(filtered) { option ->
+                        Text(
+                            option, 
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onConfirm(option) }
+                                .padding(12.dp),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    if (filtered.isEmpty() && options.isNotEmpty()) {
+                        item {
+                            Text(
+                                "No matches found",
+                                modifier = Modifier.padding(16.dp),
+                                color = Color.Gray,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
 // ... Existing ChatMessageRow remains the same ...
 @Composable
 fun ChatMessageRow(message: ChatMessage, datapackage: RoomDatapackage? = null) {
-    val annotatedString = remember(message, datapackage) {
+    val defaultTextColor = MaterialTheme.colorScheme.onSurface
+    val annotatedString = remember(message, datapackage, defaultTextColor) {
         buildAnnotatedString {
             message.segments.forEach { segment ->
+                var fontWeight = FontWeight.Normal
                 var color = when (segment.type) {
-                    "player_id" -> Color(0xFFADFF2F)
-                    "player_name" -> Color(0xFFADFF2F)
-                    "location_id" -> Color(0xFF03A9F4)
-                    "location_name" -> Color(0xFF03A9F4)
-                    "entrance_name" -> Color(0xFFBB86FC)
-                    else -> Color.White
+                    "player_id", "player_name" -> AP_Tan
+                    "location_id", "location_name" -> AP_Green
+                    "entrance_name" -> AP_Blue
+                    else -> defaultTextColor
                 }
+                
                 var text = segment.text
                 if (datapackage != null) {
                     when (segment.type) {
                         "player_id" -> text = datapackage.players[segment.text] ?: segment.text
-                        "item_id" -> {
+                        "item_id", "item_name" -> {
                             val slotKey = segment.player?.toString() ?: message.slot?.toString()
                             val checksum = slotKey?.let { datapackage.slot_to_checksum[it] }
-                            if (checksum != null) {
-                                val fullId = "${checksum}_${segment.text}"
-                                text = datapackage.items[fullId] ?: segment.text
-                                val flags = datapackage.item_flags[fullId] ?: 0
-                                color = when {
-                                    (flags and 1) != 0 -> Color(0xFFADFF2F)
-                                    (flags and 2) != 0 -> Color(0xFF03A9F4)
-                                    (flags and 4) != 0 -> Color(0xFFF44336)
-                                    else -> Color(0xFFE91E63)
-                                }
-                            } else color = Color(0xFFE91E63)
+                            
+                            // Prioritize flags from the segment itself, fallback to datapackage
+                            val flags = segment.flags ?: (if (checksum != null) datapackage.item_flags["${checksum}_${segment.text}"] else null) ?: 0
+                            
+                            if (checksum != null && segment.type == "item_id") {
+                                text = datapackage.items["${checksum}_${segment.text}"] ?: segment.text
+                            }
+                            
+                            // Archipelago Standards: 0=Cyan, 1=Plum, 2=SlateBlue, 4=Salmon
+                            color = when {
+                                flags == 0 -> AP_Cyan
+                                (flags and 0x01) != 0 -> AP_Plum
+                                (flags and 0x02) != 0 -> AP_SlateBlue
+                                (flags and 0x04) != 0 -> AP_Salmon
+                                else -> AP_Cyan
+                            }
                         }
-                        "location_id" -> {
+                        "location_id", "location_name" -> {
                             val slotKey = segment.player?.toString() ?: message.slot?.toString()
                             val checksum = slotKey?.let { datapackage.slot_to_checksum[it] }
-                            if (checksum != null) text = datapackage.locations["${checksum}_${segment.text}"] ?: segment.text
+                            if (checksum != null && segment.type == "location_id") {
+                                text = datapackage.locations["${checksum}_${segment.text}"] ?: segment.text
+                            }
                         }
                     }
                 }
-                withStyle(style = SpanStyle(color = color)) { append(text) }
+                withStyle(style = SpanStyle(color = color, fontWeight = fontWeight)) { append(text) }
             }
         }
     }

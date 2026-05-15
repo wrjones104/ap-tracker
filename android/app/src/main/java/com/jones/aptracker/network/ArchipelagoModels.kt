@@ -19,7 +19,15 @@ data class ApPacket(
     @SerializedName("data") val data: List<ApMessageSegment>? = null,
     @SerializedName("type") val type: String? = null,
     @SerializedName("team") val team: Int? = null,
-    @SerializedName("slot") val slot: Int? = null
+    @SerializedName("slot") val slot: Int? = null,
+    @SerializedName("item") val item: ApNetworkItem? = null
+)
+
+data class ApNetworkItem(
+    val item: Long,
+    val location: Long,
+    val player: Int,
+    val flags: Int
 )
 
 data class ApVersion(
@@ -36,7 +44,8 @@ data class ApMessageSegment(
     val player: Int? = null,
     val slot: Int? = null,
     val item: Long? = null,
-    val location: Long? = null
+    val location: Long? = null,
+    val flags: Int? = null
 )
 
 /**
