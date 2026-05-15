@@ -31,6 +31,13 @@ class TextClientViewModel : ViewModel() {
     private val _datapackage = MutableStateFlow<RoomDatapackage?>(null)
     val datapackage = _datapackage.asStateFlow()
 
+    private val _keepScreenOn = MutableStateFlow(false)
+    val keepScreenOn = _keepScreenOn.asStateFlow()
+
+    fun setKeepScreenOn(enabled: Boolean) {
+        _keepScreenOn.value = enabled
+    }
+
     private var wsManager: ArchipelagoWebSocketManager? = null
     private var backgroundJob: Job? = null
     private var isAppInBackground = false
