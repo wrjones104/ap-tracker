@@ -8,7 +8,7 @@ import android.content.SharedPreferences
 
 class PasswordManager(private val context: Context) {
 
-    private val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
+    private val masterKeyAlias by lazy { MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC) }
     private val PREFS_FILE_NAME = "ap_passwords"
 
     private val sharedPreferences: SharedPreferences? by lazy {
