@@ -525,7 +525,7 @@ fun SearchableSelectDialog(
                 )
                 Spacer(Modifier.height(8.dp))
                 LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                    val filtered = options.filter { it.contains(filter, ignoreCase = true) }.take(100)
+                    val filtered = options.filter { it.contains(filter, ignoreCase = true) }
                     items(filtered) { option ->
                         Text(
                             option, 
