@@ -1709,18 +1709,14 @@ async def run_room_setup(room_info, loop):
                     seen_ids = set() 
 
                     # 1. Process Items
-                    item_id_to_flags = actual_data.get('item_id_to_flags', {})
                     for n, eid in actual_data.get('item_name_to_id', {}).items():
                         if ('item', eid) in seen_ids:
                             continue # Skip duplicate/alias
                         
                         seen_ids.add(('item', eid))
                         
-                        # Extract flags if available (often in 'item_id_to_flags')
-                        f = item_id_to_flags.get(str(eid)) or item_id_to_flags.get(int(eid)) or 0
-                        
                         current_game_entries.append(DatapackageCache(
-                            game=game, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n, flags=f
+                            game=game, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n
                         ))
 
                     # 2. Process Locations
