@@ -66,7 +66,12 @@ class ArchipelagoWebSocketManager(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket Error: ${t.message}", t)
-                listener.onError(t.message ?: "Unknown connection error")
+                val userFriendlyError = if (t is java.net.ConnectException || t.message?.contains("Failed to connect") == true) {
+                    "Couldn't connect. Please make sure the room is active."
+                } else {
+                    t.message ?: "Unknown connection error"
+                }
+                listener.onError(userFriendlyError)
                 listener.onStatusChanged(ConnectionStatus.ERROR)
             }
         })
