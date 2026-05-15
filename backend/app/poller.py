@@ -1732,7 +1732,6 @@ async def run_room_setup(room_info, loop):
 
                     # 3. Process Item Groups
                     # We use negative IDs for groups to avoid collisions with real item/location IDs
-                    import zlib
                     for g_name in actual_data.get('item_name_groups', {}).keys():
                         # Use a stable hash of the name for a consistent negative ID
                         g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
