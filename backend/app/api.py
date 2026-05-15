@@ -1621,12 +1621,12 @@ def get_slot_available_items(current_user, room_db_id, slot_id):
         
         results = []
         for name, etype in items_query:
-            if etype == 'item_group':
-                results.append(f"{name} (Group)")
-            else:
-                results.append(name)
+            results.append({
+                "name": name,
+                "is_group": etype == 'item_group'
+            })
         
-        results.sort()
+        results.sort(key=lambda x: x['name'])
         return jsonify(results)
     finally:
         Session.remove()
@@ -1678,12 +1678,12 @@ def get_slot_available_locations(current_user, room_db_id, slot_id):
         
         results = []
         for name, etype in locations_query:
-            if etype == 'location_group':
-                results.append(f"{name} (Group)")
-            else:
-                results.append(name)
+            results.append({
+                "name": name,
+                "is_group": etype == 'location_group'
+            })
         
-        results.sort()
+        results.sort(key=lambda x: x['name'])
         return jsonify(results)
     finally:
         Session.remove()

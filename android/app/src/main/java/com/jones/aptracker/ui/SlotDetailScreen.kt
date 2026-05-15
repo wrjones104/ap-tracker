@@ -37,6 +37,7 @@ import com.jones.aptracker.network.RoomDatapackage
 import com.jones.aptracker.network.TrackedSlotDetail
 import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.network.SlotItemThreshold
+import com.jones.aptracker.network.AutocompleteOption
 import com.jones.aptracker.ui.theme.*
 import java.time.Duration
 import java.time.Instant
@@ -77,6 +78,21 @@ fun SlotDetailScreen(
     }
 
     val thresholds by userViewModel.slotThresholds.collectAsState()
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                textClientViewModel.onAppBackgrounded()
+            } else if (event == androidx.lifecycle.Lifecycle.Event.ON_START) {
+                textClientViewModel.onAppForegrounded()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     if (slot == null || currentRoom == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -377,7 +393,7 @@ fun SlotDetailScreen(
             availableItems = availableItems,
             onDismiss = { showAddThresholdDialog = false },
             onConfirm = { itemName, threshold ->
-                userViewModel.saveSlotThreshold(roomDbId, slotId, itemName.replace(" (Group)", ""), threshold)
+                userViewModel.saveSlotThreshold(roomDbId, slotId, itemName, threshold)
                 showAddThresholdDialog = false
             }
         )
@@ -388,7 +404,7 @@ fun SlotDetailScreen(
             title = "Hint Item",
             options = availableItems,
             onDismiss = { showHintDialog = false },
-            onConfirm = { textClientViewModel.sendMessage("!hint ${it.replace(" (Group)", "")}"); showHintDialog = false }
+            onConfirm = { textClientViewModel.sendMessage("!hint $it"); showHintDialog = false }
         )
     }
 
@@ -397,7 +413,7 @@ fun SlotDetailScreen(
             title = "Hint Location",
             options = availableLocations,
             onDismiss = { showLocationHintDialog = false },
-            onConfirm = { textClientViewModel.sendMessage("!hint_location ${it.replace(" (Group)", "")}"); showLocationHintDialog = false }
+            onConfirm = { textClientViewModel.sendMessage("!hint_location $it"); showLocationHintDialog = false }
         )
     }
 }
@@ -456,7 +472,7 @@ fun ThresholdRow(threshold: SlotItemThreshold, onDelete: () -> Unit) {
 }
 
 @Composable
-fun AddThresholdDialog(availableItems: List<String>, onDismiss: () -> Unit, onConfirm: (String, Int) -> Unit) {
+fun AddThresholdDialog(availableItems: List<AutocompleteOption>, onDismiss: () -> Unit, onConfirm: (String, Int) -> Unit) {
     var filter by remember { mutableStateOf("") }
     var selectedItem by remember { mutableStateOf("") }
     var threshold by remember { mutableStateOf("1") }
@@ -474,12 +490,13 @@ fun AddThresholdDialog(availableItems: List<String>, onDismiss: () -> Unit, onCo
                 )
                 Spacer(Modifier.height(8.dp))
                 LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
-                    val filtered = availableItems.filter { it.contains(filter, ignoreCase = true) }.take(50)
+                    val filtered = availableItems.filter { it.name.contains(filter, ignoreCase = true) }.take(50)
                     items(filtered) { item ->
+                        val displayText = if (item.is_group) "${item.name} (Group)" else item.name
                         Text(
-                            item, 
-                            modifier = Modifier.fillMaxWidth().clickable { selectedItem = item; filter = item }.padding(12.dp),
-                            color = if (selectedItem == item) MaterialTheme.colorScheme.primary else Color.Unspecified
+                            displayText, 
+                            modifier = Modifier.fillMaxWidth().clickable { selectedItem = item.name; filter = item.name }.padding(12.dp),
+                            color = if (selectedItem == item.name) MaterialTheme.colorScheme.primary else Color.Unspecified
                         )
                     }
                 }
@@ -506,7 +523,7 @@ fun AddThresholdDialog(availableItems: List<String>, onDismiss: () -> Unit, onCo
 @Composable
 fun SearchableSelectDialog(
     title: String,
-    options: List<String>,
+    options: List<AutocompleteOption>,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
@@ -525,13 +542,14 @@ fun SearchableSelectDialog(
                 )
                 Spacer(Modifier.height(8.dp))
                 LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                    val filtered = options.filter { it.contains(filter, ignoreCase = true) }
+                    val filtered = options.filter { it.name.contains(filter, ignoreCase = true) }
                     items(filtered) { option ->
+                        val displayText = if (option.is_group) "${option.name} (Group)" else option.name
                         Text(
-                            option, 
+                            displayText, 
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onConfirm(option) }
+                                .clickable { onConfirm(option.name) }
                                 .padding(12.dp),
                             style = MaterialTheme.typography.bodyMedium
                         )

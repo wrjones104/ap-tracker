@@ -83,7 +83,7 @@ interface ApiService {
     suspend fun getAvailableItems(
         @Path("id") roomId: Int,
         @Path("slot_id") slotId: Int
-    ): List<String>
+    ): List<AutocompleteOption>
 
     @GET("rooms/{id}/datapackage")
     suspend fun getRoomDatapackage(@Path("id") roomId: Int): RoomDatapackage
@@ -92,7 +92,7 @@ interface ApiService {
     suspend fun getAvailableLocations(
         @Path("id") roomId: Int,
         @Path("slot_id") slotId: Int
-    ): List<String>
+    ): List<AutocompleteOption>
 
     @GET("history/hints")
     suspend fun getGlobalHintHistory(

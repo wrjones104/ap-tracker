@@ -2,6 +2,7 @@ import asyncio
 import logging
 import aiohttp
 import json
+import zlib
 import os
 import random
 import fnmatch

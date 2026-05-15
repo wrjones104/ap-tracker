@@ -21,10 +21,10 @@ class TextClientViewModel : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
 
-    private val _availableItems = MutableStateFlow<List<String>>(emptyList())
+    private val _availableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val availableItems = _availableItems.asStateFlow()
 
-    private val _availableLocations = MutableStateFlow<List<String>>(emptyList())
+    private val _availableLocations = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val availableLocations = _availableLocations.asStateFlow()
 
     private val _datapackage = MutableStateFlow<RoomDatapackage?>(null)
@@ -53,7 +53,8 @@ class TextClientViewModel : ViewModel() {
                 }
 
                 override fun onMessageReceived(message: ChatMessage) {
-                    _messages.value = _messages.value + message
+                    // Limit message history to 500 to avoid memory/performance issues
+                    _messages.value = _messages.value.takeLast(499) + message
                 }
 
                 override fun onError(error: String) {
@@ -73,6 +74,27 @@ class TextClientViewModel : ViewModel() {
 
     fun sendMessage(text: String) {
         wsManager?.sendMessage(text)
+    }
+
+    fun onAppBackgrounded() {
+        if (connectionStatus.value == ConnectionStatus.CONNECTED || connectionStatus.value == ConnectionStatus.CONNECTING) {
+            isAppInBackground = true
+            Log.d(TAG, "App backgrounded. Starting 2-minute disconnect timer.")
+            backgroundJob?.cancel()
+            backgroundJob = viewModelScope.launch {
+                delay(120_000) // 2 minutes
+                if (isAppInBackground) {
+                    Log.d(TAG, "2 minutes elapsed in background. Disconnecting console.")
+                    disconnect()
+                }
+            }
+        }
+    }
+
+    fun onAppForegrounded() {
+        Log.d(TAG, "App foregrounded. Cancelling disconnect timer.")
+        isAppInBackground = false
+        backgroundJob?.cancel()
     }
 
     fun fetchAutocompleteData(roomDbId: Int, slotId: Int) {

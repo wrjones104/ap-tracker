@@ -65,3 +65,8 @@ enum class ConnectionStatus {
     CONNECTED,
     ERROR
 }
+
+data class AutocompleteOption(
+    val name: String,
+    val is_group: Boolean = false
+)

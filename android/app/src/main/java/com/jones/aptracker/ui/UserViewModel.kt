@@ -13,6 +13,7 @@ import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.UpdateSlotPrefsRequest
 import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.network.SnoozeRequest
+import com.jones.aptracker.network.AutocompleteOption
 import com.jones.aptracker.network.SlotItemThreshold
 import com.jones.aptracker.network.UpdateThresholdRequest
 import com.jones.aptracker.repository.UserRepository
@@ -47,7 +48,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _slotThresholds = MutableStateFlow<List<SlotItemThreshold>>(emptyList())
     val slotThresholds = _slotThresholds.asStateFlow()
 
-    private val _availableItems = MutableStateFlow<List<String>>(emptyList())
+    private val _availableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val availableItems = _availableItems.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)

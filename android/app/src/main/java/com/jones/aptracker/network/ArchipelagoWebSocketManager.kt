@@ -17,6 +17,8 @@ class ArchipelagoWebSocketManager(
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
+    private val ARCHIPELAGO_PROTOCOL_VERSION = ApVersion(major = 0, minor = 6, build = 7)
+
     private var webSocket: WebSocket? = null
     private val gson = Gson()
     private val TAG = "AP_WebSocket"
@@ -34,6 +36,7 @@ class ArchipelagoWebSocketManager(
                h.startsWith("192.168.") || 
                h.startsWith("10.") || 
                h.startsWith("172.") || 
+               h.endsWith(".local") ||
                !h.contains(".")
     }
 
@@ -133,7 +136,7 @@ class ArchipelagoWebSocketManager(
             itemsHandling = 0, // Text only
             tags = listOf("TextOnly"),
             uuid = java.util.UUID.randomUUID().toString(),
-            version = ApVersion(major = 0, minor = 6, build = 7)
+            version = ARCHIPELAGO_PROTOCOL_VERSION
         )
         
         val json = gson.toJson(listOf(connectPacket))
