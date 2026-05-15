@@ -1572,6 +1572,7 @@ async def run_room_setup(room_info, loop):
         new_tracker_id = room_status.get('tracker')
         if not new_tracker_id:
             logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] No tracker ID found in status. Cannot fetch static data.")
+            await loop.run_in_executor(None, db_handle_setup_failure, db_id)
             return
         
         setup_data['tracker_id'] = new_tracker_id
@@ -1602,6 +1603,7 @@ async def run_room_setup(room_info, loop):
 
         if not static_data:
              logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch static tracker data. Aborting setup to avoid saving 0s.")
+             await loop.run_in_executor(None, db_handle_setup_failure, db_id)
              return
         
         totals_map = {}
@@ -1779,6 +1781,7 @@ async def run_room_setup(room_info, loop):
 
     except Exception as e:
         logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Setup error: {e}", exc_info=True)
+        await loop.run_in_executor(None, db_handle_setup_failure, db_id)
         return 
 
     try:
@@ -1949,6 +1952,10 @@ async def poller_supervisor(app, loop):
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
     
+    last_cache_check = datetime.utcnow() - timedelta(minutes=15)
+    missing_checksums = set()
+    setup_cooldowns = {}
+    
     while True:
         try:
             log_resource_usage(app)
@@ -1958,15 +1965,20 @@ async def poller_supervisor(app, loop):
                 await asyncio.sleep(SUPERVISOR_INTERVAL_SECONDS)
                 continue
                 
+            now = datetime.utcnow()
+
             # --- SMART HEALING: Batch check for missing cache entries ---
-            all_required_checksums = set()
-            for room in active_rooms_in_db:
-                try:
-                    c_map = json.loads(room.game_checksums_json or '{}')
-                    all_required_checksums.update(c_map.values())
-                except: continue
-            
-            missing_checksums = await loop.run_in_executor(None, db_get_missing_checksums, list(all_required_checksums))
+            if now - last_cache_check > timedelta(minutes=15):
+                logging.info("[SUPERVISOR] Running batch cache check...")
+                all_required_checksums = set()
+                for room in active_rooms_in_db:
+                    try:
+                        c_map = json.loads(room.game_checksums_json or '{}')
+                        all_required_checksums.update(c_map.values())
+                    except: continue
+                
+                missing_checksums = await loop.run_in_executor(None, db_get_missing_checksums, list(all_required_checksums))
+                last_cache_check = now
             
             current_active_room_ids = {room.id for room in active_rooms_in_db}
             
@@ -1999,9 +2011,15 @@ async def poller_supervisor(app, loop):
                     needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations) or is_missing_players or is_missing_cache
 
                     if needs_setup:
+                        # Cooldown check: Don't spam setup/repair attempts
+                        cooldown_until = setup_cooldowns.get(room.id)
+                        if cooldown_until and now < cooldown_until:
+                            continue
+
                         if room.id not in running_tasks and room.id not in rooms_in_setup:
                             logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup (Missing Cache: {is_missing_cache}).")
                             rooms_in_setup.add(room.id)
+                            setup_cooldowns[room.id] = now + timedelta(minutes=10)
                             await setup_queue.put(room_info)
                             # THROTTLE: Stagger setup queuing
                             await asyncio.sleep(0.02)
@@ -2009,6 +2027,7 @@ async def poller_supervisor(app, loop):
                         elif room.id in running_tasks and room.id not in rooms_in_setup:
                             logging.info(f"[SUPERVISOR] Re-queuing running room {room.id} for metadata repair.")
                             rooms_in_setup.add(room.id)
+                            setup_cooldowns[room.id] = now + timedelta(minutes=10)
                             await setup_queue.put(room_info)
                             # THROTTLE: Stagger setup repair
                             await asyncio.sleep(0.02)
