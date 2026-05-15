@@ -21,9 +21,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import android.content.Context
+import android.content.ContextWrapper
 import android.app.Activity
 import android.view.WindowManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.jones.aptracker.R
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -46,6 +50,12 @@ import com.jones.aptracker.ui.theme.*
 import java.time.Duration
 import java.time.Instant
 import java.time.format.DateTimeParseException
+
+fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,9 +87,9 @@ fun SlotDetailScreen(
     val keepScreenOn by textClientViewModel.keepScreenOn.collectAsState()
 
     val context = LocalContext.current
-    val activity = context as? Activity
+    val activity = remember(context) { context.findActivity() }
 
-    DisposableEffect(keepScreenOn) {
+    DisposableEffect(keepScreenOn, activity) {
         if (keepScreenOn) {
             activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
@@ -281,7 +291,7 @@ fun SlotDetailScreen(
                                     )
                                     Spacer(Modifier.width(4.dp))
                                     Text(
-                                        "Keep Screen On",
+                                        stringResource(R.string.keep_screen_on),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = if (keepScreenOn) MaterialTheme.colorScheme.primary else Color.Gray
                                     )
