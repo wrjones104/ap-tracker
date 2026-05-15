@@ -6,6 +6,7 @@
 service-account-key.json
 # Firebase Configs (Android - covering all variants)
 **/google-services.json
+ag_review/
 
 # --- ANDROID ---
 # Standard Android Build folders (Reduces repo size significantly)

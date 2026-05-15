@@ -1698,11 +1698,16 @@ async def run_room_setup(room_info, loop):
             logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Fetching datapackages...")
             checksums_to_check = set(checksums.values())
             new_checksums_to_fetch = await loop.run_in_executor(None, db_get_missing_checksums, list(checksums.values()))
+            
+            any_datapackage_failed = False
 
             for game, checksum in checksums.items():
                 if checksum in new_checksums_to_fetch: 
                     game_data = await fetch_json(f"https://{hostname}/api/datapackage/{checksum}")
-                    if not game_data: continue
+                    if not game_data: 
+                        logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch datapackage for {game} ({checksum})")
+                        any_datapackage_failed = True
+                        continue
                     
                     current_game_entries = []
                     actual_data = game_data.get('games', {}).get(game, game_data)
@@ -1731,10 +1736,8 @@ async def run_room_setup(room_info, loop):
                         ))
 
                     # 3. Process Item Groups
-                    # We use negative IDs for groups to avoid collisions with real item/location IDs
                     import zlib
                     for g_name in actual_data.get('item_name_groups', {}).keys():
-                        # Use a stable hash of the name for a consistent negative ID
                         g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
                         g_id = -(g_stable_hash % 1000000 + 1000)
                         current_game_entries.append(DatapackageCache(
@@ -1749,16 +1752,30 @@ async def run_room_setup(room_info, loop):
                             game=game, checksum=checksum, entity_type='location_group', entity_id=g_id, entity_name=g_name
                         ))
                     
-                    if current_game_entries:
-                        datapackage_entries_by_game[game] = current_game_entries
+                    if not current_game_entries:
+                        # Marker for valid but empty datapackage
+                        current_game_entries.append(DatapackageCache(
+                            game=game, checksum=checksum, entity_type='_metadata', entity_id=0, entity_name='_empty_datapackage'
+                        ))
+                    
+                    datapackage_entries_by_game[game] = current_game_entries
             
             if datapackage_entries_by_game:
                 setup_data['datapackage_entries_by_game'] = datapackage_entries_by_game
             
             setup_data['game_checksums_json'] = new_checksums_json_str
 
-        setup_data['is_setup'] = True 
-        logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup complete.")
+            if any_datapackage_failed:
+                logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Setup partially failed (missing datapackages).")
+                await loop.run_in_executor(None, db_handle_setup_failure, db_id)
+            else:
+                setup_data['is_setup'] = True 
+                logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup complete.")
+        else:
+            # If no checksums needed, we are technically setup
+            setup_data['is_setup'] = True
+            logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup complete (No checksums found).")
+
 
     except Exception as e:
         logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Setup error: {e}", exc_info=True)
