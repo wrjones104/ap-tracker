@@ -1575,6 +1575,14 @@ async def run_room_setup(room_info, loop):
         
         setup_data['tracker_id'] = new_tracker_id
 
+        # --- INITIALIZE PLAYER CACHE ---
+        players = room_status.get('players', [])
+        if players:
+            setup_data['cached_players_json'] = json.dumps(players)
+            setup_data['cached_total_slots'] = len(players)
+            logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Found {len(players)} players. Initializing cache.")
+        # ------------------------------
+
         tracker_url = f"https://{hostname}/api/tracker/{new_tracker_id}"
         tracker_data = await fetch_json(tracker_url)
         
@@ -1924,9 +1932,10 @@ async def poller_supervisor(app, loop):
                 # ONLY run this if we have a real Room ID
                 if not is_pending_discovery:
                     is_missing_data = not room.tracker_id or not room.game_checksums_json or room.game_checksums_json == '{}'
+                    is_missing_players = not room.cached_players_json or room.cached_players_json == '[]'
                     has_total_locations = '"total_locations":' in (room.cached_players_json or "")
                     
-                    needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations)
+                    needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations) or is_missing_players
 
                     if needs_setup:
                         if room.id not in running_tasks and room.id not in rooms_in_setup:
@@ -2049,6 +2058,15 @@ def run_poller(app):
     except Exception as e:
         logging.critical(f"[POLLER_CRITICAL] asyncio.run() failed: {e}", exc_info=True)
     finally:
+        # Cancel all pending tasks to avoid "no running event loop" errors on shutdown
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        
+        if pending:
+            # Give tasks a chance to finish cancelling
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
         loop.run_until_complete(close_aiohttp_session())
         loop.close()
 

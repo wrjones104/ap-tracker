@@ -115,7 +115,8 @@ fun HistoryScreen(
     userViewModel: UserViewModel = viewModel(),
     onBackClick: () -> Unit,
     onNavigateToSlotDetail: ((Int, Int) -> Unit)? = null,
-    initialSearchQuery: String? = null
+    initialSearchQuery: String? = null,
+    initialPlayerFilter: String? = null
 ) {
     Scaffold(
         topBar = {
@@ -135,7 +136,8 @@ fun HistoryScreen(
             userViewModel = userViewModel,
             modifier = Modifier.padding(padding),
             onNavigateToSlotDetail = onNavigateToSlotDetail,
-            initialSearchQuery = initialSearchQuery
+            initialSearchQuery = initialSearchQuery,
+            initialPlayerFilter = initialPlayerFilter
         )
     }
 }
@@ -149,10 +151,11 @@ fun HistoryContent(
     userViewModel: UserViewModel,
     modifier: Modifier = Modifier,
     onNavigateToSlotDetail: ((Int, Int) -> Unit)? = null,
-    initialSearchQuery: String? = null
+    initialSearchQuery: String? = null,
+    initialPlayerFilter: String? = null
 ) {
-    LaunchedEffect(key1 = roomId, key2 = initialSearchQuery) {
-        historyViewModel.loadHistoryFor(roomId, initialSearchQuery)
+    LaunchedEffect(key1 = roomId, key2 = initialSearchQuery, key3 = initialPlayerFilter) {
+        historyViewModel.loadHistoryFor(roomId, initialSearchQuery, initialPlayerFilter)
     }
 
     val isLoading by historyViewModel.isLoading.collectAsState()
@@ -322,7 +325,7 @@ fun HistoryContent(
 
     // --- DETAIL SHEETS ---
     if (selectedItem != null) {
-        val itemRoomName = selectedItem!!.db_id?.let { roomNames[it] } ?: "Unknown Room"
+        val itemRoomName = selectedItem!!.room_db_id?.let { roomNames[it] } ?: "Unknown Room"
 
         ModalBottomSheet(onDismissRequest = { selectedItem = null }, sheetState = sheetState) {
             HistoryDetailSheet(
@@ -342,7 +345,7 @@ fun HistoryContent(
                 onSnoozePlayer = {
                     // Only trigger if we have valid IDs
                     selectedItem?.let { item ->
-                        val dbId = item.db_id
+                        val dbId = item.room_db_id
                         val slotId = item.slot_id
                         if (dbId != null && slotId != null) {
                             showSnoozeDialogForSlot = dbId to slotId
@@ -350,9 +353,9 @@ fun HistoryContent(
                         }
                     }
                 },
-                onViewSlot = if (onNavigateToSlotDetail != null && selectedItem?.db_id != null && selectedItem?.slot_id != null) {
+                onViewSlot = if (onNavigateToSlotDetail != null && selectedItem?.room_db_id != null && selectedItem?.slot_id != null) {
                     {
-                        onNavigateToSlotDetail(selectedItem!!.db_id!!, selectedItem!!.slot_id!!)
+                        onNavigateToSlotDetail(selectedItem!!.room_db_id!!, selectedItem!!.slot_id!!)
                         selectedItem = null
                     }
                 } else null
@@ -668,7 +671,7 @@ fun HistoryDetailSheet(
 
         Spacer(Modifier.height(8.dp))
 
-        if (item.slot_id != null && item.db_id != null) {
+        if (item.slot_id != null && item.room_db_id != null) {
             OutlinedButton(
                 onClick = onSnoozePlayer,
                 modifier = Modifier.fillMaxWidth(),
@@ -682,7 +685,7 @@ fun HistoryDetailSheet(
         }
 
         // View Slot button
-        if (item.slot_id != null && item.db_id != null && onViewSlot != null) {
+        if (item.slot_id != null && item.room_db_id != null && onViewSlot != null) {
             OutlinedButton(
                 onClick = onViewSlot,
                 modifier = Modifier.fillMaxWidth(),
@@ -820,16 +823,16 @@ fun ItemHistoryTab(
                     item.itemName.contains(searchQuery, ignoreCase = true)
 
             val matchesRoom = when (val f = historyFilter) {
-                is HistoryFilter.Active -> item.db_id in activeRoomIds
-                is HistoryFilter.Archived -> item.db_id in archivedRoomIds
+                is HistoryFilter.Active -> item.room_db_id in activeRoomIds
+                is HistoryFilter.Archived -> item.room_db_id in archivedRoomIds
                 is HistoryFilter.All -> true
-                is HistoryFilter.Specific -> item.db_id == f.roomId
+                is HistoryFilter.Specific -> item.room_db_id == f.roomId
             }
 
             val matchesPlayer = selectedPlayer == null || item.playerName == selectedPlayer
 
-            val isFinished = if (item.db_id != null) {
-                finishedKeys.contains(item.db_id to item.playerName)
+            val isFinished = if (item.room_db_id != null) {
+                finishedKeys.contains(item.room_db_id to item.playerName)
             } else {
                 false
             }

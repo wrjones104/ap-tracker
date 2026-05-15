@@ -910,6 +910,7 @@ def get_item_history(current_user, room_db_id):
             "isPlayerFinished": temp_item["isPlayerFinished"],
             "itemFlags": temp_item["itemFlags"],
             "timestamp": temp_item["timestamp"],
+            "room_db_id": room.id,
             "tracker_id": temp_item["tracker_id"],
             "slot_id": temp_item["slot_id"],
             "host": temp_item["host"],
@@ -1063,8 +1064,8 @@ def get_global_item_history(current_user):
                 cache_keys_to_find.add(location_name_key)
 
             history_pre_cache.append({
-                "db_id": room_data.id, 
-                "alias": sub.alias, 
+                "room_db_id": room_data.id,
+                "room_alias": sub.alias, 
                 "icon_name": sub.icon_name,
                 "playerName": receiver_name,
                 "playerAlias": receiver_alias, 
@@ -1112,8 +1113,8 @@ def get_global_item_history(current_user):
             location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
 
             final_history_dicts.append({
-                "db_id": temp_item["db_id"], 
-                "alias": temp_item["alias"], 
+                "room_db_id": temp_item["room_db_id"], 
+                "alias": temp_item["room_alias"], 
                 "icon_name": temp_item["icon_name"],
                 "playerName": temp_item['playerName'],
                 "playerAlias": temp_item['playerAlias'],
@@ -1312,11 +1313,11 @@ def get_user_tracked_slots(current_user):
     finally:
         Session.remove()
 
-@bp.route('/rooms/<int:room_id>/datapackage', methods=['GET'])
+@bp.route('/rooms/<int:room_db_id>/datapackage', methods=['GET'])
 @handle_db_errors
 @log_api_call
 @token_required
-def get_room_datapackage(current_user, room_id):
+def get_room_datapackage(current_user, room_db_id):
     """
     Returns a consolidated datapackage for a room, including:
     - player_id -> player_name (alias or raw name)
@@ -1326,8 +1327,9 @@ def get_room_datapackage(current_user, room_id):
     """
     session = Session()
     try:
-        room = session.query(TrackedRoom).filter_by(id=room_id).first()
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
         if not room:
+            logging.warning(f"[DATAPACKAGE] 404: Room {room_db_id} not found in DB.")
             return jsonify({'error': 'Room not found'}), 404
 
         # 1. Player map
@@ -1342,7 +1344,7 @@ def get_room_datapackage(current_user, room_id):
         # Add "Archipelago" (Slot 0)
         player_map["0"] = "Archipelago"
         
-        logging.debug(f"[DATAPACKAGE] Room {room_id} has {len(player_map)} players and {len(game_checksums)} game checksums.")
+        logging.debug(f"[DATAPACKAGE] Room {room_db_id} has {len(player_map)} players and {len(game_checksums)} game checksums. Cache size: {len(room.cached_players_json or '')}")
 
         # 2. Item and Location maps
         items_map = {}
@@ -1362,11 +1364,11 @@ def get_room_datapackage(current_user, room_id):
             for entry in entries:
                 if entry.entity_type == 'item':
                     items_map[f"{entry.checksum}_{entry.entity_id}"] = entry.entity_name
-                    item_flags[f"{entry.checksum}_{entry.entity_id}"] = entry.flags
+                    item_flags[f"{entry.checksum}_{entry.entity_id}"] = entry.flags or 0
                 elif entry.entity_type == 'location':
                     locations_map[f"{entry.checksum}_{entry.entity_id}"] = entry.entity_name
 
-        logging.debug(f"[DATAPACKAGE] Returning {len(items_map)} items and {len(locations_map)} locations for room {room_id}")
+        logging.debug(f"[DATAPACKAGE] Returning {len(items_map)} items and {len(locations_map)} locations for room {room_db_id}")
 
         return jsonify({
             'players': player_map,
@@ -1593,7 +1595,8 @@ def get_slot_available_items(current_user, room_db_id, slot_id):
             
         slot_info = next((p for p in players if p.get('slot_id') == slot_id), None)
         if not slot_info:
-            return jsonify({'error': 'Slot not found in room info'}), 404
+            logging.warning(f"[{'ITEMS' if 'items' in request.path else 'LOCATIONS'}] 404: Slot {slot_id} not found in cache for room {room_db_id}. Cache size: {len(players)}")
+            return jsonify({'error': f'Slot {slot_id} not found in room info cache'}), 404
             
         game = slot_info.get('game')
         if not game:
@@ -1641,7 +1644,8 @@ def get_slot_available_locations(current_user, room_db_id, slot_id):
             
         slot_info = next((p for p in players if p.get('slot_id') == slot_id), None)
         if not slot_info:
-            return jsonify({'error': 'Slot not found in room info'}), 404
+            logging.warning(f"[LOCATIONS] 404: Slot {slot_id} not found in cache for room {room_db_id}. Cache size: {len(players)}")
+            return jsonify({'error': f'Slot {slot_id} not found in room info cache'}), 404
             
         game = slot_info.get('game')
         if not game:

@@ -219,7 +219,7 @@ data class HistoryItem(
     val tracker_id: String?,
     val slot_id: Int?,
     val icon_name: String?,
-    val db_id: Int?,
+    val room_db_id: Int?,
     val host: String?,
     val receivedCount: Int? = null
 )

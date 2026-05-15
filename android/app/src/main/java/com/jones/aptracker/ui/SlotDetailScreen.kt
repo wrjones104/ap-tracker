@@ -48,7 +48,7 @@ fun SlotDetailScreen(
     roomDbId: Int,
     slotId: Int,
     onBackClick: () -> Unit,
-    onNavigateToHistory: (Int, String, String?) -> Unit,
+    onNavigateToHistory: (Int, String, String?, String?) -> Unit,
     userViewModel: UserViewModel = viewModel()
 ) {
     val room by userViewModel.trackedSlotsByRoom.collectAsState()
@@ -144,7 +144,7 @@ fun SlotDetailScreen(
                         icon = Icons.Default.History,
                         title = "View History",
                         subtitle = "See all items received by this slot",
-                        onClick = { onNavigateToHistory(currentRoom.room_db_id, currentRoom.room_alias, null) }
+                        onClick = { onNavigateToHistory(currentRoom.room_db_id, currentRoom.room_alias, null, slot?.player_name) }
                     )
                     ActionCard(
                         icon = Icons.Outlined.Notifications,

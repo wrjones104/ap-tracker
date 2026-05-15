@@ -34,7 +34,7 @@ class HistoryRepository(
                 val entities = newItems.mapNotNull { item ->
                     try {
                         val entity = HistoryItemEntity(
-                            roomId = item.db_id,
+                            roomId = item.room_db_id,
                             playerName = item.playerName,
                             playerAlias = item.playerAlias,
                             receivingGame = item.receivingGame,
