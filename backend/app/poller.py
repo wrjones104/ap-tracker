@@ -2,6 +2,7 @@ import asyncio
 import logging
 import aiohttp
 import json
+import zlib
 import os
 import random
 import fnmatch
@@ -1575,6 +1576,14 @@ async def run_room_setup(room_info, loop):
         
         setup_data['tracker_id'] = new_tracker_id
 
+        # --- INITIALIZE PLAYER CACHE ---
+        players = room_status.get('players', [])
+        if players:
+            setup_data['cached_players_json'] = json.dumps(players)
+            setup_data['cached_total_slots'] = len(players)
+            logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Found {len(players)} players. Initializing cache.")
+        # ------------------------------
+
         tracker_url = f"https://{hostname}/api/tracker/{new_tracker_id}"
         tracker_data = await fetch_json(tracker_url)
         
@@ -1688,8 +1697,7 @@ async def run_room_setup(room_info, loop):
         if checksums:
             logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Fetching datapackages...")
             checksums_to_check = set(checksums.values())
-            existing_in_db = await loop.run_in_executor(None, db_check_existing_checksums, checksums_to_check)
-            new_checksums_to_fetch = checksums_to_check - existing_in_db
+            new_checksums_to_fetch = await loop.run_in_executor(None, db_get_missing_checksums, list(checksums.values()))
 
             for game, checksum in checksums.items():
                 if checksum in new_checksums_to_fetch: 
@@ -1707,6 +1715,7 @@ async def run_room_setup(room_info, loop):
                             continue # Skip duplicate/alias
                         
                         seen_ids.add(('item', eid))
+                        
                         current_game_entries.append(DatapackageCache(
                             game=game, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n
                         ))
@@ -1719,6 +1728,25 @@ async def run_room_setup(room_info, loop):
                         seen_ids.add(('location', eid))
                         current_game_entries.append(DatapackageCache(
                             game=game, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n
+                        ))
+
+                    # 3. Process Item Groups
+                    # We use negative IDs for groups to avoid collisions with real item/location IDs
+                    import zlib
+                    for g_name in actual_data.get('item_name_groups', {}).keys():
+                        # Use a stable hash of the name for a consistent negative ID
+                        g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
+                        g_id = -(g_stable_hash % 1000000 + 1000)
+                        current_game_entries.append(DatapackageCache(
+                            game=game, checksum=checksum, entity_type='item_group', entity_id=g_id, entity_name=g_name
+                        ))
+
+                    # 4. Process Location Groups
+                    for g_name in actual_data.get('location_name_groups', {}).keys():
+                        g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
+                        g_id = -(g_stable_hash % 1000000 + 1100000)
+                        current_game_entries.append(DatapackageCache(
+                            game=game, checksum=checksum, entity_type='location_group', entity_id=g_id, entity_name=g_name
                         ))
                     
                     if current_game_entries:
@@ -1741,13 +1769,20 @@ async def run_room_setup(room_info, loop):
     except Exception as e:
         logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to commit setup data: {e}", exc_info=True)
 
-def db_check_existing_checksums(checksums_to_check):
+    finally:
+        Session.remove()
+
+def db_get_missing_checksums(checksums_to_check):
+    if not checksums_to_check: return set()
     session = Session()
     try:
-        existing = set(c[0] for c in session.query(DatapackageCache.checksum).filter(DatapackageCache.checksum.in_(checksums_to_check)).distinct())
-        return existing
-    except Exception:
-        logging.error(f"[POLLER_DB_ERROR] Failed to check existing checksums: {e}")
+        # Check which checksums actually have entries in the cache
+        existing = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
+            DatapackageCache.checksum.in_(checksums_to_check)
+        ).distinct())
+        return set(checksums_to_check) - existing
+    except Exception as e:
+        logging.error(f"[POLLER_DB_ERROR] Failed to check missing checksums: {e}")
         return set()
     finally:
         Session.remove()
@@ -1906,6 +1941,16 @@ async def poller_supervisor(app, loop):
                 await asyncio.sleep(SUPERVISOR_INTERVAL_SECONDS)
                 continue
                 
+            # --- SMART HEALING: Batch check for missing cache entries ---
+            all_required_checksums = set()
+            for room in active_rooms_in_db:
+                try:
+                    c_map = json.loads(room.game_checksums_json or '{}')
+                    all_required_checksums.update(c_map.values())
+                except: continue
+            
+            missing_checksums = await loop.run_in_executor(None, db_get_missing_checksums, list(all_required_checksums))
+            
             current_active_room_ids = {room.id for room in active_rooms_in_db}
             
             for room in active_rooms_in_db:
@@ -1924,13 +1969,21 @@ async def poller_supervisor(app, loop):
                 # ONLY run this if we have a real Room ID
                 if not is_pending_discovery:
                     is_missing_data = not room.tracker_id or not room.game_checksums_json or room.game_checksums_json == '{}'
+                    is_missing_players = not room.cached_players_json or room.cached_players_json == '[]'
                     has_total_locations = '"total_locations":' in (room.cached_players_json or "")
                     
-                    needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations)
+                    # Detect if the underlying cache for this room's games is missing
+                    is_missing_cache = False
+                    try:
+                        room_checksums = json.loads(room.game_checksums_json or '{}').values()
+                        is_missing_cache = any(c in missing_checksums for c in room_checksums)
+                    except: pass
+
+                    needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations) or is_missing_players or is_missing_cache
 
                     if needs_setup:
                         if room.id not in running_tasks and room.id not in rooms_in_setup:
-                            logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup.")
+                            logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup (Missing Cache: {is_missing_cache}).")
                             rooms_in_setup.add(room.id)
                             await setup_queue.put(room_info)
                             # THROTTLE: Stagger setup queuing
@@ -2049,6 +2102,15 @@ def run_poller(app):
     except Exception as e:
         logging.critical(f"[POLLER_CRITICAL] asyncio.run() failed: {e}", exc_info=True)
     finally:
+        # Cancel all pending tasks to avoid "no running event loop" errors on shutdown
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        
+        if pending:
+            # Give tasks a chance to finish cancelling
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
         loop.run_until_complete(close_aiohttp_session())
         loop.close()
 

@@ -910,6 +910,7 @@ def get_item_history(current_user, room_db_id):
             "isPlayerFinished": temp_item["isPlayerFinished"],
             "itemFlags": temp_item["itemFlags"],
             "timestamp": temp_item["timestamp"],
+            "room_db_id": room.id,
             "tracker_id": temp_item["tracker_id"],
             "slot_id": temp_item["slot_id"],
             "host": temp_item["host"],
@@ -1063,8 +1064,8 @@ def get_global_item_history(current_user):
                 cache_keys_to_find.add(location_name_key)
 
             history_pre_cache.append({
-                "db_id": room_data.id, 
-                "alias": sub.alias, 
+                "room_db_id": room_data.id,
+                "room_alias": sub.alias, 
                 "icon_name": sub.icon_name,
                 "playerName": receiver_name,
                 "playerAlias": receiver_alias, 
@@ -1112,8 +1113,8 @@ def get_global_item_history(current_user):
             location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
 
             final_history_dicts.append({
-                "db_id": temp_item["db_id"], 
-                "alias": temp_item["alias"], 
+                "room_db_id": temp_item["room_db_id"], 
+                "alias": temp_item["room_alias"], 
                 "icon_name": temp_item["icon_name"],
                 "playerName": temp_item['playerName'],
                 "playerAlias": temp_item['playerAlias'],
@@ -1304,10 +1305,81 @@ def get_user_tracked_slots(current_user):
                 'icon_name': sub.icon_name,
                 'is_archived': sub.is_archived,
                 'host': room_data.cached_full_address,
+                'players': players_json,
                 'tracked_slots': tracked_slots_list
             })
 
         return jsonify(response_data)
+    finally:
+        Session.remove()
+
+@bp.route('/rooms/<int:room_db_id>/datapackage', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_room_datapackage(current_user, room_db_id):
+    """
+    Returns a consolidated datapackage for a room, including:
+    - player_id -> player_name (alias or raw name)
+    - item_id -> item_name (prefixed by slot checksum)
+    - location_id -> location_name (prefixed by slot checksum)
+    This is used by the client for name resolution in the terminal.
+    """
+    session = Session()
+    try:
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+        if not room:
+            logging.warning(f"[DATAPACKAGE] 404: Room {room_db_id} not found in DB.")
+            return jsonify({'error': 'Room not found'}), 404
+
+        # 1. Player map
+        try:
+            players_json = json.loads(room.cached_players_json or '[]')
+            game_checksums = json.loads(room.game_checksums_json or '{}')
+        except (json.JSONDecodeError, TypeError):
+            players_json = []
+            game_checksums = {}
+
+        player_map = {str(p['slot_id']): (p.get('alias') or p.get('name') or f"Player {p['slot_id']}") for p in players_json if 'slot_id' in p}
+        # Add "Archipelago" (Slot 0)
+        player_map["0"] = "Archipelago"
+        
+        logging.debug(f"[DATAPACKAGE] Room {room_db_id} has {len(player_map)} players and {len(game_checksums)} game checksums. Cache size: {len(room.cached_players_json or '')}")
+
+        # 2. Item and Location maps
+        items_map = {}
+        item_flags = {}
+        locations_map = {}
+        slot_to_checksum = {}
+
+        for p in players_json:
+            slot_id = p.get('slot_id')
+            game = p.get('game')
+            if slot_id and game and game in game_checksums:
+                slot_to_checksum[str(slot_id)] = game_checksums[game]
+
+        checksums = list(set(game_checksums.values()))
+        if checksums:
+            entries = session.query(DatapackageCache).filter(DatapackageCache.checksum.in_(checksums)).all()
+            for entry in entries:
+                if entry.entity_type == 'item':
+                    items_map[f"{entry.checksum}_{entry.entity_id}"] = entry.entity_name
+                elif entry.entity_type == 'item_group':
+                    items_map[f"{entry.checksum}_{entry.entity_id}"] = f"{entry.entity_name} (Group)"
+                elif entry.entity_type == 'location':
+                    locations_map[f"{entry.checksum}_{entry.entity_id}"] = entry.entity_name
+                elif entry.entity_type == 'location_group':
+                    locations_map[f"{entry.checksum}_{entry.entity_id}"] = f"{entry.entity_name} (Group)"
+
+        logging.debug(f"[DATAPACKAGE] Returning {len(items_map)} items and {len(locations_map)} locations for room {room_db_id}")
+
+        return jsonify({
+            'players': player_map,
+            'items': items_map,
+            'item_flags': item_flags,
+            'locations': locations_map,
+            'slot_to_checksum': slot_to_checksum
+        })
     finally:
         Session.remove()
 
@@ -1526,7 +1598,8 @@ def get_slot_available_items(current_user, room_db_id, slot_id):
             
         slot_info = next((p for p in players if p.get('slot_id') == slot_id), None)
         if not slot_info:
-            return jsonify({'error': 'Slot not found in room info'}), 404
+            logging.warning(f"[{'ITEMS' if 'items' in request.path else 'LOCATIONS'}] 404: Slot {slot_id} not found in cache for room {room_db_id}. Cache size: {len(players)}")
+            return jsonify({'error': f'Slot {slot_id} not found in room info cache'}), 404
             
         game = slot_info.get('game')
         if not game:
@@ -1541,12 +1614,77 @@ def get_slot_available_items(current_user, room_db_id, slot_id):
         if not checksum:
             return jsonify([])
             
-        items = session.query(DatapackageCache.entity_name).filter_by(
-            checksum=checksum,
-            entity_type='item'
-        ).distinct().order_by(DatapackageCache.entity_name).all()
+        items_query = session.query(DatapackageCache.entity_name, DatapackageCache.entity_type).filter(
+            DatapackageCache.checksum == checksum,
+            DatapackageCache.entity_type.in_(['item', 'item_group'])
+        ).distinct().all()
         
-        return jsonify([i[0] for i in items])
+        results = []
+        for name, etype in items_query:
+            results.append({
+                "name": name,
+                "is_group": etype == 'item_group'
+            })
+        
+        results.sort(key=lambda x: x['name'])
+        return jsonify(results)
+    finally:
+        Session.remove()
+
+
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/locations', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+
+def get_slot_available_locations(current_user, room_db_id, slot_id):
+    """
+    Returns a list of all location names available for the game associated with this slot.
+    Uses the DatapackageCache for the room's game checksums.
+    """
+    session = Session()
+    try:
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+        if not room:
+            return jsonify({'error': 'Room not found'}), 404
+            
+        try:
+            players = json.loads(room.cached_players_json or '[]')
+        except (json.JSONDecodeError, TypeError):
+            players = []
+            
+        slot_info = next((p for p in players if p.get('slot_id') == slot_id), None)
+        if not slot_info:
+            logging.warning(f"[LOCATIONS] 404: Slot {slot_id} not found in cache for room {room_db_id}. Cache size: {len(players)}")
+            return jsonify({'error': f'Slot {slot_id} not found in room info cache'}), 404
+            
+        game = slot_info.get('game')
+        if not game:
+            return jsonify([])
+            
+        try:
+            game_checksums = json.loads(room.game_checksums_json or '{}')
+        except (json.JSONDecodeError, TypeError):
+            game_checksums = {}
+            
+        checksum = game_checksums.get(game)
+        if not checksum:
+            return jsonify([])
+            
+        locations_query = session.query(DatapackageCache.entity_name, DatapackageCache.entity_type).filter(
+            DatapackageCache.checksum == checksum,
+            DatapackageCache.entity_type.in_(['location', 'location_group'])
+        ).distinct().all()
+        
+        results = []
+        for name, etype in locations_query:
+            results.append({
+                "name": name,
+                "is_group": etype == 'location_group'
+            })
+        
+        results.sort(key=lambda x: x['name'])
+        return jsonify(results)
     finally:
         Session.remove()
 

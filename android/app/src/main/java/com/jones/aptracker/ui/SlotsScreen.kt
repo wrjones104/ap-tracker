@@ -76,9 +76,9 @@ fun SlotsScreen(
     }
 
     var searchQuery by remember { mutableStateOf("") }
-    var showFinished by remember { mutableStateOf(true) }
+    var showFinished by remember { mutableStateOf(false) }
     val expandedRooms = remember { mutableStateMapOf<Int, Boolean>() }
-    var allExpanded by remember { mutableStateOf(true) }
+    var allExpanded by remember { mutableStateOf(false) }
 
     // Filter: hide archived rooms
     val activeRooms = remember(trackedSlotsByRoom) {
@@ -107,7 +107,7 @@ fun SlotsScreen(
     // Initialize expand state for new rooms
     filteredRooms.forEach { room ->
         if (room.room_db_id !in expandedRooms) {
-            expandedRooms[room.room_db_id] = true
+            expandedRooms[room.room_db_id] = false
         }
     }
 
@@ -212,7 +212,7 @@ fun SlotsScreen(
                         )
                     ) {
                         filteredRooms.forEach { room ->
-                            val isExpanded = expandedRooms[room.room_db_id] ?: true
+                            val isExpanded = expandedRooms[room.room_db_id] ?: false
 
                             // Room Group Header
                             item(key = "header_${room.room_db_id}") {

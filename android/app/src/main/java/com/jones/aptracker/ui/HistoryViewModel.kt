@@ -92,8 +92,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     val finishedPlayerKeys: StateFlow<Set<Pair<Int, String>>> = combine(_itemHistory, _confirmedFinishedPlayers) { history, confirmed ->
         val fromHistory = history
-            .filter { it.isPlayerFinished && it.db_id != null }
-            .map { it.db_id!! to it.playerName }
+            .filter { it.isPlayerFinished && it.room_db_id != null }
+            .map { it.room_db_id!! to it.playerName }
             .toSet()
 
         fromHistory + confirmed
@@ -113,10 +113,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         history
             .filter { item ->
                 when (filter) {
-                    is HistoryFilter.Active -> item.db_id in activeIds
-                    is HistoryFilter.Archived -> item.db_id in archivedIds
+                    is HistoryFilter.Active -> item.room_db_id in activeIds
+                    is HistoryFilter.Archived -> item.room_db_id in archivedIds
                     is HistoryFilter.All -> true
-                    is HistoryFilter.Specific -> item.db_id == filter.roomId
+                    is HistoryFilter.Specific -> item.room_db_id == filter.roomId
                 }
             }
             .groupBy { it.playerName }
@@ -226,9 +226,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         fetchUserPreferences()
     }
 
-    fun loadHistoryFor(roomId: Int?, initialSearchQuery: String? = null) {
+    fun loadHistoryFor(roomId: Int?, initialSearchQuery: String? = null, initialPlayerFilter: String? = null) {
         currentRoomId = roomId
-        _selectedPlayerFilter.value = null
+        _selectedPlayerFilter.value = initialPlayerFilter
         searchQuery.value = initialSearchQuery ?: ""
 
         if (roomId != null) {
@@ -398,7 +398,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         tracker_id = entity.tracker_id,
                         slot_id = entity.slot_id,
                         icon_name = liveIcon ?: entity.icon_name,
-                        db_id = entity.roomId,
+                        room_db_id = entity.roomId,
                         host = entity.host,
                         receivingGame = entity.receivingGame,
                         senderName = entity.senderName,
