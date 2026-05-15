@@ -1,77 +1,45 @@
 package com.jones.aptracker.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
+import androidx.compose.animation.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.NotificationsActive
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import com.jones.aptracker.network.ChatMessage
+import com.jones.aptracker.network.ConnectionStatus
+import com.jones.aptracker.network.RoomDatapackage
 import com.jones.aptracker.network.TrackedSlotDetail
-import com.jones.aptracker.network.RoomWithTrackedSlots
+import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.network.SlotItemThreshold
+import java.time.Duration
+import java.time.Instant
+import java.time.format.DateTimeParseException
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,61 +50,49 @@ fun SlotDetailScreen(
     onNavigateToHistory: (Int, String, String?) -> Unit,
     userViewModel: UserViewModel = viewModel()
 ) {
-    val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
+    val room by userViewModel.trackedSlotsByRoom.collectAsState()
+    val currentRoom = room.find { it.room_db_id == roomDbId }
+    val slot = currentRoom?.tracked_slots?.find { it.slot_id == slotId }
     val userProfile by userViewModel.userProfile.collectAsState()
 
-    // Find the room and slot from the current data
-    val room = remember(trackedSlotsByRoom, roomDbId) {
-        trackedSlotsByRoom.find { it.room_db_id == roomDbId }
-    }
-    val slot = remember(room, slotId) {
-        room?.tracked_slots?.find { it.slot_id == slotId }
-    }
-
     var showSettingsSheet by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var showConsole by remember { mutableStateOf(false) }
+    var showAddThresholdDialog by remember { mutableStateOf(false) }
+    var isConsoleExpanded by remember { mutableStateOf(false) }
+
+    val textClientViewModel: TextClientViewModel = viewModel()
+    val messages by textClientViewModel.messages.collectAsState()
+    val connectionStatus by textClientViewModel.connectionStatus.collectAsState()
+    val textClientError by textClientViewModel.error.collectAsState()
+    val availableLocations by textClientViewModel.availableLocations.collectAsState()
+    val availableItems by textClientViewModel.availableItems.collectAsState()
+    val datapackage by textClientViewModel.datapackage.collectAsState()
 
     LaunchedEffect(roomDbId, slotId) {
         userViewModel.fetchSlotThresholds(roomDbId, slotId)
         userViewModel.fetchAvailableItems(roomDbId, slotId)
+        textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
     }
+
     val thresholds by userViewModel.slotThresholds.collectAsState()
-    val availableItems by userViewModel.availableItems.collectAsState()
 
-    val isDark = isSystemInDarkTheme()
-    val finishedColor = if (isDark) Color(0xFF81C784) else Color(0xFF0E8A0E)
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Slot Details") },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
+    if (slot == null || currentRoom == null) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
         }
-    ) { padding ->
-        if (slot == null || room == null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = "Loading slot data...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        } else {
+    } else {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Slot Details", style = MaterialTheme.typography.titleMedium) },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                )
+            },
+            containerColor = Color(0xFF121216) // Darker background as per screenshot
+        ) { padding ->
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -144,255 +100,247 @@ fun SlotDetailScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
-                // =============================================
-                // HEADER SECTION
-                // =============================================
+                // 1. MAIN INFO CARD
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp)
-                    ) {
-                        // Player Name (Title)
-                        val displayName = if (slot.player_alias.isNullOrBlank()) {
-                            slot.player_name
-                        } else {
-                            slot.player_alias
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (slot.is_finished) {
-                                Text("🏁 ", style = MaterialTheme.typography.headlineSmall)
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Text(
+                            text = slot.player_name,
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        
+                        // INFO GRID
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                InfoItem(Modifier.weight(1f), "GAME", slot.game ?: "Unknown")
+                                InfoItem(Modifier.weight(1f), "ROOM", currentRoom.room_alias)
                             }
-                            Text(
-                                text = displayName,
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = if (slot.is_finished) finishedColor else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        // Original slot name (if alias differs)
-                        if (!slot.player_alias.isNullOrBlank()) {
-                            Text(
-                                text = slot.player_name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-
-                        // Metadata Grid
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                MetadataItem(label = "GAME", value = slot.game ?: "Unknown")
-                                Spacer(Modifier.height(8.dp))
-                                MetadataItem(
-                                    label = "STATUS",
-                                    value = if (slot.is_finished) "Completed" else "In Progress"
-                                )
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                InfoItem(Modifier.weight(1f), "STATUS", if (slot.is_finished) "Finished" else "In Progress")
+                                InfoItem(Modifier.weight(1f), "LAST ACTIVITY", formatTimestamp(slot.last_activity))
                             }
-                            Column(modifier = Modifier.weight(1f)) {
-                                MetadataItem(label = "ROOM", value = room.room_alias)
-                                Spacer(Modifier.height(8.dp))
-                                MetadataItem(
-                                    label = "LAST ACTIVITY",
-                                    value = if (slot.last_activity != null) {
-                                        formatRelativeTime(slot.last_activity)
-                                    } else {
-                                        "No activity yet"
-                                    }
-                                )
-                            }
-                        }
-
-                        if (room.host != null) {
-                            Spacer(Modifier.height(8.dp))
-                            MetadataItem(label = "HOST", value = room.host)
+                            InfoItem(Modifier.fillMaxWidth(), "HOST", currentRoom.host ?: "archipelago.gg")
                         }
                     }
                 }
 
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(24.dp))
+                Text("Quick Actions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
+                Spacer(Modifier.height(12.dp))
 
-                // =============================================
-                // QUICK ACTIONS
-                // =============================================
-                Text(
-                    text = "Quick Actions",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-
-                // View History
-                ActionCard(
-                    icon = Icons.Default.History,
-                    title = "View History",
-                    subtitle = "See all items received by this slot",
-                    onClick = { onNavigateToHistory(roomDbId, room.room_alias, slot.player_name) }
-                )
-
-                Spacer(Modifier.height(8.dp))
-
-                // Notification Settings
-                ActionCard(
-                    icon = Icons.Default.Notifications,
-                    title = "Notification Settings",
-                    subtitle = "Customize how you are notified for this slot",
-                    onClick = { showSettingsSheet = true }
-                )
-
-                Spacer(Modifier.height(16.dp))
-
-                // Notification Thresholds
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    ThresholdSection(
-                        roomDbId = roomDbId,
-                        slotId = slotId,
-                        thresholds = thresholds,
-                        availableItems = availableItems,
-                        onSave = { name, count ->
-                            userViewModel.saveSlotThreshold(roomDbId, slotId, name, count)
-                        },
-                        onDelete = { thresholdId ->
-                            userViewModel.deleteSlotThreshold(roomDbId, slotId, thresholdId)
-                        }
+                // 2. QUICK ACTIONS
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ActionCard(
+                        icon = Icons.Default.History,
+                        title = "View History",
+                        subtitle = "See all items received by this slot",
+                        onClick = { onNavigateToHistory(currentRoom.room_db_id, currentRoom.room_alias, null) }
+                    )
+                    ActionCard(
+                        icon = Icons.Outlined.Notifications,
+                        title = "Notification Settings",
+                        subtitle = "Customize how you are notified for this slot",
+                        onClick = { showSettingsSheet = true }
                     )
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(24.dp))
 
-                // WebSocket Console Section=============================================
-                // WEBSOCKET CONSOLE (PLACEHOLDER)
-                // =============================================
+                // 3. THRESHOLDS SECTION
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Item Notification Thresholds", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
+                    TextButton(onClick = { showAddThresholdDialog = true }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Add")
+                        }
+                    }
+                }
+                
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        // Console Header (clickable to expand)
+                    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                        if (thresholds.isEmpty()) {
+                            Text(
+                                "No thresholds set",
+                                modifier = Modifier.padding(16.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.Gray
+                            )
+                        } else {
+                            thresholds.forEachIndexed { index, threshold ->
+                                ThresholdRow(
+                                    threshold = threshold,
+                                    onDelete = { userViewModel.deleteSlotThreshold(roomDbId, slotId, threshold.id) }
+                                )
+                                if (index < thresholds.size - 1) {
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                        color = Color.DarkGray.copy(alpha = 0.5f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(24.dp))
+
+                // 4. TEXT CLIENT (CONSOLE)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { showConsole = !showConsole }
+                                .clickable { isConsoleExpanded = !isConsoleExpanded }
                                 .padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Terminal,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Text Client",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                            Icon(Icons.Default.Terminal, null, modifier = Modifier.size(24.dp), tint = Color.White)
+                            Spacer(Modifier.width(16.dp))
+                            Text("Text Client", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Spacer(Modifier.weight(1f))
+                            
+                            if (connectionStatus == ConnectionStatus.CONNECTED) {
+                                Surface(
+                                    color = Color(0xFF4CAF50).copy(alpha = 0.1f),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text(
+                                        "Connected",
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFF4CAF50)
+                                    )
+                                }
+                            } else if (connectionStatus == ConnectionStatus.CONNECTING) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                             }
-
-                            // Coming Soon badge
-                            Surface(
-                                color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Text(
-                                    text = "Coming Soon",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.tertiary,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
-
+                            
                             Spacer(Modifier.width(8.dp))
                             Icon(
-                                imageVector = if (showConsole) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = if (showConsole) "Collapse" else "Expand",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                if (isConsoleExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                null,
+                                tint = Color.Gray
                             )
                         }
 
-                        // Console Body (expandable)
-                        if (showConsole) {
-                            HorizontalDivider()
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp)
-                            ) {
-                                // Placeholder message log
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(160.dp)
-                                        .background(
-                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                            RoundedCornerShape(8.dp)
+                        AnimatedVisibility(visible = isConsoleExpanded) {
+                            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                if (connectionStatus == ConnectionStatus.DISCONNECTED || connectionStatus == ConnectionStatus.ERROR) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        if (textClientError != null) {
+                                            Text(textClientError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                                            Spacer(Modifier.height(12.dp))
+                                        }
+                                        Button(
+                                            onClick = {
+                                                val host = currentRoom.host ?: "archipelago.gg"
+                                                textClientViewModel.connect(
+                                                    host = host,
+                                                    slotName = slot.player_name,
+                                                    game = slot.game ?: "",
+                                                    password = null
+                                                )
+                                            },
+                                            shape = RoundedCornerShape(24.dp)
+                                        ) {
+                                            Text("Connect Console")
+                                        }
+                                        TextButton(onClick = { /* Password logic if needed */ }) {
+                                            Text("Use Password", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                        }
+                                    }
+                                } else {
+                                    // Active Console UI
+                                    val listState = rememberLazyListState()
+                                    LaunchedEffect(messages.size) {
+                                        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(300.dp)
+                                            .background(Color(0xFF0A0A0C), RoundedCornerShape(8.dp))
+                                            .padding(8.dp)
+                                    ) {
+                                        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                                            items(messages) { msg ->
+                                                ChatMessageRow(msg, datapackage)
+                                            }
+                                        }
+                                    }
+                                    
+                                    Spacer(Modifier.height(12.dp))
+                                    
+                                    var inputText by remember { mutableStateOf("") }
+                                    OutlinedTextField(
+                                        value = inputText,
+                                        onValueChange = { inputText = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        placeholder = { Text("Type command...") },
+                                        trailingIcon = {
+                                            IconButton(onClick = {
+                                                if (inputText.isNotBlank()) {
+                                                    textClientViewModel.sendMessage(inputText)
+                                                    inputText = ""
+                                                }
+                                            }) { Icon(Icons.Default.Send, null, tint = MaterialTheme.colorScheme.primary) }
+                                        },
+                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                        keyboardActions = KeyboardActions(onSend = {
+                                            if (inputText.isNotBlank()) {
+                                                textClientViewModel.sendMessage(inputText)
+                                                inputText = ""
+                                            }
+                                        }),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            unfocusedBorderColor = Color.DarkGray,
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White
                                         )
-                                        .border(
-                                            1.dp,
-                                            MaterialTheme.colorScheme.outlineVariant,
-                                            RoundedCornerShape(8.dp)
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "Connect to this slot's Archipelago server to send text commands and view real-time messages using a built-in text client.\n\nThis feature is under development.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.padding(24.dp)
                                     )
+                                    Spacer(Modifier.height(8.dp))
                                 }
-
-                                Spacer(Modifier.height(8.dp))
-
-                                // Disabled text input
-                                TextField(
-                                    value = "",
-                                    onValueChange = {},
-                                    enabled = false,
-                                    placeholder = { Text("Send a command...") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true
-                                )
                             }
                         }
                     }
                 }
-
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(40.dp))
             }
         }
     }
 
-    // --- Notification Settings Bottom Sheet ---
+    // MODALS
     if (showSettingsSheet && slot != null && userProfile != null) {
-        ModalBottomSheet(
-            onDismissRequest = { showSettingsSheet = false },
-            sheetState = sheetState
-        ) {
+        ModalBottomSheet(onDismissRequest = { showSettingsSheet = false }) {
             SlotSettingsSheet(
                 slot = slot,
                 profile = userProfile!!,
-                onUpdate = { key, value ->
+                onUpdate = { key: String, value: Boolean? ->
                     userViewModel.updateSlotPreferences(roomDbId, slotId, key, value)
                 },
                 onApplyToAll = {
@@ -402,261 +350,181 @@ fun SlotDetailScreen(
             )
         }
     }
-}
 
-@Composable
-fun MetadataItem(label: String, value: String) {
-    Column {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-    }
-}
-
-@Composable
-fun ActionCard(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-            )
-        }
-    }
-}
-
-@Composable
-fun ThresholdSection(
-    roomDbId: Int,
-    slotId: Int,
-    thresholds: List<SlotItemThreshold>,
-    availableItems: List<String>,
-    onSave: (String, Int) -> Unit,
-    onDelete: (Int) -> Unit
-) {
-    var showAddDialog by remember { mutableStateOf(false) }
-
-    Column(modifier = Modifier.padding(16.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Item Notification Thresholds",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-            TextButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Add")
-            }
-        }
-
-        if (thresholds.isEmpty()) {
-            Text(
-                text = "No thresholds set. Add one to only be notified after receiving a certain count of an item (e.g. 70 Yoshi Eggs).",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.padding(vertical = 8.dp)
-            )
-        } else {
-            thresholds.forEach { threshold ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Default.NotificationsActive,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = threshold.item_name, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            text = "Notify at ${threshold.threshold} received",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    IconButton(onClick = { onDelete(threshold.id) }) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Delete",
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    if (showAddDialog) {
+    if (showAddThresholdDialog) {
         AddThresholdDialog(
             availableItems = availableItems,
-            onDismiss = { showAddDialog = false },
-            onSave = { name, count ->
-                onSave(name, count)
-                showAddDialog = false
+            onDismiss = { showAddThresholdDialog = false },
+            onConfirm = { itemName, threshold ->
+                userViewModel.saveSlotThreshold(roomDbId, slotId, itemName, threshold)
+                showAddThresholdDialog = false
             }
         )
     }
 }
 
 @Composable
-fun AddThresholdDialog(
-    availableItems: List<String>,
-    onDismiss: () -> Unit,
-    onSave: (String, Int) -> Unit
-) {
-    var itemName by remember { mutableStateOf("") }
-    var thresholdStr by remember { mutableStateOf("") }
-    var expanded by remember { mutableStateOf(false) }
+fun InfoItem(modifier: Modifier = Modifier, label: String, value: String) {
+    Column(modifier = modifier) {
+        Text(text = label, style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+        Text(text = value, style = MaterialTheme.typography.bodyLarge, color = Color.White, fontWeight = FontWeight.Medium)
+    }
+}
 
-    val filteredItems = remember(itemName, availableItems) {
-        if (itemName.isEmpty()) {
-            availableItems.take(50)
-        } else {
-            availableItems.filter { it.contains(itemName, ignoreCase = true) }.take(50)
+@Composable
+fun ActionCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier.size(40.dp).background(Color.White.copy(alpha = 0.05f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, null, modifier = Modifier.size(20.dp), tint = Color.White)
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            }
+            Icon(Icons.Default.ChevronRight, null, tint = Color.Gray)
         }
     }
+}
 
+@Composable
+fun ThresholdRow(threshold: SlotItemThreshold, onDelete: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Outlined.Notifications, null, modifier = Modifier.size(20.dp), tint = Color.Gray)
+        Spacer(Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(threshold.item_name, style = MaterialTheme.typography.bodyLarge, color = Color.White)
+            Text("Notify at ${threshold.threshold} received", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        }
+        IconButton(onClick = onDelete) {
+            Icon(Icons.Default.Delete, null, tint = Color(0xFFCF6679), modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+@Composable
+fun AddThresholdDialog(availableItems: List<String>, onDismiss: () -> Unit, onConfirm: (String, Int) -> Unit) {
+    var filter by remember { mutableStateOf("") }
+    var selectedItem by remember { mutableStateOf("") }
+    var threshold by remember { mutableStateOf("1") }
+    
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add Item Threshold") },
+        title = { Text("Add Threshold") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    "Search for an item and enter the count at which you want to be notified.",
-                    style = MaterialTheme.typography.bodySmall
+            Column {
+                OutlinedTextField(
+                    value = filter, 
+                    onValueChange = { filter = it }, 
+                    label = { Text("Search Item") },
+                    modifier = Modifier.fillMaxWidth()
                 )
-                
-                Box {
-                    Column {
-                        OutlinedTextField(
-                            value = itemName,
-                            onValueChange = { 
-                                itemName = it
-                                expanded = true
-                            },
-                            label = { Text("Item Name") },
-                            placeholder = { Text("Search items...") },
-                            modifier = Modifier.fillMaxWidth(),
-                            trailingIcon = {
-                                IconButton(onClick = { expanded = !expanded }) {
-                                    Icon(
-                                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                        contentDescription = null
-                                    )
-                                }
-                            }
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
+                    val filtered = availableItems.filter { it.contains(filter, ignoreCase = true) }.take(50)
+                    items(filtered) { item ->
+                        Text(
+                            item, 
+                            modifier = Modifier.fillMaxWidth().clickable { selectedItem = item; filter = item }.padding(12.dp),
+                            color = if (selectedItem == item) MaterialTheme.colorScheme.primary else Color.Unspecified
                         )
-                        
-                        if (expanded && filteredItems.isNotEmpty()) {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 4.dp)
-                                    .heightIn(max = 200.dp),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                            ) {
-                                LazyColumn {
-                                    items(filteredItems) { item ->
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    itemName = item
-                                                    expanded = false
-                                                }
-                                                .padding(16.dp)
-                                        ) {
-                                            Text(item)
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
-
-                OutlinedTextField(
-                    value = thresholdStr,
-                    onValueChange = { if (it.all { char -> char.isDigit() }) thresholdStr = it },
+                Spacer(Modifier.height(16.dp))
+                TextField(
+                    value = threshold,
+                    onValueChange = { if (it.all { char -> char.isDigit() }) threshold = it },
                     label = { Text("Notify at count") },
-                    placeholder = { Text("e.g. 70") },
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         },
         confirmButton = {
             Button(
-                onClick = {
-                    val count = thresholdStr.toIntOrNull() ?: 0
-                    if (itemName.isNotBlank() && count > 0) {
-                        onSave(itemName, count)
-                    }
-                },
-                enabled = itemName.isNotBlank() && thresholdStr.isNotBlank()
-            ) {
-                Text("Save")
-            }
+                onClick = { if (selectedItem.isNotBlank()) onConfirm(selectedItem, threshold.toIntOrNull() ?: 1) },
+                enabled = selectedItem.isNotBlank()
+            ) { Text("Add") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+// ... Existing ChatMessageRow remains the same ...
+@Composable
+fun ChatMessageRow(message: ChatMessage, datapackage: RoomDatapackage? = null) {
+    val annotatedString = remember(message, datapackage) {
+        buildAnnotatedString {
+            message.segments.forEach { segment ->
+                var color = when (segment.type) {
+                    "player_id" -> Color(0xFFADFF2F)
+                    "player_name" -> Color(0xFFADFF2F)
+                    "location_id" -> Color(0xFF03A9F4)
+                    "location_name" -> Color(0xFF03A9F4)
+                    "entrance_name" -> Color(0xFFBB86FC)
+                    else -> Color.White
+                }
+                var text = segment.text
+                if (datapackage != null) {
+                    when (segment.type) {
+                        "player_id" -> text = datapackage.players[segment.text] ?: segment.text
+                        "item_id" -> {
+                            val slotKey = segment.player?.toString() ?: message.slot?.toString()
+                            val checksum = slotKey?.let { datapackage.slot_to_checksum[it] }
+                            if (checksum != null) {
+                                val fullId = "${checksum}_${segment.text}"
+                                text = datapackage.items[fullId] ?: segment.text
+                                val flags = datapackage.item_flags[fullId] ?: 0
+                                color = when {
+                                    (flags and 1) != 0 -> Color(0xFFADFF2F)
+                                    (flags and 2) != 0 -> Color(0xFF03A9F4)
+                                    (flags and 4) != 0 -> Color(0xFFF44336)
+                                    else -> Color(0xFFE91E63)
+                                }
+                            } else color = Color(0xFFE91E63)
+                        }
+                        "location_id" -> {
+                            val slotKey = segment.player?.toString() ?: message.slot?.toString()
+                            val checksum = slotKey?.let { datapackage.slot_to_checksum[it] }
+                            if (checksum != null) text = datapackage.locations["${checksum}_${segment.text}"] ?: segment.text
+                        }
+                    }
+                }
+                withStyle(style = SpanStyle(color = color)) { append(text) }
             }
         }
-    )
+    }
+    Text(text = annotatedString, fontSize = 13.sp, modifier = Modifier.padding(vertical = 1.dp), lineHeight = 16.sp)
+}
+
+fun formatTimestamp(isoString: String?): String {
+    if (isoString == null) return "Never"
+    return try {
+        val instant = Instant.parse(isoString)
+        val now = Instant.now()
+        val duration = Duration.between(instant, now)
+        val seconds = duration.seconds
+        when {
+            seconds < 60 -> "Just now"
+            seconds < 3600 -> "${seconds / 60}m ago"
+            seconds < 86400 -> "${seconds / 3600}h ago"
+            else -> "${seconds / 86400}d ago"
+        }
+    } catch (e: DateTimeParseException) {
+        isoString
+    }
 }

@@ -85,6 +85,15 @@ interface ApiService {
         @Path("slot_id") slotId: Int
     ): List<String>
 
+    @GET("rooms/{id}/datapackage")
+    suspend fun getRoomDatapackage(@Path("id") roomId: Int): RoomDatapackage
+
+    @GET("rooms/{id}/slots/{slot_id}/locations")
+    suspend fun getAvailableLocations(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int
+    ): List<String>
+
     @GET("history/hints")
     suspend fun getGlobalHintHistory(
         @Query("since") since: String?,
@@ -179,15 +188,15 @@ data class UpdateRoomRequest(
 )
 
 data class Player(
-    val slot_id: Int,
-    val name: String?,
-    val alias: String?,
-    val game: String?,
-    val is_tracked: Boolean,
-    val is_finished: Boolean,
-    val notify_progression: Boolean?,
-    val notify_useful: Boolean?,
-    val notify_hints: Boolean?
+    val slot_id: Int = 0,
+    val name: String? = null,
+    val alias: String? = null,
+    val game: String? = null,
+    val is_tracked: Boolean = false,
+    val is_finished: Boolean = false,
+    val notify_progression: Boolean? = null,
+    val notify_useful: Boolean? = null,
+    val notify_hints: Boolean? = null
 )
 
 data class UpdateSlotsRequest(
@@ -290,6 +299,7 @@ data class RoomWithTrackedSlots(
     val room_alias: String,
     val icon_name: String,
     val tracked_slots: List<TrackedSlotDetail>,
+    val players: List<Player>? = null,
     val is_archived: Boolean = false,
     val host: String? = null
 )
@@ -363,6 +373,14 @@ data class SlotItemThreshold(
     val id: Int,
     val item_name: String,
     val threshold: Int
+)
+
+data class RoomDatapackage(
+    val players: Map<String, String> = emptyMap(),
+    val items: Map<String, String> = emptyMap(),
+    val item_flags: Map<String, Int> = emptyMap(),
+    val locations: Map<String, String> = emptyMap(),
+    val slot_to_checksum: Map<String, String> = emptyMap()
 )
 
 data class UpdateThresholdRequest(
