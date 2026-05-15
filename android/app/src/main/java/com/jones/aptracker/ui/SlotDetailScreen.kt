@@ -307,7 +307,7 @@ fun SlotDetailScreen(
                                             .padding(8.dp)
                                     ) {
                                         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                                            items(messages) { msg ->
+                                            items(messages, key = { it.id }) { msg ->
                                                 ChatMessageRow(msg, datapackage)
                                             }
                                         }

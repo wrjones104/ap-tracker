@@ -87,9 +87,13 @@ class ArchipelagoWebSocketManager(
     }
 
     fun sendMessage(text: String) {
-        val packet = listOf(ApPacket(cmd = "Say", text = text))
-        val json = gson.toJson(packet)
-        webSocket?.send(json)
+        val packet = ApPacket(cmd = "Say", text = text)
+        val json = gson.toJson(listOf(packet))
+        val sent = webSocket?.send(json) ?: false
+        if (!sent) {
+            Log.e(TAG, "Failed to enqueue message: $text")
+            listener.onError("Connection lost. Message failed to send.")
+        }
     }
 
     private fun handleRawMessage(text: String) {

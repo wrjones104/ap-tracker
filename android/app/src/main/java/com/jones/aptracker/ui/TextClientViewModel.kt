@@ -8,6 +8,7 @@ import com.jones.aptracker.network.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class TextClientViewModel : ViewModel() {
@@ -54,7 +55,7 @@ class TextClientViewModel : ViewModel() {
 
                 override fun onMessageReceived(message: ChatMessage) {
                     // Limit message history to 500 to avoid memory/performance issues
-_messages.update { it.takeLast(499) + message }
+                    _messages.update { it.takeLast(499) + message }
                 }
 
                 override fun onError(error: String) {
