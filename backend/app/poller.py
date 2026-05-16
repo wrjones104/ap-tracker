@@ -17,8 +17,10 @@ from sqlalchemy import or_, exc, tuple_, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
 from email.utils import parsedate_to_datetime
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from . import Session, get_firebase_app, process
+from . import Session, get_firebase_app, process, is_sqlite
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, SlotItemThreshold, SlotItemCount
@@ -48,6 +50,10 @@ AP_POLL_SEMAPHORE_LIMIT = 5
 ap_poll_semaphore = asyncio.Semaphore(AP_POLL_SEMAPHORE_LIMIT)
 
 SEMAPHORE_WAIT_WARNING_THRESHOLD = 60
+
+
+# Global locks for datapackage fetching to avoid TOCTOU race condition
+datapackage_locks = {}
 
 
 # =============================================================================
@@ -1717,62 +1723,85 @@ async def run_room_setup(room_info, loop):
 
             for game, checksum in checksums.items():
                 if checksum in new_checksums_to_fetch: 
-                    game_data = await fetch_json(f"https://{hostname}/api/datapackage/{checksum}")
-                    if not game_data: 
-                        logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch datapackage for {game} ({checksum})")
-                        any_datapackage_failed = True
-                        continue
-                    
-                    current_game_entries = []
-                    actual_data = game_data.get('games', {}).get(game, game_data)
-                    
-                    seen_ids = set() 
+                    # Use a lock keyed by checksum to prevent concurrent fetches for the same game
+                    if checksum not in datapackage_locks:
+                        # Simple pruning to avoid memory leak
+                        if len(datapackage_locks) > 500:
+                            # Remove unlocked locks to free memory
+                            to_remove = [k for k, v in datapackage_locks.items() if not v.locked()]
+                            for k in to_remove[:100]: # Remove up to 100 at a time
+                                del datapackage_locks[k]
 
-                    # 1. Process Items
-                    for n, eid in actual_data.get('item_name_to_id', {}).items():
-                        if ('item', eid) in seen_ids:
-                            continue # Skip duplicate/alias
+                        datapackage_locks[checksum] = asyncio.Lock()
+                    
+                    async with datapackage_locks[checksum]:
+                        # Double-check: was it cached while we were waiting for the lock?
+                        still_missing = await loop.run_in_executor(None, db_get_missing_checksums, [checksum])
+                        if not still_missing:
+                            logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Datapackage for {game} ({checksum}) already cached. Skipping.")
+                            continue
+
+                        game_data = await fetch_json(f"https://{hostname}/api/datapackage/{checksum}")
+                        if not game_data: 
+                            logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch datapackage for {game} ({checksum})")
+                            any_datapackage_failed = True
+                            continue
                         
-                        seen_ids.add(('item', eid))
+                        current_game_entries = []
+                        actual_data = game_data.get('games', {}).get(game, game_data)
                         
-                        current_game_entries.append(DatapackageCache(
-                            game=game, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n
-                        ))
+                        seen_ids = set() 
 
-                    # 2. Process Locations
-                    for n, eid in actual_data.get('location_name_to_id', {}).items():
-                        if ('location', eid) in seen_ids:
-                             continue # Skip duplicate/alias
+                        # 1. Process Items
+                        for n, eid in actual_data.get('item_name_to_id', {}).items():
+                            if ('item', eid) in seen_ids:
+                                continue # Skip duplicate/alias
+                            
+                            seen_ids.add(('item', eid))
+                            current_game_entries.append(DatapackageCache(
+                                game=game, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n
+                            ))
+
+                        # 2. Process Locations
+                        for n, eid in actual_data.get('location_name_to_id', {}).items():
+                            if ('location', eid) in seen_ids:
+                                 continue # Skip duplicate/alias
+                            
+                            seen_ids.add(('location', eid))
+                            current_game_entries.append(DatapackageCache(
+                                game=game, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n
+                            ))
+
+                        # 3. Process Item Groups
+                        import zlib
+                        for g_name in actual_data.get('item_name_groups', {}).keys():
+                            g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
+                            g_id = -(g_stable_hash % 1000000 + 1000)
+                            current_game_entries.append(DatapackageCache(
+                                game=game, checksum=checksum, entity_type='item_group', entity_id=g_id, entity_name=g_name
+                            ))
+
+                        # 4. Process Location Groups
+                        for g_name in actual_data.get('location_name_groups', {}).keys():
+                            g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
+                            g_id = -(g_stable_hash % 1000000 + 1100000)
+                            current_game_entries.append(DatapackageCache(
+                                game=game, checksum=checksum, entity_type='location_group', entity_id=g_id, entity_name=g_name
+                            ))
                         
-                        seen_ids.add(('location', eid))
-                        current_game_entries.append(DatapackageCache(
-                            game=game, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n
-                        ))
-
-                    # 3. Process Item Groups
-                    import zlib
-                    for g_name in actual_data.get('item_name_groups', {}).keys():
-                        g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
-                        g_id = -(g_stable_hash % 1000000 + 1000)
-                        current_game_entries.append(DatapackageCache(
-                            game=game, checksum=checksum, entity_type='item_group', entity_id=g_id, entity_name=g_name
-                        ))
-
-                    # 4. Process Location Groups
-                    for g_name in actual_data.get('location_name_groups', {}).keys():
-                        g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
-                        g_id = -(g_stable_hash % 1000000 + 1100000)
-                        current_game_entries.append(DatapackageCache(
-                            game=game, checksum=checksum, entity_type='location_group', entity_id=g_id, entity_name=g_name
-                        ))
-                    
-                    if not current_game_entries:
-                        # Marker for valid but empty datapackage
-                        current_game_entries.append(DatapackageCache(
-                            game=game, checksum=checksum, entity_type='_metadata', entity_id=0, entity_name='_empty_datapackage'
-                        ))
-                    
-                    datapackage_entries_by_game[game] = current_game_entries
+                        if not current_game_entries:
+                            # Marker for valid but empty datapackage
+                            current_game_entries.append(DatapackageCache(
+                                game=game, checksum=checksum, entity_type='_metadata', entity_id=0, entity_name='_empty_datapackage'
+                            ))
+                        
+                        # Commit this datapackage IMMEDIATELY while holding the lock
+                        # This ensures that still_missing checks from other rooms will succeed.
+                        try:
+                            await loop.run_in_executor(None, db_cache_datapackage, current_game_entries)
+                        except Exception:
+                            any_datapackage_failed = True
+                            continue
             
             if datapackage_entries_by_game:
                 setup_data['datapackage_entries_by_game'] = datapackage_entries_by_game
@@ -1819,6 +1848,44 @@ def db_get_missing_checksums(checksums_to_check):
     finally:
         Session.remove()
 
+def db_cache_datapackage(entries):
+    """
+    Synchronously caches a single game's datapackage entries using atomic upserts.
+    """
+    if not entries: return
+    session = Session()
+    try:
+        insert_stmt = sqlite_insert if is_sqlite else pg_insert
+        
+        # Convert DatapackageCache objects to dictionaries for bulk execution
+        values = [
+            {
+                'game': e.game,
+                'checksum': e.checksum,
+                'entity_type': e.entity_type,
+                'entity_id': e.entity_id,
+                'entity_name': e.entity_name
+            }
+            for e in entries
+        ]
+        
+        chunk_size = 500
+        for i in range(0, len(values), chunk_size):
+            chunk = values[i:i + chunk_size]
+            stmt = insert_stmt(DatapackageCache).values(chunk)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=['checksum', 'entity_type', 'entity_id']
+            )
+            session.execute(stmt)
+            session.commit()
+            
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[POLLER_DB_ERROR] Failed to save datapackage: {e}", exc_info=True)
+        raise e
+    finally:
+        Session.remove()
+
 def db_commit_setup_data(db_id, setup_data):
     session = Session()
     try:
@@ -1839,27 +1906,6 @@ def db_commit_setup_data(db_id, setup_data):
 
         session.commit()
         
-        if setup_data.get('datapackage_entries_by_game'):
-            # Iterate over games one by one
-            for game, entries in setup_data['datapackage_entries_by_game'].items():
-                try:
-                    chunk_size = 500 
-                    total_entries = len(entries)
-                    
-                    for i in range(0, total_entries, chunk_size):
-                        chunk = entries[i:i + chunk_size]
-                        session.bulk_save_objects(chunk)
-                        session.commit()
-                        
-                    logging.info(f"[POLLER_SETUP] Successfully cached {total_entries} entities for {game}.")
-                        
-                except IntegrityError:
-                    session.rollback()
-                    logging.warning(f"[POLLER_DB_WARN] Duplicate datapackage data for {game}, skipping.")
-                except Exception as e:
-                    session.rollback()
-                    logging.error(f"[POLLER_DB_ERROR] Failed to save datapackage for {game}: {e}", exc_info=True)
-
     except Exception as e:
         session.rollback()
         raise e
