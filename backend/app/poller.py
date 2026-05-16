@@ -661,7 +661,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 if threshold:
                     try:
                         db_count_key = (item_data['item_key_batch'][0], rid, item_id)
-                        current_total_count = item_counts.get(db_count_key, 0)
+                        current_total_count = item_data.get('current_total_count', 0)
                         
                         logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': Total={current_total_count}, Thresholds={threshold}")
 
@@ -1065,6 +1065,8 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                     existing_count_objs[(obj.room_id, obj.slot_id, obj.item_id)] = obj
             
             # Increment counts based on the current batch
+            # We track the count for each specific item instance to handle thresholds correctly
+            notif_counts = {}
             for item in items_to_add:
                 key = (item.room_id, item.receiving_slot_id, item.item_id)
                 if key not in count_updates:
@@ -1073,6 +1075,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                     else:
                         count_updates[key] = 0
                 count_updates[key] += 1
+                # Map the specific count to this item instance (including location to disambiguate within batch)
+                notif_counts[(item.room_id, item.receiving_slot_id, item.item_id, item.location_id)] = count_updates[key]
+            
+            # Attach the specific count to the notification data for threshold checks
+            for notif in new_items_notif:
+                notif['current_total_count'] = notif_counts.get(notif['item_key_batch'])
             
             # Update objects in session or create new ones
             for key, new_count in count_updates.items():
