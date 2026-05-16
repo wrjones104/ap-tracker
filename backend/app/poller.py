@@ -17,8 +17,10 @@ from sqlalchemy import or_, exc, tuple_, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError, IntegrityError
 from email.utils import parsedate_to_datetime
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from . import Session, get_firebase_app, process
+from . import Session, get_firebase_app, process, is_sqlite
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, SlotItemThreshold, SlotItemCount
@@ -48,6 +50,10 @@ AP_POLL_SEMAPHORE_LIMIT = 5
 ap_poll_semaphore = asyncio.Semaphore(AP_POLL_SEMAPHORE_LIMIT)
 
 SEMAPHORE_WAIT_WARNING_THRESHOLD = 60
+
+
+# Global locks for datapackage fetching to avoid TOCTOU race condition
+datapackage_locks = {}
 
 
 # =============================================================================
@@ -1717,14 +1723,25 @@ async def run_room_setup(room_info, loop):
 
             for game, checksum in checksums.items():
                 if checksum in new_checksums_to_fetch: 
-                    game_data = await fetch_json(f"https://{hostname}/api/datapackage/{checksum}")
-                    if not game_data: 
-                        logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch datapackage for {game} ({checksum})")
-                        any_datapackage_failed = True
-                        continue
+                    # Use a lock keyed by checksum to prevent concurrent fetches for the same game
+                    if checksum not in datapackage_locks:
+                        datapackage_locks[checksum] = asyncio.Lock()
                     
-                    current_game_entries = []
-                    actual_data = game_data.get('games', {}).get(game, game_data)
+                    async with datapackage_locks[checksum]:
+                        # Double-check: was it cached while we were waiting for the lock?
+                        still_missing = await loop.run_in_executor(None, db_get_missing_checksums, [checksum])
+                        if not still_missing:
+                            logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Datapackage for {game} ({checksum}) already cached. Skipping.")
+                            continue
+
+                        game_data = await fetch_json(f"https://{hostname}/api/datapackage/{checksum}")
+                        if not game_data: 
+                            logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch datapackage for {game} ({checksum})")
+                            any_datapackage_failed = True
+                            continue
+                        
+                        current_game_entries = []
+                        actual_data = game_data.get('games', {}).get(game, game_data)
                     
                     seen_ids = set() 
 
@@ -1840,22 +1857,40 @@ def db_commit_setup_data(db_id, setup_data):
         session.commit()
         
         if setup_data.get('datapackage_entries_by_game'):
-            # Iterate over games one by one
+            # Use dialect-specific insert to support ON CONFLICT DO NOTHING
+            insert_stmt = sqlite_insert if is_sqlite else pg_insert
+            
             for game, entries in setup_data['datapackage_entries_by_game'].items():
                 try:
-                    chunk_size = 500 
-                    total_entries = len(entries)
+                    # Convert DatapackageCache objects to dictionaries for bulk execution
+                    values = [
+                        {
+                            'game': e.game,
+                            'checksum': e.checksum,
+                            'entity_type': e.entity_type,
+                            'entity_id': e.entity_id,
+                            'entity_name': e.entity_name
+                        }
+                        for e in entries
+                    ]
                     
-                    for i in range(0, total_entries, chunk_size):
-                        chunk = entries[i:i + chunk_size]
-                        session.bulk_save_objects(chunk)
+                    if not values:
+                        continue
+
+                    chunk_size = 500
+                    for i in range(0, len(values), chunk_size):
+                        chunk = values[i:i + chunk_size]
+                        stmt = insert_stmt(DatapackageCache).values(chunk)
+                        
+                        # Securely ignore rows that violate the unique constraint
+                        stmt = stmt.on_conflict_do_nothing(
+                            index_elements=['checksum', 'entity_type', 'entity_id']
+                        )
+                        session.execute(stmt)
                         session.commit()
                         
-                    logging.info(f"[POLLER_SETUP] Successfully cached {total_entries} entities for {game}.")
+                    logging.info(f"[POLLER_SETUP] Successfully cached {len(values)} entities for {game} (or skipped duplicates).")
                         
-                except IntegrityError:
-                    session.rollback()
-                    logging.warning(f"[POLLER_DB_WARN] Duplicate datapackage data for {game}, skipping.")
                 except Exception as e:
                     session.rollback()
                     logging.error(f"[POLLER_DB_ERROR] Failed to save datapackage for {game}: {e}", exc_info=True)
