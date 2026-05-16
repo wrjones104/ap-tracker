@@ -136,6 +136,12 @@ fun SlotDetailScreen(
         }
     }
 
+    DisposableEffect(Unit) {
+        onDispose {
+            textClientViewModel.disconnect()
+        }
+    }
+
     if (slot == null || currentRoom == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
