@@ -21,7 +21,7 @@ from email.utils import parsedate_to_datetime
 from . import Session, get_firebase_app, process
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
-    DatapackageCache, NotifiedItem, NotifiedHint, SlotItemThreshold
+    DatapackageCache, NotifiedItem, NotifiedHint, SlotItemThreshold, SlotItemCount
 )
 from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector
 
@@ -509,7 +509,7 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 
     return hints_to_add, new_hints_for_notify, cache_keys_to_fetch, just_found_hint_item_loc_pairs
 
-def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids, connected_slots_set):  
+def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids, connected_slots_set, item_counts):  
     """
     Fetches names from DB in chunks and constructs final notification payloads.
     Applies filtering, backfill checks, ignore lists, alias/condensed formatting, and snooze logic.
@@ -570,38 +570,8 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
             return {}
 
     # 2. Notify Items
-    batch_threshold_counts = {} # (slot_db_id, item_name) -> current_batch_count
-
-    # Optimization: Pre-fetch DB counts for all relevant items in this batch to avoid N+1 problem
-    db_counts_lookup = {}
-    if new_items_for_notify:
-        count_keys = set()
-        for item_data in new_items_for_notify:
-            count_keys.add((
-                item_data['item_key_batch'][0], # room_uuid
-                item_data['receiving_slot_id'],
-                item_data['item_id']
-            ))
-        
-        if count_keys:
-            try:
-                # Use chunking if count_keys is very large (unlikely in poller but good practice)
-                for chunk in chunked_iterable(list(count_keys), 1000):
-                    counts_query = session.query(
-                        NotifiedItem.room_id, 
-                        NotifiedItem.receiving_slot_id, 
-                        NotifiedItem.item_id, 
-                        func.count(NotifiedItem.id)
-                    ).filter(
-                        tuple_(NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id).in_(chunk)
-                    ).group_by(
-                        NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id
-                    ).all()
-                    
-                    for r, s, i, c in counts_query:
-                        db_counts_lookup[(r, s, i)] = c
-            except Exception as e:
-                logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to bulk-fetch item counts: {e}")
+    # Note: item_counts now contains (room_uuid, slot_id, item_id) -> total_count_after_this_batch
+    # which was pre-calculated in db_process_poll_data from SlotItemCount + current batch.
 
     for item_data in new_items_for_notify:
         item_name = name_lookup_map.get(
@@ -689,17 +659,11 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 current_total_count = 0
                 threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
                 if threshold:
-                    # Increment count for this batch
-                    batch_key = (slot_prefs.id, normalized_item_name)
-                    batch_threshold_counts[batch_key] = batch_threshold_counts.get(batch_key, 0) + 1
-                    
                     try:
                         db_count_key = (item_data['item_key_batch'][0], rid, item_id)
-                        db_count = db_counts_lookup.get(db_count_key, 0)
+                        current_total_count = item_counts.get(db_count_key, 0)
                         
-                        current_total_count = db_count + batch_threshold_counts[batch_key]
-                        
-                        logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': DB={db_count}, Batch={batch_threshold_counts[batch_key]}, Total={current_total_count}, Thresholds={threshold}")
+                        logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': Total={current_total_count}, Thresholds={threshold}")
 
                         if current_total_count not in threshold:
                             logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} hit milestone {current_total_count} (Not in {threshold}) for '{item_name}'. Skipping.")
@@ -708,7 +672,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                             is_threshold_hit = True
                             logging.info(f"[THRESHOLD_HIT] User {user_id}: Slot {rid} reached threshold milestone {current_total_count} for '{item_name}'. Notifying!")
                     except Exception as e:
-                        logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to count items: {e}")
+                        logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to check threshold: {e}")
                 else:
                     # Log if we find no threshold for an item that we might expect one for (optional, very noisy)
                     # logging.debug(f"[THRESHOLD_NONE] No threshold for {(slot_prefs.id, normalized_item_name)}")
@@ -1084,13 +1048,53 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
             tracker_data, room_uuid, db_id, existing_hints_map, game_map, game_checksums, has_hint_history
         )
 
-        # --- LOGIC STEP 4: Resolve Names & Build Notifications ---
+        # --- LOGIC STEP 4: Materialized Item Counts ---
+        # Calculate updated totals for the items we are about to add
+        count_updates = {} # (room_id, slot_id, item_id) -> new_total
+        existing_count_objs = {}
+        
+        if items_to_add:
+            item_keys = list(set((item.room_id, item.receiving_slot_id, item.item_id) for item in items_to_add))
+            
+            # Fetch existing counts in one query
+            for chunk in chunked_iterable(item_keys, 1000):
+                objs = session.query(SlotItemCount).filter(
+                    tuple_(SlotItemCount.room_id, SlotItemCount.slot_id, SlotItemCount.item_id).in_(chunk)
+                ).all()
+                for obj in objs:
+                    existing_count_objs[(obj.room_id, obj.slot_id, obj.item_id)] = obj
+            
+            # Increment counts based on the current batch
+            for item in items_to_add:
+                key = (item.room_id, item.receiving_slot_id, item.item_id)
+                if key not in count_updates:
+                    if key in existing_count_objs:
+                        count_updates[key] = existing_count_objs[key].count
+                    else:
+                        count_updates[key] = 0
+                count_updates[key] += 1
+            
+            # Update objects in session or create new ones
+            for key, new_count in count_updates.items():
+                if key in existing_count_objs:
+                    existing_count_objs[key].count = new_count
+                else:
+                    new_count_obj = SlotItemCount(
+                        room_id=key[0],
+                        slot_id=key[1],
+                        item_id=key[2],
+                        count=new_count
+                    )
+                    session.add(new_count_obj)
+
+        # --- LOGIC STEP 5: Resolve Names & Build Notifications ---
         all_cache_keys = item_cache_keys | hint_cache_keys
         data_notifs = _resolve_names_and_notify(
             session, db_id, all_cache_keys, new_items_notif, new_hints_notif,
             users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, 
             full_name_map, short_name_map,
-            backfill_check_set, just_found_hints, finished_player_ids, connected_slots_set
+            backfill_check_set, just_found_hints, finished_player_ids, connected_slots_set,
+            count_updates # Pass the updated counts for threshold checks
         )
 
         # Combine notifications (Finished + Items + Hints)

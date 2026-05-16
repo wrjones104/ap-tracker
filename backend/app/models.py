@@ -190,3 +190,15 @@ class JWTBlocklist(Base):
     id = Column(Integer, primary_key=True)
     jti = Column(String, nullable=False, unique=True, index=True)
     expires_at = Column(DateTime, nullable=False)
+
+class SlotItemCount(Base):
+    __tablename__ = 'slot_item_counts'
+    id = Column(Integer, primary_key=True)
+    room_id = Column(String, ForeignKey('tracked_rooms.room_id'), nullable=False)
+    slot_id = Column(Integer, nullable=False)
+    item_id = Column(BigInteger, nullable=False)
+    count = Column(Integer, default=0, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('room_id', 'slot_id', 'item_id', name='_slot_item_count_uc'),
+    )
