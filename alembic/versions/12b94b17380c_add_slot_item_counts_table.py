@@ -32,12 +32,13 @@ def upgrade() -> None:
     sa.UniqueConstraint('room_id', 'slot_id', 'item_id', name='_slot_item_count_uc')
     )
     
-    # Backfill Data
+    # Backfill Data - JOIN with tracked_rooms to avoid orphaned data violating FK constraints
     op.execute("""
         INSERT INTO slot_item_counts (room_id, slot_id, item_id, count)
-        SELECT room_id, receiving_slot_id, item_id, COUNT(*)
-        FROM notified_items
-        GROUP BY room_id, receiving_slot_id, item_id
+        SELECT ni.room_id, ni.receiving_slot_id, ni.item_id, COUNT(*)
+        FROM notified_items ni
+        JOIN tracked_rooms tr ON ni.room_id = tr.room_id
+        GROUP BY ni.room_id, ni.receiving_slot_id, ni.item_id
     """)
 
     # ### end Alembic commands ###
