@@ -22,7 +22,7 @@ from .utils import verify_ap_server
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
     DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist, UserIgnoreItem,
-    SlotItemThreshold
+    SlotItemThreshold, SlotItemCount
 )
 
 bp = Blueprint('api', __name__)
@@ -782,16 +782,14 @@ def get_item_history(current_user, room_db_id):
     item_counts = {}
     if items:
         count_keys = set((item.room_id, item.receiving_slot_id, item.item_id) for item in items)
-        # We query the DB for the CURRENT total count of each (room, slot, item) triple
+        # We query the NEW materialized table for the CURRENT total count of each (room, slot, item) triple
         counts_query = session.query(
-            NotifiedItem.room_id, 
-            NotifiedItem.receiving_slot_id, 
-            NotifiedItem.item_id, 
-            func.count(NotifiedItem.id)
+            SlotItemCount.room_id, 
+            SlotItemCount.slot_id, 
+            SlotItemCount.item_id, 
+            SlotItemCount.count
         ).filter(
-            tuple_(NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id).in_(count_keys)
-        ).group_by(
-            NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id
+            tuple_(SlotItemCount.room_id, SlotItemCount.slot_id, SlotItemCount.item_id).in_(count_keys)
         ).all()
         item_counts = {(r, s, i): c for r, s, i, c in counts_query}
 
@@ -993,17 +991,15 @@ def get_global_item_history(current_user):
 
     for batch_items in chunked_iterable(query.yield_per(BATCH_SIZE), BATCH_SIZE):
         
-        # 4a. Pre-calculate counts for this batch
+        # 4a. Pre-calculate counts for this batch from the materialized table
         count_keys = set((item.room_id, item.receiving_slot_id, item.item_id) for item in batch_items)
         counts_query = session.query(
-            NotifiedItem.room_id, 
-            NotifiedItem.receiving_slot_id, 
-            NotifiedItem.item_id, 
-            func.count(NotifiedItem.id)
+            SlotItemCount.room_id, 
+            SlotItemCount.slot_id, 
+            SlotItemCount.item_id, 
+            SlotItemCount.count
         ).filter(
-            tuple_(NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id).in_(count_keys)
-        ).group_by(
-            NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id
+            tuple_(SlotItemCount.room_id, SlotItemCount.slot_id, SlotItemCount.item_id).in_(count_keys)
         ).all()
         item_counts = {(r, s, i): c for r, s, i, c in counts_query}
 
