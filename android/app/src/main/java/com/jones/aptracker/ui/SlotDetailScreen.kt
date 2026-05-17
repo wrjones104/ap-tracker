@@ -64,7 +64,8 @@ fun SlotDetailScreen(
     slotId: Int,
     onBackClick: () -> Unit,
     onNavigateToHistory: (Int, String, String?, String?) -> Unit,
-    userViewModel: UserViewModel = viewModel()
+    userViewModel: UserViewModel = viewModel(),
+    textClientViewModel: TextClientViewModel = viewModel()
 ) {
     val room by userViewModel.trackedSlotsByRoom.collectAsState()
     val currentRoom = room.find { it.room_db_id == roomDbId }
@@ -90,8 +91,6 @@ fun SlotDetailScreen(
             }
         }
     }
-
-    val textClientViewModel: TextClientViewModel = viewModel()
     val messages by textClientViewModel.messages.collectAsState()
     val connectionStatus by textClientViewModel.connectionStatus.collectAsState()
     val textClientError by textClientViewModel.error.collectAsState()
@@ -136,11 +135,7 @@ fun SlotDetailScreen(
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            textClientViewModel.disconnect()
-        }
-    }
+
 
     if (slot == null || currentRoom == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
