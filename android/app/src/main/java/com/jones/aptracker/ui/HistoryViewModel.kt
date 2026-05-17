@@ -52,6 +52,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _archivedRoomIds = MutableStateFlow<Set<Int>>(emptySet())
     val archivedRoomIds: StateFlow<Set<Int>> = _archivedRoomIds
 
+    private val _roomIcons = MutableStateFlow<Map<Int, String>>(emptyMap())
+    val roomIcons: StateFlow<Map<Int, String>> = _roomIcons
+
     // Default filter is now ACTIVE
     private val _historyFilter = MutableStateFlow<HistoryFilter>(HistoryFilter.Active)
     val historyFilter: StateFlow<HistoryFilter> = _historyFilter
@@ -65,6 +68,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     val searchQuery = mutableStateOf("")
     val isLoading = MutableStateFlow(true)
     val errorMessage = mutableStateOf<String?>(null)
+
+    // --- Pagination ---
+    private var currentPageOffset = 0
+    private val PAGE_SIZE = 50
+    private var isAllDataLoaded = false
+    private val _isNextPageLoading = MutableStateFlow(false)
+    val isNextPageLoading: StateFlow<Boolean> = _isNextPageLoading
 
     // --- Toggles ---
     private val _showFoundHints = MutableStateFlow(false)
@@ -238,6 +248,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
 
         Log.d("HistoryViewModel", "Loading history for Room ID: ${roomId ?: "Global"}")
+        
+        // Reset pagination for new context
+        currentPageOffset = 0
+        isAllDataLoaded = false
+        _itemHistory.value = emptyList()
+        
         refreshAllHistory()
     }
 
@@ -316,6 +332,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
+                // Reset pagination on full refresh
+                currentPageOffset = 0
+                isAllDataLoaded = false
+                
                 // --- STEP 1: Metadata & Room Setup (Fast) ---
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
 
@@ -358,56 +378,24 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 _confirmedFinishedPlayers.value = finishedPlayerNames
                 _activeRoomIds.value = activeIds
                 _archivedRoomIds.value = archivedIds
+                _roomIcons.value = liveIcons
 
-                // --- STEP 2: Item History (Priority 1) ---
+                // --- STEP 2: Item History Sync (Priority 1) ---
                 repository.refreshItemHistory()
 
                 val rawItemEntities = if (currentRoomId != null) {
                     repository.getHistoryForRoom(currentRoomId!!)
                 } else {
-                    repository.getGlobalHistory()
+                    // Start with the first page of global history
+                    repository.getGlobalHistoryPaged(PAGE_SIZE, 0)
+                }
+                
+                if (currentRoomId == null) {
+                    currentPageOffset = rawItemEntities.size
+                    isAllDataLoaded = rawItemEntities.size < PAGE_SIZE
                 }
 
-                _itemHistory.value = rawItemEntities.mapNotNull { entity ->
-                    if (entity.roomId != null && entity.slot_id != null) {
-                        if (!validSlotsSet.contains(entity.roomId to entity.slot_id)) {
-                            return@mapNotNull null
-                        }
-                    }
-
-                    val liveAlias = if (entity.roomId != null && entity.slot_id != null) {
-                        _liveAliases.value[entity.roomId to entity.slot_id]
-                    } else null
-
-                    val liveIcon = if (entity.roomId != null) {
-                        liveIcons[entity.roomId]
-                    } else null
-
-                    val isActuallyFinished = entity.isPlayerFinished ||
-                            (entity.roomId != null && entity.slot_id != null &&
-                                    liveFinishedSlots.contains(entity.roomId to entity.slot_id))
-
-                    HistoryItem(
-                        id = entity.id,
-                        playerName = entity.playerName,
-                        playerAlias = liveAlias ?: entity.playerAlias,
-                        itemName = entity.itemName,
-                        isPlayerFinished = isActuallyFinished,
-                        itemFlags = entity.itemFlags,
-                        timestamp = entity.timestamp,
-                        tracker_id = entity.tracker_id,
-                        slot_id = entity.slot_id,
-                        icon_name = liveIcon ?: entity.icon_name,
-                        room_db_id = entity.roomId,
-                        host = entity.host,
-                        receivingGame = entity.receivingGame,
-                        senderName = entity.senderName,
-                        senderAlias = entity.senderAlias,
-                        senderGame = entity.senderGame,
-                        locationName = entity.locationName,
-                        receivedCount = entity.receivedCount
-                    )
-                }
+                _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
 
                 // --- STEP 3: UNBLOCK UI HERE ---
                 // The Item list is ready. Let the user see it immediately!
@@ -429,6 +417,81 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 Log.e("HistoryViewModel", "Error during full history refresh", e)
                 isLoading.value = false // Ensure loading stops on error
             }
+        }
+    }
+
+    fun loadNextPage() {
+        if (currentRoomId != null || isAllDataLoaded || _isNextPageLoading.value) return
+
+        viewModelScope.launch {
+            _isNextPageLoading.value = true
+            try {
+                Log.d("HistoryViewModel", "Loading next page of history at offset $currentPageOffset")
+                val nextEntities = repository.getGlobalHistoryPaged(PAGE_SIZE, currentPageOffset)
+                
+                if (nextEntities.isEmpty()) {
+                    isAllDataLoaded = true
+                } else {
+                    val mappedNext = mapEntitiesToHistoryItems(nextEntities)
+                    _itemHistory.value = _itemHistory.value + mappedNext
+                    currentPageOffset += nextEntities.size
+                    if (nextEntities.size < PAGE_SIZE) {
+                        isAllDataLoaded = true
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to load next history page", e)
+            } finally {
+                _isNextPageLoading.value = false
+            }
+        }
+    }
+
+    private fun mapEntitiesToHistoryItems(entities: List<com.jones.aptracker.network.HistoryItemEntity>): List<HistoryItem> {
+        val validSlotsSet = _validTrackedSlots.value
+        val liveAliases = _liveAliases.value
+        val liveIcons = _roomIcons.value
+        val confirmedFinished = _confirmedFinishedPlayers.value
+        
+        return entities.mapNotNull { entity ->
+            if (entity.roomId != null && entity.slot_id != null) {
+                if (!validSlotsSet.contains(entity.roomId to entity.slot_id)) {
+                    return@mapNotNull null
+                }
+            }
+
+            val liveAlias = if (entity.roomId != null && entity.slot_id != null) {
+                liveAliases[entity.roomId to entity.slot_id]
+            } else null
+
+            val liveIcon = if (entity.roomId != null) {
+                liveIcons[entity.roomId]
+            } else null
+
+            val isActuallyFinished = entity.isPlayerFinished ||
+                    (entity.roomId != null && entity.slot_id != null &&
+                            confirmedFinished.contains(entity.roomId to entity.playerName))
+
+            HistoryItem(
+                id = entity.id,
+                playerName = entity.playerName,
+                playerAlias = liveAlias ?: entity.playerAlias,
+                itemName = entity.itemName,
+                isPlayerFinished = isActuallyFinished,
+                itemFlags = entity.itemFlags,
+                timestamp = entity.timestamp,
+                tracker_id = entity.tracker_id,
+                slot_id = entity.slot_id,
+                icon_name = liveIcon ?: entity.icon_name,
+                room_db_id = entity.roomId,
+                host = entity.host,
+                receivingGame = entity.receivingGame,
+                senderName = entity.senderName,
+                senderAlias = entity.senderAlias,
+                senderGame = entity.senderGame,
+                locationName = entity.locationName,
+                receivedCount = entity.receivedCount
+            )
         }
     }
 

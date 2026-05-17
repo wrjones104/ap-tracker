@@ -22,45 +22,56 @@ class HistoryRepository(
         return historyDao.getGlobalHistory()
     }
 
+    suspend fun getGlobalHistoryPaged(limit: Int, offset: Int): List<HistoryItemEntity> {
+        return historyDao.getGlobalHistoryPaged(limit, offset)
+    }
+
     // --- ITEM HISTORY (Safe to use 'since' optimization) ---
     suspend fun refreshItemHistory() {
         Log.d("HISTORY_DEBUG", "Starting ITEM history refresh...")
         val latestTimestamp = historyDao.getLatestGlobalTimestamp()
-        try {
-            val newItems = apiService.getGlobalItemHistory(since = latestTimestamp)
-            Log.d("HISTORY_DEBUG", "Received ${newItems.size} new items from the API (since $latestTimestamp).")
+        val limit = 50
+        var offset = 0
+        var fetchedCount = limit
 
-            if (newItems.isNotEmpty()) {
-                val entities = newItems.mapNotNull { item ->
-                    try {
-                        val entity = HistoryItemEntity(
-                            roomId = item.room_db_id,
-                            playerName = item.playerName,
-                            playerAlias = item.playerAlias,
-                            receivingGame = item.receivingGame,
-                            itemName = item.itemName,
-                            senderName = item.senderName,
-                            senderAlias = item.senderAlias,
-                            senderGame = item.senderGame,
-                            locationName = item.locationName,
-                            isPlayerFinished = item.isPlayerFinished,
-                            itemFlags = item.itemFlags,
-                            timestamp = normalizeTimestamp(item.timestamp),
-                            tracker_id = item.tracker_id,
-                            slot_id = item.slot_id,
-                            icon_name = item.icon_name,
-                            host = item.host,
-                            receivedCount = item.receivedCount
-                        )
-                        entity
-                    } catch (e: Exception) {
-                        Log.e("HISTORY_DEBUG", "!!! FAILED to process history item: ${e.message}")
-                        null
+        try {
+            while (fetchedCount == limit) {
+                val newItems = apiService.getGlobalItemHistory(since = latestTimestamp, limit = limit, offset = offset)
+                fetchedCount = newItems.size
+                Log.d("HISTORY_DEBUG", "Received $fetchedCount new items from the API (since $latestTimestamp, offset $offset).")
+
+                if (newItems.isNotEmpty()) {
+                    val entities = newItems.mapNotNull { item ->
+                        try {
+                            HistoryItemEntity(
+                                roomId = item.room_db_id,
+                                playerName = item.playerName,
+                                playerAlias = item.playerAlias,
+                                receivingGame = item.receivingGame,
+                                itemName = item.itemName,
+                                senderName = item.senderName,
+                                senderAlias = item.senderAlias,
+                                senderGame = item.senderGame,
+                                locationName = item.locationName,
+                                isPlayerFinished = item.isPlayerFinished,
+                                itemFlags = item.itemFlags,
+                                timestamp = normalizeTimestamp(item.timestamp),
+                                tracker_id = item.tracker_id,
+                                slot_id = item.slot_id,
+                                icon_name = item.icon_name,
+                                host = item.host,
+                                receivedCount = item.receivedCount
+                            )
+                        } catch (e: Exception) {
+                            Log.e("HISTORY_DEBUG", "!!! FAILED to process history item: ${e.message}")
+                            null
+                        }
+                    }
+                    if (entities.isNotEmpty()) {
+                        historyDao.insertHistoryItems(entities)
                     }
                 }
-                if (entities.isNotEmpty()) {
-                    historyDao.insertHistoryItems(entities)
-                }
+                offset += fetchedCount
             }
         } catch (e: Exception) {
             Log.e("HISTORY_DEBUG", "!!! FAILED item history refresh: ${e.message}", e)
