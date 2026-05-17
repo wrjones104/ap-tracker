@@ -147,6 +147,8 @@ async def send_push_notifications(notifications, device_tokens, loop):
         data_payload = {}
         if 'bundled_items' in content:
             data_payload['bundled_items'] = content['bundled_items']
+            if 'type' in content:
+                data_payload['bundle_type'] = content['type']
 
         for token in device_tokens:
             android_config = messaging.AndroidConfig(priority='high')
@@ -2318,7 +2320,9 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
 
         item_strings = []
         for n in notif_list:
-            if 'item_context' in n:
+            if n.get('type') == 'hint':
+                item_strings.append(n['body'])
+            elif 'item_context' in n:
                 ctx = n['item_context']
                 # Format: "Item Name [Alias (Original)]"
                 formatted = f"{ctx['item_name']} [{ctx['original']}]"
