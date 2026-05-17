@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jones.aptracker.ui.TextClientViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -204,9 +206,11 @@ fun MainNavHost(
         ) { backStackEntry ->
             val roomDbId = backStackEntry.arguments?.getInt("roomDbId")!!
             val slotId = backStackEntry.arguments?.getInt("slotId")!!
+            val textClientViewModel: TextClientViewModel = viewModel(backStackEntry)
             SlotDetailScreen(
                 roomDbId = roomDbId,
                 slotId = slotId,
+                textClientViewModel = textClientViewModel,
                 onBackClick = { navController.popBackStack() },
                 onNavigateToHistory = { roomId, roomAlias, query, player ->
                     val encodedAlias = android.net.Uri.encode(roomAlias)
