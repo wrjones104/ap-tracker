@@ -707,29 +707,22 @@ def update_tracked_slots(current_user, room_db_id):
 
     # Hook for Cheese Tracker Integration
     # We do this AFTER commit so the local app state is saved even if Cheese API fails.
-    # Ideally, for performance, you would offload this to a background task (like Celery or just a Thread),
-    # but for V1, calling it directly here is acceptable if the number of slots changing is small.
+    # We offload this to a background thread to prevent blocking the response.
     if current_user.cheese_api_key and (slots_to_add or slots_to_remove):
         try:
-            # Assuming you might want to thread this to avoid blocking the response:
-            # import threading
-            # threading.Thread(target=push_slot_changes_to_cheese, args=(Session(), current_user, room_db_id, slots_to_add, slots_to_remove)).start()
-            
-            # Or just call it synchronously for now to test:
-            # Note: We pass a NEW session to the helper if it's threaded, or reuse current if sync.
-            # If using sync, just pass 'session' you already have open (but it's committed, so it's fine).
+            import threading
             from .api_cheese import push_slot_changes_to_cheese
             app_context = current_app._get_current_object()
-            push_slot_changes_to_cheese(
+            threading.Thread(target=push_slot_changes_to_cheese, args=(
                 app_context, 
-                current_user.id,  # Pass user_id
+                current_user.id,
                 room_db_id, 
                 slots_to_add, 
                 slots_to_remove
-            )
+            )).start()
         except Exception as e:
-            logging.error(f"[API_ERROR] Failed to trigger Cheese push: {e}", exc_info=True)
-            # Do not return an error to the user, standard sync succeeded.
+            logging.error(f"[API_ERROR] Failed to trigger Cheese push thread: {e}", exc_info=True)
+            # Do not return an error to the user, local state update succeeded.
 
     return jsonify({'message': 'Tracked slots updated.'})
 
