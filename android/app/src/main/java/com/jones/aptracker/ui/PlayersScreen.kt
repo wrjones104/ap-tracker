@@ -2,6 +2,7 @@ package com.jones.aptracker.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -102,14 +103,20 @@ fun PlayersScreen(
             )
 
             Box(
-                modifier = Modifier.fillMaxSize().weight(1f),
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center
             ) {
                 if (playersViewModel.isLoading.value) {
                     CircularProgressIndicator()
                 } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(playersViewModel.filteredPlayers) { player ->
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 80.dp)
+                    ) {
+                        items(
+                            items = playersViewModel.filteredPlayers,
+                            key = { it.slot_id }
+                        ) { player ->
                             val isChecked = playersViewModel.isPlayerChecked(player)
                             val isPlayerDone = player.is_finished
 
