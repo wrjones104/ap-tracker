@@ -342,6 +342,16 @@ def get_rooms(current_user):
         ~TrackedRoom.room_id.startswith("PENDING_DISCOVERY") 
     ).all()
     
+    # ⚡ Bolt Optimization: Prevent N+1 queries by fetching all tracked slot counts at once
+    room_ids = [sub.room_id for sub in subscriptions]
+    tracked_counts_map = {}
+    if room_ids:
+        counts = session.query(UserTrackedSlot.room_id, func.count(UserTrackedSlot.slot_id)).filter(
+            UserTrackedSlot.user_id == current_user.id,
+            UserTrackedSlot.room_id.in_(room_ids)
+        ).group_by(UserTrackedSlot.room_id).all()
+        tracked_counts_map = {room_id: count for room_id, count in counts}
+
     rooms_list = []
     for sub in subscriptions:
         room = sub.room
@@ -349,10 +359,7 @@ def get_rooms(current_user):
         if room.room_id.startswith("PENDING_DISCOVERY"):
             continue
 
-        tracked_count = session.query(UserTrackedSlot).filter_by(
-            user_id=current_user.id, 
-            room_id=room.id
-        ).count()
+        tracked_count = tracked_counts_map.get(room.id, 0)
         
         status = 'active'
         if room.is_complete:
