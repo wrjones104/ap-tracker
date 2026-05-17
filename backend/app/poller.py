@@ -1600,8 +1600,9 @@ async def run_room_setup(room_info, loop):
         # --- INITIALIZE PLAYER CACHE ---
         players = room_status.get('players', [])
         if players:
-            setup_data['cached_players_json'] = json.dumps(players)
-            setup_data['cached_total_slots'] = len(players)
+            player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players)]
+            setup_data['cached_players_json'] = json.dumps(player_list)
+            setup_data['cached_total_slots'] = len(player_list)
             logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Found {len(players)} players. Initializing cache.")
         # ------------------------------
 
