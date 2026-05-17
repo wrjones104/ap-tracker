@@ -79,6 +79,7 @@ class MainActivity : ComponentActivity() {
 
     // State for the summary sheet
     private val bundledItemsState = mutableStateOf<List<String>?>(null)
+    private val bundleTypeState = mutableStateOf<String?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -155,6 +156,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val summaryItems = bundledItemsState.value
+                val bundleType = bundleTypeState.value
 
                 VersionGate(
                     authViewModel = authViewModel,
@@ -167,9 +169,12 @@ class MainActivity : ComponentActivity() {
                 if (summaryItems != null) {
                     BundleSummarySheet(
                         items = summaryItems,
+                        type = bundleType,
                         onDismiss = {
                             bundledItemsState.value = null
+                            bundleTypeState.value = null
                             intent?.removeExtra("bundled_items")
+                            intent?.removeExtra("bundle_type")
                         }
                     )
                 }
@@ -189,12 +194,13 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         val jsonStr = intent?.getStringExtra("bundled_items")
+        val bundleType = intent?.getStringExtra("bundle_type")
         if (jsonStr == null) {
             Log.d("BUNDLE_DEBUG", "No bundled_items extra found in intent.")
             return
         }
 
-        Log.d("BUNDLE_DEBUG", "Found bundled_items JSON: $jsonStr")
+        Log.d("BUNDLE_DEBUG", "Found bundled_items JSON: $jsonStr, Type: $bundleType")
 
         try {
             val type = object : TypeToken<List<String>>() {}.type
@@ -203,6 +209,7 @@ class MainActivity : ComponentActivity() {
             if (items.isNotEmpty()) {
                 Log.d("BUNDLE_DEBUG", "Parsed ${items.size} items successfully.")
                 bundledItemsState.value = items
+                bundleTypeState.value = bundleType
             } else {
                 Log.d("BUNDLE_DEBUG", "Parsed list was empty.")
             }
@@ -422,8 +429,17 @@ fun ErrorScreen(message: String, onRetry: () -> Unit) {
 @Composable
 fun BundleSummarySheet(
     items: List<String>,
+    type: String?,
     onDismiss: () -> Unit
 ) {
+    val isHint = type == "hint"
+    val titleText = if (isHint) "New Hints" else "New Items Received"
+    val subtitleText = if (isHint) {
+        "You just received a bundle of ${items.size} hints."
+    } else {
+        "You just received a bundle of ${items.size} items."
+    }
+
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -438,12 +454,12 @@ fun BundleSummarySheet(
                 .navigationBarsPadding()
         ) {
             Text(
-                text = "New Items Received",
+                text = titleText,
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
             Text(
-                text = "You just received a bundle of ${items.size} items.",
+                text = subtitleText,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 16.dp)

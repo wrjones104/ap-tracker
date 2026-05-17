@@ -19,11 +19,12 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
         // Extract the "bundled_items" from the data payload if it exists
         val bundledItems = remoteMessage.data["bundled_items"]
+        val bundleType = remoteMessage.data["bundle_type"]
 
         remoteMessage.notification?.let { notification ->
             Log.d("FCM", "Notification Received: ${notification.title} - ${notification.body}")
-            // Pass the bundled items to the notification generator
-            sendSystemNotification(notification.title, notification.body, bundledItems)
+            // Pass the bundled items and bundle type to the notification generator
+            sendSystemNotification(notification.title, notification.body, bundledItems, bundleType)
         }
     }
 
@@ -32,7 +33,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         Log.d("FCM", "New token generated: $token")
     }
 
-    private fun sendSystemNotification(title: String?, body: String?, bundledItems: String?) {
+    private fun sendSystemNotification(title: String?, body: String?, bundledItems: String?, bundleType: String?) {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelId = "ap_tracker_channel"
 
@@ -48,6 +49,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             if (bundledItems != null) {
                 putExtra("bundled_items", bundledItems)
+            }
+            if (bundleType != null) {
+                putExtra("bundle_type", bundleType)
             }
         }
 
