@@ -41,6 +41,7 @@ class User(Base):
     ui_show_finished_default = Column(Boolean, default=True, nullable=False)
     ui_show_found_hints_default = Column(Boolean, default=False, nullable=False)
     ui_show_progression_default = Column(Boolean, default=True, nullable=False)
+    ui_show_useful_default = Column(Boolean, default=True, nullable=False)
     global_snooze_until = Column(DateTime, nullable=True)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
 
