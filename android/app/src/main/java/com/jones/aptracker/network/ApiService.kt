@@ -35,7 +35,11 @@ interface ApiService {
     suspend fun getItemHistory(@Path("id") roomId: Int, @Query("since") since: String?): List<HistoryItem>
 
     @GET("history/items")
-    suspend fun getGlobalItemHistory(@Query("since") since: String?): List<HistoryItem>
+    suspend fun getGlobalItemHistory(
+        @Query("since") since: String?,
+        @Query("limit") limit: Int? = null,
+        @Query("offset") offset: Int? = null
+    ): List<HistoryItem>
 
     @POST("devices")
     suspend fun registerDevice(@Body request: RegisterDeviceRequest): Response<Unit>

@@ -297,9 +297,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 _ignoreList.value = userRepository.getIgnoreList()
+            } catch (e: java.net.UnknownHostException) {
+                Log.e("UserViewModel", "Network error: Could not resolve host. Check your DEV_API_BASE_URL in local.properties.", e)
+                _errorMessage.value = "Network error: Cannot reach server. (Host unreachable)"
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to fetch ignore list", e)
-                _errorMessage.value = "Failed to load ignore list."
+                _errorMessage.value = "Failed to load ignore list. Check connection."
             }
         }
     }

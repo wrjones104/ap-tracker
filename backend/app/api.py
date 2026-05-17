@@ -985,156 +985,180 @@ def get_global_item_history(current_user):
     # Order by DESC so the client gets the newest timestamp for next sync
     query = query.order_by(NotifiedItem.id.desc())
 
-    # 4. Batch Process the Results
-    final_history_dicts = []
-    BATCH_SIZE = 1000
+    # --- NEW: Pagination ---
+    try:
+        limit = max(1, min(int(request.args.get('limit', 50)), 100))
+        offset = max(int(request.args.get('offset', 0)), 0)
+    except (ValueError, TypeError):
+        limit = 50
+        offset = 0
+    
+    query = query.limit(limit).offset(offset)
 
-    for batch_items in chunked_iterable(query.yield_per(BATCH_SIZE), BATCH_SIZE):
-        
-        # 4a. Pre-calculate counts for this batch from the materialized table
-        count_keys = set((item.room_id, item.receiving_slot_id, item.item_id) for item in batch_items)
-        counts_query = session.query(
-            SlotItemCount.room_id, 
-            SlotItemCount.slot_id, 
-            SlotItemCount.item_id, 
-            SlotItemCount.count
-        ).filter(
-            tuple_(SlotItemCount.room_id, SlotItemCount.slot_id, SlotItemCount.item_id).in_(count_keys)
-        ).all()
-        item_counts = {(r, s, i): c for r, s, i, c in counts_query}
-
-        history_pre_cache = []
-        cache_keys_to_find = set()
-
-        # Process this batch
-        for item in batch_items:
-            room_data = all_room_data.get(item.room_id)
-            if not room_data:
-                continue
+    # 4. Pre-parse Room Metadata to avoid redundant JSON parsing in the loop
+    parsed_room_metadata = {}
+    for room_uuid, room_data in all_room_data.items():
+        try:
+            players = json.loads(room_data.cached_players_json or '[]')
+            if not isinstance(players, list): players = []
             
-            sub = subs_map.get(room_data.id)
-            if not sub:
-                continue
+            game_checksums = json.loads(room_data.game_checksums_json or '{}')
+            if not isinstance(game_checksums, dict): game_checksums = {}
             
-            try:
-                players = json.loads(room_data.cached_players_json or '[]')
-                if not isinstance(players, list): players = []
-
-                game_checksums = json.loads(room_data.game_checksums_json or '{}')
-                if not isinstance(game_checksums, dict): game_checksums = {}
-            except (json.JSONDecodeError, TypeError):
-                continue
-
             player_map = {p['slot_id']: p for p in players}
             game_map = {p['slot_id']: p.get('game') for p in players}
             
-            receiver_id = item.receiving_slot_id
-            sender_id = getattr(item, 'sending_slot_id', 0)
-
-            receiver_obj = player_map.get(receiver_id)
-            sender_obj = player_map.get(sender_id)
-            
-            receiver_name = receiver_obj.get('name', f"Player {receiver_id}") if receiver_obj else f"Player {receiver_id}"
-            receiver_alias = receiver_obj.get('alias') if receiver_obj else None
-            
-            sender_name = sender_obj.get('name', f"Player {sender_id}") if sender_obj else f"Player {sender_id}"
-            sender_alias = sender_obj.get('alias') if sender_obj else None
-            
-            receiver_game = game_map.get(receiver_id, "Unknown")
-            sender_game = game_map.get(sender_id, "Unknown")
-            
-            is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
-
-            rec_checksum = game_checksums.get(receiver_game)
-            snd_checksum = game_checksums.get(sender_game)
-
-            item_name_key = None
-            location_name_key = None
-
-            if receiver_game and rec_checksum:
-                item_name_key = (rec_checksum, 'item', item.item_id)
-                cache_keys_to_find.add(item_name_key)
-
-            if sender_game and snd_checksum:
-                location_name_key = (snd_checksum, 'location', item.location_id)
-                cache_keys_to_find.add(location_name_key)
-
-            history_pre_cache.append({
-                "room_db_id": room_data.id,
-                "room_alias": sub.alias, 
-                "icon_name": sub.icon_name,
-                "playerName": receiver_name,
-                "playerAlias": receiver_alias, 
-                "receivingGame": receiver_game, 
-                "senderName": sender_name,    
-                "senderAlias": sender_alias,  
-                "senderGame": sender_game,    
-                "timestamp": format_iso_z(item.timestamp),
-                "tracker_id": room_data.tracker_id,
-                "slot_id": receiver_id,
-                "host": room_data.hostname,
-                "_item_name_key": item_name_key,
-                "_loc_name_key": location_name_key,
-                "_raw_item_id": item.item_id,
-                "_raw_loc_id": item.location_id,
-                "isPlayerFinished": is_finished,
-                "itemFlags": item.item_flags or 0,
-                "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
-            })
-
-        # Bulk Fetch Names for THIS batch only
-        name_cache_map = {}
-        if cache_keys_to_find:
-            cache_query = session.query(
-                DatapackageCache.checksum,
-                DatapackageCache.entity_type,
-                DatapackageCache.entity_id,
-                DatapackageCache.entity_name
-            ).filter(
-                tuple_(
-                    DatapackageCache.checksum,
-                    DatapackageCache.entity_type,
-                    DatapackageCache.entity_id
-                ).in_(cache_keys_to_find)
-            )
-
-            name_cache_map = {
-                (c.checksum, c.entity_type, c.entity_id): c.entity_name
-                for c in cache_query.all()
+            parsed_room_metadata[room_uuid] = {
+                'player_map': player_map,
+                'game_map': game_map,
+                'game_checksums': game_checksums
+            }
+        except (json.JSONDecodeError, TypeError):
+            parsed_room_metadata[room_uuid] = {
+                'player_map': {},
+                'game_map': {},
+                'game_checksums': {}
             }
 
-        # Build Final lightweight dicts
-        for temp_item in history_pre_cache:
-            item_name = name_cache_map.get(temp_item["_item_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
-            location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
+    # 5. Process the Results
+    final_history_dicts = []
+    items = query.all()
 
-            final_history_dicts.append({
-                "room_db_id": temp_item["room_db_id"], 
-                "alias": temp_item["room_alias"], 
-                "icon_name": temp_item["icon_name"],
-                "playerName": temp_item['playerName'],
-                "playerAlias": temp_item['playerAlias'],
-                "receivingGame": temp_item['receivingGame'],
-                "itemName": item_name,
-                "senderName": temp_item['senderName'],     
-                "senderAlias": temp_item['senderAlias'],
-                "senderGame": temp_item['senderGame'],      
-                "locationName": location_name,              
-                "isPlayerFinished": temp_item['isPlayerFinished'],
-                "itemFlags": temp_item['itemFlags'],
-                "timestamp": temp_item["timestamp"],
-                "tracker_id": temp_item["tracker_id"],
-                "slot_id": temp_item["slot_id"],
-                "host": temp_item["host"],
-                "receivedCount": temp_item["receivedCount"]
-            })
+    if not items:
+        return jsonify([])
+
+    # 5a. Pre-calculate counts for these items from the materialized table
+    count_keys = set((item.room_id, item.receiving_slot_id, item.item_id) for item in items)
+    counts_query = session.query(
+        SlotItemCount.room_id, 
+        SlotItemCount.slot_id, 
+        SlotItemCount.item_id, 
+        SlotItemCount.count
+    ).filter(
+        tuple_(SlotItemCount.room_id, SlotItemCount.slot_id, SlotItemCount.item_id).in_(count_keys)
+    ).all()
+    item_counts = {(r, s, i): c for r, s, i, c in counts_query}
+
+    history_pre_cache = []
+    cache_keys_to_find = set()
+
+    for item in items:
+        room_data = all_room_data.get(item.room_id)
+        if not room_data:
+            continue
         
-        del history_pre_cache
-        del cache_keys_to_find
-        del name_cache_map
-        del batch_items
+        sub = subs_map.get(room_data.id)
+        if not sub:
+            continue
+        
+        meta = parsed_room_metadata.get(item.room_id, {})
+        player_map = meta.get('player_map', {})
+        game_checksums = meta.get('game_checksums', {})
+        game_map = meta.get('game_map', {})
+        
+        receiver_id = item.receiving_slot_id
+        sender_id = getattr(item, 'sending_slot_id', 0)
+
+        receiver_obj = player_map.get(receiver_id)
+        sender_obj = player_map.get(sender_id)
+        
+        receiver_name = receiver_obj.get('name', f"Player {receiver_id}") if receiver_obj else f"Player {receiver_id}"
+        receiver_alias = receiver_obj.get('alias') if receiver_obj else None
+        
+        sender_name = sender_obj.get('name', f"Player {sender_id}") if sender_obj else f"Player {sender_id}"
+        sender_alias = sender_obj.get('alias') if sender_obj else None
+        
+        receiver_game = game_map.get(receiver_id, "Unknown")
+        sender_game = game_map.get(sender_id, "Unknown")
+        
+        is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
+
+        rec_checksum = game_checksums.get(receiver_game)
+        snd_checksum = game_checksums.get(sender_game)
+
+        item_name_key = None
+        location_name_key = None
+
+        if receiver_game and rec_checksum:
+            item_name_key = (rec_checksum, 'item', item.item_id)
+            cache_keys_to_find.add(item_name_key)
+
+        if sender_game and snd_checksum:
+            location_name_key = (snd_checksum, 'location', item.location_id)
+            cache_keys_to_find.add(location_name_key)
+
+        history_pre_cache.append({
+            "room_db_id": room_data.id,
+            "room_alias": sub.alias, 
+            "icon_name": sub.icon_name,
+            "playerName": receiver_name,
+            "playerAlias": receiver_alias, 
+            "receivingGame": receiver_game, 
+            "senderName": sender_name,    
+            "senderAlias": sender_alias,  
+            "senderGame": sender_game,    
+            "timestamp": format_iso_z(item.timestamp),
+            "tracker_id": room_data.tracker_id,
+            "slot_id": receiver_id,
+            "host": room_data.hostname,
+            "_item_name_key": item_name_key,
+            "_loc_name_key": location_name_key,
+            "_raw_item_id": item.item_id,
+            "_raw_loc_id": item.location_id,
+            "isPlayerFinished": is_finished,
+            "itemFlags": item.item_flags or 0,
+            "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
+        })
+
+    # Bulk Fetch Names for these items
+    name_cache_map = {}
+    if cache_keys_to_find:
+        cache_query = session.query(
+            DatapackageCache.checksum,
+            DatapackageCache.entity_type,
+            DatapackageCache.entity_id,
+            DatapackageCache.entity_name
+        ).filter(
+            tuple_(
+                DatapackageCache.checksum,
+                DatapackageCache.entity_type,
+                DatapackageCache.entity_id
+            ).in_(cache_keys_to_find)
+        )
+
+        name_cache_map = {
+            (c.checksum, c.entity_type, c.entity_id): c.entity_name
+            for c in cache_query.all()
+        }
+
+    # Build Final lightweight dicts
+    for temp_item in history_pre_cache:
+        item_name = name_cache_map.get(temp_item["_item_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
+        location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
+
+        final_history_dicts.append({
+            "room_db_id": temp_item["room_db_id"], 
+            "alias": temp_item["room_alias"], 
+            "icon_name": temp_item["icon_name"],
+            "playerName": temp_item['playerName'],
+            "playerAlias": temp_item['playerAlias'],
+            "receivingGame": temp_item['receivingGame'],
+            "itemName": item_name,
+            "senderName": temp_item['senderName'],     
+            "senderAlias": temp_item['senderAlias'],
+            "senderGame": temp_item['senderGame'],      
+            "locationName": location_name,              
+            "isPlayerFinished": temp_item['isPlayerFinished'],
+            "itemFlags": temp_item['itemFlags'],
+            "timestamp": temp_item["timestamp"],
+            "tracker_id": temp_item["tracker_id"],
+            "slot_id": temp_item["slot_id"],
+            "host": temp_item["host"],
+            "receivedCount": temp_item["receivedCount"]
+        })
 
     return jsonify(final_history_dicts)
+
 
 
 # =============================================================================

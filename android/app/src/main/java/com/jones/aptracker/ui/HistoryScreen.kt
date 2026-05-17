@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -937,7 +938,18 @@ fun ItemHistoryTab(
                 Text("No item history matches.")
             }
         } else {
+            val listState = rememberLazyListState()
+            val isNextPageLoading by historyViewModel.isNextPageLoading.collectAsState()
+
+            // Trigger loadNextPage when we get near the end of the list
+            LaunchedEffect(listState.canScrollForward) {
+                if (!listState.canScrollForward && itemsToShow.isNotEmpty()) {
+                    historyViewModel.loadNextPage()
+                }
+            }
+
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1012,6 +1024,22 @@ fun ItemHistoryTab(
                                     color = Color.Gray
                                 )
                             }
+                        }
+                    }
+                }
+
+                if (isNextPageLoading) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
                         }
                     }
                 }
