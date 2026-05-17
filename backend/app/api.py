@@ -987,7 +987,7 @@ def get_global_item_history(current_user):
 
     # --- NEW: Pagination ---
     try:
-        limit = min(int(request.args.get('limit', 50)), 100)
+        limit = max(1, min(int(request.args.get('limit', 50)), 100))
         offset = max(int(request.args.get('offset', 0)), 0)
     except (ValueError, TypeError):
         limit = 50

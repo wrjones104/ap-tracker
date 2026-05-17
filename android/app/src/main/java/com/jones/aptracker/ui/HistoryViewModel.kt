@@ -433,7 +433,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     isAllDataLoaded = true
                 } else {
                     val mappedNext = mapEntitiesToHistoryItems(nextEntities)
-                    _itemHistory.value = _itemHistory.value + mappedNext
+                    _itemHistory.value = (_itemHistory.value + mappedNext).distinctBy { it.id }
                     currentPageOffset += nextEntities.size
                     if (nextEntities.size < PAGE_SIZE) {
                         isAllDataLoaded = true
