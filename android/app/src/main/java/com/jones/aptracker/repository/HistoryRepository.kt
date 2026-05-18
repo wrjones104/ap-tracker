@@ -154,6 +154,7 @@ class HistoryRepository(
             hintDao.deleteAllHints()
         } catch (e: Exception) {
             Log.e("PRUNING", "Failed to clear all history: ${e.message}", e)
+            throw e
         }
     }
 
