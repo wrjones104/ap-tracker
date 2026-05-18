@@ -29,4 +29,7 @@ interface HistoryDao {
 
     @Query("DELETE FROM history_items WHERE roomId = :roomId AND slot_id IN (:slotIds)")
     suspend fun deleteHistoryForSlots(roomId: Int, slotIds: Set<Int>)
+
+    @Query("DELETE FROM history_items")
+    suspend fun deleteAllHistory()
 }

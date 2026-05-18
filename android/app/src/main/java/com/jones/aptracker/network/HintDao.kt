@@ -33,6 +33,9 @@ interface HintDao {
     @Query("DELETE FROM hints WHERE roomDbId = :roomId AND (itemOwnerId IN (:slotIds) OR locationOwnerId IN (:slotIds))")
     suspend fun deleteHintsForSlots(roomId: Int, slotIds: Set<Int>)
 
+    @Query("DELETE FROM hints")
+    suspend fun deleteAllHints()
+
     @Query("SELECT COUNT(*) FROM hints WHERE roomDbId = :roomId AND isFound = 1")
     suspend fun countFoundHints(roomId: Int): Int
 

@@ -16,6 +16,8 @@ import com.jones.aptracker.network.SnoozeRequest
 import com.jones.aptracker.network.AutocompleteOption
 import com.jones.aptracker.network.SlotItemThreshold
 import com.jones.aptracker.network.UpdateThresholdRequest
+import com.jones.aptracker.database.AppDatabase
+import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.UserRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -32,6 +34,11 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     // --- Dependencies ---
     private val settingsManager = SettingsManager(application)
     private val userRepository = UserRepository(RetrofitClient.instance)
+    private val historyRepository = HistoryRepository(
+        RetrofitClient.instance,
+        AppDatabase.getInstance(application).historyDao(),
+        AppDatabase.getInstance(application).hintDao()
+    )
 
     // Quick access to SharedPreferences for UI state (like sort order)
     private val uiPrefs by lazy {
@@ -490,6 +497,18 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 _integrationMessage.value = "All snoozes cleared."
+            }
+        }
+    }
+
+    fun clearLocalHistory() {
+        viewModelScope.launch {
+            try {
+                historyRepository.clearAllHistory()
+                _integrationMessage.value = "Local history cleared."
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to clear local history."
+                e.printStackTrace()
             }
         }
     }
