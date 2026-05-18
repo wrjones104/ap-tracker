@@ -76,6 +76,7 @@ fun ProfileScreen(
 
     // State for Delete Dialog
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showClearHistoryDialog by remember { mutableStateOf(false) }
 
     var showSnoozeDialog by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(Instant.now()) }
@@ -262,6 +263,22 @@ fun ProfileScreen(
             Spacer(Modifier.height(8.dp))
 
             OutlinedButton(
+                onClick = { showClearHistoryDialog = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Clear Local History")
+            }
+
+            Text(
+                "Deletes all locally cached items and hints, forcing a fresh download from the server on next view.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
+            )
+
+            OutlinedButton(
                 onClick = { userViewModel.sendTestNotification() },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -277,6 +294,27 @@ fun ProfileScreen(
                 modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
             )
         }
+    }
+
+    if (showClearHistoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearHistoryDialog = false },
+            title = { Text("Clear Local History?") },
+            text = { Text("This will delete all locally cached items and hints. They will be re-downloaded from the server next time you view the history screen.") },
+            confirmButton = {
+                Button(onClick = {
+                    showClearHistoryDialog = false
+                    userViewModel.clearLocalHistory()
+                }) {
+                    Text("Clear")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearHistoryDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     // --- Delete Confirmation Dialog ---

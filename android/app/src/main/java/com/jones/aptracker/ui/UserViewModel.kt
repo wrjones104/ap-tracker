@@ -32,6 +32,11 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     // --- Dependencies ---
     private val settingsManager = SettingsManager(application)
     private val userRepository = UserRepository(RetrofitClient.instance)
+    private val historyRepository = com.jones.aptracker.repository.HistoryRepository(
+        RetrofitClient.instance,
+        com.jones.aptracker.database.AppDatabase.getInstance(application).historyDao(),
+        com.jones.aptracker.database.AppDatabase.getInstance(application).hintDao()
+    )
 
     // Quick access to SharedPreferences for UI state (like sort order)
     private val uiPrefs by lazy {
@@ -490,6 +495,18 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 _integrationMessage.value = "All snoozes cleared."
+            }
+        }
+    }
+
+    fun clearLocalHistory() {
+        viewModelScope.launch {
+            try {
+                historyRepository.clearAllHistory()
+                _integrationMessage.value = "Local history cleared."
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to clear local history."
+                e.printStackTrace()
             }
         }
     }

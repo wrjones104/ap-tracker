@@ -147,6 +147,16 @@ class HistoryRepository(
         )
     }
 
+    suspend fun clearAllHistory() {
+        Log.d("PRUNING", "Clearing all history and hints")
+        try {
+            historyDao.deleteAllHistory()
+            hintDao.deleteAllHints()
+        } catch (e: Exception) {
+            Log.e("PRUNING", "Failed to clear all history: ${e.message}", e)
+        }
+    }
+
     suspend fun pruneSlotData(roomId: Int, slotIds: Set<Int>) {
         if (slotIds.isEmpty()) return
         Log.d("PRUNING", "Pruning data for room $roomId, slots: $slotIds")
