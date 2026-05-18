@@ -27,31 +27,41 @@ def run_diagnostics():
 
     session = Session()
     try:
-        # 1. Fetch all tracked rooms
-        rooms = session.query(TrackedRoom).all()
-        if not rooms:
-            print("No tracked rooms found in the database.")
-            return
+        # Check if a room ID was passed as a command line argument
+        target_room_id = sys.argv[1] if len(sys.argv) > 1 else None
 
-        print_title("Available Tracked Rooms")
-        for idx, room in enumerate(rooms):
-            print(f"[{idx}] DB ID: {room.id} | Room ID: {room.room_id} | Host: {room.hostname} | Setup Complete: {room.is_setup}")
-
-        # 2. Select room
-        selection = input("\nSelect a room index to inspect (or press Enter to quit): ").strip()
-        if not selection:
-            print("Exiting.")
-            return
-
-        try:
-            selected_idx = int(selection)
-            if selected_idx < 0 or selected_idx >= len(rooms):
-                print("Invalid index.")
+        if target_room_id:
+            room = session.query(TrackedRoom).filter_by(room_id=target_room_id).first()
+            if not room:
+                print(f"No tracked room found in the database with Room ID: {target_room_id}")
                 return
-            room = rooms[selected_idx]
-        except ValueError:
-            print("Invalid input. Please enter a valid number.")
-            return
+            print(f"Bypassing menu. Found requested Room ID: {target_room_id}")
+        else:
+            # 1. Fetch all tracked rooms
+            rooms = session.query(TrackedRoom).all()
+            if not rooms:
+                print("No tracked rooms found in the database.")
+                return
+
+            print_title("Available Tracked Rooms")
+            for idx, r in enumerate(rooms):
+                print(f"[{idx}] DB ID: {r.id} | Room ID: {r.room_id} | Host: {r.hostname} | Setup Complete: {r.is_setup}")
+
+            # 2. Select room
+            selection = input("\nSelect a room index to inspect (or press Enter to quit): ").strip()
+            if not selection:
+                print("Exiting.")
+                return
+
+            try:
+                selected_idx = int(selection)
+                if selected_idx < 0 or selected_idx >= len(rooms):
+                    print("Invalid index.")
+                    return
+                room = rooms[selected_idx]
+            except ValueError:
+                print("Invalid input. Please enter a valid number.")
+                return
 
         print_separator()
         print(f"Analyzing Room ID: {room.room_id}")
