@@ -39,7 +39,7 @@ The system consists of two main parts:
 
 *   **Architecture:** Follows the MVVM (Model-View-ViewModel) architectural pattern combined with the Repository pattern to ensure clean separation of concerns between UI, business logic, and data layers.
 *   **UI Framework:** Developed entirely using Jetpack Compose for declarative UI.
-*   **Networking:** Retrofit for REST API requests with OkHttp interceptors (`AuthInterceptor.kt`) for handling JWT authentication headers.
+*   **Networking:** Retrofit for REST API requests with OkHttp interceptors (`AuthInterceptor.kt`) for handling JWT authentication headers. `ArchipelagoWebSocketManager` using OkHttp is used for the Text Client to communicate with Archipelago servers.
 *   **Local Storage:**
     *   Room Database (`androidx.room`) for caching application data locally.
     *   `EncryptedSharedPreferences` for securely storing JWT authentication tokens (`TokenManager.kt`).
@@ -63,7 +63,7 @@ The system consists of two main parts:
 *   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
 *   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias.
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
-*   `Device`: Stores FCM tokens for push notifications.
+*   `Device`: Stores FCM tokens and `device_id` (formerly `android_id`) for push notifications.
 *   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
 *   `DatapackageCache`: Caches game data (Item/Location names) to reduce API calls.
 
@@ -78,4 +78,6 @@ The system consists of two main parts:
 
 *   **Database:** SQLite uses WAL mode.
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
-*   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
+*   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash. The Android app uses Firebase's App Instance ID for identifying devices instead of hardware `ANDROID_ID` to comply with privacy guidelines.
+*   **SSRF Protection:** Programmatic SSRF protections using `SSRFProtectedTCPConnector` are implemented in `aiohttp` to block private/loopback IPs during external room connections.
+*   **Performance:** To prevent N+1 queries in the Flask backend, bulk SQLAlchemy `GROUP BY` operations should be used.

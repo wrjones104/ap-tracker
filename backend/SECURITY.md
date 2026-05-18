@@ -19,8 +19,7 @@ This document outlines the security measures in place to protect user data and e
 
 ### Input Validation
 - **Strict Input Validation**: All incoming data is strictly validated to ensure that it is of the correct type, length, and format. This prevents a wide range of attacks, including SQL injection, Cross-Site Scripting (XSS), and buffer overflows.
-- **Hostname Whitelist**: The `add_room` endpoint uses a hostname whitelist to restrict the servers that the application can connect to. This prevents Server-Side Request Forgery (SSRF) attacks, where an attacker could force the server to make requests to internal resources.
-- **IP Address Blacklist**: The `add_room` endpoint also uses an IP address blacklist to prevent users from adding rooms with IP addresses. This further mitigates the risk of SSRF attacks.
+- **SSRF Protections**: The `add_room` endpoint and polling logic use a programmatic Server-Side Request Forgery (SSRF) protection via `SSRFProtectedTCPConnector` and `SSRFProtectedResolver` in `aiohttp`. This explicitly restricts and blocks connections to private, loopback, link-local, multicast, and metadata IP addresses.
 
 ### Insecure Deserialization
 - **Safe JSON Parsing**: All JSON data is parsed using the `json.loads` function, which is safe from insecure deserialization vulnerabilities. The application never uses `pickle` or other unsafe deserialization libraries.
@@ -30,6 +29,9 @@ This document outlines the security measures in place to protect user data and e
 - **Detailed Logging**: Detailed error information is logged on the server-side, which can be used to debug issues without exposing sensitive information to the user.
 
 ## Data Protection
+
+### Privacy & Identifiers
+- **Device Identification**: The application replaces the hardware `ANDROID_ID` with the Firebase App Instance ID to comply with modern privacy guidelines, ensuring cross-device identification cannot be exploited.
 
 ### API Key Encryption
 - **Fernet Encryption**: The `cheese_api_key` is encrypted using the Fernet symmetric encryption algorithm before being stored in the database. This ensures that the API key is never stored in plaintext, and that it is protected from database breaches.

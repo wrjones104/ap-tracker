@@ -21,6 +21,7 @@ The app uses Discord for authentication. The backend service polls rooms you've 
     * Useful items being received.
     * New hints being revealed.
 * **Event History:** View a filterable history of received items and revealed hints.
+* **In-game Text Client:** Connect directly to the Archipelago server to send and receive chat messages, hints, and server commands in real-time.
 * **Account Deletion:** A built-in, self-service option to permanently delete your account and all associated data.
 
 ---
