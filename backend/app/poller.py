@@ -1797,6 +1797,11 @@ async def run_room_setup(room_info, loop):
                             current_game_entries.append(DatapackageCache(
                                 game=game, checksum=checksum, entity_type='_metadata', entity_id=0, entity_name='_empty_datapackage'
                             ))
+                        else:
+                            # Always append a completion marker so we know the transaction succeeded fully
+                            current_game_entries.append(DatapackageCache(
+                                game=game, checksum=checksum, entity_type='_metadata', entity_id=0, entity_name='_completed'
+                            ))
                         
                         # Commit this datapackage IMMEDIATELY while holding the lock
                         # This ensures that still_missing checks from other rooms will succeed.
@@ -1840,9 +1845,11 @@ def db_get_missing_checksums(checksums_to_check):
     if not checksums_to_check: return set()
     session = Session()
     try:
-        # Check which checksums actually have entries in the cache
+        # A checksum is considered cached if and only if it has a '_completed' or '_empty_datapackage' marker
         existing = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
-            DatapackageCache.checksum.in_(checksums_to_check)
+            DatapackageCache.checksum.in_(checksums_to_check),
+            DatapackageCache.entity_type == '_metadata',
+            DatapackageCache.entity_name.in_(['_completed', '_empty_datapackage'])
         ).distinct())
         return set(checksums_to_check) - existing
     except Exception as e:
