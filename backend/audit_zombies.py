@@ -23,7 +23,7 @@ def run_audit():
     # Fetch all rooms currently marked as setup
     query = text("""
         SELECT id, room_id, cached_players_json, game_checksums_json 
-        FROM tracked_room 
+        FROM tracked_rooms 
         WHERE is_setup = true AND is_complete = false
     """)
     
@@ -77,7 +77,7 @@ def run_audit():
     if confirm == 'y':
         ids_to_fix = [r['id'] for r in affected_rooms]
         # Using parameterized query for security against SQL injection
-        update_query = text("UPDATE tracked_room SET is_setup = false WHERE id = ANY(:ids)")
+        update_query = text("UPDATE tracked_rooms SET is_setup = false WHERE id = ANY(:ids)")
         session.execute(update_query, {'ids': ids_to_fix})
         session.commit()
         print(f"Success: {len(affected_rooms)} rooms have been queued for re-setup by the poller.")
