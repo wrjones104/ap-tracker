@@ -1684,9 +1684,23 @@ async def run_room_setup(room_info, loop):
                             msg = await ws.receive(timeout=5)
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 room_info_msg = json.loads(msg.data)
+                                
+                                # --- ZOMBIE PORT GUARDRAIL ---
+                                # Extract games from the WS packet
+                                ws_games = set(room_info_msg[0].get('games', []))
+                                # Extract games from reliable HTTP fetch
+                                http_games = set(p[1] for p in players_raw)
+                                
+                                if ws_games != http_games:
+                                    logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Zombie port detected on {uri}! WS Games: {ws_games} | HTTP Games: {http_games}")
+                                    # Close this connection, do NOT set ws_success to True.
+                                    # The loop will either retry or safely fall back to the HTTP checksums.
+                                    continue 
+                                # -----------------------------
+
                                 checksums = room_info_msg[0].get('datapackage_checksums', {})
                                 ws_success = True
-                            
+                                
                                 # Safely check if base_domain exists before using it
                                 if base_domain and (uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}")):
                                     setup_data['cached_full_address'] = f"{base_domain}:{port}"
