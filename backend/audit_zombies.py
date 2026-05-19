@@ -45,8 +45,12 @@ def run_audit():
             
             # Extract games from HTTP player cache
             expected_games = set(p.get('game') for p in players_data if p.get('game'))
+            
             # Extract games from the stored checksums
             stored_checksum_games = set(checksums_data.keys())
+            
+            # Remove 'Archipelago' system game to prevent false positives
+            stored_checksum_games.discard('Archipelago')
 
             # If there's a mismatch, flag it
             if expected_games != stored_checksum_games:
