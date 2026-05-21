@@ -815,8 +815,8 @@ def get_item_history(current_user, room_db_id):
             NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
         )
 
-    # Order by DESC
-    query = query.order_by(NotifiedItem.id.desc())
+    # Order by ID. Use ASC when 'since' is provided to allow sequential syncing; otherwise DESC for history.
+    query = query.order_by(NotifiedItem.id.asc() if since_dt else NotifiedItem.id.desc())
 
     # --- Pagination ---
     try:
