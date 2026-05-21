@@ -42,6 +42,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
     val itemHistory: StateFlow<List<HistoryItem>> = _itemHistory
 
+    private val _trackedPlayers = MutableStateFlow<List<TrackedPlayer>>(emptyList())
+
     private val _roomNames = MutableStateFlow<Map<Int, String>>(emptyMap())
     val roomNames: StateFlow<Map<Int, String>> = _roomNames
 
@@ -115,23 +117,23 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     val selectedPlayerFilter: StateFlow<String?> = _selectedPlayerFilter
 
     val availablePlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
-        _itemHistory,
+        _trackedPlayers,
         _historyFilter,
         _activeRoomIds,
         _archivedRoomIds
-    ) { history, filter, activeIds, archivedIds ->
-        history
-            .filter { item ->
+    ) { trackedPlayers, filter, activeIds, archivedIds ->
+        trackedPlayers
+            .filter { player ->
                 when (filter) {
-                    is HistoryFilter.Active -> item.room_db_id in activeIds
-                    is HistoryFilter.Archived -> item.room_db_id in archivedIds
+                    is HistoryFilter.Active -> player.roomId in activeIds
+                    is HistoryFilter.Archived -> player.roomId in archivedIds
                     is HistoryFilter.All -> true
-                    is HistoryFilter.Specific -> item.room_db_id == filter.roomId
+                    is HistoryFilter.Specific -> player.roomId == filter.roomId
                 }
             }
-            .groupBy { it.playerName }
-            .map { (name, items) ->
-                val bestAlias = items.firstNotNullOfOrNull { it.playerAlias }
+            .groupBy { player -> player.playerName }
+            .map { (name, players) ->
+                val bestAlias = players.firstNotNullOfOrNull { it.playerAlias }
                 PlayerDisplayInfo(name, bestAlias)
             }
             .sorted()
@@ -352,6 +354,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 val finishedPlayerNames = mutableSetOf<Pair<Int, String>>()
                 val roomNameMap = mutableMapOf<Int, String>()
                 val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
+                val trackedPlayersList = mutableListOf<TrackedPlayer>()
 
                 val activeIds = mutableSetOf<Int>()
                 val archivedIds = mutableSetOf<Int>()
@@ -368,6 +371,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
                     room.tracked_slots.forEach { slot ->
                         validSlotsSet.add(room.room_db_id to slot.slot_id)
+
+                        trackedPlayersList.add(
+                            TrackedPlayer(
+                                roomId = room.room_db_id,
+                                playerName = slot.player_name,
+                                playerAlias = slot.player_alias
+                            )
+                        )
 
                         if (!slot.player_alias.isNullOrBlank()) {
                             aliasMap[room.room_db_id to slot.slot_id] = slot.player_alias
@@ -386,6 +397,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 _activeRoomIds.value = activeIds
                 _archivedRoomIds.value = archivedIds
                 _roomIcons.value = liveIcons
+                _trackedPlayers.value = trackedPlayersList
 
                 // --- STEP 2: Item History Sync (Priority 1) ---
                 repository.refreshItemHistory()
@@ -566,3 +578,9 @@ data class PlayerDisplayInfo(
         return this.originalName.compareTo(other.originalName)
     }
 }
+
+data class TrackedPlayer(
+    val roomId: Int,
+    val playerName: String,
+    val playerAlias: String?
+)

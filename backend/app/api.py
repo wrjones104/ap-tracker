@@ -746,28 +746,46 @@ def get_item_history(current_user, room_db_id):
         return jsonify({'error': 'Room not found'}), 404
 
     # 1. Identify which slots this user is tracking in this room
-    user_tracked_slots = session.query(UserTrackedSlot.slot_id).filter_by(
+    user_tracked_slots = session.query(UserTrackedSlot.slot_id, UserTrackedSlot.added_at).filter_by(
         user_id=current_user.id,
         room_id=room.id
     ).all()
-    tracked_slot_ids = {slot[0] for slot in user_tracked_slots}
 
-    if not tracked_slot_ids:
+    if not user_tracked_slots:
         return jsonify([]) 
 
     # 2. Query the history log for these slots
-    query = session.query(NotifiedItem).filter(
-        NotifiedItem.room_id == room.room_id,
-        NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
-    )
-
     since_timestamp = request.args.get('since')
+    since_dt = None
     if since_timestamp:
         try:
             since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
-            query = query.filter(NotifiedItem.timestamp > since_dt)
         except (ValueError, TypeError):
             pass 
+
+    if since_dt:
+        # Build slot-specific query filters in an `or_` clause
+        slot_filters = []
+        for slot_id, added_at in user_tracked_slots:
+            added_at_utc = added_at.replace(tzinfo=timezone.utc) if added_at and added_at.tzinfo is None else added_at
+            if added_at_utc and added_at_utc > since_dt:
+                # Bypass `since` filter for this slot (sync backfill)
+                slot_filters.append(NotifiedItem.receiving_slot_id == slot_id)
+            else:
+                # Normal filter with since_dt
+                slot_filters.append(
+                    (NotifiedItem.receiving_slot_id == slot_id) & (NotifiedItem.timestamp > since_dt)
+                )
+        query = session.query(NotifiedItem).filter(
+            NotifiedItem.room_id == room.room_id,
+            or_(*slot_filters)
+        )
+    else:
+        tracked_slot_ids = {slot[0] for slot in user_tracked_slots}
+        query = session.query(NotifiedItem).filter(
+            NotifiedItem.room_id == room.room_id,
+            NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
+        )
 
     items = query.order_by(NotifiedItem.id.desc()).all()
 
@@ -922,8 +940,12 @@ def get_global_item_history(current_user):
     """
     session = Session()
 
-    # 1. Get all (room_id, slot_id) tuples the user tracks.
-    user_tracked_slots = session.query(UserTrackedSlot.room_id, UserTrackedSlot.slot_id).filter_by(
+    # 1. Get all (room_id, slot_id, added_at) tuples the user tracks.
+    user_tracked_slots = session.query(
+        UserTrackedSlot.room_id, 
+        UserTrackedSlot.slot_id, 
+        UserTrackedSlot.added_at
+    ).filter_by(
         user_id=current_user.id
     ).all()
 
@@ -931,10 +953,10 @@ def get_global_item_history(current_user):
         return jsonify([])
 
     slots_by_room_db_id = {}
-    for room_db_id, slot_id in user_tracked_slots:
+    for room_db_id, slot_id, added_at in user_tracked_slots:
         if room_db_id not in slots_by_room_db_id:
-            slots_by_room_db_id[room_db_id] = set()
-        slots_by_room_db_id[room_db_id].add(slot_id)
+            slots_by_room_db_id[room_db_id] = []
+        slots_by_room_db_id[room_db_id].append((slot_id, added_at))
 
     # 2. Get a map of {room_db_id: room_uuid} and Pre-fetch Room Data.
     relevant_room_db_ids = list(slots_by_room_db_id.keys())
@@ -952,10 +974,38 @@ def get_global_item_history(current_user):
     # Map DB ID -> UUID for query construction
     room_db_to_uuid = {r.id: r.room_id for r in room_objects}
 
+    since_timestamp = request.args.get('since')
+    since_dt = None
+    if since_timestamp:
+        try:
+            since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            pass
+
     filters = []
-    for room_db_id, slot_ids in slots_by_room_db_id.items():
+    for room_db_id, slots_info in slots_by_room_db_id.items():
         room_uuid = room_db_to_uuid.get(room_db_id)
-        if room_uuid:
+        if not room_uuid:
+            continue
+        
+        if since_dt:
+            for slot_id, added_at in slots_info:
+                added_at_utc = added_at.replace(tzinfo=timezone.utc) if added_at and added_at.tzinfo is None else added_at
+                if added_at_utc and added_at_utc > since_dt:
+                    # Sync backfill: bypass since filter for this slot
+                    filters.append(
+                        (NotifiedItem.room_id == room_uuid) &
+                        (NotifiedItem.receiving_slot_id == slot_id)
+                    )
+                else:
+                    # Normal: apply since_dt filter
+                    filters.append(
+                        (NotifiedItem.room_id == room_uuid) &
+                        (NotifiedItem.receiving_slot_id == slot_id) &
+                        (NotifiedItem.timestamp > since_dt)
+                    )
+        else:
+            slot_ids = {s[0] for s in slots_info}
             filters.append(
                 (NotifiedItem.room_id == room_uuid) &
                 (NotifiedItem.receiving_slot_id.in_(slot_ids))
@@ -966,14 +1016,6 @@ def get_global_item_history(current_user):
 
     # 3. Build the Query
     query = session.query(NotifiedItem).filter(or_(*filters))
-
-    since_timestamp = request.args.get('since')
-    if since_timestamp:
-        try:
-            since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
-            query = query.filter(NotifiedItem.timestamp > since_dt)
-        except (ValueError, TypeError):
-            pass
 
     # Order by DESC so the client gets the newest timestamp for next sync
     query = query.order_by(NotifiedItem.id.desc())
