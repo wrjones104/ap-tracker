@@ -410,8 +410,35 @@ def add_room(current_user):
     alias = data.get('alias', '').strip()
     icon_name = data.get('icon_name')
 
-    if room_url and not room_url.startswith(('http://', 'https://')):
-        room_url = f"https://{room_url}"
+    has_explicit_scheme = room_url.startswith(('http://', 'https://'))
+
+    if room_url and not has_explicit_scheme:
+        first_part = room_url.split('/')[0].split(':')[0]
+        is_local = False
+        if os.environ.get('FLASK_ENV', 'production') == 'development':
+            if first_part in ('localhost', '127.0.0.1', '10.0.2.2'):
+                is_local = True
+            else:
+                import socket
+                try:
+                    resolved_ip = socket.gethostbyname(first_part)
+                    from ipaddress import ip_address
+                    ip = ip_address(resolved_ip)
+                    if ip.is_private or ip.is_loopback:
+                        is_local = True
+                except Exception:
+                    pass
+
+                if not is_local:
+                    if '.' not in first_part:
+                        is_local = True
+                    elif first_part.endswith(('.local', '.lan', '.internal', '.test', '.example')):
+                        is_local = True
+
+        if is_local:
+            room_url = f"http://{room_url}"
+        else:
+            room_url = f"https://{room_url}"
 
     if not room_url or len(room_url) > 512:
         return jsonify({'error': 'Invalid or missing room_url.'}), 400
@@ -420,7 +447,7 @@ def add_room(current_user):
 
     try:
         parsed_url = urlparse(room_url)
-        hostname = parsed_url.hostname
+        hostname = parsed_url.netloc or parsed_url.hostname
         room_id = parsed_url.path.split('/')[-1] # This is the ap_room_id
     except Exception as e:
         return jsonify({'error': f'Invalid room_url: {e}'}), 400
@@ -437,7 +464,7 @@ def add_room(current_user):
         logging.info(f"[API] First time seeing room {room_id}. Creating global record.")
         try:
             # Verify the room uses the secure async handshake
-            # asyncio.run blocks the worker, which is acceptable here as there's a 5s timeout.
+            # asyncio.run blocks the worker, which is acceptable here as there's a 30s timeout.
             room_data = asyncio.run(verify_ap_server(hostname, room_id))
             
             ap_tracker_id = room_data['ap_tracker_id']
@@ -495,7 +522,8 @@ def add_room(current_user):
             from .api_cheese import push_new_room_to_cheese
             import threading
             
-            tracker_url = f"https://{hostname}/tracker/{ap_tracker_id}"
+            from .utils import get_web_base_url
+            tracker_url = f"{get_web_base_url(hostname)}/tracker/{ap_tracker_id}"
             app_context = current_app._get_current_object()
             
             threading.Thread(target=push_new_room_to_cheese, args=(
@@ -746,28 +774,46 @@ def get_item_history(current_user, room_db_id):
         return jsonify({'error': 'Room not found'}), 404
 
     # 1. Identify which slots this user is tracking in this room
-    user_tracked_slots = session.query(UserTrackedSlot.slot_id).filter_by(
+    user_tracked_slots = session.query(UserTrackedSlot.slot_id, UserTrackedSlot.added_at).filter_by(
         user_id=current_user.id,
         room_id=room.id
     ).all()
-    tracked_slot_ids = {slot[0] for slot in user_tracked_slots}
 
-    if not tracked_slot_ids:
+    if not user_tracked_slots:
         return jsonify([]) 
 
     # 2. Query the history log for these slots
-    query = session.query(NotifiedItem).filter(
-        NotifiedItem.room_id == room.room_id,
-        NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
-    )
-
     since_timestamp = request.args.get('since')
+    since_dt = None
     if since_timestamp:
         try:
             since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
-            query = query.filter(NotifiedItem.timestamp > since_dt)
         except (ValueError, TypeError):
             pass 
+
+    if since_dt:
+        # Build slot-specific query filters in an `or_` clause
+        slot_filters = []
+        for slot_id, added_at in user_tracked_slots:
+            added_at_utc = added_at.replace(tzinfo=timezone.utc) if added_at and added_at.tzinfo is None else added_at
+            if added_at_utc and added_at_utc > since_dt:
+                # Bypass `since` filter for this slot (sync backfill)
+                slot_filters.append(NotifiedItem.receiving_slot_id == slot_id)
+            else:
+                # Normal filter with since_dt
+                slot_filters.append(
+                    (NotifiedItem.receiving_slot_id == slot_id) & (NotifiedItem.timestamp > since_dt)
+                )
+        query = session.query(NotifiedItem).filter(
+            NotifiedItem.room_id == room.room_id,
+            or_(*slot_filters)
+        )
+    else:
+        tracked_slot_ids = {slot[0] for slot in user_tracked_slots}
+        query = session.query(NotifiedItem).filter(
+            NotifiedItem.room_id == room.room_id,
+            NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
+        )
 
     items = query.order_by(NotifiedItem.id.desc()).all()
 
@@ -922,8 +968,12 @@ def get_global_item_history(current_user):
     """
     session = Session()
 
-    # 1. Get all (room_id, slot_id) tuples the user tracks.
-    user_tracked_slots = session.query(UserTrackedSlot.room_id, UserTrackedSlot.slot_id).filter_by(
+    # 1. Get all (room_id, slot_id, added_at) tuples the user tracks.
+    user_tracked_slots = session.query(
+        UserTrackedSlot.room_id, 
+        UserTrackedSlot.slot_id, 
+        UserTrackedSlot.added_at
+    ).filter_by(
         user_id=current_user.id
     ).all()
 
@@ -931,10 +981,10 @@ def get_global_item_history(current_user):
         return jsonify([])
 
     slots_by_room_db_id = {}
-    for room_db_id, slot_id in user_tracked_slots:
+    for room_db_id, slot_id, added_at in user_tracked_slots:
         if room_db_id not in slots_by_room_db_id:
-            slots_by_room_db_id[room_db_id] = set()
-        slots_by_room_db_id[room_db_id].add(slot_id)
+            slots_by_room_db_id[room_db_id] = []
+        slots_by_room_db_id[room_db_id].append((slot_id, added_at))
 
     # 2. Get a map of {room_db_id: room_uuid} and Pre-fetch Room Data.
     relevant_room_db_ids = list(slots_by_room_db_id.keys())
@@ -952,10 +1002,38 @@ def get_global_item_history(current_user):
     # Map DB ID -> UUID for query construction
     room_db_to_uuid = {r.id: r.room_id for r in room_objects}
 
+    since_timestamp = request.args.get('since')
+    since_dt = None
+    if since_timestamp:
+        try:
+            since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            pass
+
     filters = []
-    for room_db_id, slot_ids in slots_by_room_db_id.items():
+    for room_db_id, slots_info in slots_by_room_db_id.items():
         room_uuid = room_db_to_uuid.get(room_db_id)
-        if room_uuid:
+        if not room_uuid:
+            continue
+        
+        if since_dt:
+            for slot_id, added_at in slots_info:
+                added_at_utc = added_at.replace(tzinfo=timezone.utc) if added_at and added_at.tzinfo is None else added_at
+                if added_at_utc and added_at_utc > since_dt:
+                    # Sync backfill: bypass since filter for this slot
+                    filters.append(
+                        (NotifiedItem.room_id == room_uuid) &
+                        (NotifiedItem.receiving_slot_id == slot_id)
+                    )
+                else:
+                    # Normal: apply since_dt filter
+                    filters.append(
+                        (NotifiedItem.room_id == room_uuid) &
+                        (NotifiedItem.receiving_slot_id == slot_id) &
+                        (NotifiedItem.timestamp > since_dt)
+                    )
+        else:
+            slot_ids = {s[0] for s in slots_info}
             filters.append(
                 (NotifiedItem.room_id == room_uuid) &
                 (NotifiedItem.receiving_slot_id.in_(slot_ids))
@@ -966,14 +1044,6 @@ def get_global_item_history(current_user):
 
     # 3. Build the Query
     query = session.query(NotifiedItem).filter(or_(*filters))
-
-    since_timestamp = request.args.get('since')
-    if since_timestamp:
-        try:
-            since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
-            query = query.filter(NotifiedItem.timestamp > since_dt)
-        except (ValueError, TypeError):
-            pass
 
     # Order by DESC so the client gets the newest timestamp for next sync
     query = query.order_by(NotifiedItem.id.desc())

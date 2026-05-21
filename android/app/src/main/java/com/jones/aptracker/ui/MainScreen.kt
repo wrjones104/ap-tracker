@@ -86,6 +86,7 @@ fun MainScreen(
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
     val isSyncingCheese by roomsViewModel.isSyncingCheese.collectAsState()
     val rooms by roomsViewModel.rooms.collectAsState()
+    val isAddingRoom by roomsViewModel.isAddingRoom.collectAsState()
 
     var showUnSnoozeDialog by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(Instant.now()) }
@@ -155,10 +156,13 @@ fun MainScreen(
 
     if (showAddRoomDialog) {
         AddRoomDialog(
+            isAdding = isAddingRoom,
             onDismiss = { showAddRoomDialog = false },
             onAdd = { url, alias, icon ->
-                roomsViewModel.addRoom(url, alias, icon) { newRoomAliasToFind = alias }
-                showAddRoomDialog = false
+                roomsViewModel.addRoom(url, alias, icon) {
+                    newRoomAliasToFind = alias
+                    showAddRoomDialog = false
+                }
             }
         )
     }

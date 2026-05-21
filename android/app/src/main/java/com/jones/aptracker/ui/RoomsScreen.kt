@@ -525,7 +525,7 @@ fun RoomOptionsSheet(
 // --- Dialogs ---
 
 @Composable
-fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit) {
+fun AddRoomDialog(isAdding: Boolean, onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit) {
     var roomUrl by remember { mutableStateOf("") }
     var alias by remember { mutableStateOf("") }
     var selectedIconName by remember { mutableStateOf("default_icon") }
@@ -546,12 +546,12 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
         trimmed.isNotBlank() && (trimmed.contains(".") || trimmed.contains("localhost"))
     }
 
-    // Button is enabled only if URL looks valid, is NOT a socket string, and alias is set
-    val canAdd = isValidUrlFormat && !isSocketFormat && alias.isNotBlank()
+    // Button is enabled only if URL looks valid, is NOT a socket string, alias is set, and not currently adding
+    val canAdd = isValidUrlFormat && !isSocketFormat && alias.isNotBlank() && !isAdding
 
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isAdding) onDismiss() },
         title = { Text("Add New Room") },
         text = {
             Column {
@@ -561,11 +561,12 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
                     label = { Text("Room URL") },
                     placeholder = { Text("archipelago.gg/room/...") },
                     singleLine = true,
+                    enabled = !isAdding,
                     // Highlight error state if user enters socket format
                     isError = isSocketFormat,
                     modifier = Modifier.fillMaxWidth(),
                     trailingIcon = {
-                        IconButton(onClick = { showUrlHelp = true }) {
+                        IconButton(onClick = { showUrlHelp = true }, enabled = !isAdding) {
                             Icon(
                                 // Use Warning icon if error, otherwise Info
                                 imageVector = if (isSocketFormat) Icons.Default.Warning else Icons.Default.Info,
@@ -593,12 +594,30 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
                     onValueChange = { alias = it },
                     label = { Text("Room Name") },
                     singleLine = true,
+                    enabled = !isAdding,
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(Modifier.height(16.dp))
                 Text("Select Icon", style = MaterialTheme.typography.labelMedium)
-                IconPicker(selected = selectedIconName, onSelect = { selectedIconName = it })
+                IconPicker(selected = selectedIconName, onSelect = { if (!isAdding) selectedIconName = it })
+
+                if (isAdding) {
+                    Spacer(Modifier.height(16.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Verifying Archipelago room...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
@@ -608,7 +627,7 @@ fun AddRoomDialog(onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit
             ) { Text("Add") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss, enabled = !isAdding) { Text("Cancel") }
         }
     )
 
