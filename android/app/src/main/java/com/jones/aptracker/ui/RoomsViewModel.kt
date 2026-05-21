@@ -32,6 +32,9 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSyncingCheese = MutableStateFlow(false)
     val isSyncingCheese: StateFlow<Boolean> = _isSyncingCheese.asStateFlow()
 
+    private val _isAddingRoom = MutableStateFlow(false)
+    val isAddingRoom: StateFlow<Boolean> = _isAddingRoom.asStateFlow()
+
     val isAutoSyncEnabled = settingsManager.isAutoSyncEnabled.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -110,6 +113,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addRoom(roomUrl: String, alias: String, iconName: String, onSuccess: () -> Unit) {
         viewModelScope.launch {
+            _isAddingRoom.value = true
             _errorMessage.value = null
             var cleanUrl = roomUrl.trim()
             if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
@@ -125,6 +129,8 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to add room. Check connection."
                 e.printStackTrace()
+            } finally {
+                _isAddingRoom.value = false
             }
         }
     }

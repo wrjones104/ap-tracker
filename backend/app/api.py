@@ -410,8 +410,35 @@ def add_room(current_user):
     alias = data.get('alias', '').strip()
     icon_name = data.get('icon_name')
 
-    if room_url and not room_url.startswith(('http://', 'https://')):
-        room_url = f"https://{room_url}"
+    has_explicit_scheme = room_url.startswith(('http://', 'https://'))
+
+    if room_url and not has_explicit_scheme:
+        first_part = room_url.split('/')[0].split(':')[0]
+        is_local = False
+        if os.environ.get('FLASK_ENV', 'production') == 'development':
+            if first_part in ('localhost', '127.0.0.1', '10.0.2.2'):
+                is_local = True
+            else:
+                import socket
+                try:
+                    resolved_ip = socket.gethostbyname(first_part)
+                    from ipaddress import ip_address
+                    ip = ip_address(resolved_ip)
+                    if ip.is_private or ip.is_loopback:
+                        is_local = True
+                except Exception:
+                    pass
+
+                if not is_local:
+                    if '.' not in first_part:
+                        is_local = True
+                    elif first_part.endswith(('.local', '.lan', '.internal', '.test', '.example')):
+                        is_local = True
+
+        if is_local:
+            room_url = f"http://{room_url}"
+        else:
+            room_url = f"https://{room_url}"
 
     if not room_url or len(room_url) > 512:
         return jsonify({'error': 'Invalid or missing room_url.'}), 400
@@ -420,7 +447,7 @@ def add_room(current_user):
 
     try:
         parsed_url = urlparse(room_url)
-        hostname = parsed_url.hostname
+        hostname = parsed_url.netloc or parsed_url.hostname
         room_id = parsed_url.path.split('/')[-1] # This is the ap_room_id
     except Exception as e:
         return jsonify({'error': f'Invalid room_url: {e}'}), 400
@@ -437,7 +464,7 @@ def add_room(current_user):
         logging.info(f"[API] First time seeing room {room_id}. Creating global record.")
         try:
             # Verify the room uses the secure async handshake
-            # asyncio.run blocks the worker, which is acceptable here as there's a 5s timeout.
+            # asyncio.run blocks the worker, which is acceptable here as there's a 30s timeout.
             room_data = asyncio.run(verify_ap_server(hostname, room_id))
             
             ap_tracker_id = room_data['ap_tracker_id']
@@ -495,7 +522,8 @@ def add_room(current_user):
             from .api_cheese import push_new_room_to_cheese
             import threading
             
-            tracker_url = f"https://{hostname}/tracker/{ap_tracker_id}"
+            from .utils import get_web_base_url
+            tracker_url = f"{get_web_base_url(hostname)}/tracker/{ap_tracker_id}"
             app_context = current_app._get_current_object()
             
             threading.Thread(target=push_new_room_to_cheese, args=(

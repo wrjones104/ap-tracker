@@ -42,7 +42,7 @@ import json
 
 def _validate_ip(ip):
     """Checks if an IP address is safe to connect to."""
-    if os.environ.get('FLASK_ENV', 'production') == 'development' and ip.is_loopback:
+    if os.environ.get('FLASK_ENV', 'production') == 'development' and (ip.is_loopback or ip.is_private):
         return
 
     if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or not ip.is_global:
@@ -86,6 +86,40 @@ def extract_ap_room_id(url_string):
         pass
     return None
 
+def get_web_base_url(hostname: str) -> str:
+    """
+    Returns the full web base URL (scheme + host [+ port]) for the given hostname.
+    In development, if the hostname is a loopback/private address or contains a local host/port,
+    it defaults to http:// instead of https://.
+    """
+    if not hostname:
+        return "https://archipelago.gg"
+        
+    use_http = False
+    if os.environ.get('FLASK_ENV', 'production') == 'development':
+        host_only = hostname.split(':')[0]
+        if host_only in ('localhost', '127.0.0.1', '10.0.2.2'):
+            use_http = True
+        else:
+            import socket
+            try:
+                resolved_ip = socket.gethostbyname(host_only)
+                from ipaddress import ip_address
+                ip = ip_address(resolved_ip)
+                if ip.is_private or ip.is_loopback:
+                    use_http = True
+            except Exception:
+                pass
+
+            if not use_http:
+                if '.' not in host_only:
+                    use_http = True
+                elif host_only.endswith(('.local', '.lan', '.internal', '.test', '.example')):
+                    use_http = True
+                
+    scheme = "http" if use_http else "https"
+    return f"{scheme}://{hostname}"
+
 async def verify_ap_server(hostname: str, room_id: str):
     """
     Verifies that the given Archipelago server URL is valid and reachable.
@@ -98,19 +132,26 @@ async def verify_ap_server(hostname: str, room_id: str):
     connector = SSRFProtectedTCPConnector()
     async with aiohttp.ClientSession(connector=connector) as session:
         # Step 1: Check room status endpoint
-        status_url = f"https://{hostname}/api/room_status/{room_id}"
+        base_url = get_web_base_url(hostname)
+        status_url = f"{base_url}/api/room_status/{room_id}"
 
         try:
-            # We enforce a strict timeout of 5 seconds, and payload size limit by reading raw bytes
-            async with session.get(status_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+            # We enforce a strict timeout of 30 seconds, and payload size limit by reading raw bytes
+            async with session.get(status_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 if response.status == 404:
                     raise ValueError(f"Room {room_id} not found on server {hostname}.")
                 response.raise_for_status()
 
-                # Limit initial read to 1MB to prevent DoS via memory exhaustion
-                raw_data = await response.content.read(1024 * 1024)
-                if not response.content.at_eof():
-                     raise ValueError("Server response is too large.")
+                # Limit read to 20MB to prevent DoS via memory exhaustion
+                raw_data = bytearray()
+                limit = 20 * 1024 * 1024
+                while len(raw_data) < limit:
+                    chunk = await response.content.read(65536)
+                    if not chunk:
+                        break
+                    raw_data.extend(chunk)
+                else:
+                    raise ValueError("Server response is too large.")
 
                 status_data = json.loads(raw_data)
 
@@ -128,12 +169,13 @@ async def verify_ap_server(hostname: str, room_id: str):
             raise ValueError(f"Could not connect to the room to verify its status: {e}")
 
         # Step 2: Attempt WebSocket handshake
+        clean_host = hostname.split(':')[0]
         uris_to_try = [
-            f"wss://{hostname}:{port}",
-            f"ws://{hostname}:{port}"
+            f"wss://{clean_host}:{port}",
+            f"ws://{clean_host}:{port}"
         ]
 
-        parts = hostname.split('.')
+        parts = clean_host.split('.')
         base_domain = None
         if len(parts) > 2:
             base_domain = ".".join(parts[1:])
@@ -143,16 +185,16 @@ async def verify_ap_server(hostname: str, room_id: str):
             ])
 
         ws_success = False
-        successful_hostname = hostname
+        successful_hostname = clean_host
 
         for uri in uris_to_try:
             if ws_success:
                 break
 
             try:
-                # 5-second timeout for websocket connection and read
-                async with session.ws_connect(uri, timeout=5) as ws:
-                    msg = await ws.receive(timeout=5)
+                # 10-second timeout for websocket connection and read
+                async with session.ws_connect(uri, timeout=10) as ws:
+                    msg = await ws.receive(timeout=10)
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         room_info_msg = json.loads(msg.data)
                         if isinstance(room_info_msg, list) and len(room_info_msg) > 0:
@@ -178,7 +220,7 @@ async def verify_ap_server(hostname: str, room_id: str):
         final_address = f"{successful_hostname}:{port}"
 
         return {
-            'hostname': successful_hostname,
+            'hostname': hostname, # Keep hostname (which may include port in local dev) intact for references
             'room_id': room_id,
             'ap_tracker_id': ap_tracker_id,
             'cached_full_address': final_address,
@@ -186,7 +228,8 @@ async def verify_ap_server(hostname: str, room_id: str):
             'cached_total_slots': total_slots
         }
 
-async def fetch_json_with_status(url, session=None, headers=None, timeout=15):
+
+async def fetch_json_with_status(url, session=None, headers=None, timeout=60):
     """
     Fetches JSON and returns a tuple: (json_data, status_code).
     Used when the status code (e.g. 404) matters for logic.

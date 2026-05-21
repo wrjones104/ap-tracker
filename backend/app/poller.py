@@ -25,7 +25,11 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, SlotItemThreshold, SlotItemCount
 )
-from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector
+from .utils import (
+    get_user_agent_string, get_cheese_headers, extract_ap_room_id,
+    fetch_json_with_status, db_suspend_room, is_snoozed,
+    SSRFProtectedTCPConnector, get_web_base_url
+)
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -118,7 +122,7 @@ async def _attempt_room_wake(hostname, room_uuid):
     """
     Attempts to 'wake' a sleeping AP room by sending an HTTP GET to its public page.
     """
-    url = f"https://{hostname}/room/{room_uuid}"
+    url = f"{get_web_base_url(hostname)}/room/{room_uuid}"
     logging.info(f"[POLLER_WAKE] Attempting to wake room: {url}")
     session = get_aiohttp_session()
     try:
@@ -200,7 +204,7 @@ def db_remove_invalid_tokens(tokens_to_remove):
 async def fetch_json(url, headers=None):
     session = get_aiohttp_session()
     try:
-        async with session.get(url, timeout=15) as response:
+        async with session.get(url, timeout=60) as response:
             if response.status == 429:
                 retry_after = response.headers.get("Retry-After", "unknown")
                 logging.warning(f"[HTTP_429] Rate limited on {url}. Retry-After: {retry_after}")
@@ -1274,9 +1278,11 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                     room.room_id = real_uuid
                     try:
                         parsed = urlparse(new_tracker_data['room_link'])
-                        if parsed.hostname:
-                            room.hostname = parsed.hostname
-                            room.cached_full_address = f"{parsed.hostname}:{new_tracker_data.get('last_port', '')}"
+                        new_host = parsed.netloc or parsed.hostname
+                        if new_host:
+                            room.hostname = new_host
+                            clean_host = new_host.split(':')[0]
+                            room.cached_full_address = f"{clean_host}:{new_tracker_data.get('last_port', '')}"
                     except Exception: pass
 
         # =========================================================================
@@ -1377,7 +1383,7 @@ async def run_room_poll(room_info, loop):
     if not tracker_id: return
 
     # --- GATEKEEPER START ---
-    status_url = f"https://{hostname}/api/room_status/{room_uuid}"
+    status_url = f"{get_web_base_url(hostname)}/api/room_status/{room_uuid}"
     status_data, status_code = await fetch_json_with_status(status_url)
 
     # Variables to track what we find
@@ -1455,7 +1461,7 @@ async def run_room_poll(room_info, loop):
             logging.warning(f"[HIGH_LOAD] Room {db_id} waited {wait_duration:.2f}s for semaphore.")
             
         # 1. FETCH THE DATA
-        tracker_data = await fetch_json(f"https://{hostname}/api/tracker/{tracker_id}")
+        tracker_data = await fetch_json(f"{get_web_base_url(hostname)}/api/tracker/{tracker_id}")
 
     # 2. CHECK IF DATA EXISTS
     if not tracker_data:
@@ -1583,7 +1589,7 @@ async def run_room_setup(room_info, loop):
     setup_data = {} 
     
     try:
-        room_status = await fetch_json(f"https://{hostname}/api/room_status/{room_uuid}")
+        room_status = await fetch_json(f"{get_web_base_url(hostname)}/api/room_status/{room_uuid}")
         if not room_status:
             logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to fetch room status.")
             await loop.run_in_executor(None, db_handle_setup_failure, db_id)
@@ -1606,7 +1612,7 @@ async def run_room_setup(room_info, loop):
             logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Found {len(players)} players. Initializing cache.")
         # ------------------------------
 
-        tracker_url = f"https://{hostname}/api/tracker/{new_tracker_id}"
+        tracker_url = f"{get_web_base_url(hostname)}/api/tracker/{new_tracker_id}"
         tracker_data = await fetch_json(tracker_url)
         
         finished_slots = set()
@@ -1619,7 +1625,7 @@ async def run_room_setup(room_info, loop):
                     if isinstance(s, dict) and s.get('status') == 30:
                         finished_slots.add(s.get('player'))
 
-        static_tracker_url = f"https://{hostname}/api/static_tracker/{new_tracker_id}"
+        static_tracker_url = f"{get_web_base_url(hostname)}/api/static_tracker/{new_tracker_id}"
         static_data = await fetch_json(static_tracker_url)
 
         if not static_data:
@@ -1645,9 +1651,10 @@ async def run_room_setup(room_info, loop):
                 'is_finished': slot_id in finished_slots
             })
         
+        clean_host = hostname.split(':')[0]
         setup_data['cached_players_json'] = json.dumps(player_list)
         setup_data['cached_total_slots'] = len(player_list)
-        setup_data['cached_full_address'] = f"{hostname}:{room_status.get('last_port', '')}"
+        setup_data['cached_full_address'] = f"{clean_host}:{room_status.get('last_port', '')}"
         setup_data['last_api_check'] = datetime.utcnow()
 
         port = room_status.get('last_port')
@@ -1655,11 +1662,11 @@ async def run_room_setup(room_info, loop):
 
         if port:
             uris_to_try = [
-                f"wss://{hostname}:{port}",
-                f"ws://{hostname}:{port}"
+                f"wss://{clean_host}:{port}",
+                f"ws://{clean_host}:{port}"
             ]
             
-            parts = hostname.split('.')
+            parts = clean_host.split('.')
             base_domain = None 
             
             if len(parts) > 2:
@@ -1680,8 +1687,8 @@ async def run_room_setup(room_info, loop):
                     try:
                         logging.debug(f"[POLLER_SETUP] WebSocket attempt {attempt}/{max_ws_retries} for {uri}")
                         session = get_aiohttp_session()
-                        async with session.ws_connect(uri, timeout=5) as ws:
-                            msg = await ws.receive(timeout=5)
+                        async with session.ws_connect(uri, timeout=10) as ws:
+                            msg = await ws.receive(timeout=10)
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 room_info_msg = json.loads(msg.data)
                                 
@@ -1760,7 +1767,7 @@ async def run_room_setup(room_info, loop):
                             logging.debug(f"[POLLER_SETUP_DEBUG][RoomDBID:{db_id}] Datapackage for {game} ({checksum}) already cached. Skipping.")
                             continue
 
-                        game_data = await fetch_json(f"https://{hostname}/api/datapackage/{checksum}")
+                        game_data = await fetch_json(f"{get_web_base_url(hostname)}/api/datapackage/{checksum}")
                         if not game_data: 
                             logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch datapackage for {game} ({checksum})")
                             any_datapackage_failed = True
