@@ -142,9 +142,9 @@ async def verify_ap_server(hostname: str, room_id: str):
                     raise ValueError(f"Room {room_id} not found on server {hostname}.")
                 response.raise_for_status()
 
-                # Limit read to 20MB to prevent DoS via memory exhaustion
+                # Limit read to 5MB to prevent DoS via memory exhaustion
                 raw_data = bytearray()
-                limit = 20 * 1024 * 1024
+                limit = 5 * 1024 * 1024
                 while len(raw_data) < limit:
                     chunk = await response.content.read(65536)
                     if not chunk:
