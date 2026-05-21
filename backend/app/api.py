@@ -448,7 +448,7 @@ def add_room(current_user):
     try:
         parsed_url = urlparse(room_url)
         hostname = parsed_url.netloc or parsed_url.hostname
-        room_id = parsed_url.path.split('/')[-1] # This is the ap_room_id
+        room_id = parsed_url.path.strip('/').split('/')[-1] # This is the ap_room_id
     except Exception as e:
         return jsonify({'error': f'Invalid room_url: {e}'}), 400
 
@@ -815,7 +815,20 @@ def get_item_history(current_user, room_db_id):
             NotifiedItem.receiving_slot_id.in_(tracked_slot_ids)
         )
 
-    items = query.order_by(NotifiedItem.id.desc()).all()
+    # Order by DESC
+    query = query.order_by(NotifiedItem.id.desc())
+
+    # --- Pagination ---
+    try:
+        limit = max(1, min(int(request.args.get('limit', 50)), 100))
+        offset = max(int(request.args.get('offset', 0)), 0)
+    except (ValueError, TypeError):
+        limit = 50
+        offset = 0
+    
+    query = query.limit(limit).offset(offset)
+
+    items = query.all()
 
     # 3. Calculate counts for each unique item in this history set
     item_counts = {}
