@@ -670,6 +670,10 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     except Exception as e:
                         logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to check threshold: {e}")
 
+                    if not is_threshold_hit:
+                        logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} item '{item_name}' count ({current_total_count}) did not match milestones {threshold}. Suppressing.")
+                        continue
+
                 # --- IGNORE LIST CHECK (Only evaluated if it's NOT a threshold milestone) ---
                 if not is_threshold_hit:
                     should_ignore = False
