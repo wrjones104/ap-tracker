@@ -18,6 +18,10 @@ class HistoryRepository(
         return historyDao.getHistoryForRoom(roomId)
     }
 
+    suspend fun getHistoryForRoomPaged(roomId: Int, limit: Int, offset: Int): List<HistoryItemEntity> {
+        return historyDao.getHistoryForRoomPaged(roomId, limit, offset)
+    }
+
     suspend fun getGlobalHistory(): List<HistoryItemEntity> {
         return historyDao.getGlobalHistory()
     }

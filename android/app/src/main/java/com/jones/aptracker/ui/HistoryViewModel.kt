@@ -227,6 +227,15 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage
 
+    private val _navigateToActivityTab = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(replay = 0)
+    val navigateToActivityTab: kotlinx.coroutines.flow.SharedFlow<Unit> = _navigateToActivityTab
+
+    fun triggerNavigateToActivity() {
+        viewModelScope.launch {
+            _navigateToActivityTab.emit(Unit)
+        }
+    }
+
     init {
         val db = AppDatabase.getInstance(application)
         val historyDao = db.historyDao()
@@ -251,9 +260,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
         Log.d("HistoryViewModel", "Loading history for Room ID: ${roomId ?: "Global"}")
         
-        // Reset pagination for new context
-        currentPageOffset = 0
-        isAllDataLoaded = false
+        // Clear current items while loading new context
         _itemHistory.value = emptyList()
         
         refreshAllHistory()
@@ -262,6 +269,35 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setHistoryFilter(filter: HistoryFilter) {
         _historyFilter.value = filter
         _selectedPlayerFilter.value = null
+        currentRoomId = when (filter) {
+            is HistoryFilter.Specific -> filter.roomId
+            else -> null
+        }
+        reloadHistory()
+    }
+
+    fun reloadHistory() {
+        viewModelScope.launch {
+            isLoading.value = true
+            errorMessage.value = null
+            try {
+                val rawItemEntities = when (val filter = _historyFilter.value) {
+                    is HistoryFilter.Specific -> {
+                        repository.getHistoryForRoom(filter.roomId)
+                    }
+                    else -> {
+                        repository.getGlobalHistory()
+                    }
+                }
+                
+                _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
+            } catch (e: Exception) {
+                errorMessage.value = "Failed to load history: ${e.message}"
+                Log.e("HistoryViewModel", "Error reloading history", e)
+            } finally {
+                isLoading.value = false
+            }
+        }
     }
 
     private fun fetchUserPreferences() {
@@ -341,10 +377,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             errorMessage.value = null
 
             try {
-                // Reset pagination on full refresh
-                currentPageOffset = 0
-                isAllDataLoaded = false
-                
                 // --- STEP 1: Metadata & Room Setup (Fast) ---
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
 
@@ -390,6 +422,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
+                Log.d("HistoryViewModel", "TRACKED ROOMS from API: ${trackedRooms.size}")
+                trackedRooms.forEach { room ->
+                    Log.d("HistoryViewModel", "  Room ${room.room_db_id} (${room.room_alias}): tracked_slots=${room.tracked_slots.map { it.slot_id }}")
+                }
+                Log.d("HistoryViewModel", "VALID SLOTS SET: $validSlotsSet")
+
                 _roomNames.value = roomNameMap
                 _validTrackedSlots.value = validSlotsSet
                 _liveAliases.value = aliasMap
@@ -405,13 +443,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 val rawItemEntities = if (currentRoomId != null) {
                     repository.getHistoryForRoom(currentRoomId!!)
                 } else {
-                    // Start with the first page of global history
-                    repository.getGlobalHistoryPaged(PAGE_SIZE, 0)
-                }
-                
-                if (currentRoomId == null) {
-                    currentPageOffset = rawItemEntities.size
-                    isAllDataLoaded = rawItemEntities.size < PAGE_SIZE
+                    repository.getGlobalHistory()
                 }
 
                 _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
@@ -440,13 +472,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun loadNextPage() {
-        if (currentRoomId != null || isAllDataLoaded || _isNextPageLoading.value) return
+        if (isAllDataLoaded || _isNextPageLoading.value) return
 
         viewModelScope.launch {
             _isNextPageLoading.value = true
             try {
-                Log.d("HistoryViewModel", "Loading next page of history at offset $currentPageOffset")
-                val nextEntities = repository.getGlobalHistoryPaged(PAGE_SIZE, currentPageOffset)
+                Log.d("HistoryViewModel", "Loading next page of history at offset $currentPageOffset for room: $currentRoomId")
+                val nextEntities = if (currentRoomId != null) {
+                    repository.getHistoryForRoomPaged(currentRoomId!!, PAGE_SIZE, currentPageOffset)
+                } else {
+                    repository.getGlobalHistoryPaged(PAGE_SIZE, currentPageOffset)
+                }
                 
                 if (nextEntities.isEmpty()) {
                     isAllDataLoaded = true
@@ -472,9 +508,15 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         val liveIcons = _roomIcons.value
         val confirmedFinished = _confirmedFinishedPlayers.value
         
-        return entities.mapNotNull { entity ->
+        Log.d("HistoryViewModel", "mapEntities: ${entities.size} entities, validSlotsSet=$validSlotsSet")
+        var filteredCount = 0
+        val result = entities.mapNotNull { entity ->
             if (entity.roomId != null && entity.slot_id != null) {
                 if (!validSlotsSet.contains(entity.roomId to entity.slot_id)) {
+                    filteredCount++
+                    if (filteredCount <= 5) {
+                        Log.d("HistoryViewModel", "  FILTERED OUT: roomId=${entity.roomId}, slot_id=${entity.slot_id}, player=${entity.playerName}")
+                    }
                     return@mapNotNull null
                 }
             }
@@ -512,6 +554,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 receivedCount = entity.receivedCount
             )
         }
+        Log.d("HistoryViewModel", "mapEntities: $filteredCount items filtered out, ${result.size} items remaining")
+        return result
     }
 
     fun onSearchQueryChanged(query: String) { searchQuery.value = query }

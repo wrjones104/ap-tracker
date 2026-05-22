@@ -12,6 +12,9 @@ interface HistoryDao {
     @Query("SELECT * FROM history_items WHERE roomId = :roomId ORDER BY timestamp DESC")
     suspend fun getHistoryForRoom(roomId: Int): List<HistoryItemEntity>
 
+    @Query("SELECT * FROM history_items WHERE roomId = :roomId ORDER BY timestamp DESC LIMIT :limit OFFSET :offset")
+    suspend fun getHistoryForRoomPaged(roomId: Int, limit: Int, offset: Int): List<HistoryItemEntity>
+
     @Query("SELECT * FROM history_items ORDER BY timestamp DESC")
     suspend fun getGlobalHistory(): List<HistoryItemEntity>
     
