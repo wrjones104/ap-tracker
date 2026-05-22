@@ -582,9 +582,6 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
             return {}
 
     # 2. Notify Items
-    # Note: item_counts now contains (room_uuid, slot_id, item_id) -> total_count_after_this_batch
-    # which was pre-calculated in db_process_poll_data from SlotItemCount + current batch.
-
     for item_data in new_items_for_notify:
         item_name = name_lookup_map.get(
             (item_data['game_checksum'], 'item', item_data['item_id']),
@@ -641,15 +638,9 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                         logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Cross-slot item (From {send_id} to {rid}).")
                         continue
                 
-                # Resolving Aliases for Display and Context
-                # 'alias' is the User's custom name for this Room
                 room_alias = aliases_by_user.get(user_id, "Unknown Room")
-
-                # 'receiver_alias' is the User's custom name for this specific SLOT (if set), or fall back to full name
                 receiver_alias = short_name_map.get(rid, f"Slot {rid}")
-                # 'receiver_original' is the actual player name from the server
                 receiver_original = full_name_map.get(rid, f"Slot {rid}")
-
 
                 # Check Finished Suppression
                 wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
@@ -662,9 +653,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     logging.debug(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
                     continue
 
-                # --- IGNORE LIST CHECK ---
                 normalized_item_name = item_name.lower().strip()
-                should_ignore = False
 
                 # --- THRESHOLD CHECK ---
                 is_threshold_hit = False
@@ -672,38 +661,32 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
                 if threshold:
                     try:
-                        db_count_key = (item_data['item_key_batch'][0], rid, item_id)
                         current_total_count = item_data.get('current_total_count', 0)
-                        
                         logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': Total={current_total_count}, Thresholds={threshold}")
 
-                        if current_total_count not in threshold:
-                            logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} hit milestone {current_total_count} (Not in {threshold}) for '{item_name}'. Skipping.")
-                            continue
-                        else:
+                        if current_total_count in threshold:
                             is_threshold_hit = True
                             logging.info(f"[THRESHOLD_HIT] User {user_id}: Slot {rid} reached threshold milestone {current_total_count} for '{item_name}'. Notifying!")
                     except Exception as e:
                         logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to check threshold: {e}")
-                else:
-                    # Log if we find no threshold for an item that we might expect one for (optional, very noisy)
-                    # logging.debug(f"[THRESHOLD_NONE] No threshold for {(slot_prefs.id, normalized_item_name)}")
-                    pass
-                
-                if user_prefs.ignore_items:
-                    for ignore_rule in user_prefs.ignore_items:
-                        rule_pattern = ignore_rule.item_name.lower().strip()
-                        if fnmatch.fnmatch(normalized_item_name, rule_pattern):
-                            if not ignore_rule.game_name:
-                                should_ignore = True
-                                break
-                            elif ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
-                                should_ignore = True
-                                break
-                
-                if should_ignore and not is_threshold_hit:
-                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}') for game '{item_data['receiver_game']}'.")
-                    continue
+
+                # --- IGNORE LIST CHECK (Only evaluated if it's NOT a threshold milestone) ---
+                if not is_threshold_hit:
+                    should_ignore = False
+                    if user_prefs.ignore_items:
+                        for ignore_rule in user_prefs.ignore_items:
+                            rule_pattern = ignore_rule.item_name.lower().strip()
+                            if fnmatch.fnmatch(normalized_item_name, rule_pattern):
+                                if not ignore_rule.game_name:
+                                    should_ignore = True
+                                    break
+                                elif ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                    should_ignore = True
+                                    break
+                    
+                    if should_ignore:
+                        logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}') for game '{item_data['receiver_game']}'.")
+                        continue
 
                 # --- CONDENSED MESSAGING CHECK ---
                 use_condensed = user_prefs.use_condensed_messages_default
@@ -734,7 +717,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 if is_threshold_hit:
                     title_prefix = f"{icon_milestone}Milestone! {item_name} ({current_total_count})"
                     item_type = "item_milestone"
-                    should_notify = True # Threshold hits always notify
+                    should_notify = True # Threshold milestones always notify
                 elif is_progression:
                     title_prefix = f"{icon_prog}{item_name}"
                     item_type = "item_progression"
@@ -757,8 +740,6 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                         'body': body, 
                         'type': item_type, 
                         'details': item_data['item_key_batch'],
-                        
-                        # --- Context for clean bundle formatting ---
                         'item_context': {
                             'item_name': item_name,
                             'alias': receiver_alias,
