@@ -66,8 +66,6 @@ sealed class BottomNavItem(val route: String, val icon: ImageVector, val label: 
 fun MainScreen(
     onLogoutClick: () -> Unit,
     onGuestUpgradeClick: () -> Unit,
-    onNavigateToRoomHistory: (Int, String) -> Unit,
-    onNavigateToGlobalHistory: () -> Unit,
     onNavigateToPlayers: (Int, String) -> Unit,
     onNavigateToIgnoreList: () -> Unit,
     onNavigateToCredits: () -> Unit,
@@ -75,9 +73,25 @@ fun MainScreen(
     onNavigateToArchived: () -> Unit,
     onNavigateToSlotDetail: (Int, Int) -> Unit,
     userViewModel: UserViewModel = viewModel(),
-    roomsViewModel: RoomsViewModel = viewModel()
+    roomsViewModel: RoomsViewModel = viewModel(),
+    historyViewModel: HistoryViewModel = viewModel()
 ) {
     val bottomNavController = rememberNavController()
+
+    val historyFilter by historyViewModel.historyFilter.collectAsState()
+    val roomNames by historyViewModel.roomNames.collectAsState()
+    val pendingNavigateToActivity by historyViewModel.pendingNavigateToActivity.collectAsState()
+
+    LaunchedEffect(pendingNavigateToActivity) {
+        if (pendingNavigateToActivity) {
+            bottomNavController.navigate(BottomNavItem.Activity.route) {
+                popUpTo(bottomNavController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+            historyViewModel.clearPendingNavigateToActivity()
+        }
+    }
 
     // --- 1. Get URI Handler for links ---
     val uriHandler = LocalUriHandler.current
@@ -176,7 +190,14 @@ fun MainScreen(
             val titleText = when (currentRoute) {
                 BottomNavItem.Rooms.route -> "Tracked Rooms"
                 BottomNavItem.Slots.route -> "My Slots"
-                BottomNavItem.Activity.route -> "Activity Feed"
+                BottomNavItem.Activity.route -> {
+                    when (val filter = historyFilter) {
+                        HistoryFilter.Active -> "Active Rooms"
+                        HistoryFilter.Archived -> "Archived Rooms"
+                        HistoryFilter.All -> "All History"
+                        is HistoryFilter.Specific -> roomNames[filter.roomId] ?: "Room History"
+                    }
+                }
                 BottomNavItem.Profile.route -> "Profile"
                 else -> "Archipelago Tracker"
             }
@@ -311,7 +332,14 @@ fun MainScreen(
                 RoomsScreen(
                     roomsViewModel = roomsViewModel,
                     userViewModel = userViewModel,
-                    onRoomClick = onNavigateToRoomHistory,
+                    onRoomClick = { roomId, _ ->
+                        historyViewModel.loadHistoryFor(roomId, null, null)
+                        bottomNavController.navigate(BottomNavItem.Activity.route) {
+                            popUpTo(bottomNavController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                     onManageSlotsClick = onNavigateToPlayers,
                 )
             }
@@ -322,7 +350,11 @@ fun MainScreen(
                 )
             }
             composable(BottomNavItem.Activity.route) {
-                ActivityFeedScreen(userViewModel = userViewModel)
+                ActivityFeedScreen(
+                    userViewModel = userViewModel,
+                    historyViewModel = historyViewModel,
+                    onNavigateToSlotDetail = onNavigateToSlotDetail
+                )
             }
             composable(BottomNavItem.Profile.route) {
                 ProfileScreen(

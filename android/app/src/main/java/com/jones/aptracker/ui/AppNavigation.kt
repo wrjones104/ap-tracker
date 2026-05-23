@@ -74,6 +74,8 @@ fun MainNavHost(
     onLogoutClick: () -> Unit,
     onGuestUpgradeClick: () -> Unit
 ) {
+    val historyViewModel: HistoryViewModel = viewModel()
+
     // Start destination is now 'home', which holds the Bottom Bar
     NavHost(navController = navController, startDestination = "home") {
 
@@ -82,12 +84,6 @@ fun MainNavHost(
             MainScreen(
                 onLogoutClick = onLogoutClick,
                 onGuestUpgradeClick = onGuestUpgradeClick,
-                onNavigateToRoomHistory = { roomId, roomAlias ->
-                    navController.navigate("history/$roomId/${Uri.encode(roomAlias)}")
-                },
-                onNavigateToGlobalHistory = {
-                    navController.navigate("history/global/All Rooms")
-                },
                 onNavigateToPlayers = { roomId, roomAlias ->
                     navController.navigate("players/$roomId/${Uri.encode(roomAlias)}")
                 },
@@ -101,7 +97,8 @@ fun MainNavHost(
                 onNavigateToArchived = { navController.navigate("archived_rooms") },
                 onNavigateToSlotDetail = { roomDbId, slotId ->
                     navController.navigate("slot_detail/$roomDbId/$slotId")
-                }
+                },
+                historyViewModel = historyViewModel
             )
         }
 
@@ -135,49 +132,7 @@ fun MainNavHost(
             )
         }
 
-        composable("history/global/All Rooms") {
-            HistoryScreen(
-                roomId = null,
-                roomAlias = "Global History",
-                onBackClick = { navController.popBackStack() },
-                onNavigateToSlotDetail = { roomDbId, slotId ->
-                    navController.navigate("slot_detail/$roomDbId/$slotId")
-                }
-            )
-        }
 
-        composable(
-            route = "history/{roomId}/{roomAlias}?query={query}&player={player}",
-            arguments = listOf(
-                navArgument("roomId") { type = NavType.IntType },
-                navArgument("roomAlias") { type = NavType.StringType },
-                navArgument("query") { 
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-                navArgument("player") { 
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                }
-            )
-        ) { backStackEntry ->
-            val roomId = backStackEntry.arguments?.getInt("roomId")!!
-            val roomAlias = Uri.decode(backStackEntry.arguments?.getString("roomAlias")!!)
-            val query = backStackEntry.arguments?.getString("query")
-            val player = backStackEntry.arguments?.getString("player")
-            HistoryScreen(
-                roomId = roomId,
-                roomAlias = roomAlias,
-                initialSearchQuery = query,
-                initialPlayerFilter = player,
-                onBackClick = { navController.popBackStack() },
-                onNavigateToSlotDetail = { roomDbId, slotId ->
-                    navController.navigate("slot_detail/$roomDbId/$slotId")
-                }
-            )
-        }
         composable("settings") {
             SettingsScreen(
                 onBackClick = { navController.popBackStack() },
@@ -212,17 +167,10 @@ fun MainNavHost(
                 slotId = slotId,
                 textClientViewModel = textClientViewModel,
                 onBackClick = { navController.popBackStack() },
-                onNavigateToHistory = { roomId, roomAlias, query, player ->
-                    val encodedAlias = android.net.Uri.encode(roomAlias)
-                    var route = "history/$roomId/$encodedAlias"
-                    val params = mutableListOf<String>()
-                    query?.let { params.add("query=${android.net.Uri.encode(it)}") }
-                    player?.let { params.add("player=${android.net.Uri.encode(it)}") }
-                    
-                    if (params.isNotEmpty()) {
-                        route += "?" + params.joinToString("&")
-                    }
-                    navController.navigate(route)
+                onNavigateToHistory = { roomId, _, query, player ->
+                    historyViewModel.loadHistoryFor(roomId, query, player)
+                    historyViewModel.triggerNavigateToActivity()
+                    navController.popBackStack("home", inclusive = false)
                 }
             )
         }

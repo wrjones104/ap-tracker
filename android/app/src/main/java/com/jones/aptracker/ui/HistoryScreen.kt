@@ -106,58 +106,15 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
-// --- 1. THE WRAPPER ---
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun HistoryScreen(
-    roomId: Int?,
-    roomAlias: String?,
-    historyViewModel: HistoryViewModel = viewModel(),
-    userViewModel: UserViewModel = viewModel(),
-    onBackClick: () -> Unit,
-    onNavigateToSlotDetail: ((Int, Int) -> Unit)? = null,
-    initialSearchQuery: String? = null,
-    initialPlayerFilter: String? = null
-) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(roomAlias ?: "History") },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        HistoryContent(
-            roomId = roomId,
-            historyViewModel = historyViewModel,
-            userViewModel = userViewModel,
-            modifier = Modifier.padding(padding),
-            onNavigateToSlotDetail = onNavigateToSlotDetail,
-            initialSearchQuery = initialSearchQuery,
-            initialPlayerFilter = initialPlayerFilter
-        )
-    }
-}
-
-// --- 2. THE REUSABLE CONTENT ---
+// --- 1. THE REUSABLE CONTENT ---
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryContent(
-    roomId: Int?,
     historyViewModel: HistoryViewModel,
     userViewModel: UserViewModel,
     modifier: Modifier = Modifier,
-    onNavigateToSlotDetail: ((Int, Int) -> Unit)? = null,
-    initialSearchQuery: String? = null,
-    initialPlayerFilter: String? = null
+    onNavigateToSlotDetail: ((Int, Int) -> Unit)? = null
 ) {
-    LaunchedEffect(key1 = roomId, key2 = initialSearchQuery, key3 = initialPlayerFilter) {
-        historyViewModel.loadHistoryFor(roomId, initialSearchQuery, initialPlayerFilter)
-    }
 
     val isLoading by historyViewModel.isLoading.collectAsState()
     val errorMessage by historyViewModel.errorMessage
@@ -253,9 +210,8 @@ fun HistoryContent(
                     state = pagerState,
                     modifier = Modifier.weight(1f)
                 ) { page ->
-                    // Determine if we should show the filter chip.
-                    // If a roomId was passed (e.g. from Main Screen), we are locked to that room, so hide the filter.
-                    val showRoomFilter = roomId == null
+                    // Always show the room filter chip to allow the user to dynamically clear or change filters
+                    val showRoomFilter = true
 
                     when (page) {
                         0 -> ItemHistoryTab(
@@ -848,10 +804,9 @@ fun ItemHistoryTab(
             } else if (isUseful) {
                 showUseful
             } else {
-                // Determine behavior for items that are NEITHER (e.g. traps/junk)
-                // Since we don't have a toggle for them, we hide them if they don't match above.
-                // This corresponds to "false" in the old logic when toggles were off.
-                false
+                // Determine behavior for items that are NEITHER (e.g. traps/junk/filler)
+                // Since we don't have a toggle for them, they are always visible (matching normal behavior).
+                true
             }
 
             val lowerCaseItemName = item.itemName.lowercase()
@@ -941,9 +896,8 @@ fun ItemHistoryTab(
             val listState = rememberLazyListState()
             val isNextPageLoading by historyViewModel.isNextPageLoading.collectAsState()
 
-            // Trigger loadNextPage when we get near the end of the list
-            LaunchedEffect(listState.canScrollForward) {
-                if (!listState.canScrollForward && itemsToShow.isNotEmpty()) {
+            LaunchedEffect(listState.canScrollForward, fullHistory.size) {
+                if (!listState.canScrollForward && fullHistory.isNotEmpty()) {
                     historyViewModel.loadNextPage()
                 }
             }
@@ -1552,7 +1506,7 @@ private fun filterHints(
         } else if (isUseful) {
             showUseful
         } else {
-            false
+            true
         }
 
         // Note: HintEntity does not have receivingGame, so we just match on itemName

@@ -662,15 +662,22 @@ def get_room_players(current_user, room_db_id):
         response_players = []
         for p in players_list:
             slot_id = p.get('slot_id')
-            tracked_slot_entry = tracked_slots_map.get(slot_id)
+            try:
+                slot_id_int = int(slot_id) if slot_id is not None else None
+            except (ValueError, TypeError):
+                slot_id_int = None
+            
+            tracked_slot_entry = tracked_slots_map.get(slot_id_int) if slot_id_int is not None else None
+
+            is_tracked = tracked_slot_entry is not None
 
             response_players.append({
-                'slot_id': slot_id,
+                'slot_id': slot_id_int if slot_id_int is not None else slot_id,
                 'name': p.get('name'),
                 'alias': p.get('alias'),
                 'game': p.get('game'),
                 'is_finished': p.get('is_finished', False),
-                'is_tracked': tracked_slot_entry is not None,
+                'is_tracked': is_tracked,
                 'notify_progression': tracked_slot_entry.notify_progression if tracked_slot_entry else None,
                 'notify_useful': tracked_slot_entry.notify_useful if tracked_slot_entry else None,
                 'notify_hints': tracked_slot_entry.notify_hints if tracked_slot_entry else None
@@ -703,7 +710,15 @@ def update_tracked_slots(current_user, room_db_id):
         return jsonify({'error': 'You are not subscribed to this room'}), 403
 
     room = subscription.room
-    requested_ids = set(data.get('tracked_slot_ids', []))
+    
+    # Coerce slot IDs to integers safely to prevent type mismatches
+    raw_requested_ids = data.get('tracked_slot_ids', [])
+    requested_ids = set()
+    for sid in raw_requested_ids:
+        try:
+            requested_ids.add(int(sid))
+        except (ValueError, TypeError):
+            pass
 
     current_slots_query = session.query(UserTrackedSlot.slot_id).filter_by(user_id=current_user.id, room_id=room_db_id)
     current_tracked_ids = {slot.slot_id for slot in current_slots_query.all()}
@@ -720,11 +735,13 @@ def update_tracked_slots(current_user, room_db_id):
         logging.info(f"[API] User {current_user.id} untracked {len(slots_to_remove)} slots in room {room_db_id}.")
 
     if slots_to_add:
+        # Explicitly pass added_at to bypass bulk_save_objects bypassing column default values
         objects_to_add = [
             UserTrackedSlot(
                 user_id=current_user.id, 
                 room_id=room_db_id, 
-                slot_id=slot_id
+                slot_id=slot_id,
+                added_at=datetime.utcnow()
             )
             for slot_id in slots_to_add if isinstance(slot_id, int) and slot_id > 0
         ]
@@ -796,7 +813,9 @@ def get_item_history(current_user, room_db_id):
         slot_filters = []
         for slot_id, added_at in user_tracked_slots:
             added_at_utc = added_at.replace(tzinfo=timezone.utc) if added_at and added_at.tzinfo is None else added_at
-            if added_at_utc and added_at_utc > since_dt:
+            # If added_at is NULL (unknown) OR newer than since_dt, bypass the since filter
+            # for a full backfill of this slot's history.
+            if not added_at_utc or added_at_utc > since_dt:
                 # Bypass `since` filter for this slot (sync backfill)
                 slot_filters.append(NotifiedItem.receiving_slot_id == slot_id)
             else:
@@ -903,6 +922,7 @@ def get_item_history(current_user, room_db_id):
         sender_alias = sender_obj.get('alias') if sender_obj else None
 
         history_pre_cache.append({
+            "id": item.id,
             "playerName": receiver_name,
             "playerAlias": receiver_alias,
             "receivingGame": receiver_game, 
@@ -949,6 +969,7 @@ def get_item_history(current_user, room_db_id):
         location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
         
         history.append({
+            "id": temp_item["id"],
             "playerName": temp_item["playerName"],
             "playerAlias": temp_item["playerAlias"],
             "receivingGame": temp_item["receivingGame"], 
@@ -1032,7 +1053,9 @@ def get_global_item_history(current_user):
         if since_dt:
             for slot_id, added_at in slots_info:
                 added_at_utc = added_at.replace(tzinfo=timezone.utc) if added_at and added_at.tzinfo is None else added_at
-                if added_at_utc and added_at_utc > since_dt:
+                # If added_at is NULL (unknown) OR newer than since_dt, bypass the since filter
+                # for a full backfill of this slot's history.
+                if not added_at_utc or added_at_utc > since_dt:
                     # Sync backfill: bypass since filter for this slot
                     filters.append(
                         (NotifiedItem.room_id == room_uuid) &
@@ -1164,6 +1187,7 @@ def get_global_item_history(current_user):
             cache_keys_to_find.add(location_name_key)
 
         history_pre_cache.append({
+            "id": item.id,
             "room_db_id": room_data.id,
             "room_alias": sub.alias, 
             "icon_name": sub.icon_name,
@@ -1213,6 +1237,7 @@ def get_global_item_history(current_user):
         location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
 
         final_history_dicts.append({
+            "id": temp_item["id"],
             "room_db_id": temp_item["room_db_id"], 
             "alias": temp_item["room_alias"], 
             "icon_name": temp_item["icon_name"],

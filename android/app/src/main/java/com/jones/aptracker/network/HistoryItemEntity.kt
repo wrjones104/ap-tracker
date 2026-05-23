@@ -9,8 +9,8 @@ import androidx.room.PrimaryKey
     indices = [Index(value = ["roomId", "playerName", "itemName"], unique = false)]
 )
 data class HistoryItemEntity(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
+    @PrimaryKey
+    val id: Long,
     val roomId: Int?,
     val timestamp: String,
     val playerName: String,
