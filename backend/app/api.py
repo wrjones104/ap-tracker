@@ -928,6 +928,7 @@ def get_item_history(current_user, room_db_id):
         sender_alias = sender_obj.get('alias') if sender_obj else None
 
         history_pre_cache.append({
+            "id": item.id,
             "playerName": receiver_name,
             "playerAlias": receiver_alias,
             "receivingGame": receiver_game, 
@@ -974,6 +975,7 @@ def get_item_history(current_user, room_db_id):
         location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
         
         history.append({
+            "id": temp_item["id"],
             "playerName": temp_item["playerName"],
             "playerAlias": temp_item["playerAlias"],
             "receivingGame": temp_item["receivingGame"], 
@@ -1191,6 +1193,7 @@ def get_global_item_history(current_user):
             cache_keys_to_find.add(location_name_key)
 
         history_pre_cache.append({
+            "id": item.id,
             "room_db_id": room_data.id,
             "room_alias": sub.alias, 
             "icon_name": sub.icon_name,
@@ -1240,6 +1243,7 @@ def get_global_item_history(current_user):
         location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
 
         final_history_dicts.append({
+            "id": temp_item["id"],
             "room_db_id": temp_item["room_db_id"], 
             "alias": temp_item["room_alias"], 
             "icon_name": temp_item["icon_name"],

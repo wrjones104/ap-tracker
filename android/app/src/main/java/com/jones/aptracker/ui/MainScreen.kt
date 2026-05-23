@@ -80,14 +80,16 @@ fun MainScreen(
 
     val historyFilter by historyViewModel.historyFilter.collectAsState()
     val roomNames by historyViewModel.roomNames.collectAsState()
+    val pendingNavigateToActivity by historyViewModel.pendingNavigateToActivity.collectAsState()
 
-    LaunchedEffect(historyViewModel) {
-        historyViewModel.navigateToActivityTab.collect {
+    LaunchedEffect(pendingNavigateToActivity) {
+        if (pendingNavigateToActivity) {
             bottomNavController.navigate(BottomNavItem.Activity.route) {
                 popUpTo(bottomNavController.graph.findStartDestination().id) { saveState = true }
                 launchSingleTop = true
                 restoreState = true
             }
+            historyViewModel.clearPendingNavigateToActivity()
         }
     }
 

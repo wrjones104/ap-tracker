@@ -227,13 +227,15 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage
 
-    private val _navigateToActivityTab = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(replay = 0)
-    val navigateToActivityTab: kotlinx.coroutines.flow.SharedFlow<Unit> = _navigateToActivityTab
+    private val _pendingNavigateToActivity = MutableStateFlow(false)
+    val pendingNavigateToActivity: StateFlow<Boolean> = _pendingNavigateToActivity
 
     fun triggerNavigateToActivity() {
-        viewModelScope.launch {
-            _navigateToActivityTab.emit(Unit)
-        }
+        _pendingNavigateToActivity.value = true
+    }
+
+    fun clearPendingNavigateToActivity() {
+        _pendingNavigateToActivity.value = false
     }
 
     init {
