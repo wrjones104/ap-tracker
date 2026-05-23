@@ -57,10 +57,6 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val playerList = RetrofitClient.instance.getPlayersInRoom(roomId)
-                android.util.Log.d("PlayersViewModel", "fetchPlayers room=$roomId: ${playerList.size} players")
-                playerList.forEach { p ->
-                    android.util.Log.d("PlayersViewModel", "  slot_id=${p.slot_id}, name=${p.name}, is_tracked=${p.is_tracked}")
-                }
                 allPlayers.value = playerList
                 selections.clear()
                 val trackedSlots = mutableSetOf<Int>()
@@ -71,7 +67,6 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
                 initialTrackedSlots = trackedSlots
-                android.util.Log.d("PlayersViewModel", "initialTrackedSlots=$initialTrackedSlots")
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to load players: ${e.message}"
                 e.printStackTrace()
@@ -92,14 +87,12 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val newTrackedSlots = selections.filter { it.value }.keys.toSet()
                 val slotsToPrune = initialTrackedSlots - newTrackedSlots
-                android.util.Log.d("PlayersViewModel", "saveSelections room=$roomId: newTrackedSlots=$newTrackedSlots, initialTrackedSlots=$initialTrackedSlots, slotsToPrune=$slotsToPrune")
 
                 if (slotsToPrune.isNotEmpty()) {
                     repository.pruneSlotData(roomId, slotsToPrune)
                 }
 
                 val request = UpdateSlotsRequest(tracked_slot_ids = newTrackedSlots.toList())
-                android.util.Log.d("PlayersViewModel", "Sending to server: tracked_slot_ids=${newTrackedSlots.toList()}")
                 RetrofitClient.instance.updateTrackedSlots(roomId, request)
                 showSaveConfirmation.value = true
 

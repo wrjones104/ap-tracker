@@ -144,3 +144,50 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
         db.execSQL("ALTER TABLE history_items ADD COLUMN receivedCount INTEGER")
     }
 }
+
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `history_items_new` (
+                `id` INTEGER NOT NULL,
+                `roomId` INTEGER,
+                `timestamp` TEXT NOT NULL,
+                `playerName` TEXT NOT NULL,
+                `playerAlias` TEXT,
+                `receivingGame` TEXT,
+                `itemName` TEXT NOT NULL,
+                `senderName` TEXT,
+                `senderAlias` TEXT,
+                `senderGame` TEXT,
+                `locationName` TEXT,
+                `isPlayerFinished` INTEGER NOT NULL,
+                `itemFlags` INTEGER NOT NULL,
+                `tracker_id` TEXT,
+                `slot_id` INTEGER,
+                `icon_name` TEXT,
+                `host` TEXT,
+                `receivedCount` INTEGER,
+                PRIMARY KEY(`id`)
+            )
+        """.trimIndent())
+
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_history_items_roomId_playerName_itemName` ON `history_items_new` (`roomId`, `playerName`, `itemName`)")
+
+        db.execSQL("""
+            INSERT INTO `history_items_new` (
+                `id`, `roomId`, `timestamp`, `playerName`, `playerAlias`, `receivingGame`,
+                `itemName`, `senderName`, `senderAlias`, `senderGame`, `locationName`,
+                `isPlayerFinished`, `itemFlags`, `tracker_id`, `slot_id`, `icon_name`, `host`, `receivedCount`
+            )
+            SELECT
+                `id`, `roomId`, `timestamp`, `playerName`, `playerAlias`, `receivingGame`,
+                `itemName`, `senderName`, `senderAlias`, `senderGame`, `locationName`,
+                `isPlayerFinished`, `itemFlags`, `tracker_id`, `slot_id`, `icon_name`, `host`, `receivedCount`
+            FROM `history_items`
+        """.trimIndent())
+
+        db.execSQL("DROP TABLE `history_items`")
+
+        db.execSQL("ALTER TABLE `history_items_new` RENAME TO `history_items`")
+    }
+}

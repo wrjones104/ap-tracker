@@ -659,8 +659,6 @@ def get_room_players(current_user, room_db_id):
         
         tracked_slots_map = {ts.slot_id: ts for ts in tracked_slots_query}
 
-        logging.info(f"[PLAYERS_DEBUG] Room {room_db_id}: tracked_slots_map keys (types): {[(k, type(k).__name__) for k in tracked_slots_map.keys()]}")
-
         response_players = []
         for p in players_list:
             slot_id = p.get('slot_id')
@@ -672,7 +670,6 @@ def get_room_players(current_user, room_db_id):
             tracked_slot_entry = tracked_slots_map.get(slot_id_int) if slot_id_int is not None else None
 
             is_tracked = tracked_slot_entry is not None
-            logging.debug(f"[PLAYERS_DEBUG]   slot_id raw={slot_id} (type={type(slot_id).__name__}), coerced={slot_id_int}, is_tracked={is_tracked}")
 
             response_players.append({
                 'slot_id': slot_id_int if slot_id_int is not None else slot_id,
@@ -686,7 +683,6 @@ def get_room_players(current_user, room_db_id):
                 'notify_hints': tracked_slot_entry.notify_hints if tracked_slot_entry else None
             })
         
-        logging.info(f"[PLAYERS_DEBUG] Room {room_db_id}: returning {sum(1 for p in response_players if p['is_tracked'])} tracked out of {len(response_players)} total")
         return jsonify(response_players)
     finally:
         Session.remove()
@@ -729,8 +725,6 @@ def update_tracked_slots(current_user, room_db_id):
     
     slots_to_add = requested_ids - current_tracked_ids
     slots_to_remove = current_tracked_ids - requested_ids
-
-    logging.info(f"[SLOTS_DEBUG] update_tracked_slots room={room_db_id}: requested_ids={requested_ids}, current_tracked_ids={current_tracked_ids}, slots_to_add={slots_to_add}, slots_to_remove={slots_to_remove}")
 
     if slots_to_remove:
         session.query(UserTrackedSlot).filter(

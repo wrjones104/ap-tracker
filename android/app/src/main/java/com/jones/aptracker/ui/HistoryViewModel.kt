@@ -283,16 +283,22 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             isLoading.value = true
             errorMessage.value = null
             try {
+                currentPageOffset = 0
+                isAllDataLoaded = false
                 val rawItemEntities = when (val filter = _historyFilter.value) {
                     is HistoryFilter.Specific -> {
-                        repository.getHistoryForRoom(filter.roomId)
+                        repository.getHistoryForRoomPaged(filter.roomId, PAGE_SIZE, 0)
                     }
                     else -> {
-                        repository.getGlobalHistory()
+                        repository.getGlobalHistoryPaged(PAGE_SIZE, 0)
                     }
                 }
                 
                 _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
+                currentPageOffset = rawItemEntities.size
+                if (rawItemEntities.size < PAGE_SIZE) {
+                    isAllDataLoaded = true
+                }
             } catch (e: Exception) {
                 errorMessage.value = "Failed to load history: ${e.message}"
                 Log.e("HistoryViewModel", "Error reloading history", e)
@@ -424,12 +430,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                Log.d("HistoryViewModel", "TRACKED ROOMS from API: ${trackedRooms.size}")
-                trackedRooms.forEach { room ->
-                    Log.d("HistoryViewModel", "  Room ${room.room_db_id} (${room.room_alias}): tracked_slots=${room.tracked_slots.map { it.slot_id }}")
-                }
-                Log.d("HistoryViewModel", "VALID SLOTS SET: $validSlotsSet")
-
                 _roomNames.value = roomNameMap
                 _validTrackedSlots.value = validSlotsSet
                 _liveAliases.value = aliasMap
@@ -442,13 +442,20 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 // --- STEP 2: Item History Sync (Priority 1) ---
                 repository.refreshItemHistory()
 
+                currentPageOffset = 0
+                isAllDataLoaded = false
+
                 val rawItemEntities = if (currentRoomId != null) {
-                    repository.getHistoryForRoom(currentRoomId!!)
+                    repository.getHistoryForRoomPaged(currentRoomId!!, PAGE_SIZE, 0)
                 } else {
-                    repository.getGlobalHistory()
+                    repository.getGlobalHistoryPaged(PAGE_SIZE, 0)
                 }
 
                 _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
+                currentPageOffset = rawItemEntities.size
+                if (rawItemEntities.size < PAGE_SIZE) {
+                    isAllDataLoaded = true
+                }
 
                 // --- STEP 3: UNBLOCK UI HERE ---
                 // The Item list is ready. Let the user see it immediately!
@@ -510,15 +517,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         val liveIcons = _roomIcons.value
         val confirmedFinished = _confirmedFinishedPlayers.value
         
-        Log.d("HistoryViewModel", "mapEntities: ${entities.size} entities, validSlotsSet=$validSlotsSet")
         var filteredCount = 0
         val result = entities.mapNotNull { entity ->
             if (entity.roomId != null && entity.slot_id != null) {
                 if (!validSlotsSet.contains(entity.roomId to entity.slot_id)) {
                     filteredCount++
-                    if (filteredCount <= 5) {
-                        Log.d("HistoryViewModel", "  FILTERED OUT: roomId=${entity.roomId}, slot_id=${entity.slot_id}, player=${entity.playerName}")
-                    }
                     return@mapNotNull null
                 }
             }
@@ -556,7 +559,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 receivedCount = entity.receivedCount
             )
         }
-        Log.d("HistoryViewModel", "mapEntities: $filteredCount items filtered out, ${result.size} items remaining")
         return result
     }
 

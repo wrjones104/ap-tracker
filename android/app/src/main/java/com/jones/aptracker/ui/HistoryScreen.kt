@@ -894,6 +894,13 @@ fun ItemHistoryTab(
             }
         } else {
             val listState = rememberLazyListState()
+            val isNextPageLoading by historyViewModel.isNextPageLoading.collectAsState()
+
+            LaunchedEffect(listState.canScrollForward, fullHistory.size) {
+                if (!listState.canScrollForward && fullHistory.isNotEmpty()) {
+                    historyViewModel.loadNextPage()
+                }
+            }
 
             LazyColumn(
                 state = listState,
@@ -971,6 +978,22 @@ fun ItemHistoryTab(
                                     color = Color.Gray
                                 )
                             }
+                        }
+                    }
+                }
+
+                if (isNextPageLoading) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
                         }
                     }
                 }
