@@ -171,8 +171,6 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
             )
         """.trimIndent())
 
-        db.execSQL("CREATE INDEX IF NOT EXISTS `index_history_items_roomId_playerName_itemName` ON `history_items_new` (`roomId`, `playerName`, `itemName`)")
-
         db.execSQL("""
             INSERT INTO `history_items_new` (
                 `id`, `roomId`, `timestamp`, `playerName`, `playerAlias`, `receivingGame`,
@@ -189,5 +187,7 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
         db.execSQL("DROP TABLE `history_items`")
 
         db.execSQL("ALTER TABLE `history_items_new` RENAME TO `history_items`")
+
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_history_items_roomId_playerName_itemName` ON `history_items` (`roomId`, `playerName`, `itemName`)")
     }
 }
