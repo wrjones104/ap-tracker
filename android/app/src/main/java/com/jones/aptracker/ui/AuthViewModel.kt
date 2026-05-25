@@ -42,6 +42,7 @@ class AuthViewModel : ViewModel() {
             try {
                 val settingsManager = SettingsManager(context)
                 settingsManager.setAutoSync(false)
+                settingsManager.setCheeseConnected(false)
             } catch (e: Exception) {
                 Log.e("AuthViewModel", "Failed to clear settings", e)
             }
@@ -100,10 +101,11 @@ class AuthViewModel : ViewModel() {
                 Log.e("AuthViewModel", "Failed to clear session on server. Proceeding with local logout.", e)
             } finally {
 
-                try {
+                 try {
                     val settingsManager = SettingsManager(context)
                     settingsManager.setAutoSync(false)
-                    Log.d("AuthViewModel", "Cleared local auto-sync setting.")
+                    settingsManager.setCheeseConnected(false)
+                    Log.d("AuthViewModel", "Cleared local auto-sync and cheese-connected settings.")
                 } catch (e: Exception) {
                     Log.e("AuthViewModel", "Failed to clear SettingsManager.", e)
                 }

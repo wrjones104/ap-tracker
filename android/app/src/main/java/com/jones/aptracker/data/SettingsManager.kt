@@ -17,6 +17,7 @@ class SettingsManager(context: Context) {
 
     companion object {
         val CHEESE_AUTO_SYNC_KEY = booleanPreferencesKey("cheese_auto_sync")
+        val IS_CHEESE_CONNECTED_KEY = booleanPreferencesKey("is_cheese_connected")
     }
 
     /**
@@ -29,11 +30,29 @@ class SettingsManager(context: Context) {
         }
 
     /**
+     * A flow that emits whether Cheese Tracker is connected.
+     * It defaults to 'false' if not set.
+     */
+    val isCheeseConnected: Flow<Boolean> = dataStore.data
+        .map { preferences ->
+            preferences[IS_CHEESE_CONNECTED_KEY] ?: false
+        }
+
+    /**
      * Saves the new auto-sync preference.
      */
     suspend fun setAutoSync(isEnabled: Boolean) {
         dataStore.edit { preferences ->
             preferences[CHEESE_AUTO_SYNC_KEY] = isEnabled
+        }
+    }
+
+    /**
+     * Saves whether Cheese Tracker is connected.
+     */
+    suspend fun setCheeseConnected(isConnected: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[IS_CHEESE_CONNECTED_KEY] = isConnected
         }
     }
 }

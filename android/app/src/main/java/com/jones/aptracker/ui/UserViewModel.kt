@@ -123,7 +123,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchUserProfile() {
         viewModelScope.launch {
             try {
-                _userProfile.value = RetrofitClient.instance.getUserProfile()
+                val profile = RetrofitClient.instance.getUserProfile()
+                _userProfile.value = profile
+                settingsManager.setCheeseConnected(profile.is_cheese_connected)
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to load user profile."
                 e.printStackTrace()
@@ -285,6 +287,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 RetrofitClient.instance.disconnectCheeseTracker()
                 _integrationMessage.value = "Disconnected from Cheese Tracker."
+                settingsManager.setCheeseConnected(false)
                 fetchUserProfile()
             } catch (e: Exception) {
                 e.printStackTrace()
