@@ -41,6 +41,12 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         true
     )
 
+    val isCheeseConnected = settingsManager.isCheeseConnected.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        false
+    )
+
     private val _rooms = MutableStateFlow<List<Room>>(emptyList())
     val rooms: StateFlow<List<Room>> = _rooms
 
@@ -77,7 +83,8 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             delay(1000)
             val isAutoSync = isAutoSyncEnabled.value
-            if (isAutoSync) {
+            val isCheeseConn = isCheeseConnected.value
+            if (isAutoSync && isCheeseConn) {
                 triggerBackgroundSync()
             }
         }
@@ -214,6 +221,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             try {
+                // Fetch latest user profile to verify connection status before sync
+                val profile = userRepository.getUserProfile()
+                if (!profile.is_cheese_connected) {
+                    _isSyncingCheese.value = false
+                    return@launch
+                }
+
                 // 1. Tell backend to START syncing
                 RetrofitClient.instance.syncCheeseTracker()
 
@@ -221,8 +235,8 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 var retries = 0
                 while (retries < 15) { // Check for 30 seconds
                     delay(2000)
-                    val profile = userRepository.getUserProfile()
-                    if (!profile.is_syncing_cheese) {
+                    val currentProfile = userRepository.getUserProfile()
+                    if (!currentProfile.is_syncing_cheese) {
                         break // Sync complete
                     }
                     retries++
