@@ -10,6 +10,7 @@ import com.jones.aptracker.network.HistoryItemEntity
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.RoomEntity
 import kotlinx.coroutines.flow.Flow
+import androidx.core.content.edit
 
 class HistoryRepository(
     private val apiService: ApiService,
@@ -175,14 +176,14 @@ class HistoryRepository(
                 }
 
                 // Persist new watermarks immediately to allow the next loop to fetch next batch
-                prefs.edit().apply {
+                prefs.edit {
                     response.item_watermarks.forEach { (key, timestamp) ->
                         putString("item_watermark_$key", timestamp)
                     }
                     response.hint_watermarks.forEach { (key, timestamp) ->
                         putString("hint_watermark_$key", timestamp)
                     }
-                }.apply()
+                }
 
                 // If both lists are below limits, it means we fully caught up
                 if (response.new_items.size < 200 && response.updated_hints.size < 100) {

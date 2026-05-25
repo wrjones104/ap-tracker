@@ -10,6 +10,7 @@ import com.jones.aptracker.network.ApiService
 import com.jones.aptracker.network.RoomDao
 import com.jones.aptracker.network.RoomEntity
 import kotlinx.coroutines.flow.Flow
+import androidx.core.content.edit
 
 class RoomsRepository(
     private val apiService: ApiService,
@@ -31,6 +32,7 @@ class RoomsRepository(
             val hintDao = db.hintDao()
             val prefs = context.getSharedPreferences("ap_tracker_sync_watermarks", Context.MODE_PRIVATE)
 
+            val allKeys = prefs.all
             val localRoomMap = localRooms.associateBy { it.room_id }
 
             networkRooms.forEach { networkRoom ->
@@ -48,28 +50,27 @@ class RoomsRepository(
                     hintDao.updateRoomIdForHints(oldId, newId)
 
                     // 3. Migrate SharedPreferences watermarks for all slots of this room!
-                    val prefsEdit = prefs.edit()
-                    val allKeys = prefs.all
-                    allKeys.forEach { (key, value) ->
-                        if (key.startsWith("item_watermark_${oldId}_")) {
-                            val slotIdStr = key.substringAfter("item_watermark_${oldId}_")
-                            val newItemKey = "item_watermark_${newId}_$slotIdStr"
-                            if (value is String) {
-                                prefsEdit.putString(newItemKey, value)
-                                prefsEdit.remove(key)
+                    prefs.edit {
+                        allKeys.forEach { (key, value) ->
+                            if (key.startsWith("item_watermark_${oldId}_")) {
+                                val slotIdStr = key.substringAfter("item_watermark_${oldId}_")
+                                val newItemKey = "item_watermark_${newId}_$slotIdStr"
+                                if (value is String) {
+                                    putString(newItemKey, value)
+                                    remove(key)
+                                }
                             }
                         }
+                        
+                        // Migrate hint watermark
+                        val oldHintKey = "hint_watermark_$oldId"
+                        val newHintKey = "hint_watermark_$newId"
+                        if (prefs.contains(oldHintKey)) {
+                            val ts = prefs.getString(oldHintKey, null)
+                            putString(newHintKey, ts)
+                            remove(oldHintKey)
+                        }
                     }
-                    
-                    // Migrate hint watermark
-                    val oldHintKey = "hint_watermark_$oldId"
-                    val newHintKey = "hint_watermark_$newId"
-                    if (prefs.contains(oldHintKey)) {
-                        val ts = prefs.getString(oldHintKey, null)
-                        prefsEdit.putString(newHintKey, ts)
-                        prefsEdit.remove(oldHintKey)
-                    }
-                    prefsEdit.apply()
                     Log.d("ALIGNMENT_DEBUG", "  Re-alignment from refreshRooms completed successfully.")
                 }
             }

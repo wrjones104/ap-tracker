@@ -1022,7 +1022,9 @@ def sync_history(current_user):
         })
 
     # Get all active subscriptions for room metadata mapping
-    user_subs = session.query(UserRoomSubscription).filter_by(
+    user_subs = session.query(UserRoomSubscription).options(
+        selectinload(UserRoomSubscription.room)
+    ).filter_by(
         user_id=current_user.id,
         is_archived=False
     ).all()
@@ -1054,34 +1056,29 @@ def sync_history(current_user):
         if (r_id, s_id) not in item_watermarks_map:
             item_watermarks_map[(r_id, s_id)] = None
 
-    # Execute isolated queries per slot to prevent starvation/crowding
-    items = []
+    # Execute a single consolidated query for items using OR filters
+    item_filters = []
     for (r_id, s_id), last_ts in item_watermarks_map.items():
         room_uuid = room_db_id_to_uuid.get(r_id)
         if not room_uuid:
             continue
             
-        slot_query = session.query(NotifiedItem).filter(
-            NotifiedItem.room_id == room_uuid,
-            NotifiedItem.receiving_slot_id == s_id
-        )
-        
+        slot_cond = (NotifiedItem.room_id == room_uuid) & (NotifiedItem.receiving_slot_id == s_id)
         if last_ts:
             try:
                 since_dt = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
                 if since_dt.tzinfo:
                     since_dt = since_dt.replace(tzinfo=None)
-                
-                slot_items = slot_query.filter(
-                    NotifiedItem.timestamp > since_dt
-                ).order_by(NotifiedItem.id.asc()).limit(200).all()
+                slot_cond = slot_cond & (NotifiedItem.timestamp > since_dt)
             except (ValueError, TypeError):
-                slot_items = slot_query.order_by(NotifiedItem.id.asc()).limit(200).all()
-        else:
-            # Backfill: fetch oldest 200 items in ascending order to allow progressive pagination
-            slot_items = slot_query.order_by(NotifiedItem.id.asc()).limit(200).all()
-            
-        items.extend(slot_items)
+                pass
+        item_filters.append(slot_cond)
+
+    items = []
+    if item_filters:
+        items = session.query(NotifiedItem).filter(
+            or_(*item_filters)
+        ).order_by(NotifiedItem.id.asc()).limit(200).all()
 
     # 3. Build Hint Sync Watermarks & Query Filters
     hint_watermarks_map = {}
@@ -1096,33 +1093,29 @@ def sync_history(current_user):
         if r_id not in hint_watermarks_map:
             hint_watermarks_map[r_id] = None
 
-    # Execute isolated queries per room for hints
-    hints = []
+    # Execute a single consolidated query for hints using OR filters
+    hint_filters = []
     for r_id, last_upd in hint_watermarks_map.items():
         room_uuid = room_db_id_to_uuid.get(r_id)
         if not room_uuid:
             continue
             
-        room_hint_query = session.query(NotifiedHint).filter(
-            NotifiedHint.room_id == room_uuid
-        )
-        
+        room_cond = (NotifiedHint.room_id == room_uuid)
         if last_upd:
             try:
                 since_upd = datetime.fromisoformat(last_upd.replace('Z', '+00:00'))
                 if since_upd.tzinfo:
                     since_upd = since_upd.replace(tzinfo=None)
-                
-                room_hints = room_hint_query.filter(
-                    NotifiedHint.updated_at > since_upd
-                ).order_by(NotifiedHint.updated_at.asc()).limit(100).all()
+                room_cond = room_cond & (NotifiedHint.updated_at > since_upd)
             except (ValueError, TypeError):
-                room_hints = room_hint_query.order_by(NotifiedHint.updated_at.asc()).limit(100).all()
-        else:
-            # Backfill: fetch oldest 100 hints in ascending order to allow progressive pagination
-            room_hints = room_hint_query.order_by(NotifiedHint.updated_at.asc()).limit(100).all()
-            
-        hints.extend(room_hints)
+                pass
+        hint_filters.append(room_cond)
+
+    hints = []
+    if hint_filters:
+        hints = session.query(NotifiedHint).filter(
+            or_(*hint_filters)
+        ).order_by(NotifiedHint.updated_at.asc()).limit(100).all()
 
     # 4. Gather room metadata
     room_uuids = set(item.room_id for item in items) | set(hint.room_id for hint in hints)
@@ -1329,24 +1322,39 @@ def sync_history(current_user):
             "item_flags": hint.item_flags or 0
         })
 
-    # Compute advanced watermarks safely using absolute max calculations
-    new_item_watermarks = {}
+    # Compute advanced watermarks safely using absolute max calculations on raw datetimes
+    max_item_dts = {}
     for item in items:
         room_data = room_map_by_uuid.get(item.room_id)
         if room_data:
             key = f"{room_data.id}_{item.receiving_slot_id}"
-            ts_str = format_iso_z(item.timestamp)
-            if key not in new_item_watermarks or ts_str > new_item_watermarks[key]:
-                new_item_watermarks[key] = ts_str
+            dt = item.timestamp
+            if dt:
+                # Ensure timezone information is comparable by stripping or normalizing
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                if key not in max_item_dts or dt > max_item_dts[key]:
+                    max_item_dts[key] = dt
 
-    new_hint_watermarks = {}
+    new_item_watermarks = {
+        key: format_iso_z(dt) for key, dt in max_item_dts.items()
+    }
+
+    max_hint_dts = {}
     for hint in hints:
         room_data = room_map_by_uuid.get(hint.room_id)
         if room_data:
             key = f"{room_data.id}"
-            ts_str = format_iso_z(hint.updated_at)
-            if key not in new_hint_watermarks or ts_str > new_hint_watermarks[key]:
-                new_hint_watermarks[key] = ts_str
+            dt = hint.updated_at
+            if dt:
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                if key not in max_hint_dts or dt > max_hint_dts[key]:
+                    max_hint_dts[key] = dt
+
+    new_hint_watermarks = {
+        key: format_iso_z(dt) for key, dt in max_hint_dts.items()
+    }
 
     return jsonify({
         "new_items": response_items,
