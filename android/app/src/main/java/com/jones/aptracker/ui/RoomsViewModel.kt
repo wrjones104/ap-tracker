@@ -59,7 +59,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     init {
         val roomDao = AppDatabase.getInstance(application).roomDao()
         val api = RetrofitClient.instance
-        repository = RoomsRepository(api, roomDao)
+        repository = RoomsRepository(api, roomDao, application)
         userRepository = UserRepository(api)
 
         viewModelScope.launch {

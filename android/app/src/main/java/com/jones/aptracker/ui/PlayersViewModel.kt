@@ -1,6 +1,7 @@
 package com.jones.aptracker.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -33,7 +34,8 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
         repository = HistoryRepository(
             RetrofitClient.instance,
             db.historyDao(),
-            db.hintDao()
+            db.hintDao(),
+            application
         )
     }
     val filteredPlayers by derivedStateOf {
@@ -56,7 +58,9 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
         _errorMessage.value = null
         viewModelScope.launch {
             try {
+                Log.d("SLOTS_DEBUG", "fetchPlayers starting for roomId=$roomId")
                 val playerList = RetrofitClient.instance.getPlayersInRoom(roomId)
+                Log.d("SLOTS_DEBUG", "Received playerList of size ${playerList.size} from server.")
                 allPlayers.value = playerList
                 selections.clear()
                 val trackedSlots = mutableSetOf<Int>()
@@ -64,12 +68,14 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                     selections[player.slot_id] = player.is_tracked
                     if (player.is_tracked) {
                         trackedSlots.add(player.slot_id)
+                        Log.d("SLOTS_DEBUG", "  Detected already tracked slot: id=${player.slot_id}, name=${player.name}")
                     }
                 }
                 initialTrackedSlots = trackedSlots
+                Log.d("SLOTS_DEBUG", "initialTrackedSlots set to: $initialTrackedSlots")
             } catch (e: Exception) {
+                Log.e("SLOTS_DEBUG", "Failed to load players: ${e.message}", e)
                 _errorMessage.value = "Failed to load players: ${e.message}"
-                e.printStackTrace()
             } finally {
                 isLoading.value = false
             }
@@ -77,6 +83,7 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun onPlayerSelectionChanged(playerId: Int, isSelected: Boolean) {
+        Log.d("SLOTS_DEBUG", "onPlayerSelectionChanged: slotId=$playerId, isSelected=$isSelected")
         selections[playerId] = isSelected
     }
 
@@ -88,19 +95,30 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                 val newTrackedSlots = selections.filter { it.value }.keys.toSet()
                 val slotsToPrune = initialTrackedSlots - newTrackedSlots
 
+                Log.d("SLOTS_DEBUG", "saveSelections starting for roomId=$roomId:")
+                Log.d("SLOTS_DEBUG", "  initialTrackedSlots=$initialTrackedSlots")
+                Log.d("SLOTS_DEBUG", "  selectionsMap=${selections.toMap()}")
+                Log.d("SLOTS_DEBUG", "  newTrackedSlots=$newTrackedSlots")
+                Log.d("SLOTS_DEBUG", "  slotsToPrune=$slotsToPrune")
+
                 if (slotsToPrune.isNotEmpty()) {
+                    Log.d("SLOTS_DEBUG", "  PRUNING slots locally: $slotsToPrune")
                     repository.pruneSlotData(roomId, slotsToPrune)
+                } else {
+                    Log.d("SLOTS_DEBUG", "  No slots to prune locally.")
                 }
 
                 val request = UpdateSlotsRequest(tracked_slot_ids = newTrackedSlots.toList())
+                Log.d("SLOTS_DEBUG", "  Sending updateTrackedSlots to server: $newTrackedSlots")
                 RetrofitClient.instance.updateTrackedSlots(roomId, request)
                 showSaveConfirmation.value = true
 
                 initialTrackedSlots = newTrackedSlots
+                Log.d("SLOTS_DEBUG", "saveSelections successfully completed. initialTrackedSlots updated to $initialTrackedSlots")
 
             } catch (e: Exception) {
+                Log.e("SLOTS_DEBUG", "Failed to save selections: ${e.message}", e)
                 _errorMessage.value = "Failed to save selections."
-                e.printStackTrace()
             } finally {
                 isLoading.value = false
             }

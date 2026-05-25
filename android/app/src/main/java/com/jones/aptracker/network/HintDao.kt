@@ -41,4 +41,7 @@ interface HintDao {
 
     @Query("SELECT COUNT(*) FROM hints WHERE isFound = 1")
     suspend fun countGlobalFoundHints(): Int
+
+    @Query("UPDATE hints SET roomDbId = :newId WHERE roomDbId = :oldId")
+    suspend fun updateRoomIdForHints(oldId: Int, newId: Int)
 }

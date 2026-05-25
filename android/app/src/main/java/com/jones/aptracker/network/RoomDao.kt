@@ -23,6 +23,12 @@ interface RoomDao {
     @Query("DELETE FROM rooms WHERE id NOT IN (:validIds)")
     suspend fun deleteObsoleteRooms(validIds: List<Int>)
 
+    @Query("SELECT * FROM rooms WHERE room_id = :uuid LIMIT 1")
+    suspend fun getRoomByUuid(uuid: String): RoomEntity?
+
+    @Query("DELETE FROM rooms WHERE id = :id")
+    suspend fun deleteRoomById(id: Int)
+
     @Update
     suspend fun updateRooms(rooms: List<RoomEntity>)
 

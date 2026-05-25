@@ -507,6 +507,7 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                 if is_found_from_tracker and not existing_hint_obj.is_found:
                     existing_hint_obj.is_found = True                     
                     existing_hint_obj.timestamp = datetime.now(timezone.utc)                    
+                    existing_hint_obj.updated_at = datetime.utcnow()
                     just_found_hint_item_loc_pairs.add((loc_id, item_id))                    
                     logging.debug(f"[POLLER_HINT_UPDATE] Marked hint {item_id} as found. Bumped timestamp.")
     

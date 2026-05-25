@@ -161,6 +161,13 @@ fun HistoryContent(
         }
     }
 
+    // Automatically trigger history refresh on first composition if empty
+    LaunchedEffect(Unit) {
+        if (historyViewModel.itemHistory.value.isEmpty()) {
+            historyViewModel.refreshAllHistory()
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         val swipeRefreshState = rememberSwipeRefreshState(isRefreshing = isLoading)
 

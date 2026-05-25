@@ -46,6 +46,8 @@ fun PlayersScreen(
     roomId: Int,
     roomAlias: String,
     onSave: () -> Unit,
+    userViewModel: UserViewModel,
+    historyViewModel: HistoryViewModel,
     playersViewModel: PlayersViewModel = viewModel()
 ) {
     LaunchedEffect(key1 = roomId) {
@@ -69,6 +71,10 @@ fun PlayersScreen(
     LaunchedEffect(playersViewModel.showSaveConfirmation.value) {
         if (playersViewModel.showSaveConfirmation.value) {
             launch { snackbarHostState.showSnackbar("Selections Saved!") }
+
+            // Instantly refresh ViewModels to prevent stale cache in other screens
+            userViewModel.fetchTrackedSlots()
+            historyViewModel.refreshAllHistory()
 
             playersViewModel.showSaveConfirmation.value = false
             onSave()
@@ -137,9 +143,7 @@ fun PlayersScreen(
                                 ) {
                                     Checkbox(
                                         checked = isChecked,
-                                        onCheckedChange = { isSelected ->
-                                            playersViewModel.onPlayerSelectionChanged(player.slot_id, isSelected)
-                                        },
+                                        onCheckedChange = null,
                                         enabled = true
                                     )
                                     Spacer(Modifier.width(16.dp))

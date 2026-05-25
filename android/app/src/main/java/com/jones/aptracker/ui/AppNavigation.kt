@@ -75,6 +75,7 @@ fun MainNavHost(
     onGuestUpgradeClick: () -> Unit
 ) {
     val historyViewModel: HistoryViewModel = viewModel()
+    val userViewModel: UserViewModel = viewModel()
 
     // Start destination is now 'home', which holds the Bottom Bar
     NavHost(navController = navController, startDestination = "home") {
@@ -98,6 +99,7 @@ fun MainNavHost(
                 onNavigateToSlotDetail = { roomDbId, slotId ->
                     navController.navigate("slot_detail/$roomDbId/$slotId")
                 },
+                userViewModel = userViewModel,
                 historyViewModel = historyViewModel
             )
         }
@@ -129,6 +131,8 @@ fun MainNavHost(
                 roomId = roomId,
                 roomAlias = roomAlias,
                 onSave = { navController.popBackStack() },
+                userViewModel = userViewModel,
+                historyViewModel = historyViewModel
             )
         }
 
