@@ -221,15 +221,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             try {
-                // Fetch latest user profile to verify connection status before sync
-                val profile = userRepository.getUserProfile()
-                if (!profile.is_cheese_connected) {
-                    _isSyncingCheese.value = false
-                    return@launch
-                }
-
                 // 1. Tell backend to START syncing
-                RetrofitClient.instance.syncCheeseTracker()
+                val response = RetrofitClient.instance.syncCheeseTracker()
+                
+                // Update local state if the server response contains the status
+                response.is_connected?.let {
+                    settingsManager.setCheeseConnected(it)
+                }
 
                 // 2. Poll until backend says "Done"
                 var retries = 0
