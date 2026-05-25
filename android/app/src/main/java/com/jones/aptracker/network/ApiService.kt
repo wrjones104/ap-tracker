@@ -321,6 +321,7 @@ data class TrackedSlotDetail(
     val is_finished: Boolean = false,
     val game: String? = null,
     val last_activity: String? = null,
+    val needs_backfill: Boolean = false,
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
     val notify_hints: Boolean?,

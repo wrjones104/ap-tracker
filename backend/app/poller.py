@@ -1359,6 +1359,7 @@ async def run_room_poll(room_info, loop):
     room_uuid = room_data['room_uuid']
     last_known_activity = room_data['last_remote_activity']
     cached_address = room_data.get('cached_full_address')
+    needs_backfill = room_data.get('needs_backfill', False)
 
     if not tracker_id: return
 
@@ -1426,6 +1427,10 @@ async def run_room_poll(room_info, loop):
         else:
             # Status endpoint failed (404/500)? Safety Fallback.
             should_fetch_tracker = True
+
+    if needs_backfill:
+        logging.info(f"[POLLER_GATE] needs_backfill detected for Room {db_id}. Forcing poll to backfill new slots.")
+        should_fetch_tracker = True
 
     # FINAL DECISION
     if not should_fetch_tracker:
@@ -1536,6 +1541,16 @@ def db_read_room_poll_state(db_id):
     try:
         room = session.query(TrackedRoom).filter_by(id=db_id).first()
         if not room: return None
+        
+        # Check if any active tracked slot in this room needs backfill
+        needs_backfill = session.query(UserTrackedSlot.id).join(
+            UserRoomSubscription
+        ).filter(
+            UserTrackedSlot.room_id == db_id,
+            UserTrackedSlot.needs_backfill == True,
+            UserRoomSubscription.is_archived == False
+        ).first() is not None
+
         return {
             'room_uuid': room.room_id,
             'tracker_id': room.tracker_id,
@@ -1544,7 +1559,8 @@ def db_read_room_poll_state(db_id):
             'is_complete_status': room.is_complete,
             'last_remote_activity': room.last_remote_activity,
             'cached_full_address': room.cached_full_address,
-            'hostname': room.hostname
+            'hostname': room.hostname,
+            'needs_backfill': needs_backfill
         }
     except Exception as e:
         return None
@@ -2198,6 +2214,30 @@ def db_run_cleanup():
         session.rollback()
     finally:
         Session.remove()
+
+def trigger_immediate_room_poll(room_db_id):
+    """
+    Spawns a one-shot background thread to immediately poll a room and backfill its slots.
+    """
+    import threading
+    def worker():
+        loop = asyncio.new_event_loop()
+        try:
+            room_info = {
+                'db_id': room_db_id,
+                'room_uuid': None,
+                'hostname': 'archipelago.gg'
+            }
+            state = db_read_room_poll_state(room_db_id)
+            if state:
+                room_info['hostname'] = state['hostname']
+                loop.run_until_complete(run_room_poll(room_info, loop))
+        except Exception as e:
+            logging.error(f"[POLLER_TRIGGER] Failed to run immediate poll for room {room_db_id}: {e}", exc_info=True)
+        finally:
+            loop.close()
+
+    threading.Thread(target=worker, name=f"ImmediateRoomPoll-{room_db_id}", daemon=True).start()
 
 def run_poller(app):
     loop = asyncio.new_event_loop()
