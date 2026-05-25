@@ -35,4 +35,7 @@ interface HistoryDao {
 
     @Query("DELETE FROM history_items")
     suspend fun deleteAllHistory()
+
+    @Query("UPDATE history_items SET roomId = :newId WHERE roomId = :oldId")
+    suspend fun updateRoomIdForHistory(oldId: Int, newId: Int)
 }

@@ -180,6 +180,7 @@ class NotifiedHint(Base):
     item_id = Column(BigInteger, nullable=False)
     location_id = Column(BigInteger, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
     is_found = Column(Boolean, default=False, nullable=False)
     item_flags = Column(Integer, default=0)
     __table_args__ = (

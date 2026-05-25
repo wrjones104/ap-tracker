@@ -991,6 +991,379 @@ def get_item_history(current_user, room_db_id):
     return jsonify(history)
 
 
+@bp.route('/history/sync', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def sync_history(current_user):
+    """
+    High-performance batch history sync endpoint.
+    Accepts per-slot and per-room watermarks, performs isolated delta queries,
+    and returns only new/modified items and hints along with updated watermarks.
+    """
+    data = request.json or {}
+    session = Session()
+
+    # 1. Fetch tracked rooms and slots for the current user
+    user_tracked_slots = session.query(
+        UserTrackedSlot.room_id, 
+        UserTrackedSlot.slot_id,
+        UserTrackedSlot.added_at
+    ).filter_by(
+        user_id=current_user.id
+    ).all()
+
+    if not user_tracked_slots:
+        return jsonify({
+            "new_items": [],
+            "updated_hints": [],
+            "item_watermarks": {},
+            "hint_watermarks": {}
+        })
+
+    # Get all active subscriptions for room metadata mapping
+    user_subs = session.query(UserRoomSubscription).options(
+        selectinload(UserRoomSubscription.room)
+    ).filter_by(
+        user_id=current_user.id,
+        is_archived=False
+    ).all()
+
+    room_db_id_to_uuid = {}
+    room_db_id_to_sub = {}
+    room_uuid_to_sub = {}
+    room_db_id_to_room = {}
+    for sub in user_subs:
+        if sub.room:
+            room_db_id_to_uuid[sub.room_id] = sub.room.room_id
+            room_db_id_to_sub[sub.room_id] = sub
+            room_uuid_to_sub[sub.room.room_id] = sub
+            room_db_id_to_room[sub.room_id] = sub.room
+
+    # 2. Build Item Sync Watermarks & Query Filters
+    tracked_set = set((slot.room_id, slot.slot_id) for slot in user_tracked_slots)
+    
+    item_watermarks_map = {}
+    for item in data.get('items', []):
+        r_id = item.get('room_db_id')
+        s_id = item.get('slot_id')
+        last_ts = item.get('last_timestamp')
+        if (r_id, s_id) in tracked_set:
+            item_watermarks_map[(r_id, s_id)] = last_ts
+
+    # Backfill missing slots
+    for (r_id, s_id) in tracked_set:
+        if (r_id, s_id) not in item_watermarks_map:
+            item_watermarks_map[(r_id, s_id)] = None
+
+    # Execute a single consolidated query for items using OR filters
+    item_filters = []
+    for (r_id, s_id), last_ts in item_watermarks_map.items():
+        room_uuid = room_db_id_to_uuid.get(r_id)
+        if not room_uuid:
+            continue
+            
+        slot_cond = (NotifiedItem.room_id == room_uuid) & (NotifiedItem.receiving_slot_id == s_id)
+        if last_ts:
+            try:
+                since_dt = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
+                if since_dt.tzinfo:
+                    since_dt = since_dt.replace(tzinfo=None)
+                slot_cond = slot_cond & (NotifiedItem.timestamp > since_dt)
+            except (ValueError, TypeError):
+                pass
+        item_filters.append(slot_cond)
+
+    items = []
+    if item_filters:
+        items = session.query(NotifiedItem).filter(
+            or_(*item_filters)
+        ).order_by(NotifiedItem.id.asc()).limit(200).all()
+
+    # 3. Build Hint Sync Watermarks & Query Filters
+    hint_watermarks_map = {}
+    for hint in data.get('hints', []):
+        r_id = hint.get('room_db_id')
+        last_upd = hint.get('last_updated')
+        if r_id in room_db_id_to_uuid:
+            hint_watermarks_map[r_id] = last_upd
+
+    # Backfill missing rooms
+    for r_id in room_db_id_to_uuid.keys():
+        if r_id not in hint_watermarks_map:
+            hint_watermarks_map[r_id] = None
+
+    # Execute a single consolidated query for hints using OR filters
+    hint_filters = []
+    for r_id, last_upd in hint_watermarks_map.items():
+        room_uuid = room_db_id_to_uuid.get(r_id)
+        if not room_uuid:
+            continue
+            
+        room_cond = (NotifiedHint.room_id == room_uuid)
+        if last_upd:
+            try:
+                since_upd = datetime.fromisoformat(last_upd.replace('Z', '+00:00'))
+                if since_upd.tzinfo:
+                    since_upd = since_upd.replace(tzinfo=None)
+                room_cond = room_cond & (NotifiedHint.updated_at > since_upd)
+            except (ValueError, TypeError):
+                pass
+        hint_filters.append(room_cond)
+
+    hints = []
+    if hint_filters:
+        hints = session.query(NotifiedHint).filter(
+            or_(*hint_filters)
+        ).order_by(NotifiedHint.updated_at.asc()).limit(100).all()
+
+    # 4. Gather room metadata
+    room_uuids = set(item.room_id for item in items) | set(hint.room_id for hint in hints)
+    rooms_to_map = session.query(TrackedRoom).filter(TrackedRoom.room_id.in_(room_uuids)).all()
+    room_map_by_uuid = {r.room_id: r for r in rooms_to_map}
+
+    parsed_room_metadata = {}
+    for room_uuid, room_data in room_map_by_uuid.items():
+        try:
+            players = json.loads(room_data.cached_players_json or '[]')
+            if not isinstance(players, list): players = []
+            
+            game_checksums = json.loads(room_data.game_checksums_json or '{}')
+            if not isinstance(game_checksums, dict): game_checksums = {}
+            
+            player_map = {p['slot_id']: p for p in players}
+            game_map = {p['slot_id']: p.get('game') for p in players}
+            
+            parsed_room_metadata[room_uuid] = {
+                'player_map': player_map,
+                'game_map': game_map,
+                'game_checksums': game_checksums
+            }
+        except Exception:
+            parsed_room_metadata[room_uuid] = {
+                'player_map': {},
+                'game_map': {},
+                'game_checksums': {}
+            }
+
+    # Fetch Slot Item Counts
+    item_counts = {}
+    if items:
+        count_keys = set((item.room_id, item.receiving_slot_id, item.item_id) for item in items)
+        counts_query = session.query(
+            SlotItemCount.room_id, 
+            SlotItemCount.slot_id, 
+            SlotItemCount.item_id, 
+            SlotItemCount.count
+        ).filter(
+            tuple_(SlotItemCount.room_id, SlotItemCount.slot_id, SlotItemCount.item_id).in_(count_keys)
+        ).all()
+        item_counts = {(r, s, i): c for r, s, i, c in counts_query}
+
+    # Bulk Resolve Names from Cache
+    cache_keys_to_find = set()
+    for item in items:
+        meta = parsed_room_metadata.get(item.room_id, {})
+        game_checksums = meta.get('game_checksums', {})
+        game_map = meta.get('game_map', {})
+        
+        receiver_game = game_map.get(item.receiving_slot_id, "Unknown")
+        sender_game = game_map.get(item.sending_slot_id, "Unknown")
+        
+        rec_checksum = game_checksums.get(receiver_game)
+        snd_checksum = game_checksums.get(sender_game)
+        
+        if receiver_game and rec_checksum:
+            cache_keys_to_find.add((rec_checksum, 'item', item.item_id))
+        if sender_game and snd_checksum:
+            cache_keys_to_find.add((snd_checksum, 'location', item.location_id))
+
+    for hint in hints:
+        meta = parsed_room_metadata.get(hint.room_id, {})
+        game_checksums = meta.get('game_checksums', {})
+        game_map = meta.get('game_map', {})
+        
+        io_game = game_map.get(hint.item_owner_id, "Unknown")
+        lo_game = game_map.get(hint.location_owner_id, "Unknown")
+        
+        io_checksum = game_checksums.get(io_game)
+        lo_checksum = game_checksums.get(lo_game)
+        
+        if io_game and io_checksum:
+            cache_keys_to_find.add((io_checksum, 'item', hint.item_id))
+        if lo_game and lo_checksum:
+            cache_keys_to_find.add((lo_checksum, 'location', hint.location_id))
+
+    name_cache_map = {}
+    if cache_keys_to_find:
+        cache_query = session.query(
+            DatapackageCache.checksum,
+            DatapackageCache.entity_type,
+            DatapackageCache.entity_id,
+            DatapackageCache.entity_name
+        ).filter(
+            tuple_(
+                DatapackageCache.checksum,
+                DatapackageCache.entity_type,
+                DatapackageCache.entity_id
+            ).in_(cache_keys_to_find)
+        )
+        name_cache_map = {
+            (c.checksum, c.entity_type, c.entity_id): c.entity_name
+            for c in cache_query.all()
+        }
+
+    # 5. Build JSON Response Elements
+    response_items = []
+    for item in items:
+        room_data = room_map_by_uuid.get(item.room_id)
+        sub = room_uuid_to_sub.get(item.room_id)
+        if not room_data or not sub:
+            continue
+            
+        meta = parsed_room_metadata.get(item.room_id, {})
+        player_map = meta.get('player_map', {})
+        game_checksums = meta.get('game_checksums', {})
+        game_map = meta.get('game_map', {})
+        
+        receiver_id = item.receiving_slot_id
+        sender_id = getattr(item, 'sending_slot_id', 0)
+        
+        receiver_obj = player_map.get(receiver_id)
+        sender_obj = player_map.get(sender_id)
+        
+        receiver_name = receiver_obj.get('name', f"Player {receiver_id}") if receiver_obj else f"Player {receiver_id}"
+        receiver_alias = receiver_obj.get('alias') if receiver_obj else None
+        
+        sender_name = sender_obj.get('name', f"Player {sender_id}") if sender_obj else f"Player {sender_id}"
+        sender_alias = sender_obj.get('alias') if sender_obj else None
+        
+        receiver_game = game_map.get(receiver_id, "Unknown")
+        sender_game = game_map.get(sender_id, "Unknown")
+        
+        is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
+        
+        rec_checksum = game_checksums.get(receiver_game)
+        snd_checksum = game_checksums.get(sender_game)
+        
+        item_name = name_cache_map.get((rec_checksum, 'item', item.item_id)) or f"Item ID {item.item_id}"
+        location_name = name_cache_map.get((snd_checksum, 'location', item.location_id)) or f"Location ID {item.location_id}"
+        
+        response_items.append({
+            "id": item.id,
+            "room_db_id": room_data.id,
+            "room_alias": sub.alias,
+            "icon_name": sub.icon_name,
+            "playerName": receiver_name,
+            "playerAlias": receiver_alias,
+            "receivingGame": receiver_game,
+            "itemName": item_name,
+            "senderName": sender_name,
+            "senderAlias": sender_alias,
+            "senderGame": sender_game,
+            "locationName": location_name,
+            "isPlayerFinished": is_finished,
+            "itemFlags": item.item_flags or 0,
+            "timestamp": format_iso_z(item.timestamp),
+            "tracker_id": room_data.tracker_id,
+            "slot_id": receiver_id,
+            "host": room_data.hostname,
+            "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
+        })
+
+    response_hints = []
+    for hint in hints:
+        room_data = room_map_by_uuid.get(hint.room_id)
+        sub = room_uuid_to_sub.get(hint.room_id)
+        if not room_data or not sub:
+            continue
+            
+        meta = parsed_room_metadata.get(hint.room_id, {})
+        player_map = meta.get('player_map', {})
+        game_checksums = meta.get('game_checksums', {})
+        game_map = meta.get('game_map', {})
+        
+        io_id = hint.item_owner_id
+        lo_id = hint.location_owner_id
+        
+        io_obj = player_map.get(io_id)
+        lo_obj = player_map.get(lo_id)
+        
+        io_name = io_obj.get('name', f"Player {io_id}") if io_obj else f"Player {io_id}"
+        io_alias = io_obj.get('alias') if io_obj else None
+        
+        lo_name = lo_obj.get('name', f"Player {lo_id}") if lo_obj else f"Player {lo_id}"
+        lo_alias = lo_obj.get('alias') if lo_obj else None
+        
+        io_game = game_map.get(io_id, "Unknown")
+        lo_game = game_map.get(lo_id, "Unknown")
+        
+        io_checksum = game_checksums.get(io_game)
+        lo_checksum = game_checksums.get(lo_game)
+        
+        item_name = name_cache_map.get((io_checksum, 'item', hint.item_id)) or f"Item ID {hint.item_id}"
+        location_name = name_cache_map.get((lo_checksum, 'location', hint.location_id)) or f"Location ID {hint.location_id}"
+        
+        response_hints.append({
+            "id": hint.id,
+            "room_db_id": room_data.id,
+            "room_alias": sub.alias,
+            "item_owner_id": io_id,
+            "item_owner_name": io_name,
+            "item_owner_alias": io_alias,
+            "location_owner_id": lo_id,
+            "location_owner_name": lo_name,
+            "location_owner_alias": lo_alias,
+            "item_name": item_name,
+            "location_name": location_name,
+            "is_found": hint.is_found,
+            "timestamp": format_iso_z(hint.timestamp),
+            "updated_at": format_iso_z(hint.updated_at),
+            "item_flags": hint.item_flags or 0
+        })
+
+    # Compute advanced watermarks safely using absolute max calculations on raw datetimes
+    max_item_dts = {}
+    for item in items:
+        room_data = room_map_by_uuid.get(item.room_id)
+        if room_data:
+            key = f"{room_data.id}_{item.receiving_slot_id}"
+            dt = item.timestamp
+            if dt:
+                # Ensure timezone information is comparable by stripping or normalizing
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                if key not in max_item_dts or dt > max_item_dts[key]:
+                    max_item_dts[key] = dt
+
+    new_item_watermarks = {
+        key: format_iso_z(dt) for key, dt in max_item_dts.items()
+    }
+
+    max_hint_dts = {}
+    for hint in hints:
+        room_data = room_map_by_uuid.get(hint.room_id)
+        if room_data:
+            key = f"{room_data.id}"
+            dt = hint.updated_at
+            if dt:
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                if key not in max_hint_dts or dt > max_hint_dts[key]:
+                    max_hint_dts[key] = dt
+
+    new_hint_watermarks = {
+        key: format_iso_z(dt) for key, dt in max_hint_dts.items()
+    }
+
+    return jsonify({
+        "new_items": response_items,
+        "updated_hints": response_hints,
+        "item_watermarks": new_item_watermarks,
+        "hint_watermarks": new_hint_watermarks
+    })
+
+
 @bp.route('/history/items', methods=['GET'])
 @handle_db_errors
 @log_api_call
@@ -1426,6 +1799,7 @@ def get_user_tracked_slots(current_user):
 
             response_data.append({
                 'room_db_id': sub.room_id,
+                'room_id': room_data.room_id,
                 'room_alias': sub.alias,
                 'icon_name': sub.icon_name,
                 'is_archived': sub.is_archived,

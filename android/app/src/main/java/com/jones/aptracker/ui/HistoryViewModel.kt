@@ -244,7 +244,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         val hintDao = db.hintDao()
 
         val apiService = RetrofitClient.instance
-        repository = HistoryRepository(apiService, historyDao, hintDao)
+        repository = HistoryRepository(apiService, historyDao, hintDao, application)
         userRepository = UserRepository(apiService)
         fetchUserPreferences()
     }
@@ -278,32 +278,33 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         reloadHistory()
     }
 
-    fun reloadHistory() {
+    fun reloadHistory(showSpinner: Boolean = true) {
         viewModelScope.launch {
-            isLoading.value = true
+            if (showSpinner) {
+                isLoading.value = true
+            }
             errorMessage.value = null
             try {
                 currentPageOffset = 0
-                isAllDataLoaded = false
+                isAllDataLoaded = true // All local data loaded in one shot
                 val rawItemEntities = when (val filter = _historyFilter.value) {
                     is HistoryFilter.Specific -> {
-                        repository.getHistoryForRoomPaged(filter.roomId, PAGE_SIZE, 0)
+                        repository.getHistoryForRoom(filter.roomId)
                     }
                     else -> {
-                        repository.getGlobalHistoryPaged(PAGE_SIZE, 0)
+                        repository.getGlobalHistory()
                     }
                 }
                 
                 _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
                 currentPageOffset = rawItemEntities.size
-                if (rawItemEntities.size < PAGE_SIZE) {
-                    isAllDataLoaded = true
-                }
             } catch (e: Exception) {
                 errorMessage.value = "Failed to load history: ${e.message}"
                 Log.e("HistoryViewModel", "Error reloading history", e)
             } finally {
-                isLoading.value = false
+                if (showSpinner) {
+                    isLoading.value = false
+                }
             }
         }
     }
@@ -439,37 +440,43 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 _roomIcons.value = liveIcons
                 _trackedPlayers.value = trackedPlayersList
 
-                // --- STEP 2: Item History Sync (Priority 1) ---
-                repository.refreshItemHistory()
-
-                currentPageOffset = 0
-                isAllDataLoaded = false
-
-                val rawItemEntities = if (currentRoomId != null) {
-                    repository.getHistoryForRoomPaged(currentRoomId!!, PAGE_SIZE, 0)
-                } else {
-                    repository.getGlobalHistoryPaged(PAGE_SIZE, 0)
+                // --- STEP 1.5: Re-align currentRoomId if the room's server database ID changed ---
+                var targetRoomId = currentRoomId
+                if (targetRoomId != null) {
+                    val syncPrefs = getApplication<Application>().getSharedPreferences("ap_tracker_sync_watermarks", Context.MODE_PRIVATE)
+                    val migratedId = syncPrefs.getInt("room_id_migration_${targetRoomId}", -1)
+                    if (migratedId != -1) {
+                        Log.d("HistoryViewModel", "Updating currentRoomId from $targetRoomId to $migratedId due to shared migration record.")
+                        currentRoomId = migratedId
+                        if (_historyFilter.value is HistoryFilter.Specific) {
+                            _historyFilter.value = HistoryFilter.Specific(migratedId)
+                        }
+                    } else {
+                        val db = AppDatabase.getInstance(getApplication())
+                        val currentRoomEntity = db.roomDao().getAllRoomsOneShot().find { it.id == targetRoomId }
+                        if (currentRoomEntity != null) {
+                            val matchingServerRoom = trackedRooms.find { it.room_id == currentRoomEntity.room_id }
+                            if (matchingServerRoom != null && matchingServerRoom.room_db_id != targetRoomId) {
+                                Log.d("HistoryViewModel", "Updating currentRoomId from $targetRoomId to ${matchingServerRoom.room_db_id} due to server re-alignment.")
+                                currentRoomId = matchingServerRoom.room_db_id
+                                if (_historyFilter.value is HistoryFilter.Specific) {
+                                    _historyFilter.value = HistoryFilter.Specific(matchingServerRoom.room_db_id)
+                                }
+                            }
+                        }
+                    }
                 }
 
-                _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
-                currentPageOffset = rawItemEntities.size
-                if (rawItemEntities.size < PAGE_SIZE) {
-                    isAllDataLoaded = true
-                }
-
-                // --- STEP 3: UNBLOCK UI HERE ---
-                // The Item list is ready. Let the user see it immediately!
+                // --- STEP 2: Instantly load cached history and unblock UI ---
+                reloadHistory()
                 isLoading.value = false
 
-                // --- STEP 4: Hint History (Background Priority) ---
-                // We launch this in a separate non-blocking way (or just sequentially after flipping the flag)
-                // The UI will update automatically via Flows when this finishes.
+                // --- STEP 3: Silent background delta sync ---
                 try {
-                    repository.refreshHintHistory(currentRoomId)
+                    repository.syncHistoryBatch(trackedRooms)
+                    reloadHistory(showSpinner = false)
                 } catch (e: Exception) {
-                    Log.e("HistoryViewModel", "Background hint refresh failed", e)
-                    // We don't show an error message to the user here because
-                    // the main content (Items) loaded successfully.
+                    Log.e("HistoryViewModel", "Background sync failed", e)
                 }
 
             } catch (e: Exception) {

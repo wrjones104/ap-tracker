@@ -165,6 +165,9 @@ interface ApiService {
 
     @POST("users/me/test-notification")
     suspend fun sendTestNotification(): Response<Unit>
+
+    @POST("history/sync")
+    suspend fun syncHistory(@Body request: HistorySyncRequest): HistorySyncResponse
 }
 
 data class Room(
@@ -302,6 +305,7 @@ data class UpdateSlotPrefsRequest(
 
 data class RoomWithTrackedSlots(
     val room_db_id: Int,
+    val room_id: String,
     val room_alias: String,
     val icon_name: String,
     val tracked_slots: List<TrackedSlotDetail>,
@@ -392,4 +396,27 @@ data class RoomDatapackage(
 data class UpdateThresholdRequest(
     val item_name: String,
     val threshold: Int
+)
+
+data class HistorySyncRequest(
+    val items: List<SlotSyncWatermark>,
+    val hints: List<RoomSyncWatermark>
+)
+
+data class SlotSyncWatermark(
+    val room_db_id: Int,
+    val slot_id: Int,
+    val last_timestamp: String?
+)
+
+data class RoomSyncWatermark(
+    val room_db_id: Int,
+    val last_updated: String?
+)
+
+data class HistorySyncResponse(
+    val new_items: List<HistoryItem>,
+    val updated_hints: List<HintDetail>,
+    val item_watermarks: Map<String, String>,
+    val hint_watermarks: Map<String, String>
 )

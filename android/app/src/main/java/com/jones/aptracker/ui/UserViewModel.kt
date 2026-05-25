@@ -37,7 +37,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val historyRepository = HistoryRepository(
         RetrofitClient.instance,
         AppDatabase.getInstance(application).historyDao(),
-        AppDatabase.getInstance(application).hintDao()
+        AppDatabase.getInstance(application).hintDao(),
+        application
     )
 
     // Quick access to SharedPreferences for UI state (like sort order)
