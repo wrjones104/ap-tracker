@@ -1543,14 +1543,13 @@ def db_read_room_poll_state(db_id):
         if not room: return None
         
         # Check if any active tracked slot in this room needs backfill
-        from .models import UserTrackedSlot, UserRoomSubscription
-        needs_backfill = session.query(UserTrackedSlot).join(
+        needs_backfill = session.query(UserTrackedSlot.id).join(
             UserRoomSubscription
         ).filter(
             UserTrackedSlot.room_id == db_id,
             UserTrackedSlot.needs_backfill == True,
             UserRoomSubscription.is_archived == False
-        ).limit(1).scalar() is not None
+        ).first() is not None
 
         return {
             'room_uuid': room.room_id,
@@ -2222,8 +2221,6 @@ def trigger_immediate_room_poll(room_db_id):
     """
     import threading
     def worker():
-        import asyncio
-        from .poller import run_room_poll, db_read_room_poll_state
         loop = asyncio.new_event_loop()
         try:
             room_info = {
@@ -2240,7 +2237,7 @@ def trigger_immediate_room_poll(room_db_id):
         finally:
             loop.close()
 
-    threading.Thread(target=worker, name=f"ImmediateRoomPoll-{room_db_id}").start()
+    threading.Thread(target=worker, name=f"ImmediateRoomPoll-{room_db_id}", daemon=True).start()
 
 def run_poller(app):
     loop = asyncio.new_event_loop()
