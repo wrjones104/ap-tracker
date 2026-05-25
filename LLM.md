@@ -63,16 +63,18 @@ The system consists of two main parts:
 *   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
 *   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias.
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
-*   `Device`: Stores FCM tokens for push notifications.
+*   `Device`: Stores FCM tokens for push notifications. Uses Firebase App Instance IDs as `device_id` instead of deprecated hardware IDs to comply with privacy guidelines.
 *   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
 *   `DatapackageCache`: Caches game data (Item/Location names) to reduce API calls.
 
 ## Development Notes
 
 1.  **Environment Variables:** The backend relies on environment variables (often in `backend/.env`). Key vars include `DATABASE_URL`, `DISCORD_CLIENT_ID`, `SECRET_KEY`, and `ENCRYPTION_KEY`.
-2.  **Polling Logic:** The `poller.py` is complex. It manages concurrent setups, regular polling, and "Cheese" polling. It handles "backfilling" history for new subscriptions to avoid notification spam.
+2.  **Polling Logic:** The `poller.py` is complex. It manages concurrent setups, regular polling, and "Cheese" polling. It handles "backfilling" history for new subscriptions to avoid notification spam. It also implements "smart healing" to dynamically re-fetch datapackage caches if it detects a room is missing data.
 3.  **No Tests:** The project currently lacks a formal test suite. Changes should be verified carefully, preferably by running the backend locally.
 4.  **Frontend/Backend Sync:** Changes to API response formats in `backend/app/api.py` usually require corresponding updates in the Android app (specifically the Retrofit interfaces).
+5.  **Guest Accounts:** Inactive guest accounts (`is_guest=True`) are periodically pruned by `backend/app/poller.py` after 30 days of inactivity.
+6.  **Alembic Migrations:** To execute Alembic database migrations correctly due to the project structure, run the command from the project root: `PYTHONPATH=backend alembic -c alembic.ini upgrade head`.
 
 ## "Gotchas"
 

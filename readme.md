@@ -13,6 +13,7 @@ The app uses Discord for authentication. The backend service polls rooms you've 
 ### Key Features ✨
 
 * **Discord Authentication:** Securely log in using your existing Discord account via OAuth 2.0.
+* **Guest Accounts:** Quickly start tracking rooms without a Discord account using anonymous guest logins.
 * **Room Management:** Easily add, rename, and remove Archipelago rooms you want to track.
 * **Player Selection:** Choose exactly which players in a room you want to receive notifications for.
 * **Per-Slot Preferences:** Fine-tune your notifications for *each specific player*, overriding your global defaults.
@@ -98,7 +99,7 @@ This project uses a hybrid database setup. The backend is designed to run with *
     source backend/.env
     
     # Run the migrations
-    alembic upgrade head
+    PYTHONPATH=backend alembic -c alembic.ini upgrade head
     
 
 8.  **Run the Server**
