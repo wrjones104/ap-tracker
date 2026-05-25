@@ -134,7 +134,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             .groupBy { player -> player.playerName }
             .map { (name, players) ->
                 val bestAlias = players.firstNotNullOfOrNull { it.playerAlias }
-                PlayerDisplayInfo(name, bestAlias)
+                val backfillNeeded = players.any { it.needsBackfill }
+                PlayerDisplayInfo(name, bestAlias, backfillNeeded)
             }
             .sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -417,7 +418,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                             TrackedPlayer(
                                 roomId = room.room_db_id,
                                 playerName = slot.player_name,
-                                playerAlias = slot.player_alias
+                                playerAlias = slot.player_alias,
+                                needsBackfill = slot.needs_backfill
                             )
                         )
 
@@ -627,7 +629,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
 data class PlayerDisplayInfo(
     val originalName: String,
-    val alias: String?
+    val alias: String?,
+    val needsBackfill: Boolean = false
 ) : Comparable<PlayerDisplayInfo> {
     override fun compareTo(other: PlayerDisplayInfo): Int {
         return this.originalName.compareTo(other.originalName)
@@ -637,5 +640,6 @@ data class PlayerDisplayInfo(
 data class TrackedPlayer(
     val roomId: Int,
     val playerName: String,
-    val playerAlias: String?
+    val playerAlias: String?,
+    val needsBackfill: Boolean = false
 )

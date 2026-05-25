@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -896,8 +897,40 @@ fun ItemHistoryTab(
         }
 
         if (itemsToShow.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
+            val selectedPlayerInfo = availablePlayers.find { it.originalName == selectedPlayer }
+            val isBackfilling = if (selectedPlayer != null) {
+                selectedPlayerInfo?.needsBackfill == true
+            } else {
+                availablePlayers.any { it.needsBackfill }
+            }
+
             Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
-                Text("No item history matches.")
+                if (isBackfilling) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(36.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 3.dp
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Retrieving initial history from Archipelago...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "This may take a moment to populate.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                } else {
+                    Text("No item history matches.")
+                }
             }
         } else {
             val listState = rememberLazyListState()

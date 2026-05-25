@@ -750,6 +750,14 @@ def update_tracked_slots(current_user, room_db_id):
 
     session.commit()
 
+    if slots_to_add:
+        # Trigger an immediate background poll to backfill the newly added slots from Archipelago
+        try:
+            from .poller import trigger_immediate_room_poll
+            trigger_immediate_room_poll(room_db_id)
+        except Exception as e:
+            logging.error(f"[API_ERROR] Failed to trigger immediate room poll: {e}", exc_info=True)
+
     # Hook for Cheese Tracker Integration
     # We do this AFTER commit so the local app state is saved even if Cheese API fails.
     # We offload this to a background thread to prevent blocking the response.
@@ -1783,6 +1791,7 @@ def get_user_tracked_slots(current_user):
                     'is_finished': p_finished,
                     'game': p_game,
                     'last_activity': format_iso_z(slot_last_activity),
+                    'needs_backfill': slot.needs_backfill,
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,
                     'notify_hints': slot.notify_hints,
