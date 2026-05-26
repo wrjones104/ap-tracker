@@ -1696,6 +1696,7 @@ async def run_room_setup(room_info, loop):
                                 
                                 # Extract games from our reliable HTTP fetch
                                 http_games = set(p[1] for p in players_raw)
+                                http_games.discard('Archipelago')
                                 
                                 if ws_games != http_games:
                                     logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Zombie port detected on {uri}! WS Games: {ws_games} | HTTP Games: {http_games}")
