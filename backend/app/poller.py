@@ -1887,17 +1887,16 @@ def db_get_missing_checksums(checksums_to_check):
         ).all()]
         
         if completed_checksums:
-            any_deleted = False
-            for chk in completed_checksums:
-                count = session.query(DatapackageCache.id).filter(
-                    DatapackageCache.checksum == chk,
-                    DatapackageCache.entity_type.in_(['item', 'location'])
-                ).limit(1).count()
-                if count == 0:
+            checksums_with_data = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
+                DatapackageCache.checksum.in_(completed_checksums),
+                DatapackageCache.entity_type.in_(['item', 'location'])
+            ).distinct().all())
+            
+            checksums_to_delete = [chk for chk in completed_checksums if chk not in checksums_with_data]
+            if checksums_to_delete:
+                for chk in checksums_to_delete:
                     logging.info(f"[SELF_HEALING] Checksum {chk} is marked completed but has 0 items/locations. Deleting from cache to trigger redownload.")
-                    session.query(DatapackageCache).filter(DatapackageCache.checksum == chk).delete(synchronize_session=False)
-                    any_deleted = True
-            if any_deleted:
+                session.query(DatapackageCache).filter(DatapackageCache.checksum.in_(checksums_to_delete)).delete(synchronize_session=False)
                 session.commit()
 
         # A checksum is considered cached if and only if it has a '_completed' or '_empty_datapackage' marker

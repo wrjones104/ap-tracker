@@ -38,7 +38,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .build()
                 
                 // On first database creation/upgrade to v17, clean all history watermarks in SharedPreferences
-                val prefs = context.getSharedPreferences("ap_tracker_sync_watermarks", Context.MODE_PRIVATE)
+                val prefs = context.applicationContext.getSharedPreferences("ap_tracker_sync_watermarks", Context.MODE_PRIVATE)
                 if (!prefs.getBoolean("watermarks_cleared_v17", false)) {
                     prefs.edit().clear().putBoolean("watermarks_cleared_v17", true).apply()
                 }
