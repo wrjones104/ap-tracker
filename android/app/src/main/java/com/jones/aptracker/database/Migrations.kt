@@ -190,4 +190,11 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
 
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_history_items_roomId_playerName_itemName` ON `history_items` (`roomId`, `playerName`, `itemName`)")
     }
+}
+
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("DELETE FROM history_items")
+        db.execSQL("DELETE FROM hints")
+    }
 }
