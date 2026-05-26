@@ -328,6 +328,10 @@ class HistoryRepository(
         try {
             historyDao.deleteAllHistory()
             hintDao.deleteAllHints()
+            
+            // Clear all watermarks from SharedPreferences but preserve v17 cleared flag
+            prefs.edit().clear().putBoolean("watermarks_cleared_v17", true).apply()
+            Log.d("PRUNING", "Cleared all SharedPreferences watermarks.")
         } catch (e: Exception) {
             Log.e("PRUNING", "Failed to clear all history: ${e.message}", e)
             throw e

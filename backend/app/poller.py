@@ -1769,7 +1769,23 @@ async def run_room_setup(room_info, loop):
                             continue
                         
                         current_game_entries = []
-                        actual_data = game_data.get('games', {}).get(game, game_data)
+                        actual_data = None
+                        if 'games' in game_data and isinstance(game_data['games'], dict):
+                            # Try exact match first
+                            actual_data = game_data['games'].get(game)
+                            if not actual_data:
+                                # Try case-insensitive match
+                                game_lower = game.lower()
+                                for g_key, g_val in game_data['games'].items():
+                                    if g_key.lower() == game_lower:
+                                        actual_data = g_val
+                                        break
+                            if not actual_data and game_data['games']:
+                                # Fallback: if there's only one game in the games dictionary, use that
+                                if len(game_data['games']) == 1:
+                                    actual_data = list(game_data['games'].values())[0]
+                        if not actual_data:
+                            actual_data = game_data
                         
                         seen_ids = set() 
 
@@ -1863,6 +1879,27 @@ def db_get_missing_checksums(checksums_to_check):
     if not checksums_to_check: return set()
     session = Session()
     try:
+        # Self-healing: if a checksum is marked completed but has 0 items and locations, delete it to trigger a redownload
+        completed_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+            DatapackageCache.checksum.in_(checksums_to_check),
+            DatapackageCache.entity_type == '_metadata',
+            DatapackageCache.entity_name == '_completed'
+        ).all()]
+        
+        if completed_checksums:
+            any_deleted = False
+            for chk in completed_checksums:
+                count = session.query(DatapackageCache.id).filter(
+                    DatapackageCache.checksum == chk,
+                    DatapackageCache.entity_type.in_(['item', 'location'])
+                ).limit(1).count()
+                if count == 0:
+                    logging.info(f"[SELF_HEALING] Checksum {chk} is marked completed but has 0 items/locations. Deleting from cache to trigger redownload.")
+                    session.query(DatapackageCache).filter(DatapackageCache.checksum == chk).delete(synchronize_session=False)
+                    any_deleted = True
+            if any_deleted:
+                session.commit()
+
         # A checksum is considered cached if and only if it has a '_completed' or '_empty_datapackage' marker
         existing = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
             DatapackageCache.checksum.in_(checksums_to_check),
