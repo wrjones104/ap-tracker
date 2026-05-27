@@ -182,7 +182,7 @@ async def verify_ap_server(hostname: str, room_id: str):
             uris_to_try.extend([
                 f"wss://{base_domain}:{port}",
                 f"ws://{base_domain}:{port}"
-            ])
+                ])
 
         ws_success = False
         successful_hostname = clean_host
