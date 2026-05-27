@@ -114,20 +114,6 @@ def _extract_ap_room_id(url_string):
         pass
     return None
 
-async def _attempt_room_wake(hostname, room_uuid):
-    """
-    Attempts to 'wake' a sleeping AP room by sending an HTTP GET to its public page.
-    """
-    url = f"https://{hostname}/room/{room_uuid}"
-    logging.info(f"[POLLER_WAKE] Attempting to wake room: {url}")
-    session = get_aiohttp_session()
-    try:
-        async with session.get(url, timeout=10) as response:
-            logging.info(f"[POLLER_WAKE] Wake request sent. Status: {response.status}")
-            return True
-    except Exception as e:
-        logging.warning(f"[POLLER_WAKE] Failed to send wake request: {e}")
-        return False
 
 async def send_push_notifications(notifications, device_tokens, loop):
     firebase_app = get_firebase_app()
@@ -1715,11 +1701,9 @@ async def run_room_setup(room_info, loop):
                     except Exception as ws_e:
                         logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket attempt {attempt} failed for {uri}: {ws_e}")
                         
-                        # Only wait to wake the room if we are on the final attempt of the CURRENT uri
                         if attempt < max_ws_retries:
-                            await _attempt_room_wake(hostname, room_uuid)
-                            logging.info(f"[POLLER_SETUP] Waiting 8 seconds for room to wake up...")
-                            await asyncio.sleep(8)
+                            logging.info(f"[POLLER_SETUP] Waiting 2 seconds before retry...")
+                            await asyncio.sleep(2)
                         else:
                             logging.info(f"[POLLER_SETUP_INFO][RoomDBID:{db_id}] Exhausted attempts for {uri}.")
 
