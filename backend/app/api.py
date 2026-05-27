@@ -465,7 +465,14 @@ def add_room(current_user):
         try:
             # Verify the room uses the secure async handshake
             # asyncio.run blocks the worker, which is acceptable here as there's a 30s timeout.
-            room_data = asyncio.run(verify_ap_server(hostname, room_id))
+            async def _verify_and_cleanup():
+                try:
+                    return await verify_ap_server(hostname, room_id)
+                finally:
+                    # Give underlying connection transports a brief moment to close cleanly on the loop
+                    await asyncio.sleep(0.05)
+
+            room_data = asyncio.run(_verify_and_cleanup())
             
             ap_tracker_id = room_data['ap_tracker_id']
 

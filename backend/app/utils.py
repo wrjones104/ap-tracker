@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import aiohttp
 import os
@@ -131,108 +130,103 @@ async def verify_ap_server(hostname: str, room_id: str):
         raise ValueError("Hostname and room_id are required.")
 
     connector = SSRFProtectedTCPConnector()
-    try:
-        async with aiohttp.ClientSession(connector=connector) as session:
-            # Step 1: Check room status endpoint
-            base_url = get_web_base_url(hostname)
-            status_url = f"{base_url}/api/room_status/{room_id}"
+    async with aiohttp.ClientSession(connector=connector) as session:
+        # Step 1: Check room status endpoint
+        base_url = get_web_base_url(hostname)
+        status_url = f"{base_url}/api/room_status/{room_id}"
 
-            try:
-                # We enforce a strict timeout of 30 seconds, and payload size limit by reading raw bytes
-                async with session.get(status_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                    if response.status == 404:
-                        raise ValueError(f"Room {room_id} not found on server {hostname}.")
-                    response.raise_for_status()
+        try:
+            # We enforce a strict timeout of 30 seconds, and payload size limit by reading raw bytes
+            async with session.get(status_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                if response.status == 404:
+                    raise ValueError(f"Room {room_id} not found on server {hostname}.")
+                response.raise_for_status()
 
-                    # Limit read to 5MB to prevent DoS via memory exhaustion
-                    raw_data = bytearray()
-                    limit = 5 * 1024 * 1024
-                    while len(raw_data) < limit:
-                        chunk = await response.content.read(65536)
-                        if not chunk:
-                            break
-                        raw_data.extend(chunk)
-                    else:
-                        raise ValueError("Server response is too large.")
+                # Limit read to 5MB to prevent DoS via memory exhaustion
+                raw_data = bytearray()
+                limit = 5 * 1024 * 1024
+                while len(raw_data) < limit:
+                    chunk = await response.content.read(65536)
+                    if not chunk:
+                        break
+                    raw_data.extend(chunk)
+                else:
+                    raise ValueError("Server response is too large.")
 
-                    status_data = json.loads(raw_data)
+                status_data = json.loads(raw_data)
 
-                    if not isinstance(status_data, dict):
-                        raise ValueError("Unexpected response format from room status API.")
+                if not isinstance(status_data, dict):
+                    raise ValueError("Unexpected response format from room status API.")
 
-                    port = status_data.get('last_port', '')
-                    ap_tracker_id = status_data.get('tracker')
+                port = status_data.get('last_port', '')
+                ap_tracker_id = status_data.get('tracker')
 
-                    if not port:
-                        raise ValueError("Could not find server port from room status.")
-            except ValueError:
-                raise
-            except Exception as e:
-                raise ValueError(f"Could not connect to the room to verify its status: {e}")
+                if not port:
+                    raise ValueError("Could not find server port from room status.")
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Could not connect to the room to verify its status: {e}")
 
-            # Step 2: Attempt WebSocket handshake
-            clean_host = hostname.split(':')[0]
-            uris_to_try = [
-                f"wss://{clean_host}:{port}",
-                f"ws://{clean_host}:{port}"
-            ]
+        # Step 2: Attempt WebSocket handshake
+        clean_host = hostname.split(':')[0]
+        uris_to_try = [
+            f"wss://{clean_host}:{port}",
+            f"ws://{clean_host}:{port}"
+        ]
 
-            parts = clean_host.split('.')
-            base_domain = None
-            if len(parts) > 2:
-                base_domain = ".".join(parts[1:])
-                uris_to_try.extend([
-                    f"wss://{base_domain}:{port}",
-                    f"ws://{base_domain}:{port}"
+        parts = clean_host.split('.')
+        base_domain = None
+        if len(parts) > 2:
+            base_domain = ".".join(parts[1:])
+            uris_to_try.extend([
+                f"wss://{base_domain}:{port}",
+                f"ws://{base_domain}:{port}"
                 ])
 
-            ws_success = False
-            successful_hostname = clean_host
+        ws_success = False
+        successful_hostname = clean_host
 
-            for uri in uris_to_try:
-                if ws_success:
-                    break
+        for uri in uris_to_try:
+            if ws_success:
+                break
 
-                try:
-                    # 10-second timeout for websocket connection and read
-                    async with session.ws_connect(uri, timeout=10) as ws:
-                        msg = await ws.receive(timeout=10)
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            room_info_msg = json.loads(msg.data)
-                            if isinstance(room_info_msg, list) and len(room_info_msg) > 0:
-                                if room_info_msg[0].get('cmd') == 'RoomInfo':
-                                    ws_success = True
-                                    # Keep track of which hostname succeeded
-                                    if uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}"):
-                                        successful_hostname = base_domain
-                                    break
-                except Exception as e:
-                    pass
+            try:
+                # 10-second timeout for websocket connection and read
+                async with session.ws_connect(uri, timeout=10) as ws:
+                    msg = await ws.receive(timeout=10)
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        room_info_msg = json.loads(msg.data)
+                        if isinstance(room_info_msg, list) and len(room_info_msg) > 0:
+                            if room_info_msg[0].get('cmd') == 'RoomInfo':
+                                ws_success = True
+                                # Keep track of which hostname succeeded
+                                if uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}"):
+                                    successful_hostname = base_domain
+                                break
+            except Exception as e:
+                pass
 
-            if not ws_success:
-                raise ValueError("Failed to perform Archipelago server handshake. Ensure the server is running and accessible.")
+        if not ws_success:
+            raise ValueError("Failed to perform Archipelago server handshake. Ensure the server is running and accessible.")
 
-            # Return relevant data to be used by the caller
-            players_raw = status_data.get('players', [])
-            player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players_raw)]
-            total_slots = len(player_list)
-            players_json = json.dumps(player_list)
+        # Return relevant data to be used by the caller
+        players_raw = status_data.get('players', [])
+        player_list = [{'slot_id': i + 1, 'name': p[0], 'game': p[1]} for i, p in enumerate(players_raw)]
+        total_slots = len(player_list)
+        players_json = json.dumps(player_list)
 
-            # Extract the correct address format
-            final_address = f"{successful_hostname}:{port}"
+        # Extract the correct address format
+        final_address = f"{successful_hostname}:{port}"
 
-            return {
-                'hostname': hostname, # Keep hostname (which may include port in local dev) intact for references
-                'room_id': room_id,
-                'ap_tracker_id': ap_tracker_id,
-                'cached_full_address': final_address,
-                'cached_players_json': players_json,
-                'cached_total_slots': total_slots
-            }
-    finally:
-        # A tiny delay to allow aiohttp's underlying socket transport closures to register
-        # on the event loop before asyncio.run() closes the loop.
-        await asyncio.sleep(0.25)
+        return {
+            'hostname': hostname, # Keep hostname (which may include port in local dev) intact for references
+            'room_id': room_id,
+            'ap_tracker_id': ap_tracker_id,
+            'cached_full_address': final_address,
+            'cached_players_json': players_json,
+            'cached_total_slots': total_slots
+        }
 
 
 async def fetch_json_with_status(url, session=None, headers=None, timeout=60):
