@@ -90,6 +90,7 @@ def get_aiohttp_session():
 
         thread_local_data.aiohttp_session = aiohttp.ClientSession(
             connector=SSRFProtectedTCPConnector(),
+            connector_owner=True,
             headers=headers, 
             cookie_jar=aiohttp.DummyCookieJar()
         )
@@ -2256,6 +2257,10 @@ def trigger_immediate_room_poll(room_db_id):
         except Exception as e:
             logging.error(f"[POLLER_TRIGGER] Failed to run immediate poll for room {room_db_id}: {e}", exc_info=True)
         finally:
+            try:
+                loop.run_until_complete(close_aiohttp_session())
+            except Exception as e:
+                logging.error(f"[POLLER_TRIGGER] Failed to close aiohttp session: {e}", exc_info=True)
             loop.close()
 
     threading.Thread(target=worker, name=f"ImmediateRoomPoll-{room_db_id}", daemon=True).start()
