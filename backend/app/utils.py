@@ -130,7 +130,7 @@ async def verify_ap_server(hostname: str, room_id: str):
         raise ValueError("Hostname and room_id are required.")
 
     connector = SSRFProtectedTCPConnector()
-    async with aiohttp.ClientSession(connector=connector) as session:
+    async with aiohttp.ClientSession(connector=connector, connector_owner=True) as session:
         # Step 1: Check room status endpoint
         base_url = get_web_base_url(hostname)
         status_url = f"{base_url}/api/room_status/{room_id}"
@@ -236,7 +236,7 @@ async def fetch_json_with_status(url, session=None, headers=None, timeout=60):
     """
     should_close_session = False
     if not session:
-        session = aiohttp.ClientSession(connector=SSRFProtectedTCPConnector())
+        session = aiohttp.ClientSession(connector=SSRFProtectedTCPConnector(), connector_owner=True)
         should_close_session = True
         
     json_data = None
