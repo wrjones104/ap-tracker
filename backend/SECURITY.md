@@ -13,14 +13,13 @@ This document outlines the security measures in place to protect user data and e
 - **Secure Signing Algorithm**: JWTs are signed using the HMAC-SHA256 algorithm, which is a strong and widely-used symmetric signing algorithm.
 - **JTI (JWT ID) Claim**: Each JWT is issued with a unique `jti` claim, which is used to prevent token replay attacks.
 - **JWT Blocklist**: A JWT blocklist is implemented to allow for the immediate revocation of tokens in the event of a security incident. When a user logs out or deletes their account, their token's `jti` is added to the blocklist, rendering it unusable.
-- **Short-Lived Tokens**: JWTs have a 30-day expiration, which limits the window of opportunity for an attacker to use a stolen token.
+- **Token Expiration**: JWTs issued to Discord users have a 90-day expiration, while tokens for anonymous guest users have a 730-day expiration.
 
 ## API Security
 
 ### Input Validation
 - **Strict Input Validation**: All incoming data is strictly validated to ensure that it is of the correct type, length, and format. This prevents a wide range of attacks, including SQL injection, Cross-Site Scripting (XSS), and buffer overflows.
-- **Hostname Whitelist**: The `add_room` endpoint uses a hostname whitelist to restrict the servers that the application can connect to. This prevents Server-Side Request Forgery (SSRF) attacks, where an attacker could force the server to make requests to internal resources.
-- **IP Address Blacklist**: The `add_room` endpoint also uses an IP address blacklist to prevent users from adding rooms with IP addresses. This further mitigates the risk of SSRF attacks.
+- **Programmatic SSRF Protection**: The application uses `aiohttp`'s `SSRFProtectedTCPConnector` and `SSRFProtectedResolver` to block connections to private, loopback, and metadata IPs during external requests (like polling rooms). This robustly prevents Server-Side Request Forgery (SSRF) attacks, ensuring the server cannot be forced to access internal network resources.
 
 ### Insecure Deserialization
 - **Safe JSON Parsing**: All JSON data is parsed using the `json.loads` function, which is safe from insecure deserialization vulnerabilities. The application never uses `pickle` or other unsafe deserialization libraries.

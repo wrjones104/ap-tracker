@@ -6,13 +6,14 @@ Archipelago Alerts (formerly AP Tracker) is a tool for tracking Archipelago mult
 
 This project was built to solve a simple problem: wanting to know when important things happen in an Archipelago game without having to constantly watch a tracker website or be at your computer.
 
-The app uses Discord for authentication. The backend service polls rooms you've added, and the Android app provides a clean interface for managing your tracked rooms, setting notification preferences, and viewing event history. When a significant event occurs, the backend sends a push notification via Firebase Cloud Messaging directly to your phone.
+The app uses Discord for authentication, but also supports an anonymous guest mode. The backend service polls rooms you've added, and the Android app provides a clean interface for managing your tracked rooms, setting notification preferences, and viewing event history. When a significant event occurs, the backend sends a push notification via Firebase Cloud Messaging directly to your phone.
 
 ---
 
 ### Key Features ✨
 
 * **Discord Authentication:** Securely log in using your existing Discord account via OAuth 2.0.
+* **Guest Mode:** Try the application anonymously without linking a Discord account.
 * **Room Management:** Easily add, rename, and remove Archipelago rooms you want to track.
 * **Player Selection:** Choose exactly which players in a room you want to receive notifications for.
 * **Per-Slot Preferences:** Fine-tune your notifications for *each specific player*, overriding your global defaults.

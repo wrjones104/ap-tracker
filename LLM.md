@@ -52,14 +52,14 @@ The system consists of two main parts:
 *   **Asynchronous Processing:** The `poller.py` script uses `asyncio` and `aiohttp` for high-concurrency polling of multiple Archipelago rooms.
 *   **Authentication:**
     *   **Discord OAuth2:** Users log in via Discord.
-    *   **JWT:** The backend issues JWTs for API access after Discord auth.
+    *   **JWT:** The backend issues JWTs for API access after Discord auth (90 days expiration) or for guest accounts (730 days expiration).
     *   **Guest Mode:** Supports anonymous guest accounts.
 *   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
 *   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted.
 
 ### Database Schema (Key Models)
 
-*   `User`: Stores Discord ID, preferences, and encryption keys.
+*   `User`: Stores Discord ID, preferences, and encryption keys. Inactive guest accounts are pruned after 30 days.
 *   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
 *   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias.
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
@@ -73,6 +73,7 @@ The system consists of two main parts:
 2.  **Polling Logic:** The `poller.py` is complex. It manages concurrent setups, regular polling, and "Cheese" polling. It handles "backfilling" history for new subscriptions to avoid notification spam.
 3.  **No Tests:** The project currently lacks a formal test suite. Changes should be verified carefully, preferably by running the backend locally.
 4.  **Frontend/Backend Sync:** Changes to API response formats in `backend/app/api.py` usually require corresponding updates in the Android app (specifically the Retrofit interfaces).
+5.  **SSRF Protection:** The backend implements programmatic SSRF protections (`SSRFProtectedTCPConnector` and `SSRFProtectedResolver` in `utils.py`) to block connections to private, loopback, and metadata IPs during external requests.
 
 ## "Gotchas"
 
