@@ -141,7 +141,7 @@ fun SettingsScreen(
 
                         NotificationToggle(
                             text = "Suppress if I'm connected",
-                            description = "Don't notify me for slots I'm currently playing",
+                            description = "Don't notify me for slots I'm currently playing.",
                             checked = profile.suppress_connected_default,
                             onCheckedChange = { userViewModel.updateGlobalPreferences(suppressConnected = it) }
                         )

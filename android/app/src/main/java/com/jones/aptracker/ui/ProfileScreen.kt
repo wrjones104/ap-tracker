@@ -500,7 +500,7 @@ fun CheeseIntegrationCard(
             } else {
                 // DISCONNECTED STATE
                 Text(
-                    text = "Sync your rooms and tracked slots with cheesetracker.gg",
+                    text = "Sync your rooms and tracked slots with Cheesetracker.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
