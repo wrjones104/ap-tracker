@@ -71,6 +71,7 @@ fun SnoozeDialog(
 
                 // 4. Standard Snooze Options
                 SnoozeOptionButton("1 Hour", 60, onSnoozeSelected)
+                SnoozeOptionButton("4 Hours", 240, onSnoozeSelected)
                 SnoozeOptionButton("8 Hours", 480, onSnoozeSelected)
                 SnoozeOptionButton("24 Hours", 1440, onSnoozeSelected)
             }
