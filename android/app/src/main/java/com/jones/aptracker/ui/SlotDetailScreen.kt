@@ -3,6 +3,10 @@ package com.jones.aptracker.ui
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import android.widget.Toast
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -393,9 +397,11 @@ fun SlotDetailScreen(
                                             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
                                             .padding(8.dp)
                                     ) {
-                                        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                                            items(messages, key = { it.id }) { msg ->
-                                                ChatMessageRow(msg, datapackage)
+                                        SelectionContainer {
+                                            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                                                items(messages, key = { it.id }) { msg ->
+                                                    ChatMessageRow(msg, datapackage)
+                                                }
                                             }
                                         }
                                     }
@@ -688,6 +694,8 @@ fun SearchableSelectDialog(
 // ... Existing ChatMessageRow remains the same ...
 @Composable
 fun ChatMessageRow(message: ChatMessage, datapackage: RoomDatapackage? = null) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     val defaultTextColor = MaterialTheme.colorScheme.onSurface
     val annotatedString = remember(message, datapackage, defaultTextColor) {
         buildAnnotatedString {
@@ -737,7 +745,21 @@ fun ChatMessageRow(message: ChatMessage, datapackage: RoomDatapackage? = null) {
             }
         }
     }
-    Text(text = annotatedString, fontSize = 13.sp, modifier = Modifier.padding(vertical = 1.dp), lineHeight = 16.sp)
+    Text(
+        text = annotatedString,
+        fontSize = 13.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                val textToCopy = annotatedString.text
+                if (textToCopy.isNotEmpty()) {
+                    clipboardManager.setText(AnnotatedString(textToCopy))
+                    Toast.makeText(context, "Line copied to clipboard", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .padding(vertical = 2.dp),
+        lineHeight = 16.sp
+    )
 }
 
 fun formatTimestamp(isoString: String?): String {
