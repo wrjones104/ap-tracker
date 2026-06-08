@@ -147,6 +147,17 @@ interface ApiService {
     @GET("games")
     suspend fun getKnownGames(): List<String>
 
+    @GET("games/{gameName}/items")
+    suspend fun getGameAvailableItems(
+        @Path("gameName") gameName: String
+    ): List<AutocompleteOption>
+
+    @GET("games/{gameName}/items/{itemName}/groups")
+    suspend fun getItemGroups(
+        @Path("gameName") gameName: String,
+        @Path("itemName") itemName: String
+    ): List<String>
+
     @PUT("users/me/ignore-list/{id}")
     suspend fun updateIgnoreItem(
         @Path("id") itemId: Int,

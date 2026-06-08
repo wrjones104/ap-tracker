@@ -18,7 +18,7 @@ from sqlalchemy import or_, desc, tuple_, func
 from firebase_admin import messaging
 
 from . import Session, get_firebase_app
-from .utils import verify_ap_server
+from .utils import verify_ap_server, generate_negative_id
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
     DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist, UserIgnoreItem,
@@ -2095,6 +2095,242 @@ def delete_slot_threshold(current_user, room_db_id, slot_id, threshold_id):
     finally:
         Session.remove()
 
+def rebuild_game_cache_synchronously(session, game_name):
+    """
+    Finds a checksum and hostname for the game in existing rooms,
+    fetches the datapackage from the Archipelago server, and caches it synchronously.
+    """
+    import requests
+    
+    # Find a room that tracks this game using optimized column query
+    room_query = session.query(TrackedRoom.game_checksums_json, TrackedRoom.hostname).filter(
+        TrackedRoom.game_checksums_json.isnot(None),
+        TrackedRoom.game_checksums_json != '{}'
+    ).all()
+    checksum = None
+    hostname = "archipelago.gg"
+    
+    for game_checksums_json, room_hostname in room_query:
+        try:
+            checksums = json.loads(game_checksums_json)
+            checksums_lower = {k.lower(): v for k, v in checksums.items()}
+            if game_name.lower() in checksums_lower:
+                checksum = checksums_lower[game_name.lower()]
+                if room_hostname:
+                    hostname = room_hostname
+                break
+        except:
+            pass
+            
+    if not checksum:
+        # Check if we can find the checksum from existing DatapackageCache entries
+        checksum_row = session.query(DatapackageCache.checksum).filter(
+            func.lower(DatapackageCache.game) == game_name.lower()
+        ).first()
+        if checksum_row:
+            checksum = checksum_row[0]
+            
+    if not checksum:
+        logging.warning(f"[SYNC_HEAL] Could not find checksum for game '{game_name}' to rebuild cache.")
+        return False
+        
+    logging.info(f"[SYNC_HEAL] Fetching datapackage for '{game_name}' ({checksum}) from {hostname}...")
+    try:
+        from .utils import fetch_json_with_status
+        url = f"https://{hostname}/api/datapackage/{checksum}"
+        game_data, status_code = asyncio.run(fetch_json_with_status(url, timeout=10))
+        if status_code != 200 or not game_data:
+            logging.error(f"[SYNC_HEAL] Failed to fetch datapackage from {url}: status {status_code}")
+            return False
+        actual_data = None
+        if 'games' in game_data and isinstance(game_data['games'], dict):
+            actual_data = game_data['games'].get(game_name)
+            if not actual_data:
+                game_lower = game_name.lower()
+                for g_key, g_val in game_data['games'].items():
+                    if g_key.lower() == game_lower:
+                        actual_data = g_val
+                        break
+            if not actual_data and game_data['games']:
+                if len(game_data['games']) == 1:
+                    actual_data = list(game_data['games'].values())[0]
+        if not actual_data:
+            actual_data = game_data
+ 
+        # Delete old entries to prevent duplicates
+        session.query(DatapackageCache).filter_by(checksum=checksum).delete()
+        
+        current_game_entries = []
+        seen_ids = set()
+ 
+        # 1. Items
+        for n, eid in actual_data.get('item_name_to_id', {}).items():
+            if ('item', eid) in seen_ids: continue
+            seen_ids.add(('item', eid))
+            current_game_entries.append(DatapackageCache(
+                game=game_name, checksum=checksum, entity_type='item', entity_id=eid, entity_name=n
+            ))
+ 
+        # 2. Locations
+        for n, eid in actual_data.get('location_name_to_id', {}).items():
+            if ('location', eid) in seen_ids: continue
+            seen_ids.add(('location', eid))
+            current_game_entries.append(DatapackageCache(
+                game=game_name, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n
+            ))
+ 
+        # 3. Item Groups & Members
+        for g_name, g_items in actual_data.get('item_name_groups', {}).items():
+            g_id = generate_negative_id('item_group', g_name)
+            current_game_entries.append(DatapackageCache(
+                game=game_name, checksum=checksum, entity_type='item_group', entity_id=g_id, entity_name=g_name
+            ))
+            if isinstance(g_items, list):
+                for item in g_items:
+                    membership_key = json.dumps([g_name, item])
+                    m_id = generate_negative_id('item_group_member', membership_key)
+                    current_game_entries.append(DatapackageCache(
+                        game=game_name, checksum=checksum, entity_type='item_group_member', entity_id=m_id, entity_name=membership_key
+                    ))
+
+        # 4. Location Groups & Members
+        for g_name, g_locations in actual_data.get('location_name_groups', {}).items():
+            g_id = generate_negative_id('location_group', g_name)
+            current_game_entries.append(DatapackageCache(
+                game=game_name, checksum=checksum, entity_type='location_group', entity_id=g_id, entity_name=g_name
+            ))
+            if isinstance(g_locations, list):
+                for loc in g_locations:
+                    membership_key = json.dumps([g_name, loc])
+                    m_id = generate_negative_id('location_group_member', membership_key)
+                    current_game_entries.append(DatapackageCache(
+                        game=game_name, checksum=checksum, entity_type='location_group_member', entity_id=m_id, entity_name=membership_key
+                    ))
+ 
+        if not current_game_entries:
+            current_game_entries.append(DatapackageCache(
+                game=game_name, checksum=checksum, entity_type='_metadata', entity_id=0, entity_name='_empty_datapackage'
+            ))
+        else:
+            current_game_entries.append(DatapackageCache(
+                game=game_name, checksum=checksum, entity_type='_metadata', entity_id=0, entity_name='_completed_v2'
+            ))
+ 
+        session.bulk_save_objects(current_game_entries)
+        session.commit()
+        logging.info(f"[SYNC_HEAL] Successfully rebuilt cache for game '{game_name}'.")
+        return True
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[SYNC_HEAL] Error rebuilding cache for '{game_name}': {e}", exc_info=True)
+        return False
+ 
+def heal_datapackage_cache_if_outdated(session, game_name):
+    """
+    Checks if a game is cached but lacks 'item_group_member' entries or uses old '_completed' marker.
+    If so, rebuilds it synchronously to ensure the client gets results immediately.
+    """
+    if not game_name:
+        return
+        
+    # Check if we have an old cache version (_completed) for this game
+    has_old = session.query(DatapackageCache.id).filter(
+        func.lower(DatapackageCache.game) == game_name.lower(),
+        DatapackageCache.entity_type == '_metadata',
+        DatapackageCache.entity_name == '_completed'
+    ).limit(1).scalar() is not None
+
+    if has_old:
+        logging.info(f"[SELF_HEALING] Game '{game_name}' has an old cache version (_completed). Rebuilding synchronously to _completed_v2...")
+        rebuild_game_cache_synchronously(session, game_name)
+        return
+        
+    # Check if we have any 'item_group' entries but no 'item_group_member' entries for this game
+    has_groups = session.query(DatapackageCache.id).filter(
+        func.lower(DatapackageCache.game) == game_name.lower(),
+        DatapackageCache.entity_type == 'item_group'
+    ).limit(1).scalar() is not None
+    if has_groups:
+        has_members = session.query(DatapackageCache.id).filter(
+            func.lower(DatapackageCache.game) == game_name.lower(),
+            DatapackageCache.entity_type == 'item_group_member'
+        ).limit(1).scalar() is not None
+        if not has_members:
+            logging.info(f"[SELF_HEALING] Game '{game_name}' cache lacks group members. Rebuilding synchronously...")
+            rebuild_game_cache_synchronously(session, game_name)
+ 
+@bp.route('/games/<path:game_name>/items', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_game_available_items(current_user, game_name):
+    """
+    Returns a list of all item names and item groups available for the specified game.
+    Triggers self-healing if the cache for this game is outdated.
+    """
+    session = Session()
+    try:
+        # Trigger self-healing if needed
+        heal_datapackage_cache_if_outdated(session, game_name)
+        
+        # Query distinct items and item groups for this game name
+        items_query = session.query(DatapackageCache.entity_name, DatapackageCache.entity_type).filter(
+            func.lower(DatapackageCache.game) == game_name.lower(),
+            DatapackageCache.entity_type.in_(['item', 'item_group'])
+        ).distinct().all()
+        
+        results = []
+        for name, etype in items_query:
+            results.append({
+                "name": name,
+                "is_group": etype == 'item_group'
+            })
+        
+        results.sort(key=lambda x: x['name'])
+        return jsonify(results)
+    finally:
+        Session.remove()
+
+@bp.route('/games/<path:game_name>/items/<path:item_name>/groups', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_item_groups(current_user, game_name, item_name):
+    """
+    Returns a list of group names that the specified item belongs to.
+    """
+    session = Session()
+    try:
+        # Check if cache is outdated first
+        heal_datapackage_cache_if_outdated(session, game_name)
+        
+        # Query all group members for this game to filter in memory safely
+        members = session.query(DatapackageCache.entity_name).filter(
+            func.lower(DatapackageCache.game) == game_name.lower(),
+            DatapackageCache.entity_type == 'item_group_member'
+        ).all()
+        
+        groups = []
+        for (member_key,) in members:
+            try:
+                # Try structured JSON list decoding
+                parsed = json.loads(member_key)
+                if isinstance(parsed, list) and len(parsed) == 2:
+                    g_name, item = parsed
+                    if item.lower() == item_name.lower():
+                        groups.append(g_name)
+            except Exception:
+                # Fallback to legacy colon-split format if parsing fails (old cache not yet rebuilt)
+                if ':' in member_key:
+                    parts = member_key.split(':', 1)
+                    if parts[1].lower() == item_name.lower():
+                        groups.append(parts[0])
+                    
+        groups.sort()
+        return jsonify(groups)
+    finally:
+        Session.remove()
+
 @bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/items', methods=['GET'])
 @handle_db_errors
 @log_api_call
@@ -2123,6 +2359,8 @@ def get_slot_available_items(current_user, room_db_id, slot_id):
         game = slot_info.get('game')
         if not game:
             return jsonify([])
+
+        heal_datapackage_cache_if_outdated(session, game)
             
         try:
             game_checksums = json.loads(room.game_checksums_json or '{}')
@@ -2565,6 +2803,7 @@ def get_ignore_list(current_user):
                 'id': item.id,
                 'item_name': item.item_name,
                 'game_name': item.game_name,
+                'is_group': getattr(item, 'is_group', False),
                 'created_at': item.created_at.isoformat()
             })
         return jsonify(items)
@@ -2578,14 +2817,18 @@ def get_ignore_list(current_user):
 def add_ignore_item(current_user):
     """
     Adds a new item to the ignore list.
-    payload: { "item_name": "Power Star", "game_name": "Super Mario 64" (optional) }
+    payload: { "item_name": "Power Star", "game_name": "Super Mario 64" (optional), "is_group": true/false (optional) }
     """
     data = request.json
     item_name = data.get('item_name', '').strip()
     game_name = data.get('game_name')
+    is_group = bool(data.get('is_group', False))
     
     if game_name:
         game_name = game_name.strip()
+
+    if is_group and not game_name:
+        return jsonify({'error': 'game_name is required for group ignore rules'}), 400
 
     if not item_name:
         return jsonify({'error': 'item_name is required'}), 400
@@ -2605,12 +2848,13 @@ def add_ignore_item(current_user):
         new_item = UserIgnoreItem(
             user_id=current_user.id,
             item_name=item_name,
-            game_name=game_name
+            game_name=game_name,
+            is_group=is_group
         )
         session.add(new_item)
         session.commit()
         
-        logging.info(f"[API] User {current_user.id} ignored '{item_name}' (Game: {game_name or 'Global'})")
+        logging.info(f"[API] User {current_user.id} ignored '{item_name}' (Game: {game_name or 'Global'}, Group: {is_group})")
         
         return jsonify({
             'message': 'Item added to ignore list.',
@@ -2632,11 +2876,15 @@ def update_ignore_item(current_user, item_id):
     """
     data = request.json
     new_item_name = data.get('item_name', '').strip()
+    new_is_group = bool(data.get('is_group', False))
     
     # game_name can be None (Global) or a string
     new_game_name = data.get('game_name')
     if new_game_name:
         new_game_name = new_game_name.strip()
+
+    if new_is_group and not new_game_name:
+        return jsonify({'error': 'game_name is required for group ignore rules'}), 400
 
     if not new_item_name:
         return jsonify({'error': 'item_name is required'}), 400
@@ -2662,6 +2910,7 @@ def update_ignore_item(current_user, item_id):
         # Apply updates
         item.item_name = new_item_name
         item.game_name = new_game_name
+        item.is_group = new_is_group
         
         session.commit()
         return jsonify({'message': 'Rule updated.'})

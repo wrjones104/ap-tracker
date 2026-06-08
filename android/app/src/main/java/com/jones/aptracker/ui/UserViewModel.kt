@@ -84,6 +84,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _knownGames = MutableStateFlow<List<String>>(emptyList())
     val knownGames = _knownGames.asStateFlow()
 
+    private val _gameAvailableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
+    val gameAvailableItems = _gameAvailableItems.asStateFlow()
+
+    private var fetchAvailableItemsJob: kotlinx.coroutines.Job? = null
+    private var latestGameQuery: String? = null
+
     private val _ignoreSortOption = MutableStateFlow(IgnoreSortOption.NEWEST)
     val ignoreSortOption = _ignoreSortOption.asStateFlow()
 
@@ -342,10 +348,35 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addIgnoreItem(itemName: String, gameName: String?) {
+    fun fetchGameAvailableItems(gameName: String) {
+        latestGameQuery = gameName
+        _gameAvailableItems.value = emptyList()
+        fetchAvailableItemsJob?.cancel()
+        fetchAvailableItemsJob = viewModelScope.launch {
+            try {
+                val items = RetrofitClient.instance.getGameAvailableItems(gameName)
+                if (latestGameQuery == gameName) {
+                    _gameAvailableItems.value = items
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to fetch game available items", e)
+                if (latestGameQuery == gameName) {
+                    _gameAvailableItems.value = emptyList()
+                }
+            }
+        }
+    }
+
+    fun clearGameAvailableItems() {
+        latestGameQuery = null
+        fetchAvailableItemsJob?.cancel()
+        _gameAvailableItems.value = emptyList()
+    }
+
+    fun addIgnoreItem(itemName: String, gameName: String?, isGroup: Boolean = false) {
         viewModelScope.launch {
             try {
-                userRepository.addIgnoreItem(itemName, gameName)
+                userRepository.addIgnoreItem(itemName, gameName, isGroup)
                 fetchIgnoreList()
                 _integrationMessage.value = "Item ignored."
             } catch (e: HttpException) {
@@ -362,10 +393,10 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateIgnoreItem(id: Int, itemName: String, gameName: String?) {
+    fun updateIgnoreItem(id: Int, itemName: String, gameName: String?, isGroup: Boolean = false) {
         viewModelScope.launch {
             try {
-                val request = com.jones.aptracker.network.AddIgnoreItemRequest(itemName, gameName)
+                val request = com.jones.aptracker.network.AddIgnoreItemRequest(itemName, gameName, isGroup)
                 val response = RetrofitClient.instance.updateIgnoreItem(id, request)
 
                 if (response.isSuccessful) {

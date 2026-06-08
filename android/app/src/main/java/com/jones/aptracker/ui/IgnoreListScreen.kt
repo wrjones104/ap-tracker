@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -80,6 +81,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jones.aptracker.network.IgnoreItem
+import com.jones.aptracker.network.AutocompleteOption
 
 // Enum for Sorting Options
 enum class IgnoreSortOption(val label: String) {
@@ -315,11 +317,11 @@ fun IgnoreListScreen(
                     showSheet = false
                     editingItem = null
                 },
-                onConfirm = { itemName, gameName ->
+                onConfirm = { itemName, gameName, isGroup ->
                     if (editingItem == null) {
-                        userViewModel.addIgnoreItem(itemName, gameName)
+                        userViewModel.addIgnoreItem(itemName, gameName, isGroup)
                     } else {
-                        userViewModel.updateIgnoreItem(editingItem!!.id, itemName, gameName)
+                        userViewModel.updateIgnoreItem(editingItem!!.id, itemName, gameName, isGroup)
                     }
                     showSheet = false
                     editingItem = null
@@ -473,29 +475,45 @@ fun IgnoreItemCard(
                     style = MaterialTheme.typography.titleMedium
                 )
                 Spacer(Modifier.height(4.dp))
-                if (item.gameName != null) {
-                    Surface(
-                        color = if (isSelected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.primaryContainer,
-                        shape = MaterialTheme.shapes.small
-                    ) {
-                        Text(
-                            text = item.gameName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (item.gameName != null) {
+                        Surface(
+                            color = if (isSelected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.primaryContainer,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                text = item.gameName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    } else {
+                        Surface(
+                            color = if (isSelected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.secondaryContainer,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                text = "Global (All Games)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
-                } else {
-                    Surface(
-                        color = if (isSelected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.secondaryContainer,
-                        shape = MaterialTheme.shapes.small
-                    ) {
-                        Text(
-                            text = "Global (All Games)",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
+                    if (item.isGroup) {
+                        Spacer(Modifier.width(8.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                text = "Group",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -568,15 +586,47 @@ fun IgnoreRuleSheet(
     existingItem: IgnoreItem?,
     knownGames: List<String>,
     onDismiss: () -> Unit,
-    onConfirm: (String, String?) -> Unit
+    onConfirm: (String, String?, Boolean) -> Unit,
+    userViewModel: UserViewModel = viewModel()
 ) {
     var itemName by remember { mutableStateOf(existingItem?.itemName ?: "") }
-    var selectedTypeIndex by remember { mutableStateOf(if (existingItem?.gameName != null) 1 else 0) }
+    var selectedTypeIndex by remember { mutableStateOf(if (existingItem?.gameName != null) 1 else 0) } // 0 = Global, 1 = Game Specific
     var gameNameQuery by remember { mutableStateOf(existingItem?.gameName ?: "") }
+
+    var selectedGame by remember { mutableStateOf<String?>(existingItem?.gameName) }
+    var selectedIgnoreCategory by remember { mutableStateOf(if (existingItem?.isGroup == true) 1 else 0) } // 0 = Single Item, 1 = Item Group
+    var itemQuery by remember { mutableStateOf(existingItem?.itemName ?: "") }
+
+    val gameAvailableItems by userViewModel.gameAvailableItems.collectAsState()
+    var isItemsLoading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedGame) {
+        if (selectedGame != null) {
+            isItemsLoading = true
+            userViewModel.fetchGameAvailableItems(selectedGame!!)
+        } else {
+            userViewModel.clearGameAvailableItems()
+            isItemsLoading = false
+        }
+    }
+
+    LaunchedEffect(gameAvailableItems) {
+        isItemsLoading = false
+    }
 
     val filteredGames = remember(gameNameQuery, knownGames) {
         if (gameNameQuery.isBlank()) knownGames else knownGames.filter {
             it.contains(gameNameQuery, ignoreCase = true)
+        }
+    }
+
+    val filteredItems = remember(itemQuery, gameAvailableItems, selectedIgnoreCategory) {
+        val targetIsGroup = (selectedIgnoreCategory == 1)
+        val list = gameAvailableItems.filter { it.isGroup == targetIsGroup }
+        if (itemQuery.isBlank()) {
+            list
+        } else {
+            list.filter { it.name.contains(itemQuery, ignoreCase = true) }
         }
     }
 
@@ -594,16 +644,6 @@ fun IgnoreRuleSheet(
             modifier = Modifier.padding(vertical = 16.dp)
         )
 
-        OutlinedTextField(
-            value = itemName,
-            onValueChange = { itemName = it },
-            label = { Text("Item Name (e.g. *Key)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(16.dp))
-
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             SegmentedButton(
                 selected = selectedTypeIndex == 0,
@@ -620,48 +660,167 @@ fun IgnoreRuleSheet(
 
         Spacer(Modifier.height(16.dp))
 
-        if (selectedTypeIndex == 1) {
-            Text("Select Game", style = MaterialTheme.typography.labelMedium)
+        if (selectedTypeIndex == 0) {
             OutlinedTextField(
-                value = gameNameQuery,
-                onValueChange = { gameNameQuery = it },
-                placeholder = { Text("Search games...") },
-                modifier = Modifier.fillMaxWidth(),
+                value = itemName,
+                onValueChange = { itemName = it },
+                label = { Text("Item Name (e.g. *Key)") },
                 singleLine = true,
-                leadingIcon = { Icon(Icons.Default.Search, null) }
+                modifier = Modifier.fillMaxWidth()
             )
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                if (filteredGames.isEmpty()) {
-                    item {
-                        Text(
-                            "No games found.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(8.dp)
-                        )
+            Spacer(Modifier.weight(1f))
+        } else {
+            if (selectedGame == null) {
+                Text("Select Game", style = MaterialTheme.typography.labelMedium)
+                OutlinedTextField(
+                    value = gameNameQuery,
+                    onValueChange = { gameNameQuery = it },
+                    placeholder = { Text("Search games...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.Search, null) }
+                )
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    if (filteredGames.isEmpty()) {
+                        item {
+                            Text(
+                                "No games found.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+                    } else {
+                        items(filteredGames) { game ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        selectedGame = game
+                                        gameNameQuery = game
+                                    }
+                                    .padding(vertical = 12.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (gameNameQuery.equals(game, ignoreCase = true)) {
+                                    Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text(game, style = MaterialTheme.typography.bodyLarge)
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        }
+                    }
+                }
+            } else {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(selectedGame!!, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        TextButton(onClick = {
+                            selectedGame = null
+                            gameNameQuery = ""
+                            itemName = ""
+                            itemQuery = ""
+                        }) {
+                            Text("Change Game")
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                Text("Ignore Type", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(4.dp))
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = selectedIgnoreCategory == 0,
+                        onClick = {
+                            selectedIgnoreCategory = 0
+                            itemName = ""
+                            itemQuery = ""
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                    ) { Text("Single Item") }
+
+                    SegmentedButton(
+                        selected = selectedIgnoreCategory == 1,
+                        onClick = {
+                            selectedIgnoreCategory = 1
+                            itemName = ""
+                            itemQuery = ""
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                    ) { Text("Item Group") }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = itemQuery,
+                    onValueChange = {
+                        itemQuery = it
+                        itemName = it
+                    },
+                    label = { Text(if (selectedIgnoreCategory == 1) "Search or Type Group..." else "Search or Type Item...") },
+                    placeholder = { Text(if (selectedIgnoreCategory == 1) "e.g. Boos" else "e.g. Power Star") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.Search, null) }
+                )
+                Spacer(Modifier.height(8.dp))
+
+                if (isItemsLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
                     }
                 } else {
-                    items(filteredGames) { game ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { gameNameQuery = game }
-                                .padding(vertical = 12.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (gameNameQuery.equals(game, ignoreCase = true)) {
-                                Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                Spacer(Modifier.width(8.dp))
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        if (filteredItems.isEmpty()) {
+                            item {
+                                Text(
+                                    if (selectedIgnoreCategory == 1) "No matching groups found." else "No matching items found.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(8.dp)
+                                )
                             }
-                            Text(game, style = MaterialTheme.typography.bodyLarge)
+                        } else {
+                            items(filteredItems) { option ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            itemQuery = option.name
+                                            itemName = option.name
+                                        }
+                                        .padding(vertical = 12.dp, horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (itemQuery.equals(option.name, ignoreCase = true)) {
+                                        Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    Text(option.name, style = MaterialTheme.typography.bodyLarge)
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            }
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     }
                 }
             }
-        } else {
-            Spacer(Modifier.weight(1f))
         }
 
         Spacer(Modifier.height(16.dp))
@@ -674,10 +833,11 @@ fun IgnoreRuleSheet(
             Spacer(Modifier.width(8.dp))
             Button(
                 onClick = {
-                    val finalGame = if (selectedTypeIndex == 1) gameNameQuery.trim().ifBlank { null } else null
-                    onConfirm(itemName.trim(), finalGame)
+                    val finalGame = if (selectedTypeIndex == 1) selectedGame?.trim()?.ifBlank { null } else null
+                    val isGroup = selectedTypeIndex == 1 && selectedIgnoreCategory == 1
+                    onConfirm(itemName.trim(), finalGame, isGroup)
                 },
-                enabled = itemName.isNotBlank() && (selectedTypeIndex == 0 || gameNameQuery.isNotBlank())
+                enabled = itemName.isNotBlank() && (selectedTypeIndex == 0 || selectedGame != null)
             ) {
                 Text(if (existingItem == null) "Add" else "Save")
             }

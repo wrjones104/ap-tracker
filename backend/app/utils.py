@@ -311,3 +311,19 @@ def is_snoozed(user_prefs, slot_prefs, now_utc, user_id, slot_id, context_label=
                 
     return False
 
+
+def generate_negative_id(namespace: str, name: str) -> int:
+    """
+    Generates a deterministic 64-bit signed integer ID from a namespace and name.
+    The returned ID is always negative (less than 0) to avoid colliding with AP IDs.
+    """
+    import hashlib
+    import struct
+    key = f"{namespace}:{name}"
+    h = hashlib.sha256(key.encode('utf-8')).digest()
+    val = struct.unpack('!q', h[:8])[0]
+    if val >= 0:
+        val = -val - 1
+    return val
+
+

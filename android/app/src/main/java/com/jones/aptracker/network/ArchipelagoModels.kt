@@ -68,5 +68,5 @@ enum class ConnectionStatus {
 
 data class AutocompleteOption(
     val name: String,
-    val is_group: Boolean = false
+    @SerializedName("is_group") val isGroup: Boolean = false
 )

@@ -11,10 +11,11 @@ class UserRepository(private val apiService: ApiService) {
         return apiService.getIgnoreList()
     }
 
-    suspend fun addIgnoreItem(itemName: String, gameName: String?): Int {
+    suspend fun addIgnoreItem(itemName: String, gameName: String?, isGroup: Boolean = false): Int {
         val request = AddIgnoreItemRequest(
             itemName = itemName,
-            gameName = gameName?.takeIf { it.isNotBlank() }
+            gameName = gameName?.takeIf { it.isNotBlank() },
+            isGroup = isGroup
         )
         val response = apiService.addIgnoreItem(request)
         return response.id

@@ -25,7 +25,7 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, SlotItemThreshold, SlotItemCount
 )
-from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector
+from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -534,6 +534,22 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
         except Exception as e:
             logging.error(f"[POLLER_THRESHOLD_ERROR] Failed to fetch thresholds: {e}")
 
+    # 0.5. Pre-fetch group memberships for the checksums involved in this poll batch
+    group_members_lookup = set()
+    if new_items_for_notify:
+        checksums = {item['game_checksum'] for item in new_items_for_notify if item.get('game_checksum')}
+        if checksums:
+            try:
+                member_results = session.query(DatapackageCache.checksum, DatapackageCache.entity_name).filter(
+                    DatapackageCache.checksum.in_(checksums),
+                    DatapackageCache.entity_type == 'item_group_member'
+                ).all()
+                for chk, name in member_results:
+                    # name is "GroupName:ItemName"
+                    group_members_lookup.add((chk, name.lower().strip()))
+            except Exception as e:
+                logging.error(f"[POLLER_DB_ERROR] Failed to fetch group members: {e}")
+
     # 1. Fetch Names from DatapackageCache
     if cache_keys_to_fetch:
         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Fetching {len(cache_keys_to_fetch)} names...")
@@ -664,16 +680,27 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     if user_prefs.ignore_items:
                         for ignore_rule in user_prefs.ignore_items:
                             rule_pattern = ignore_rule.item_name.lower().strip()
-                            if fnmatch.fnmatch(normalized_item_name, rule_pattern):
-                                if not ignore_rule.game_name:
-                                    should_ignore = True
-                                    break
-                                elif ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
-                                    should_ignore = True
-                                    break
+                            if getattr(ignore_rule, 'is_group', False):
+                                # Group ignore: Only supports game-specific level
+                                if ignore_rule.game_name and ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                    # Check if the item belongs to this group
+                                    # Group member format in DB is "groupname:itemname"
+                                    lookup_key = (item_data['game_checksum'], f"{rule_pattern}:{normalized_item_name}")
+                                    if lookup_key in group_members_lookup:
+                                        should_ignore = True
+                                        break
+                            else:
+                                # Single item ignore (supports wildcard matching)
+                                if fnmatch.fnmatch(normalized_item_name, rule_pattern):
+                                    if not ignore_rule.game_name:
+                                        should_ignore = True
+                                        break
+                                    elif ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                        should_ignore = True
+                                        break
                     
                     if should_ignore:
-                        logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}') for game '{item_data['receiver_game']}'.")
+                        logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}' is_group={getattr(ignore_rule, 'is_group', False)}) for game '{item_data['receiver_game']}'.")
                         continue
 
                 # --- CONDENSED MESSAGING CHECK ---
@@ -1795,22 +1822,33 @@ async def run_room_setup(room_info, loop):
                                 game=game, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n
                             ))
 
-                        # 3. Process Item Groups
-                        import zlib
-                        for g_name in actual_data.get('item_name_groups', {}).keys():
-                            g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
-                            g_id = -(g_stable_hash % 1000000 + 1000)
+                        # 3. Process Item Groups & Members
+                        for g_name, g_items in actual_data.get('item_name_groups', {}).items():
+                            g_id = generate_negative_id('item_group', g_name)
                             current_game_entries.append(DatapackageCache(
                                 game=game, checksum=checksum, entity_type='item_group', entity_id=g_id, entity_name=g_name
                             ))
+                            if isinstance(g_items, list):
+                                for item_name in g_items:
+                                    membership_key = json.dumps([g_name, item_name])
+                                    m_id = generate_negative_id('item_group_member', membership_key)
+                                    current_game_entries.append(DatapackageCache(
+                                        game=game, checksum=checksum, entity_type='item_group_member', entity_id=m_id, entity_name=membership_key
+                                    ))
 
-                        # 4. Process Location Groups
-                        for g_name in actual_data.get('location_name_groups', {}).keys():
-                            g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
-                            g_id = -(g_stable_hash % 1000000 + 1100000)
+                        # 4. Process Location Groups & Members
+                        for g_name, g_locations in actual_data.get('location_name_groups', {}).items():
+                            g_id = generate_negative_id('location_group', g_name)
                             current_game_entries.append(DatapackageCache(
                                 game=game, checksum=checksum, entity_type='location_group', entity_id=g_id, entity_name=g_name
                             ))
+                            if isinstance(g_locations, list):
+                                for loc_name in g_locations:
+                                    membership_key = json.dumps([g_name, loc_name])
+                                    m_id = generate_negative_id('location_group_member', membership_key)
+                                    current_game_entries.append(DatapackageCache(
+                                        game=game, checksum=checksum, entity_type='location_group_member', entity_id=m_id, entity_name=membership_key
+                                    ))
                         
                         if not current_game_entries:
                             # Marker for valid but empty datapackage
@@ -1820,7 +1858,7 @@ async def run_room_setup(room_info, loop):
                         else:
                             # Always append a completion marker so we know the transaction succeeded fully
                             current_game_entries.append(DatapackageCache(
-                                game=game, checksum=checksum, entity_type='_metadata', entity_id=0, entity_name='_completed'
+                                game=game, checksum=checksum, entity_type='_metadata', entity_id=0, entity_name='_completed_v2'
                             ))
                         
                         # Commit this datapackage IMMEDIATELY while holding the lock
@@ -1865,31 +1903,44 @@ def db_get_missing_checksums(checksums_to_check):
     if not checksums_to_check: return set()
     session = Session()
     try:
-        # Self-healing: if a checksum is marked completed but has 0 items and locations, delete it to trigger a redownload
-        completed_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+        # Self-healing: if a checksum is marked completed (old) or has 0 items and locations, delete it
+        # to trigger a redownload/rebuild.
+        completed_old_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
             DatapackageCache.checksum.in_(checksums_to_check),
             DatapackageCache.entity_type == '_metadata',
             DatapackageCache.entity_name == '_completed'
         ).all()]
         
-        if completed_checksums:
+        completed_v2_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+            DatapackageCache.checksum.in_(checksums_to_check),
+            DatapackageCache.entity_type == '_metadata',
+            DatapackageCache.entity_name == '_completed_v2'
+        ).all()]
+        
+        checksums_to_delete = set(completed_old_checksums)
+        
+        # Also check completed_v2 caches with 0 items/locations
+        if completed_v2_checksums:
             checksums_with_data = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
-                DatapackageCache.checksum.in_(completed_checksums),
+                DatapackageCache.checksum.in_(completed_v2_checksums),
                 DatapackageCache.entity_type.in_(['item', 'location'])
             ).distinct().all())
             
-            checksums_to_delete = [chk for chk in completed_checksums if chk not in checksums_with_data]
-            if checksums_to_delete:
-                for chk in checksums_to_delete:
-                    logging.info(f"[SELF_HEALING] Checksum {chk} is marked completed but has 0 items/locations. Deleting from cache to trigger redownload.")
-                session.query(DatapackageCache).filter(DatapackageCache.checksum.in_(checksums_to_delete)).delete(synchronize_session=False)
-                session.commit()
+            for chk in completed_v2_checksums:
+                if chk not in checksums_with_data:
+                    checksums_to_delete.add(chk)
+                    
+        if checksums_to_delete:
+            for chk in checksums_to_delete:
+                logging.info(f"[SELF_HEALING] Checksum {chk} is outdated or has 0 items/locations. Deleting from cache to trigger redownload.")
+            session.query(DatapackageCache).filter(DatapackageCache.checksum.in_(list(checksums_to_delete))).delete(synchronize_session=False)
+            session.commit()
 
-        # A checksum is considered cached if and only if it has a '_completed' or '_empty_datapackage' marker
+        # A checksum is considered cached if and only if it has a '_completed_v2' or '_empty_datapackage' marker
         existing = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
             DatapackageCache.checksum.in_(checksums_to_check),
             DatapackageCache.entity_type == '_metadata',
-            DatapackageCache.entity_name.in_(['_completed', '_empty_datapackage'])
+            DatapackageCache.entity_name.in_(['_completed_v2', '_empty_datapackage'])
         ).distinct())
         return set(checksums_to_check) - existing
     except Exception as e:
@@ -1901,10 +1952,14 @@ def db_get_missing_checksums(checksums_to_check):
 def db_cache_datapackage(entries):
     """
     Synchronously caches a single game's datapackage entries using atomic upserts.
+    Wipes existing entries for the checksum first to clean legacy structures.
     """
     if not entries: return
     session = Session()
     try:
+        checksum = entries[0].checksum
+        session.query(DatapackageCache).filter_by(checksum=checksum).delete()
+        
         insert_stmt = sqlite_insert if is_sqlite else pg_insert
         
         # Convert DatapackageCache objects to dictionaries for bulk execution
