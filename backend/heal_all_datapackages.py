@@ -72,6 +72,7 @@ def heal_all_datapackages(limit, delay):
             outdated_games = outdated_games[:limit]
 
         healed_count = 0
+        had_room_failures = False
         
         for idx, game_name in enumerate(outdated_games):
             if idx > 0 and delay > 0:
@@ -100,8 +101,11 @@ def heal_all_datapackages(limit, delay):
                         r_checksums = json.loads(game_checksums_json or '{}').values()
                         if any(c in checksums for c in r_checksums):
                             reset_room_ids.append(r_id)
-                    except:
-                        pass
+                    except (json.JSONDecodeError, TypeError, ValueError) as e:
+                        print(f"  - Error: Failed to parse game_checksums_json for room ID {r_id}: {e}")
+                        had_room_failures = True
+                        # Do not reset this room: game association is unknown when parsing fails.
+                        continue
                 
                 rooms_to_reset = 0
                 if reset_room_ids:
@@ -117,13 +121,16 @@ def heal_all_datapackages(limit, delay):
                 healed_count += 1
         
         print("\n" + "=" * 80)
-        if healed_count > 0:
+        if healed_count > 0 and not had_room_failures:
             print(f"SUCCESS: Healed {healed_count} game cache(s) successfully.")
             print("The background poller service will automatically rebuild the cache for these games on its next poll tick.")
             if len(outdated_games) == limit:
                 print("\nNOTE: There are still outdated games remaining. Run this script again to heal the next batch.")
         else:
-            print("No action taken.")
+            if had_room_failures:
+                print("FAILURE: Some room checksums could not be read. Overall success was not achieved.")
+            else:
+                print("No action taken.")
         print("=" * 80)
         
     except Exception as e:

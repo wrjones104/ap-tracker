@@ -155,7 +155,8 @@ interface ApiService {
     @GET("games/{gameName}/items/{itemName}/groups")
     suspend fun getItemGroups(
         @Path("gameName") gameName: String,
-        @Path("itemName") itemName: String
+        @Path("itemName") itemName: String,
+        @Query("room_db_id") roomDbId: Int?
     ): List<String>
 
     @PUT("users/me/ignore-list/{id}")

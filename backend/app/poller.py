@@ -545,8 +545,20 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     DatapackageCache.entity_type == 'item_group_member'
                 ).all()
                 for chk, name in member_results:
-                    # name is "GroupName:ItemName"
-                    group_members_lookup.add((chk, name.lower().strip()))
+                    parsed_pair = None
+                    try:
+                        parsed = json.loads(name)
+                        if isinstance(parsed, list) and len(parsed) == 2:
+                            parsed_pair = (parsed[0].lower().strip(), parsed[1].lower().strip())
+                    except Exception:
+                        pass
+                    
+                    if not parsed_pair and ':' in name:
+                        parts = name.split(':', 1)
+                        parsed_pair = (parts[0].lower().strip(), parts[1].lower().strip())
+                        
+                    if parsed_pair:
+                        group_members_lookup.add((chk, parsed_pair))
             except Exception as e:
                 logging.error(f"[POLLER_DB_ERROR] Failed to fetch group members: {e}")
 
@@ -684,8 +696,7 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                                 # Group ignore: Only supports game-specific level
                                 if ignore_rule.game_name and ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
                                     # Check if the item belongs to this group
-                                    # Group member format in DB is "groupname:itemname"
-                                    lookup_key = (item_data['game_checksum'], f"{rule_pattern}:{normalized_item_name}")
+                                    lookup_key = (item_data['game_checksum'], (rule_pattern, normalized_item_name))
                                     if lookup_key in group_members_lookup:
                                         should_ignore = True
                                         break

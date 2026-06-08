@@ -177,7 +177,7 @@ fun HistoryContent(
         val item = selectedItem
         val game = item?.receivingGame
         if (item != null && !game.isNullOrBlank()) {
-            historyViewModel.fetchGroupsForItem(game, item.itemName)
+            historyViewModel.fetchGroupsForItem(game, item.itemName, item.room_db_id)
         } else {
             historyViewModel.clearSelectedGroups()
         }
