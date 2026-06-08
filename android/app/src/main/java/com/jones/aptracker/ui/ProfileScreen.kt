@@ -74,6 +74,9 @@ fun ProfileScreen(
     val userProfile by userViewModel.userProfile.collectAsState()
     val isAutoSyncEnabled by userViewModel.isAutoSyncEnabled.collectAsState()
 
+    val dateFormatPresetKey by userViewModel.dateFormatPreset.collectAsState()
+    val dateFormatPreset = remember(dateFormatPresetKey) { DateFormatPreset.fromKey(dateFormatPresetKey) }
+
     // State for Delete Dialog
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showClearHistoryDialog by remember { mutableStateOf(false) }
@@ -101,6 +104,7 @@ fun ProfileScreen(
             title = "Global Snooze",
             currentSnoozeUntil = if (isGlobalSnoozeActive) globalSnoozeRaw else null,
             activeSnoozeDetails = emptyList(),
+            dateFormatPreset = dateFormatPreset,
             onDismiss = { showSnoozeDialog = false },
             onSnoozeSelected = { minutes ->
                 userViewModel.setGlobalSnooze(minutes)
@@ -163,7 +167,7 @@ fun ProfileScreen(
             Spacer(Modifier.height(32.dp))
 
             val snoozeSubtitle = userProfile?.global_snooze_until?.let { snoozeTime ->
-                "Active until ${formatIsoDate(snoozeTime)}"
+                "Active until ${formatIsoDate(snoozeTime, dateFormatPreset)}"
             } ?: "Silence all notifications temporarily"
 
             // --- Menu Options ---
@@ -172,7 +176,7 @@ fun ProfileScreen(
                 icon = Icons.Default.NotificationsPaused,
                 title = "Snooze All Notifications",
                 subtitle = if (isGlobalSnoozeActive) {
-                    "Active until ${formatIsoDate(globalSnoozeRaw ?: "")}"
+                    "Active until ${formatIsoDate(globalSnoozeRaw!!, dateFormatPreset)}"
                 } else {
                     null
                 },

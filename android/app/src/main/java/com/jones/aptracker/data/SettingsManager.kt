@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -18,6 +19,7 @@ class SettingsManager(context: Context) {
     companion object {
         val CHEESE_AUTO_SYNC_KEY = booleanPreferencesKey("cheese_auto_sync")
         val IS_CHEESE_CONNECTED_KEY = booleanPreferencesKey("is_cheese_connected")
+        val DATE_FORMAT_PRESET_KEY = stringPreferencesKey("date_format_preset")
     }
 
     /**
@@ -39,6 +41,15 @@ class SettingsManager(context: Context) {
         }
 
     /**
+     * A flow that emits the current date format preset.
+     * It defaults to 'SYSTEM_DEFAULT' if not set.
+     */
+    val dateFormatPreset: Flow<String> = dataStore.data
+        .map { preferences ->
+            preferences[DATE_FORMAT_PRESET_KEY] ?: "SYSTEM_DEFAULT"
+        }
+
+    /**
      * Saves the new auto-sync preference.
      */
     suspend fun setAutoSync(isEnabled: Boolean) {
@@ -53,6 +64,15 @@ class SettingsManager(context: Context) {
     suspend fun setCheeseConnected(isConnected: Boolean) {
         dataStore.edit { preferences ->
             preferences[IS_CHEESE_CONNECTED_KEY] = isConnected
+        }
+    }
+
+    /**
+     * Saves the new date format preset preference.
+     */
+    suspend fun setDateFormatPreset(preset: String) {
+        dataStore.edit { preferences ->
+            preferences[DATE_FORMAT_PRESET_KEY] = preset
         }
     }
 }

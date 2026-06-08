@@ -71,6 +71,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         true
     )
 
+    val dateFormatPreset = settingsManager.dateFormatPreset.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        "SYSTEM_DEFAULT"
+    )
+
     // --- Ignore List & Sorting State ---
     private val _ignoreList = MutableStateFlow<List<IgnoreItem>>(emptyList())
     val ignoreList = _ignoreList.asStateFlow()
@@ -95,6 +101,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun setAutoSync(isEnabled: Boolean) {
         viewModelScope.launch {
             settingsManager.setAutoSync(isEnabled)
+        }
+    }
+
+    fun setDateFormatPreset(preset: String) {
+        viewModelScope.launch {
+            settingsManager.setDateFormatPreset(preset)
         }
     }
 
