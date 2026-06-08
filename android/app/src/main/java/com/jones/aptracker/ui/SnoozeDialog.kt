@@ -27,6 +27,7 @@ fun SnoozeDialog(
     title: String = "Snooze Notifications",
     currentSnoozeUntil: String? = null,
     activeSnoozeDetails: List<String> = emptyList(),
+    dateFormatPreset: DateFormatPreset = DateFormatPreset.SYSTEM_DEFAULT,
     onDismiss: () -> Unit,
     onSnoozeSelected: (Int) -> Unit
 ) {
@@ -37,7 +38,7 @@ fun SnoozeDialog(
             Column {
                 // 1. Show Global Snooze Status
                 if (currentSnoozeUntil != null) {
-                    Text("Global Snooze active until: ${formatIsoDate(currentSnoozeUntil)}")
+                    Text("Global Snooze active until: ${formatIsoDate(currentSnoozeUntil, dateFormatPreset)}")
                     Spacer(Modifier.height(16.dp))
                 }
 
@@ -91,7 +92,7 @@ fun SnoozeOptionButton(text: String, minutes: Int, onSelect: (Int) -> Unit) {
     }
 }
 
-fun formatIsoDate(isoString: String): String {
+fun formatIsoDate(isoString: String, dateFormatPreset: DateFormatPreset = DateFormatPreset.SYSTEM_DEFAULT): String {
     return try {
         // 1. Parse the incoming string.
         val cleanedString = isoString.replace("Z", "")
@@ -104,7 +105,7 @@ fun formatIsoDate(isoString: String): String {
         val localTime = utcTime.withZoneSameInstant(ZoneId.systemDefault())
 
         // 4. Format nicely
-        val formatter = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+        val formatter = dateFormatPreset.getFormatter(isDetail = true)
 
         localTime.format(formatter)
     } catch (e: Exception) {

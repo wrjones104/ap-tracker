@@ -137,6 +137,9 @@ fun HistoryContent(
 
     val roomNames by historyViewModel.roomNames.collectAsState()
 
+    val dateFormatPresetKey by userViewModel.dateFormatPreset.collectAsState()
+    val dateFormatPreset = remember(dateFormatPresetKey) { DateFormatPreset.fromKey(dateFormatPresetKey) }
+
     var selectedItem by remember { mutableStateOf<HistoryItem?>(null) }
     var selectedHint by remember { mutableStateOf<HintEntity?>(null) }
     var showFilterSheet by remember { mutableStateOf(false) }
@@ -225,6 +228,7 @@ fun HistoryContent(
                         0 -> ItemHistoryTab(
                             historyViewModel = historyViewModel,
                             searchQuery = searchQuery,
+                            dateFormatPreset = dateFormatPreset,
                             onItemClick = { selectedItem = it },
                             showRoomFilter = showRoomFilter,
                             showIgnoredItems = showIgnoredItems,
@@ -233,6 +237,7 @@ fun HistoryContent(
                         1 -> HintHistoryTab(
                             historyViewModel = historyViewModel,
                             searchQuery = searchQuery,
+                            dateFormatPreset = dateFormatPreset,
                             onHintClick = { selectedHint = it },
                             showRoomFilter = showRoomFilter,
                             showIgnoredItems = showIgnoredItems,
@@ -280,6 +285,7 @@ fun HistoryContent(
             title = "Snooze Player",
             currentSnoozeUntil = null,
             activeSnoozeDetails = emptyList(), // Pass empty list if not using details here
+            dateFormatPreset = dateFormatPreset,
             onDismiss = { showSnoozeDialogForSlot = null },
             onSnoozeSelected = { minutes ->
                 userViewModel.setSlotSnooze(snoozeRoomId, snoozeSlotId, minutes)
@@ -296,6 +302,7 @@ fun HistoryContent(
             HistoryDetailSheet(
                 item = selectedItem!!,
                 roomName = itemRoomName,
+                dateFormatPreset = dateFormatPreset,
                 onOpenTracker = {
                     val cleanHost = (selectedItem!!.host?.takeIf { it.isNotBlank() } ?: "archipelago.gg")
                         .removePrefix("https://").removePrefix("http://")
@@ -530,14 +537,14 @@ fun HistoryFilterSheet(
 fun HistoryDetailSheet(
     item: HistoryItem,
     roomName: String,
+    dateFormatPreset: DateFormatPreset,
     onOpenTracker: () -> Unit,
     onIgnoreItem: (String?) -> Unit,
     onSnoozePlayer: () -> Unit,
     onViewSlot: (() -> Unit)? = null
 ) {
-    val formatter = remember {
-        DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
-            .withZone(ZoneId.systemDefault())
+    val formatter = remember(dateFormatPreset) {
+        dateFormatPreset.getFormatter(isDetail = true)
     }
 
     fun formatName(name: String, alias: String?): String {
@@ -712,6 +719,7 @@ fun CompactDetailItem(label: String, value: String) {
 fun ItemHistoryTab(
     historyViewModel: HistoryViewModel,
     searchQuery: String,
+    dateFormatPreset: DateFormatPreset,
     onItemClick: (HistoryItem) -> Unit,
     showRoomFilter: Boolean,
     showIgnoredItems: Boolean,
@@ -733,9 +741,8 @@ fun ItemHistoryTab(
     val archivedRoomIds by historyViewModel.archivedRoomIds.collectAsState()
     val availableRooms by historyViewModel.availableRooms.collectAsState()
 
-    val formatter = remember {
-        DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
-            .withZone(ZoneId.systemDefault())
+    val formatter = remember(dateFormatPreset) {
+        dateFormatPreset.getFormatter(isDetail = false)
     }
 
     val isDark = isSystemInDarkTheme()
@@ -1130,6 +1137,7 @@ fun RoomFilterChip(
 fun HintHistoryTab(
     historyViewModel: HistoryViewModel,
     searchQuery: String,
+    dateFormatPreset: DateFormatPreset,
     onHintClick: (HintEntity) -> Unit,
     showRoomFilter: Boolean,
     showIgnoredItems: Boolean,
@@ -1153,9 +1161,8 @@ fun HintHistoryTab(
     val archivedRoomIds by historyViewModel.archivedRoomIds.collectAsState()
     val availableRooms by historyViewModel.availableRooms.collectAsState()
 
-    val formatter = remember {
-        DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
-            .withZone(ZoneId.systemDefault())
+    val formatter = remember(dateFormatPreset) {
+        dateFormatPreset.getFormatter(isDetail = false)
     }
 
     var isForYouExpanded by rememberSaveable { mutableStateOf(true) }
