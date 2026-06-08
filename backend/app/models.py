@@ -138,6 +138,7 @@ class UserIgnoreItem(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     item_name = Column(String(255), nullable=False)
     game_name = Column(String(255), nullable=True) 
+    is_group = Column(Boolean, default=False, nullable=False, server_default='f')
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     user = relationship("User", back_populates="ignore_items")

@@ -17,6 +17,8 @@ prod/
 android/.kotlin/errors/
 # Local configuration file (contains SDK path, often strictly local)
 local.properties
+android/app/src/main/res/xml/network_security_config.xml
+
 # Android Studio IDE files
 *.iml
 .idea/

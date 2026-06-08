@@ -534,6 +534,22 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
         except Exception as e:
             logging.error(f"[POLLER_THRESHOLD_ERROR] Failed to fetch thresholds: {e}")
 
+    # 0.5. Pre-fetch group memberships for the checksums involved in this poll batch
+    group_members_lookup = set()
+    if new_items_for_notify:
+        checksums = {item['game_checksum'] for item in new_items_for_notify if item.get('game_checksum')}
+        if checksums:
+            try:
+                member_results = session.query(DatapackageCache.checksum, DatapackageCache.entity_name).filter(
+                    DatapackageCache.checksum.in_(checksums),
+                    DatapackageCache.entity_type == 'item_group_member'
+                ).all()
+                for chk, name in member_results:
+                    # name is "GroupName:ItemName"
+                    group_members_lookup.add((chk, name.lower().strip()))
+            except Exception as e:
+                logging.error(f"[POLLER_DB_ERROR] Failed to fetch group members: {e}")
+
     # 1. Fetch Names from DatapackageCache
     if cache_keys_to_fetch:
         logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Fetching {len(cache_keys_to_fetch)} names...")
@@ -664,16 +680,27 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     if user_prefs.ignore_items:
                         for ignore_rule in user_prefs.ignore_items:
                             rule_pattern = ignore_rule.item_name.lower().strip()
-                            if fnmatch.fnmatch(normalized_item_name, rule_pattern):
-                                if not ignore_rule.game_name:
-                                    should_ignore = True
-                                    break
-                                elif ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
-                                    should_ignore = True
-                                    break
+                            if getattr(ignore_rule, 'is_group', False):
+                                # Group ignore: Only supports game-specific level
+                                if ignore_rule.game_name and ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                    # Check if the item belongs to this group
+                                    # Group member format in DB is "groupname:itemname"
+                                    lookup_key = (item_data['game_checksum'], f"{rule_pattern}:{normalized_item_name}")
+                                    if lookup_key in group_members_lookup:
+                                        should_ignore = True
+                                        break
+                            else:
+                                # Single item ignore (supports wildcard matching)
+                                if fnmatch.fnmatch(normalized_item_name, rule_pattern):
+                                    if not ignore_rule.game_name:
+                                        should_ignore = True
+                                        break
+                                    elif ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                        should_ignore = True
+                                        break
                     
                     if should_ignore:
-                        logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}') for game '{item_data['receiver_game']}'.")
+                        logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}' is_group={getattr(ignore_rule, 'is_group', False)}) for game '{item_data['receiver_game']}'.")
                         continue
 
                 # --- CONDENSED MESSAGING CHECK ---
@@ -1795,22 +1822,38 @@ async def run_room_setup(room_info, loop):
                                 game=game, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n
                             ))
 
-                        # 3. Process Item Groups
+                        # 3. Process Item Groups & Members
                         import zlib
-                        for g_name in actual_data.get('item_name_groups', {}).keys():
+                        for g_name, g_items in actual_data.get('item_name_groups', {}).items():
                             g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
                             g_id = -(g_stable_hash % 1000000 + 1000)
                             current_game_entries.append(DatapackageCache(
                                 game=game, checksum=checksum, entity_type='item_group', entity_id=g_id, entity_name=g_name
                             ))
+                            if isinstance(g_items, list):
+                                for item_name in g_items:
+                                    membership_key = f"{g_name}:{item_name}"
+                                    m_stable_hash = zlib.adler32(membership_key.encode('utf-8')) & 0xffffffff
+                                    m_id = -(m_stable_hash % 1000000 + 2000000)
+                                    current_game_entries.append(DatapackageCache(
+                                        game=game, checksum=checksum, entity_type='item_group_member', entity_id=m_id, entity_name=membership_key
+                                    ))
 
-                        # 4. Process Location Groups
-                        for g_name in actual_data.get('location_name_groups', {}).keys():
+                        # 4. Process Location Groups & Members
+                        for g_name, g_locations in actual_data.get('location_name_groups', {}).items():
                             g_stable_hash = zlib.adler32(g_name.encode('utf-8')) & 0xffffffff
                             g_id = -(g_stable_hash % 1000000 + 1100000)
                             current_game_entries.append(DatapackageCache(
                                 game=game, checksum=checksum, entity_type='location_group', entity_id=g_id, entity_name=g_name
                             ))
+                            if isinstance(g_locations, list):
+                                for loc_name in g_locations:
+                                    membership_key = f"{g_name}:{loc_name}"
+                                    m_stable_hash = zlib.adler32(membership_key.encode('utf-8')) & 0xffffffff
+                                    m_id = -(m_stable_hash % 1000000 + 3100000)
+                                    current_game_entries.append(DatapackageCache(
+                                        game=game, checksum=checksum, entity_type='location_group_member', entity_id=m_id, entity_name=membership_key
+                                    ))
                         
                         if not current_game_entries:
                             # Marker for valid but empty datapackage
