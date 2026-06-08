@@ -2304,13 +2304,36 @@ def get_item_groups(current_user, game_name, item_name):
         # Check if cache is outdated first
         heal_datapackage_cache_if_outdated(session, game_name)
         
-        # Query all group members for this game to filter in memory safely
+        checksum = request.args.get('checksum') or request.args.get('datapackage_checksum')
+        if not checksum:
+            room_db_id = request.args.get('room_db_id')
+            if room_db_id:
+                try:
+                    room = session.query(TrackedRoom.game_checksums_json).filter_by(id=int(room_db_id)).first()
+                    if room and room[0]:
+                        checksums = json.loads(room[0])
+                        checksum = checksums.get(game_name)
+                except Exception:
+                    pass
+
+        # If we couldn't resolve the checksum, fall back to any checksum matching this game in the cache
+        if not checksum:
+            checksum_row = session.query(DatapackageCache.checksum).filter(
+                func.lower(DatapackageCache.game) == game_name.lower()
+            ).first()
+            if checksum_row:
+                checksum = checksum_row[0]
+
+        if not checksum:
+            return jsonify([])
+        
+        # Query group members for the isolated game checksum
         members = session.query(DatapackageCache.entity_name).filter(
-            func.lower(DatapackageCache.game) == game_name.lower(),
+            DatapackageCache.checksum == checksum,
             DatapackageCache.entity_type == 'item_group_member'
         ).all()
         
-        groups = []
+        groups = set()
         for (member_key,) in members:
             try:
                 # Try structured JSON list decoding
@@ -2318,16 +2341,16 @@ def get_item_groups(current_user, game_name, item_name):
                 if isinstance(parsed, list) and len(parsed) == 2:
                     g_name, item = parsed
                     if item.lower() == item_name.lower():
-                        groups.append(g_name)
+                        groups.add(g_name)
             except Exception:
                 # Fallback to legacy colon-split format if parsing fails (old cache not yet rebuilt)
                 if ':' in member_key:
                     parts = member_key.split(':', 1)
                     if parts[1].lower() == item_name.lower():
-                        groups.append(parts[0])
+                        groups.add(parts[0])
                     
-        groups.sort()
-        return jsonify(groups)
+        sorted_groups = sorted(list(groups))
+        return jsonify(sorted_groups)
     finally:
         Session.remove()
 
@@ -2822,7 +2845,21 @@ def add_ignore_item(current_user):
     data = request.json
     item_name = data.get('item_name', '').strip()
     game_name = data.get('game_name')
-    is_group = bool(data.get('is_group', False))
+    raw_is_group = data.get('is_group', False)
+    if isinstance(raw_is_group, bool):
+        is_group = raw_is_group
+    elif isinstance(raw_is_group, str):
+        val_lower = raw_is_group.strip().lower()
+        if val_lower in ("true", "1"):
+            is_group = True
+        elif val_lower in ("false", "0"):
+            is_group = False
+        else:
+            return jsonify({'error': 'is_group must be a boolean or a valid string representation'}), 400
+    elif raw_is_group is None:
+        is_group = False
+    else:
+        return jsonify({'error': 'is_group must be a boolean or a valid string representation'}), 400
     
     if game_name:
         game_name = game_name.strip()
@@ -2876,7 +2913,21 @@ def update_ignore_item(current_user, item_id):
     """
     data = request.json
     new_item_name = data.get('item_name', '').strip()
-    new_is_group = bool(data.get('is_group', False))
+    raw_is_group = data.get('is_group', False)
+    if isinstance(raw_is_group, bool):
+        new_is_group = raw_is_group
+    elif isinstance(raw_is_group, str):
+        val_lower = raw_is_group.strip().lower()
+        if val_lower in ("true", "1"):
+            new_is_group = True
+        elif val_lower in ("false", "0"):
+            new_is_group = False
+        else:
+            return jsonify({'error': 'is_group must be a boolean or a valid string representation'}), 400
+    elif raw_is_group is None:
+        new_is_group = False
+    else:
+        return jsonify({'error': 'is_group must be a boolean or a valid string representation'}), 400
     
     # game_name can be None (Global) or a string
     new_game_name = data.get('game_name')

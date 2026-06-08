@@ -608,14 +608,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun fetchGroupsForItem(gameName: String, itemName: String) {
+    fun fetchGroupsForItem(gameName: String, itemName: String, roomDbId: Int?) {
         val queryKey = gameName to itemName
         latestGroupQuery = queryKey
         _selectedItemGroups.value = emptyList()
         fetchGroupsJob?.cancel()
         fetchGroupsJob = viewModelScope.launch {
             try {
-                val groups = RetrofitClient.instance.getItemGroups(gameName, itemName)
+                val groups = RetrofitClient.instance.getItemGroups(gameName, itemName, roomDbId)
                     .filter { !it.equals("Everything", ignoreCase = true) && !it.equals("Everywhere", ignoreCase = true) }
                 if (latestGroupQuery == queryKey) {
                     _selectedItemGroups.value = groups
