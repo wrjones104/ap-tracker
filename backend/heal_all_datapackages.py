@@ -104,7 +104,8 @@ def heal_all_datapackages(limit, delay):
                     except (json.JSONDecodeError, TypeError, ValueError) as e:
                         print(f"  - Error: Failed to parse game_checksums_json for room ID {r_id}: {e}")
                         had_room_failures = True
-                        reset_room_ids.append(r_id)
+                        # Do not reset this room: game association is unknown when parsing fails.
+                        continue
                 
                 rooms_to_reset = 0
                 if reset_room_ids:

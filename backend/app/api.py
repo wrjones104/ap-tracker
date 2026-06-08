@@ -2312,9 +2312,17 @@ def get_item_groups(current_user, game_name, item_name):
                     room = session.query(TrackedRoom.game_checksums_json).filter_by(id=int(room_db_id)).first()
                     if room and room[0]:
                         checksums = json.loads(room[0])
-                        checksum = checksums.get(game_name)
-                except Exception:
-                    pass
+                        if isinstance(checksums, dict):
+                            checksum = checksums.get(game_name)
+                            if not checksum:
+                                game_name_lower = game_name.lower()
+                                checksum = next(
+                                    (v for k, v in checksums.items()
+                                     if isinstance(k, str) and k.lower() == game_name_lower),
+                                    None
+                                )
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
+                    logging.warning(f"[API] Failed to parse room game_checksums_json for room_db_id {room_db_id}: {e}")
 
         # If we couldn't resolve the checksum, fall back to any checksum matching this game in the cache
         if not checksum:

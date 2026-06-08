@@ -103,7 +103,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     val selectedItemGroups: StateFlow<List<String>> = _selectedItemGroups
 
     private var fetchGroupsJob: kotlinx.coroutines.Job? = null
-    private var latestGroupQuery: Pair<String, String>? = null
+    private var latestGroupQuery: Triple<String, String, Int?>? = null
 
     private val _liveAliases = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
     private val _confirmedFinishedPlayers = MutableStateFlow<Set<Pair<Int, String>>>(emptySet())
@@ -609,7 +609,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun fetchGroupsForItem(gameName: String, itemName: String, roomDbId: Int?) {
-        val queryKey = gameName to itemName
+        val queryKey = Triple(gameName, itemName, roomDbId)
         latestGroupQuery = queryKey
         _selectedItemGroups.value = emptyList()
         fetchGroupsJob?.cancel()
