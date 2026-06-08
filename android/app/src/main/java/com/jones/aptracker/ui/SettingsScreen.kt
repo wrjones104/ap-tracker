@@ -224,16 +224,8 @@ fun SettingsScreen(
                                     onDismissRequest = { dropdownExpanded = false }
                                 ) {
                                     DateFormatPreset.values().forEach { preset ->
-                                        val displayLabel = when (preset) {
-                                            DateFormatPreset.SYSTEM_DEFAULT -> "System Default"
-                                            DateFormatPreset.ISO_LIKE -> "ISO (2026-06-08 12:05)"
-                                            DateFormatPreset.US_12H -> "US (06/08/2026 12:05 PM)"
-                                            DateFormatPreset.EU_24H -> "Europe (08/06/2026 12:05)"
-                                            DateFormatPreset.DE_24H -> "Germany (08.06.2026 12:05)"
-                                            DateFormatPreset.FRIENDLY_12H -> "Friendly (Jun 8, 2026 12:05 PM)"
-                                        }
                                         DropdownMenuItem(
-                                            text = { Text(displayLabel) },
+                                            text = { Text(preset.label) },
                                             onClick = {
                                                 userViewModel.setDateFormatPreset(preset.key)
                                                 dropdownExpanded = false

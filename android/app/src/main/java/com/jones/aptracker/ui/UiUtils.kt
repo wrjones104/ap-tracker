@@ -6,13 +6,20 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
-enum class DateFormatPreset(val key: String, val label: String, val pattern: String?) {
+enum class DateFormatPreset(val key: String, val description: String, val pattern: String?) {
     SYSTEM_DEFAULT("SYSTEM_DEFAULT", "System Default", null),
-    ISO_LIKE("ISO_LIKE", "2026-06-08 12:05", "yyyy-MM-dd HH:mm"),
-    US_12H("US_12H", "06/08/2026 12:05 PM", "MM/dd/yyyy h:mm a"),
-    EU_24H("EU_24H", "08/06/2026 12:05", "dd/MM/yyyy HH:mm"),
-    DE_24H("DE_24H", "08.06.2026 12:05", "dd.MM.yyyy HH:mm"),
-    FRIENDLY_12H("FRIENDLY_12H", "Jun 8, 2026 12:05 PM", "MMM d, yyyy h:mm a");
+    ISO_LIKE("ISO_LIKE", "ISO", "yyyy-MM-dd HH:mm"),
+    US_12H("US_12H", "US", "MM/dd/yyyy h:mm a"),
+    EU_24H("EU_24H", "Europe", "dd/MM/yyyy HH:mm"),
+    DE_24H("DE_24H", "Germany", "dd.MM.yyyy HH:mm"),
+    FRIENDLY_12H("FRIENDLY_12H", "Friendly", "MMM d, yyyy h:mm a");
+
+    val label: String
+        get() {
+            val sample = java.time.ZonedDateTime.of(2026, 6, 8, 12, 5, 0, 0, java.time.ZoneId.systemDefault())
+            val formatted = sample.format(getFormatter(isDetail = true))
+            return if (this == SYSTEM_DEFAULT) description else "$description ($formatted)"
+        }
 
     fun getFormatter(isDetail: Boolean = false): DateTimeFormatter {
         return if (pattern != null) {

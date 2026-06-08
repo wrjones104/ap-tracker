@@ -176,7 +176,7 @@ fun ProfileScreen(
                 icon = Icons.Default.NotificationsPaused,
                 title = "Snooze All Notifications",
                 subtitle = if (isGlobalSnoozeActive) {
-                    "Active until ${formatIsoDate(globalSnoozeRaw ?: "", dateFormatPreset)}"
+                    "Active until ${formatIsoDate(globalSnoozeRaw!!, dateFormatPreset)}"
                 } else {
                     null
                 },
