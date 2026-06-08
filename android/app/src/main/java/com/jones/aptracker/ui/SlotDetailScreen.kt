@@ -611,7 +611,7 @@ fun AddThresholdDialog(availableItems: List<AutocompleteOption>, onDismiss: () -
                 LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
                     val filtered = availableItems.filter { it.name.contains(filter, ignoreCase = true) }.take(50)
                     items(filtered) { item ->
-                        val displayText = if (item.is_group) "${item.name} (Group)" else item.name
+                        val displayText = if (item.isGroup) "${item.name} (Group)" else item.name
                         Text(
                             displayText, 
                             modifier = Modifier.fillMaxWidth().clickable { selectedItem = item.name; filter = item.name }.padding(12.dp),
@@ -663,7 +663,7 @@ fun SearchableSelectDialog(
                 LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
                     val filtered = options.filter { it.name.contains(filter, ignoreCase = true) }
                     items(filtered) { option ->
-                        val displayText = if (option.is_group) "${option.name} (Group)" else option.name
+                        val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
                         Text(
                             displayText, 
                             modifier = Modifier

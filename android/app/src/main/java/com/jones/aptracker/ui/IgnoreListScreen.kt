@@ -622,7 +622,7 @@ fun IgnoreRuleSheet(
 
     val filteredItems = remember(itemQuery, gameAvailableItems, selectedIgnoreCategory) {
         val targetIsGroup = (selectedIgnoreCategory == 1)
-        val list = gameAvailableItems.filter { it.is_group == targetIsGroup }
+        val list = gameAvailableItems.filter { it.isGroup == targetIsGroup }
         if (itemQuery.isBlank()) {
             list
         } else {
