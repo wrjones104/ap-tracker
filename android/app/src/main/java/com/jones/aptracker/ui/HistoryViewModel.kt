@@ -102,6 +102,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _selectedItemGroups = MutableStateFlow<List<String>>(emptyList())
     val selectedItemGroups: StateFlow<List<String>> = _selectedItemGroups
 
+    private var fetchGroupsJob: kotlinx.coroutines.Job? = null
+    private var latestGroupQuery: Pair<String, String>? = null
+
     private val _liveAliases = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
     private val _confirmedFinishedPlayers = MutableStateFlow<Set<Pair<Int, String>>>(emptySet())
 
@@ -606,12 +609,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun fetchGroupsForItem(gameName: String, itemName: String) {
+        val queryKey = gameName to itemName
+        latestGroupQuery = queryKey
         _selectedItemGroups.value = emptyList()
-        viewModelScope.launch {
+        fetchGroupsJob?.cancel()
+        fetchGroupsJob = viewModelScope.launch {
             try {
                 val groups = RetrofitClient.instance.getItemGroups(gameName, itemName)
                     .filter { !it.equals("Everything", ignoreCase = true) && !it.equals("Everywhere", ignoreCase = true) }
-                _selectedItemGroups.value = groups
+                if (latestGroupQuery == queryKey) {
+                    _selectedItemGroups.value = groups
+                }
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to fetch groups for item $itemName in game $gameName", e)
             }
@@ -619,6 +627,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun clearSelectedGroups() {
+        latestGroupQuery = null
+        fetchGroupsJob?.cancel()
         _selectedItemGroups.value = emptyList()
     }
 

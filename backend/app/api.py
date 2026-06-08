@@ -2136,13 +2136,12 @@ def rebuild_game_cache_synchronously(session, game_name):
         
     logging.info(f"[SYNC_HEAL] Fetching datapackage for '{game_name}' ({checksum}) from {hostname}...")
     try:
+        from .utils import fetch_json_with_status
         url = f"https://{hostname}/api/datapackage/{checksum}"
-        resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            logging.error(f"[SYNC_HEAL] Failed to fetch datapackage from {url}: status {resp.status_code}")
+        game_data, status_code = asyncio.run(fetch_json_with_status(url, timeout=10))
+        if status_code != 200 or not game_data:
+            logging.error(f"[SYNC_HEAL] Failed to fetch datapackage from {url}: status {status_code}")
             return False
-            
-        game_data = resp.json()
         actual_data = None
         if 'games' in game_data and isinstance(game_data['games'], dict):
             actual_data = game_data['games'].get(game_name)
@@ -2188,12 +2187,12 @@ def rebuild_game_cache_synchronously(session, game_name):
             ))
             if isinstance(g_items, list):
                 for item in g_items:
-                    membership_key = f"{g_name}:{item}"
+                    membership_key = json.dumps([g_name, item])
                     m_id = generate_negative_id('item_group_member', membership_key)
                     current_game_entries.append(DatapackageCache(
                         game=game_name, checksum=checksum, entity_type='item_group_member', entity_id=m_id, entity_name=membership_key
                     ))
- 
+
         # 4. Location Groups & Members
         for g_name, g_locations in actual_data.get('location_name_groups', {}).items():
             g_id = generate_negative_id('location_group', g_name)
@@ -2202,7 +2201,7 @@ def rebuild_game_cache_synchronously(session, game_name):
             ))
             if isinstance(g_locations, list):
                 for loc in g_locations:
-                    membership_key = f"{g_name}:{loc}"
+                    membership_key = json.dumps([g_name, loc])
                     m_id = generate_negative_id('location_group_member', membership_key)
                     current_game_entries.append(DatapackageCache(
                         game=game_name, checksum=checksum, entity_type='location_group_member', entity_id=m_id, entity_name=membership_key
@@ -2305,20 +2304,27 @@ def get_item_groups(current_user, game_name, item_name):
         # Check if cache is outdated first
         heal_datapackage_cache_if_outdated(session, game_name)
         
-        # Query group members matching this item
-        # Since membership_key is stored as "GroupName:ItemName"
+        # Query all group members for this game to filter in memory safely
         members = session.query(DatapackageCache.entity_name).filter(
             func.lower(DatapackageCache.game) == game_name.lower(),
-            DatapackageCache.entity_type == 'item_group_member',
-            DatapackageCache.entity_name.like(f'%:{item_name}')
+            DatapackageCache.entity_type == 'item_group_member'
         ).all()
         
         groups = []
         for (member_key,) in members:
-            if ':' in member_key:
-                parts = member_key.split(':', 1)
-                if parts[1].lower() == item_name.lower():
-                    groups.append(parts[0])
+            try:
+                # Try structured JSON list decoding
+                parsed = json.loads(member_key)
+                if isinstance(parsed, list) and len(parsed) == 2:
+                    g_name, item = parsed
+                    if item.lower() == item_name.lower():
+                        groups.append(g_name)
+            except Exception:
+                # Fallback to legacy colon-split format if parsing fails (old cache not yet rebuilt)
+                if ':' in member_key:
+                    parts = member_key.split(':', 1)
+                    if parts[1].lower() == item_name.lower():
+                        groups.append(parts[0])
                     
         groups.sort()
         return jsonify(groups)

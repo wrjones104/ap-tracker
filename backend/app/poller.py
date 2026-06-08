@@ -1830,7 +1830,7 @@ async def run_room_setup(room_info, loop):
                             ))
                             if isinstance(g_items, list):
                                 for item_name in g_items:
-                                    membership_key = f"{g_name}:{item_name}"
+                                    membership_key = json.dumps([g_name, item_name])
                                     m_id = generate_negative_id('item_group_member', membership_key)
                                     current_game_entries.append(DatapackageCache(
                                         game=game, checksum=checksum, entity_type='item_group_member', entity_id=m_id, entity_name=membership_key
@@ -1844,7 +1844,7 @@ async def run_room_setup(room_info, loop):
                             ))
                             if isinstance(g_locations, list):
                                 for loc_name in g_locations:
-                                    membership_key = f"{g_name}:{loc_name}"
+                                    membership_key = json.dumps([g_name, loc_name])
                                     m_id = generate_negative_id('location_group_member', membership_key)
                                     current_game_entries.append(DatapackageCache(
                                         game=game, checksum=checksum, entity_type='location_group_member', entity_id=m_id, entity_name=membership_key

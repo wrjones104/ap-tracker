@@ -87,6 +87,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _gameAvailableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val gameAvailableItems = _gameAvailableItems.asStateFlow()
 
+    private var fetchAvailableItemsJob: kotlinx.coroutines.Job? = null
+    private var latestGameQuery: String? = null
+
     private val _ignoreSortOption = MutableStateFlow(IgnoreSortOption.NEWEST)
     val ignoreSortOption = _ignoreSortOption.asStateFlow()
 
@@ -346,18 +349,27 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun fetchGameAvailableItems(gameName: String) {
-        viewModelScope.launch {
+        latestGameQuery = gameName
+        _gameAvailableItems.value = emptyList()
+        fetchAvailableItemsJob?.cancel()
+        fetchAvailableItemsJob = viewModelScope.launch {
             try {
                 val items = RetrofitClient.instance.getGameAvailableItems(gameName)
-                _gameAvailableItems.value = items
+                if (latestGameQuery == gameName) {
+                    _gameAvailableItems.value = items
+                }
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to fetch game available items", e)
-                _gameAvailableItems.value = emptyList()
+                if (latestGameQuery == gameName) {
+                    _gameAvailableItems.value = emptyList()
+                }
             }
         }
     }
 
     fun clearGameAvailableItems() {
+        latestGameQuery = null
+        fetchAvailableItemsJob?.cancel()
         _gameAvailableItems.value = emptyList()
     }
 

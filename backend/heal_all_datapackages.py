@@ -93,16 +93,22 @@ def heal_all_datapackages(limit, delay):
                 print(f"  - Deleted {deleted_rows} cache entries for checksums: {', '.join(checksums)}")
                 
                 # Reset is_setup on rooms using these checksums
-                rooms = session.query(TrackedRoom).all()
-                rooms_to_reset = 0
-                for room in rooms:
+                rooms = session.query(TrackedRoom.id, TrackedRoom.game_checksums_json).all()
+                reset_room_ids = []
+                for r_id, game_checksums_json in rooms:
                     try:
-                        r_checksums = json.loads(room.game_checksums_json or '{}').values()
+                        r_checksums = json.loads(game_checksums_json or '{}').values()
                         if any(c in checksums for c in r_checksums):
-                            room.is_setup = False
-                            rooms_to_reset += 1
+                            reset_room_ids.append(r_id)
                     except:
                         pass
+                
+                rooms_to_reset = 0
+                if reset_room_ids:
+                    session.query(TrackedRoom).filter(TrackedRoom.id.in_(reset_room_ids)).update(
+                        {TrackedRoom.is_setup: False}, synchronize_session=False
+                    )
+                    rooms_to_reset = len(reset_room_ids)
                 
                 if rooms_to_reset > 0:
                     print(f"  - Reset 'is_setup' to False for {rooms_to_reset} room(s) to trigger auto-rebuild.")
