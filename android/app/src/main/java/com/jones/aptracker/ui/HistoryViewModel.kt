@@ -99,6 +99,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _showIgnoredItems = MutableStateFlow(prefs.getBoolean("ui_show_ignored_items", false))
     val showIgnoredItems: StateFlow<Boolean> = _showIgnoredItems
 
+    private val _selectedItemGroups = MutableStateFlow<List<String>>(emptyList())
+    val selectedItemGroups: StateFlow<List<String>> = _selectedItemGroups
+
     private val _liveAliases = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
     private val _confirmedFinishedPlayers = MutableStateFlow<Set<Pair<Int, String>>>(emptySet())
 
@@ -598,6 +601,47 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to ignore item", e)
                 errorMessage.value = "Failed to ignore item. Check connection."
+            }
+        }
+    }
+
+    fun fetchGroupsForItem(gameName: String, itemName: String) {
+        _selectedItemGroups.value = emptyList()
+        viewModelScope.launch {
+            try {
+                val groups = RetrofitClient.instance.getItemGroups(gameName, itemName)
+                    .filter { !it.equals("Everything", ignoreCase = true) && !it.equals("Everywhere", ignoreCase = true) }
+                _selectedItemGroups.value = groups
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to fetch groups for item $itemName in game $gameName", e)
+            }
+        }
+    }
+
+    fun clearSelectedGroups() {
+        _selectedItemGroups.value = emptyList()
+    }
+
+    fun ignoreItemGroup(groupName: String, gameName: String) {
+        viewModelScope.launch {
+            try {
+                val request = com.jones.aptracker.network.AddIgnoreItemRequest(
+                    itemName = groupName,
+                    gameName = gameName,
+                    isGroup = true
+                )
+                RetrofitClient.instance.addIgnoreItem(request)
+                _actionMessage.value = "Ignored group '$groupName'"
+            } catch (e: HttpException) {
+                if (e.code() == 409) {
+                    errorMessage.value = "Group '$groupName' is already ignored for this game."
+                } else {
+                    Log.e("HistoryViewModel", "Failed to ignore item group (HTTP ${e.code()})", e)
+                    errorMessage.value = "Failed to ignore item group."
+                }
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to ignore item group", e)
+                errorMessage.value = "Failed to ignore item group. Check connection."
             }
         }
     }

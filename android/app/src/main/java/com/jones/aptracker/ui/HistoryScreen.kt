@@ -136,6 +136,7 @@ fun HistoryContent(
     val ignoreList by userViewModel.ignoreList.collectAsState()
 
     val roomNames by historyViewModel.roomNames.collectAsState()
+    val selectedItemGroups by historyViewModel.selectedItemGroups.collectAsState()
 
     val dateFormatPresetKey by userViewModel.dateFormatPreset.collectAsState()
     val dateFormatPreset = remember(dateFormatPresetKey) { DateFormatPreset.fromKey(dateFormatPresetKey) }
@@ -169,6 +170,16 @@ fun HistoryContent(
     LaunchedEffect(Unit) {
         if (historyViewModel.itemHistory.value.isEmpty()) {
             historyViewModel.refreshAllHistory()
+        }
+    }
+
+    LaunchedEffect(selectedItem) {
+        val item = selectedItem
+        val game = item?.receivingGame
+        if (item != null && !game.isNullOrBlank()) {
+            historyViewModel.fetchGroupsForItem(game, item.itemName)
+        } else {
+            historyViewModel.clearSelectedGroups()
         }
     }
 
@@ -330,7 +341,15 @@ fun HistoryContent(
                         onNavigateToSlotDetail(selectedItem!!.room_db_id!!, selectedItem!!.slot_id!!)
                         selectedItem = null
                     }
-                } else null
+                } else null,
+                itemGroups = selectedItemGroups,
+                onIgnoreGroup = { groupName ->
+                    val game = selectedItem?.receivingGame
+                    if (!game.isNullOrBlank()) {
+                        historyViewModel.ignoreItemGroup(groupName, game)
+                    }
+                    selectedItem = null
+                }
             )
         }
     }
@@ -541,7 +560,9 @@ fun HistoryDetailSheet(
     onOpenTracker: () -> Unit,
     onIgnoreItem: (String?) -> Unit,
     onSnoozePlayer: () -> Unit,
-    onViewSlot: (() -> Unit)? = null
+    onViewSlot: (() -> Unit)? = null,
+    itemGroups: List<String> = emptyList(),
+    onIgnoreGroup: (String) -> Unit = {}
 ) {
     val formatter = remember(dateFormatPreset) {
         dateFormatPreset.getFormatter(isDetail = true)
@@ -668,6 +689,22 @@ fun HistoryDetailSheet(
                 Text("View Slot")
             }
             Spacer(Modifier.height(8.dp))
+        }
+
+        // Ignore Group Actions
+        if (!item.receivingGame.isNullOrBlank() && itemGroups.isNotEmpty()) {
+            itemGroups.forEach { groupName ->
+                OutlinedButton(
+                    onClick = { onIgnoreGroup(groupName) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Ignore group '$groupName' in ${item.receivingGame}")
+                }
+                Spacer(Modifier.height(8.dp))
+            }
         }
 
         // Ignore Actions

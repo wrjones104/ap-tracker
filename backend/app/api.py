@@ -2292,6 +2292,39 @@ def get_game_available_items(current_user, game_name):
     finally:
         Session.remove()
 
+@bp.route('/games/<path:game_name>/items/<path:item_name>/groups', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_item_groups(current_user, game_name, item_name):
+    """
+    Returns a list of group names that the specified item belongs to.
+    """
+    session = Session()
+    try:
+        # Check if cache is outdated first
+        heal_datapackage_cache_if_outdated(session, game_name)
+        
+        # Query group members matching this item
+        # Since membership_key is stored as "GroupName:ItemName"
+        members = session.query(DatapackageCache.entity_name).filter(
+            func.lower(DatapackageCache.game) == game_name.lower(),
+            DatapackageCache.entity_type == 'item_group_member',
+            DatapackageCache.entity_name.like(f'%:{item_name}')
+        ).all()
+        
+        groups = []
+        for (member_key,) in members:
+            if ':' in member_key:
+                parts = member_key.split(':', 1)
+                if parts[1].lower() == item_name.lower():
+                    groups.append(parts[0])
+                    
+        groups.sort()
+        return jsonify(groups)
+    finally:
+        Session.remove()
+
 @bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/items', methods=['GET'])
 @handle_db_errors
 @log_api_call
