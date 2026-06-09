@@ -137,6 +137,7 @@ fun HistoryContent(
 
     val roomNames by historyViewModel.roomNames.collectAsState()
     val selectedItemGroups by historyViewModel.selectedItemGroups.collectAsState()
+    val isFetchingGroups by historyViewModel.isFetchingGroups.collectAsState()
 
     val dateFormatPresetKey by userViewModel.dateFormatPreset.collectAsState()
     val dateFormatPreset = remember(dateFormatPresetKey) { DateFormatPreset.fromKey(dateFormatPresetKey) }
@@ -343,6 +344,7 @@ fun HistoryContent(
                     }
                 } else null,
                 itemGroups = selectedItemGroups,
+                isFetchingGroups = isFetchingGroups,
                 onIgnoreGroup = { groupName ->
                     val game = selectedItem?.receivingGame
                     if (!game.isNullOrBlank()) {
@@ -562,6 +564,7 @@ fun HistoryDetailSheet(
     onSnoozePlayer: () -> Unit,
     onViewSlot: (() -> Unit)? = null,
     itemGroups: List<String> = emptyList(),
+    isFetchingGroups: Boolean = false,
     onIgnoreGroup: (String) -> Unit = {}
 ) {
     val formatter = remember(dateFormatPreset) {
@@ -692,7 +695,28 @@ fun HistoryDetailSheet(
         }
 
         // Ignore Group Actions
-        if (!item.receivingGame.isNullOrBlank() && itemGroups.isNotEmpty()) {
+        if (isFetchingGroups) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Checking for item groups...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        } else if (!item.receivingGame.isNullOrBlank() && itemGroups.isNotEmpty()) {
             itemGroups.forEach { groupName ->
                 OutlinedButton(
                     onClick = { onIgnoreGroup(groupName) },

@@ -2289,18 +2289,21 @@ def heal_datapackage_cache_if_outdated(session, game_name):
 def get_game_available_items(current_user, game_name):
     """
     Returns a list of all item names and item groups available for the specified game.
-    Triggers self-healing if the cache for this game is outdated.
     """
     session = Session()
     try:
-        # Trigger self-healing if needed
-        heal_datapackage_cache_if_outdated(session, game_name)
-        
         # Query distinct items and item groups for this game name
+        # Try exact matching first to leverage indexes, then fall back to case-insensitive lookup
         items_query = session.query(DatapackageCache.entity_name, DatapackageCache.entity_type).filter(
-            func.lower(DatapackageCache.game) == game_name.lower(),
+            DatapackageCache.game == game_name,
             DatapackageCache.entity_type.in_(['item', 'item_group'])
         ).distinct().all()
+        
+        if not items_query:
+            items_query = session.query(DatapackageCache.entity_name, DatapackageCache.entity_type).filter(
+                func.lower(DatapackageCache.game) == game_name.lower(),
+                DatapackageCache.entity_type.in_(['item', 'item_group'])
+            ).distinct().all()
         
         results = []
         for name, etype in items_query:
@@ -2324,9 +2327,6 @@ def get_item_groups(current_user, game_name, item_name):
     """
     session = Session()
     try:
-        # Check if cache is outdated first
-        heal_datapackage_cache_if_outdated(session, game_name)
-        
         checksum = request.args.get('checksum') or request.args.get('datapackage_checksum')
         if not checksum:
             room_db_id = request.args.get('room_db_id')
@@ -2350,8 +2350,12 @@ def get_item_groups(current_user, game_name, item_name):
         # If we couldn't resolve the checksum, fall back to any checksum matching this game in the cache
         if not checksum:
             checksum_row = session.query(DatapackageCache.checksum).filter(
-                func.lower(DatapackageCache.game) == game_name.lower()
+                DatapackageCache.game == game_name
             ).first()
+            if not checksum_row:
+                checksum_row = session.query(DatapackageCache.checksum).filter(
+                    func.lower(DatapackageCache.game) == game_name.lower()
+                ).first()
             if checksum_row:
                 checksum = checksum_row[0]
 
@@ -2413,8 +2417,6 @@ def get_slot_available_items(current_user, room_db_id, slot_id):
         game = slot_info.get('game')
         if not game:
             return jsonify([])
-
-        heal_datapackage_cache_if_outdated(session, game)
             
         try:
             game_checksums = json.loads(room.game_checksums_json or '{}')
