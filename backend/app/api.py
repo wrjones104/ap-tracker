@@ -2257,15 +2257,15 @@ def heal_datapackage_cache_if_outdated(session, game_name):
             
         # Check if we have any 'item_group' entries but no 'item_group_member' entries for this game
         # Group by checksum to ensure we target only the invalid cache versions
-        member_subquery = session.query(DatapackageCache.checksum).filter(
+        member_query = session.query(DatapackageCache.checksum).filter(
             func.lower(DatapackageCache.game) == game_name.lower(),
             DatapackageCache.entity_type == 'item_group_member'
-        ).subquery()
+        )
         
         bad_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
             func.lower(DatapackageCache.game) == game_name.lower(),
             DatapackageCache.entity_type == 'item_group',
-            ~DatapackageCache.checksum.in_(member_subquery)
+            ~DatapackageCache.checksum.in_(member_query)
         ).distinct().all() if c and c[0]]
         
         if bad_checksums:
