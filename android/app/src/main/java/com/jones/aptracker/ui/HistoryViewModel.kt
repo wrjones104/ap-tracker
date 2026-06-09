@@ -102,6 +102,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _selectedItemGroups = MutableStateFlow<List<String>>(emptyList())
     val selectedItemGroups: StateFlow<List<String>> = _selectedItemGroups
 
+    private val _isFetchingGroups = MutableStateFlow(false)
+    val isFetchingGroups: StateFlow<Boolean> = _isFetchingGroups
+
+    private val groupsCache = mutableMapOf<Pair<String, String>, List<String>>()
+
     private var fetchGroupsJob: kotlinx.coroutines.Job? = null
     private var latestGroupQuery: Triple<String, String, Int?>? = null
 
@@ -609,19 +614,33 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun fetchGroupsForItem(gameName: String, itemName: String, roomDbId: Int?) {
+        val cacheKey = Pair(gameName, itemName)
+        val cached = groupsCache[cacheKey]
+        if (cached != null) {
+            _selectedItemGroups.value = cached
+            _isFetchingGroups.value = false
+            return
+        }
+
         val queryKey = Triple(gameName, itemName, roomDbId)
         latestGroupQuery = queryKey
         _selectedItemGroups.value = emptyList()
+        _isFetchingGroups.value = true
         fetchGroupsJob?.cancel()
         fetchGroupsJob = viewModelScope.launch {
             try {
                 val groups = RetrofitClient.instance.getItemGroups(gameName, itemName, roomDbId)
                     .filter { !it.equals("Everything", ignoreCase = true) && !it.equals("Everywhere", ignoreCase = true) }
                 if (latestGroupQuery == queryKey) {
+                    groupsCache[cacheKey] = groups
                     _selectedItemGroups.value = groups
                 }
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to fetch groups for item $itemName in game $gameName", e)
+            } finally {
+                if (latestGroupQuery == queryKey) {
+                    _isFetchingGroups.value = false
+                }
             }
         }
     }
@@ -630,6 +649,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         latestGroupQuery = null
         fetchGroupsJob?.cancel()
         _selectedItemGroups.value = emptyList()
+        _isFetchingGroups.value = false
     }
 
     fun ignoreItemGroup(groupName: String, gameName: String) {
