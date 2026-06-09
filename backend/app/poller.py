@@ -1916,26 +1916,36 @@ def db_get_missing_checksums(checksums_to_check):
         
         # Also check completed_v2 caches with 0 items/locations or missing group members
         if completed_v2_checksums:
-            checksums_with_data = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
-                DatapackageCache.checksum.in_(completed_v2_checksums),
-                DatapackageCache.entity_type.in_(['item', 'location'])
-            ).distinct().all())
+            from sqlalchemy import exists
+            from sqlalchemy.orm import aliased
+            D2 = aliased(DatapackageCache)
             
-            for chk in completed_v2_checksums:
-                if chk not in checksums_with_data:
-                    checksums_to_delete.add(chk)
+            checksums_without_data = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+                DatapackageCache.checksum.in_(completed_v2_checksums),
+                DatapackageCache.entity_type == '_metadata',
+                DatapackageCache.entity_name == '_completed_v2',
+                ~exists().where(
+                    (D2.checksum == DatapackageCache.checksum) &
+                    D2.entity_type.in_(['item', 'location'])
+                )
+            ).all() if c and c[0]]
+            
+            for chk in checksums_without_data:
+                checksums_to_delete.add(chk)
 
             # Check if any cache version has item groups but lacks group members
-            member_query = session.query(DatapackageCache.checksum).filter(
+            # We fetch both sets separately and do a set difference in Python to avoid slow SQL NOT IN subqueries
+            has_groups = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
+                DatapackageCache.checksum.in_(completed_v2_checksums),
+                DatapackageCache.entity_type == 'item_group'
+            ).distinct().all() if c and c[0])
+            
+            has_members = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
                 DatapackageCache.checksum.in_(completed_v2_checksums),
                 DatapackageCache.entity_type == 'item_group_member'
-            )
-            bad_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
-                DatapackageCache.checksum.in_(completed_v2_checksums),
-                DatapackageCache.entity_type == 'item_group',
-                ~DatapackageCache.checksum.in_(member_query)
-            ).distinct().all() if c and c[0]]
+            ).distinct().all() if c and c[0])
             
+            bad_checksums = list(has_groups - has_members)
             for chk in bad_checksums:
                 checksums_to_delete.add(chk)
                     
