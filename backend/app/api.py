@@ -2231,33 +2231,53 @@ def heal_datapackage_cache_if_outdated(session, game_name):
     If so, rebuilds it synchronously to ensure the client gets results immediately.
     """
     if not game_name:
+        logging.warning("[SELF_HEALING] Empty game name provided to heal_datapackage_cache_if_outdated")
         return
         
-    # Check if we have an old cache version (_completed) for this game
-    has_old = session.query(DatapackageCache.id).filter(
-        func.lower(DatapackageCache.game) == game_name.lower(),
-        DatapackageCache.entity_type == '_metadata',
-        DatapackageCache.entity_name == '_completed'
-    ).limit(1).scalar() is not None
-
-    if has_old:
-        logging.info(f"[SELF_HEALING] Game '{game_name}' has an old cache version (_completed). Rebuilding synchronously to _completed_v2...")
-        rebuild_game_cache_synchronously(session, game_name)
-        return
-        
-    # Check if we have any 'item_group' entries but no 'item_group_member' entries for this game
-    has_groups = session.query(DatapackageCache.id).filter(
-        func.lower(DatapackageCache.game) == game_name.lower(),
-        DatapackageCache.entity_type == 'item_group'
-    ).limit(1).scalar() is not None
-    if has_groups:
-        has_members = session.query(DatapackageCache.id).filter(
+    try:
+        # Check if we have an old cache version (_completed) for this game
+        old_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
             func.lower(DatapackageCache.game) == game_name.lower(),
-            DatapackageCache.entity_type == 'item_group_member'
-        ).limit(1).scalar() is not None
-        if not has_members:
-            logging.info(f"[SELF_HEALING] Game '{game_name}' cache lacks group members. Rebuilding synchronously...")
+            DatapackageCache.entity_type == '_metadata',
+            DatapackageCache.entity_name == '_completed'
+        ).all() if c and c[0] is not None]
+
+        if old_checksums:
+            logging.info(f"[SELF_HEALING] Game '{game_name}' has an old cache version (_completed) for checksums {old_checksums}. Wiping and rebuilding synchronously to _completed_v2...")
+            # Wipe the old cache entries for these checksums to prevent the loop
+            session.query(DatapackageCache).filter(
+                DatapackageCache.checksum.in_(old_checksums)
+            ).delete(synchronize_session=False)
+            session.commit()
+            
             rebuild_game_cache_synchronously(session, game_name)
+            return
+            
+        # Check if we have any 'item_group' entries but no 'item_group_member' entries for this game
+        # Group by checksum to ensure we target only the invalid cache versions
+        checksums_with_groups = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+            func.lower(DatapackageCache.game) == game_name.lower(),
+            DatapackageCache.entity_type == 'item_group'
+        ).distinct().all() if c and c[0] is not None]
+        
+        if checksums_with_groups:
+            checksums_with_members = {c[0] for c in session.query(DatapackageCache.checksum).filter(
+                func.lower(DatapackageCache.game) == game_name.lower(),
+                DatapackageCache.entity_type == 'item_group_member'
+            ).distinct().all() if c and c[0] is not None}
+            
+            bad_checksums = [c for c in checksums_with_groups if c not in checksums_with_members]
+            if bad_checksums:
+                logging.info(f"[SELF_HEALING] Game '{game_name}' cache lacks group members for checksums {bad_checksums}. Wiping and rebuilding synchronously...")
+                session.query(DatapackageCache).filter(
+                    DatapackageCache.checksum.in_(bad_checksums)
+                ).delete(synchronize_session=False)
+                session.commit()
+                
+                rebuild_game_cache_synchronously(session, game_name)
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[SELF_HEALING] Error during cache healing check for game '{game_name}': {e}", exc_info=True)
  
 @bp.route('/games/<path:game_name>/items', methods=['GET'])
 @handle_db_errors
