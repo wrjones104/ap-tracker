@@ -121,7 +121,7 @@ def run_diagnostics():
                 print("    - (No cache rows found for this checksum!)")
 
             # Diagnostic logic
-            has_marker = '_completed' in metadata_names or '_empty_datapackage' in metadata_names
+            has_marker = '_completed_v2' in metadata_names or '_empty_datapackage' in metadata_names
             is_empty_marker = '_empty_datapackage' in metadata_names
             
             if total_entries == 0:
