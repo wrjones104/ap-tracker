@@ -2240,13 +2240,15 @@ def heal_datapackage_cache_if_outdated(session, game_name):
             func.lower(DatapackageCache.game) == game_name.lower(),
             DatapackageCache.entity_type == '_metadata',
             DatapackageCache.entity_name == '_completed'
-        ).all() if c and c[0] is not None]
+        ).all() if c and c[0]]
 
         if old_checksums:
             logging.info(f"[SELF_HEALING] Game '{game_name}' has an old cache version (_completed) for checksums {old_checksums}. Wiping and rebuilding synchronously to _completed_v2...")
-            # Wipe the old cache entries for these checksums to prevent the loop
+            # Wipe only the old completion marker to prevent the loop while preserving fallback data
             session.query(DatapackageCache).filter(
-                DatapackageCache.checksum.in_(old_checksums)
+                DatapackageCache.checksum.in_(old_checksums),
+                DatapackageCache.entity_type == '_metadata',
+                DatapackageCache.entity_name == '_completed'
             ).delete(synchronize_session=False)
             session.commit()
             
@@ -2255,26 +2257,27 @@ def heal_datapackage_cache_if_outdated(session, game_name):
             
         # Check if we have any 'item_group' entries but no 'item_group_member' entries for this game
         # Group by checksum to ensure we target only the invalid cache versions
-        checksums_with_groups = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+        member_subquery = session.query(DatapackageCache.checksum).filter(
             func.lower(DatapackageCache.game) == game_name.lower(),
-            DatapackageCache.entity_type == 'item_group'
-        ).distinct().all() if c and c[0] is not None]
+            DatapackageCache.entity_type == 'item_group_member'
+        ).subquery()
         
-        if checksums_with_groups:
-            checksums_with_members = {c[0] for c in session.query(DatapackageCache.checksum).filter(
-                func.lower(DatapackageCache.game) == game_name.lower(),
-                DatapackageCache.entity_type == 'item_group_member'
-            ).distinct().all() if c and c[0] is not None}
+        bad_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+            func.lower(DatapackageCache.game) == game_name.lower(),
+            DatapackageCache.entity_type == 'item_group',
+            ~DatapackageCache.checksum.in_(member_subquery)
+        ).distinct().all() if c and c[0]]
+        
+        if bad_checksums:
+            logging.info(f"[SELF_HEALING] Game '{game_name}' cache lacks group members for checksums {bad_checksums}. Wiping and rebuilding synchronously...")
+            # Wipe only the item_group entries to prevent the loop while preserving fallback data
+            session.query(DatapackageCache).filter(
+                DatapackageCache.checksum.in_(bad_checksums),
+                DatapackageCache.entity_type == 'item_group'
+            ).delete(synchronize_session=False)
+            session.commit()
             
-            bad_checksums = [c for c in checksums_with_groups if c not in checksums_with_members]
-            if bad_checksums:
-                logging.info(f"[SELF_HEALING] Game '{game_name}' cache lacks group members for checksums {bad_checksums}. Wiping and rebuilding synchronously...")
-                session.query(DatapackageCache).filter(
-                    DatapackageCache.checksum.in_(bad_checksums)
-                ).delete(synchronize_session=False)
-                session.commit()
-                
-                rebuild_game_cache_synchronously(session, game_name)
+            rebuild_game_cache_synchronously(session, game_name)
     except Exception as e:
         session.rollback()
         logging.error(f"[SELF_HEALING] Error during cache healing check for game '{game_name}': {e}", exc_info=True)
