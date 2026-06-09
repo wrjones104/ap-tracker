@@ -1734,16 +1734,15 @@ async def run_room_setup(room_info, loop):
 
                                 # Fetch missing datapackages via the active WebSocket connection
                                 if checksums:
-                                    new_checksums_to_fetch = await loop.run_in_executor(None, db_get_missing_checksums, list(checksums.values()))
-                                    missing_games = [game for game, chk in checksums.items() if chk in new_checksums_to_fetch]
+                                    missing_games = [game for game, chk in checksums.items() if chk in db_get_missing_checksums(list(checksums.values()))]
                                     
                                     if missing_games:
                                         logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Fetching datapackages via WebSocket for: {missing_games}")
                                         await ws.send_json([{"cmd": "GetDataPackage", "games": missing_games}])
                                         
-                                        datapackage_received = False
+                                        remaining_games = set(missing_games)
                                         start_fetch_time = time.time()
-                                        while time.time() - start_fetch_time < 10:
+                                        while time.time() - start_fetch_time < 10 and remaining_games:
                                             try:
                                                 ws_msg = await ws.receive(timeout=5)
                                                 if ws_msg.type == aiohttp.WSMsgType.TEXT:
@@ -1754,9 +1753,11 @@ async def run_room_setup(room_info, loop):
                                                             actual_datapackage = dp_packet.get("datapackage", {}).get("games", {})
                                                             
                                                             for game_name, game_data in actual_datapackage.items():
-                                                                chk = checksums.get(game_name)
-                                                                if not chk:
-                                                                    chk = next((v for k, v in checksums.items() if k.lower() == game_name.lower()), None)
+                                                                matched_game = next((g for g in remaining_games if g.lower() == game_name.lower()), None)
+                                                                if not matched_game:
+                                                                    continue
+                                                                
+                                                                chk = checksums.get(matched_game)
                                                                 if not chk:
                                                                     continue
                                                                 
@@ -1771,6 +1772,7 @@ async def run_room_setup(room_info, loop):
                                                                 async with datapackage_locks[chk]:
                                                                     still_missing = await loop.run_in_executor(None, db_get_missing_checksums, [chk])
                                                                     if not still_missing:
+                                                                        remaining_games.discard(matched_game)
                                                                         continue
                                                                         
                                                                     current_game_entries = []
@@ -1778,65 +1780,65 @@ async def run_room_setup(room_info, loop):
                                                                     
                                                                     # 1. Items
                                                                     for n, eid in game_data.get('item_name_to_id', {}).items():
-                                                                        if ('item', eid) in seen_ids: continue
+                                                                        if ('item', eid) in seen_ids:
+                                                                            continue
                                                                         seen_ids.add(('item', eid))
                                                                         current_game_entries.append(DatapackageCache(
-                                                                            game=game_name, checksum=chk, entity_type='item', entity_id=eid, entity_name=n
+                                                                            game=matched_game, checksum=chk, entity_type='item', entity_id=eid, entity_name=n
                                                                         ))
                                                                         
                                                                     # 2. Locations
                                                                     for n, eid in game_data.get('location_name_to_id', {}).items():
-                                                                        if ('location', eid) in seen_ids: continue
+                                                                        if ('location', eid) in seen_ids:
+                                                                            continue
                                                                         seen_ids.add(('location', eid))
                                                                         current_game_entries.append(DatapackageCache(
-                                                                            game=game_name, checksum=chk, entity_type='location', entity_id=eid, entity_name=n
+                                                                            game=matched_game, checksum=chk, entity_type='location', entity_id=eid, entity_name=n
                                                                         ))
                                                                         
-                                                                    # 3. Item Groups & Members
+                                                                    # 3. Process Item Groups & Members
                                                                     for g_name, g_items in game_data.get('item_name_groups', {}).items():
                                                                         g_id = generate_negative_id('item_group', g_name)
                                                                         current_game_entries.append(DatapackageCache(
-                                                                            game=game_name, checksum=chk, entity_type='item_group', entity_id=g_id, entity_name=g_name
+                                                                            game=matched_game, checksum=chk, entity_type='item_group', entity_id=g_id, entity_name=g_name
                                                                         ))
                                                                         if isinstance(g_items, list):
                                                                             for item_name in g_items:
                                                                                 membership_key = json.dumps([g_name, item_name])
                                                                                 m_id = generate_negative_id('item_group_member', membership_key)
                                                                                 current_game_entries.append(DatapackageCache(
-                                                                                    game=game_name, checksum=chk, entity_type='item_group_member', entity_id=m_id, entity_name=membership_key
+                                                                                    game=matched_game, checksum=chk, entity_type='item_group_member', entity_id=m_id, entity_name=membership_key
                                                                                 ))
                                                                                 
-                                                                    # 4. Location Groups & Members
+                                                                    # 4. Process Location Groups & Members
                                                                     for g_name, g_locations in game_data.get('location_name_groups', {}).items():
                                                                         g_id = generate_negative_id('location_group', g_name)
                                                                         current_game_entries.append(DatapackageCache(
-                                                                            game=game_name, checksum=chk, entity_type='location_group', entity_id=g_id, entity_name=g_name
+                                                                            game=matched_game, checksum=chk, entity_type='location_group', entity_id=g_id, entity_name=g_name
                                                                         ))
                                                                         if isinstance(g_locations, list):
                                                                             for loc_name in g_locations:
                                                                                 membership_key = json.dumps([g_name, loc_name])
                                                                                 m_id = generate_negative_id('location_group_member', membership_key)
                                                                                 current_game_entries.append(DatapackageCache(
-                                                                                    game=game_name, checksum=chk, entity_type='location_group_member', entity_id=m_id, entity_name=membership_key
+                                                                                    game=matched_game, checksum=chk, entity_type='location_group_member', entity_id=m_id, entity_name=membership_key
                                                                                 ))
                                                                                 
                                                                     if not current_game_entries:
                                                                         current_game_entries.append(DatapackageCache(
-                                                                            game=game_name, checksum=chk, entity_type='_metadata', entity_id=0, entity_name='_empty_datapackage'
+                                                                            game=matched_game, checksum=chk, entity_type='_metadata', entity_id=0, entity_name='_empty_datapackage'
                                                                         ))
                                                                     else:
                                                                         current_game_entries.append(DatapackageCache(
-                                                                            game=game_name, checksum=chk, entity_type='_metadata', entity_id=0, entity_name='_completed_v2'
+                                                                            game=matched_game, checksum=chk, entity_type='_metadata', entity_id=0, entity_name='_completed_v2'
                                                                         ))
                                                                         
                                                                     try:
                                                                         await loop.run_in_executor(None, db_cache_datapackage, current_game_entries)
+                                                                        remaining_games.discard(matched_game)
                                                                     except Exception as e:
                                                                         logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to save WS datapackage: {e}")
                                                                         any_datapackage_failed = True
-                                                            
-                                                            datapackage_received = True
-                                                            break
                                                 elif ws_msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                                                     logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket connection closed while fetching datapackages.")
                                                     break
@@ -1844,9 +1846,9 @@ async def run_room_setup(room_info, loop):
                                                 logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket timeout waiting for DataPackage payload.")
                                                 break
                                                 
-                                        if not datapackage_received and missing_games:
+                                        if remaining_games:
                                             any_datapackage_failed = True
-                                            logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch missing datapackages via WebSocket.")
+                                            logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch all missing datapackages via WebSocket. Remaining: {remaining_games}")
                                 break
                             
                     except Exception as ws_e:
@@ -1873,6 +1875,7 @@ async def run_room_setup(room_info, loop):
         if any_datapackage_failed:
             logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Setup partially failed (missing datapackages).")
             await loop.run_in_executor(None, db_handle_setup_failure, db_id)
+            return
         else:
             setup_data['is_setup'] = True 
             logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup complete.")
@@ -1911,7 +1914,7 @@ def db_get_missing_checksums(checksums_to_check):
         
         checksums_to_delete = set(completed_old_checksums)
         
-        # Also check completed_v2 caches with 0 items/locations
+        # Also check completed_v2 caches with 0 items/locations or missing group members
         if completed_v2_checksums:
             checksums_with_data = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
                 DatapackageCache.checksum.in_(completed_v2_checksums),
@@ -1921,6 +1924,20 @@ def db_get_missing_checksums(checksums_to_check):
             for chk in completed_v2_checksums:
                 if chk not in checksums_with_data:
                     checksums_to_delete.add(chk)
+
+            # Check if any cache version has item groups but lacks group members
+            member_query = session.query(DatapackageCache.checksum).filter(
+                DatapackageCache.checksum.in_(completed_v2_checksums),
+                DatapackageCache.entity_type == 'item_group_member'
+            )
+            bad_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+                DatapackageCache.checksum.in_(completed_v2_checksums),
+                DatapackageCache.entity_type == 'item_group',
+                ~DatapackageCache.checksum.in_(member_query)
+            ).distinct().all() if c and c[0]]
+            
+            for chk in bad_checksums:
+                checksums_to_delete.add(chk)
                     
         if checksums_to_delete:
             for chk in checksums_to_delete:

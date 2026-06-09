@@ -105,7 +105,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _isFetchingGroups = MutableStateFlow(false)
     val isFetchingGroups: StateFlow<Boolean> = _isFetchingGroups
 
-    private val groupsCache = mutableMapOf<Pair<String, String>, List<String>>()
+    private val groupsCache = mutableMapOf<Triple<String, String, Int?>, List<String>>()
 
     private var fetchGroupsJob: kotlinx.coroutines.Job? = null
     private var latestGroupQuery: Triple<String, String, Int?>? = null
@@ -614,7 +614,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun fetchGroupsForItem(gameName: String, itemName: String, roomDbId: Int?) {
-        val cacheKey = Pair(gameName, itemName)
+        fetchGroupsJob?.cancel()
+        val queryKey = Triple(gameName, itemName, roomDbId)
+        latestGroupQuery = queryKey
+
+        val cacheKey = Triple(gameName, itemName, roomDbId)
         val cached = groupsCache[cacheKey]
         if (cached != null) {
             _selectedItemGroups.value = cached
@@ -622,11 +626,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
-        val queryKey = Triple(gameName, itemName, roomDbId)
-        latestGroupQuery = queryKey
         _selectedItemGroups.value = emptyList()
         _isFetchingGroups.value = true
-        fetchGroupsJob?.cancel()
         fetchGroupsJob = viewModelScope.launch {
             try {
                 val groups = RetrofitClient.instance.getItemGroups(gameName, itemName, roomDbId)
