@@ -1764,15 +1764,17 @@ async def run_room_setup(room_info, loop):
                                                         if isinstance(payload, list):
                                                             dp_packet = next((p for p in payload if p.get("cmd") == "DataPackage"), None)
                                                             if dp_packet:
-                                                                actual_datapackage = dp_packet.get("data", dp_packet.get("datapackage", {})).get("games", {})
-                                                                
+                                                                dp_data = dp_packet.get("data") or dp_packet.get("datapackage")
+                                                                actual_datapackage = dp_data.get("games") if isinstance(dp_data, dict) else {}
+                                                                if not isinstance(actual_datapackage, dict):
+                                                                    actual_datapackage = {}
                                                                 for game_name, game_data in actual_datapackage.items():
                                                                     matched_game = next((g for g in remaining_in_batch if g.lower() == game_name.lower()), None)
                                                                     if not matched_game:
                                                                         continue
                                                                     
                                                                     chk = checksums.get(matched_game)
-                                                                    if not chk:
+                                                                    if not chk or not isinstance(game_data, dict):
                                                                         continue
                                                                     
                                                                     # Use a lock keyed by checksum to prevent concurrent writes/insertions
@@ -1849,10 +1851,11 @@ async def run_room_setup(room_info, loop):
                                                                             
                                                                         try:
                                                                             await loop.run_in_executor(None, db_cache_datapackage, current_game_entries)
-                                                                            remaining_in_batch.discard(matched_game)
                                                                         except Exception as e:
                                                                             logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to save WS datapackage: {e}")
                                                                             any_datapackage_failed = True
+                                                                        finally:
+                                                                            remaining_in_batch.discard(matched_game)
                                                     elif ws_msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                                                         logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket connection closed while fetching datapackages.")
                                                         any_datapackage_failed = True
