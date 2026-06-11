@@ -1608,6 +1608,7 @@ async def run_room_setup(room_info, loop):
     logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Starting setup...")
     
     setup_data = {} 
+    last_activity_dt = None
     
     try:
         room_status = await fetch_json(f"https://{hostname}/api/room_status/{room_uuid}")
@@ -1616,10 +1617,19 @@ async def run_room_setup(room_info, loop):
             await loop.run_in_executor(None, db_handle_setup_failure, db_id)
             return
         
+        remote_activity_str = room_status.get('last_activity')
+        if remote_activity_str:
+            try:
+                dt_aware = parsedate_to_datetime(remote_activity_str)
+                last_activity_dt = dt_aware.astimezone(timezone.utc).replace(tzinfo=None)
+                setup_data['last_remote_activity'] = last_activity_dt
+            except Exception as e:
+                logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to parse last_activity '{remote_activity_str}': {e}")
+        
         new_tracker_id = room_status.get('tracker')
         if not new_tracker_id:
             logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] No tracker ID found in status. Cannot fetch static data.")
-            await loop.run_in_executor(None, db_handle_setup_failure, db_id)
+            await loop.run_in_executor(None, db_handle_setup_failure, db_id, last_activity_dt)
             return
         
         setup_data['tracker_id'] = new_tracker_id
@@ -1651,7 +1661,7 @@ async def run_room_setup(room_info, loop):
 
         if not static_data:
              logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch static tracker data. Aborting setup to avoid saving 0s.")
-             await loop.run_in_executor(None, db_handle_setup_failure, db_id)
+             await loop.run_in_executor(None, db_handle_setup_failure, db_id, last_activity_dt)
              return
         
         totals_map = {}
@@ -1886,7 +1896,7 @@ async def run_room_setup(room_info, loop):
 
         if not ws_success or not checksums:
             logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] No valid checksums or connection. Aborting setup.")
-            await loop.run_in_executor(None, db_handle_setup_failure, db_id)
+            await loop.run_in_executor(None, db_handle_setup_failure, db_id, last_activity_dt)
             return
 
         new_checksums_json_str = json.dumps(checksums)
@@ -1894,7 +1904,7 @@ async def run_room_setup(room_info, loop):
 
         if any_datapackage_failed:
             logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Setup partially failed (missing datapackages).")
-            await loop.run_in_executor(None, db_handle_setup_failure, db_id)
+            await loop.run_in_executor(None, db_handle_setup_failure, db_id, last_activity_dt)
             return
         else:
             setup_data['is_setup'] = True 
@@ -1903,7 +1913,7 @@ async def run_room_setup(room_info, loop):
 
     except Exception as e:
         logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Setup error: {e}", exc_info=True)
-        await loop.run_in_executor(None, db_handle_setup_failure, db_id)
+        await loop.run_in_executor(None, db_handle_setup_failure, db_id, last_activity_dt)
         return 
 
     try:
@@ -2046,6 +2056,7 @@ def db_commit_setup_data(db_id, setup_data):
         if 'last_api_check' in setup_data: room.last_api_check = setup_data['last_api_check']
         if 'tracker_id' in setup_data: room.tracker_id = setup_data['tracker_id']
         if 'game_checksums_json' in setup_data: room.game_checksums_json = setup_data['game_checksums_json']
+        if 'last_remote_activity' in setup_data: room.last_remote_activity = setup_data['last_remote_activity']
         if setup_data.get('is_setup'): room.is_setup = True
 
         session.commit()
@@ -2056,10 +2067,11 @@ def db_commit_setup_data(db_id, setup_data):
     finally:
         Session.remove()
 
-def db_handle_setup_failure(db_id):
+def db_handle_setup_failure(db_id, last_remote_activity=None):
     """
     Synchronously increments the failure count for a room during setup.
     If it exceeds the limit, suspends the room to stop the error loop.
+    Also records the last known remote activity if provided.
     """
     session = Session()
     try:
@@ -2068,6 +2080,8 @@ def db_handle_setup_failure(db_id):
             return
 
         room.failed_poll_count += 1
+        if last_remote_activity:
+            room.last_remote_activity = last_remote_activity
         
         if room.failed_poll_count >= 5:
             room.is_suspended = True
@@ -2155,6 +2169,7 @@ async def poller_supervisor(app, loop):
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
     
     last_cache_check = datetime.utcnow() - timedelta(minutes=15)
+    last_revive_check = datetime.utcnow() - timedelta(hours=2)
     missing_checksums = set()
     setup_cooldowns = {}
     
@@ -2168,6 +2183,15 @@ async def poller_supervisor(app, loop):
                 continue
                 
             now = datetime.utcnow()
+
+            # --- SMART HEALING: Revive suspended rooms with new activity ---
+            if now - last_revive_check > timedelta(hours=2):
+                logging.info("[SUPERVISOR] Running periodic check to revive suspended rooms...")
+                try:
+                    await heal_suspended_rooms(loop)
+                except Exception as ex:
+                    logging.error(f"[HEALING_ERROR] Failed during periodic revive check: {ex}", exc_info=True)
+                last_revive_check = now
 
             # --- SMART HEALING: Batch check for missing cache entries ---
             if now - last_cache_check > timedelta(minutes=15):
@@ -2436,6 +2460,130 @@ def db_check_stale_rooms():
         session.rollback()
     finally:
         Session.remove()
+
+def db_get_suspended_rooms_for_healing():
+    """
+    Retrieves rooms that are suspended and not complete, but either have no last_remote_activity,
+    or last_remote_activity is within the past 30 days.
+    """
+    session = Session()
+    try:
+        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        rooms = session.query(TrackedRoom).filter(
+            TrackedRoom.is_suspended == True,
+            TrackedRoom.is_complete == False,
+            or_(
+                TrackedRoom.last_remote_activity == None,
+                TrackedRoom.last_remote_activity > thirty_days_ago
+            )
+        ).all()
+        # Return simple dictionaries to be safe outside database session
+        return [
+            {
+                'id': r.id,
+                'room_uuid': r.room_id,
+                'hostname': r.hostname,
+                'last_remote_activity': r.last_remote_activity
+            }
+            for r in rooms
+        ]
+    except Exception as e:
+        logging.error(f"[HEALING_DB_ERROR] Failed to fetch suspended rooms: {e}")
+        return []
+    finally:
+        Session.remove()
+
+def db_revive_suspended_room(db_id, remote_activity):
+    """
+    Revives a suspended room and sets its last_remote_activity.
+    """
+    session = Session()
+    try:
+        room = session.query(TrackedRoom).filter_by(id=db_id).first()
+        if room:
+            room.is_suspended = False
+            room.failed_poll_count = 0
+            room.last_remote_activity = remote_activity
+            session.commit()
+            logging.info(f"[HEALING] Revived Room {db_id} (UUID: {room.room_id}) due to remote activity at {remote_activity}")
+            return True
+        return False
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[HEALING_DB_ERROR] Failed to revive room {db_id}: {e}")
+        return False
+    finally:
+        Session.remove()
+
+def db_update_suspended_room_activity(db_id, remote_activity):
+    """
+    Updates the last_remote_activity of a suspended room without reviving it.
+    This is used to prevent future status requests for rooms whose activity is > 30 days.
+    """
+    session = Session()
+    try:
+        room = session.query(TrackedRoom).filter_by(id=db_id).first()
+        if room:
+            room.last_remote_activity = remote_activity
+            session.commit()
+            logging.info(f"[HEALING] Recorded remote activity {remote_activity} for suspended Room {db_id} (older than 30 days limit).")
+            return True
+        return False
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[HEALING_DB_ERROR] Failed to update room activity {db_id}: {e}")
+        return False
+    finally:
+        Session.remove()
+
+async def heal_suspended_rooms(loop):
+    """
+    Periodically queries and checks suspended rooms for new activity, reviving them if appropriate.
+    """
+    suspended_rooms = await loop.run_in_executor(None, db_get_suspended_rooms_for_healing)
+    if not suspended_rooms:
+        return
+
+    logging.info(f"[HEALING] Checking {len(suspended_rooms)} suspended rooms for new activity...")
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+
+    for r in suspended_rooms:
+        db_id = r['id']
+        room_uuid = r['room_uuid']
+        hostname = r['hostname']
+        last_known = r['last_remote_activity']
+
+        status_url = f"https://{hostname}/api/room_status/{room_uuid}"
+        status_data, status_code = await fetch_json_with_status(status_url, timeout=15)
+
+        if status_code == 404:
+            logging.warning(f"[HEALING] Room {db_id} (UUID: {room_uuid}) returned 404 from status endpoint. Skipping.")
+            continue
+
+        if not status_data:
+            continue
+
+        remote_activity_str = status_data.get('last_activity')
+        if not remote_activity_str:
+            continue
+
+        try:
+            dt_aware = parsedate_to_datetime(remote_activity_str)
+            remote_activity = dt_aware.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception as e:
+            logging.warning(f"[HEALING_WARN] Failed to parse activity time for Room {db_id}: {e}")
+            continue
+
+        # Check if remote activity is in the past 30 days
+        if remote_activity > thirty_days_ago:
+            # Check if it has had new activity since our local database record
+            if not last_known or remote_activity > last_known:
+                await loop.run_in_executor(None, db_revive_suspended_room, db_id, remote_activity)
+        else:
+            # If remote activity is older than 30 days and local is None, we store it
+            # so that we won't query the host API again (filtered out by the thirty_days_ago query constraint)
+            if not last_known:
+                await loop.run_in_executor(None, db_update_suspended_room_activity, db_id, remote_activity)
 
 def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
     """
