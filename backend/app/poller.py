@@ -2187,10 +2187,12 @@ async def poller_supervisor(app, loop):
             # --- SMART HEALING: Revive suspended rooms with new activity ---
             if now - last_revive_check > timedelta(hours=2):
                 logging.info("[SUPERVISOR] Running periodic check to revive suspended rooms...")
-                try:
-                    await heal_suspended_rooms(loop)
-                except Exception as ex:
-                    logging.error(f"[HEALING_ERROR] Failed during periodic revive check: {ex}", exc_info=True)
+                async def run_healing_task():
+                    try:
+                        await heal_suspended_rooms(loop)
+                    except Exception as ex:
+                        logging.error(f"[HEALING_ERROR] Failed during periodic revive check: {ex}", exc_info=True)
+                asyncio.create_task(run_healing_task())
                 last_revive_check = now
 
             # --- SMART HEALING: Batch check for missing cache entries ---
@@ -2546,6 +2548,7 @@ async def heal_suspended_rooms(loop):
 
     logging.info(f"[HEALING] Checking {len(suspended_rooms)} suspended rooms for new activity...")
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    session = get_aiohttp_session()
 
     for r in suspended_rooms:
         db_id = r['id']
@@ -2554,7 +2557,7 @@ async def heal_suspended_rooms(loop):
         last_known = r['last_remote_activity']
 
         status_url = f"https://{hostname}/api/room_status/{room_uuid}"
-        status_data, status_code = await fetch_json_with_status(status_url, timeout=15)
+        status_data, status_code = await fetch_json_with_status(status_url, session=session, timeout=15)
 
         if status_code == 404:
             logging.warning(f"[HEALING] Room {db_id} (UUID: {room_uuid}) returned 404 from status endpoint. Skipping.")
