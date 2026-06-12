@@ -538,8 +538,8 @@ fun RoomsScreen(
                 title = { Text("Room Suspended") },
                 text = {
                     Text(
-                        "This room is suspended. This can happen if there are communication errors or backend update issues..\n\n" +
-                        "To wake it, hit the button below to open the room in a browswer, and resume tracking in Archipelago Alerts."
+                        "This room is suspended. This can happen if there are communication errors or backend update issues.\n\n" +
+                        "To wake it, hit the button below to open the room in a browser, and resume tracking in Archipelago Alerts."
                     )
                 },
                 confirmButton = {

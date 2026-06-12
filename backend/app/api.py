@@ -27,11 +27,7 @@ from .models import (
 
 bp = Blueprint('api', __name__)
 
-import threading
-import time
 
-_revive_throttle_lock = threading.Lock()
-_last_revive_times = {}
 
 def chunked_iterable(iterable, size):
     """Yields successive chunks from an iterable."""
@@ -582,31 +578,25 @@ def revive_room(current_user, room_db_id):
     if not room.is_suspended:
         return jsonify({'error': 'Room is not suspended.'}), 400
 
-    # 30-second rate limit cooldown per room ID
-    with _revive_throttle_lock:
-        now_time = time.time()
-        last_time = _last_revive_times.get(room_db_id, 0.0)
-        if now_time - last_time < 30.0:
+    # 30-second rate limit cooldown per room ID using database field
+    from datetime import datetime, timedelta
+    now_time = datetime.utcnow()
+    if room.last_revive_attempt:
+        if now_time - room.last_revive_attempt < timedelta(seconds=30):
             logging.warning(f"[API_RATE_LIMIT] User {current_user.id} spammed revive for Room {room.id}.")
             return jsonify({'error': 'Please wait 30 seconds between revival attempts.'}), 429
-        _last_revive_times[room_db_id] = now_time
 
-    if room.is_suspended:
-        logging.info(f"[API] Reviving suspended room {room.id} because User {current_user.id} requested it.")
-        try:
-            room.is_suspended = False
-            room.failed_poll_count = 0
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            logging.error(f"[API_ERROR] Database commit failed when reviving Room {room.id}: {e}", exc_info=True)
-            return jsonify({'error': 'Failed to update room status in database.'}), 500
-
-        try:
-            from .poller import trigger_immediate_room_poll
-            trigger_immediate_room_poll(room.id)
-        except Exception as e:
-            logging.error(f"[API_ERROR] Failed to trigger immediate room poll for Room {room.id}: {e}", exc_info=True)
+    logging.info(f"[API] Reviving suspended room {room.id} because User {current_user.id} requested it.")
+    try:
+        room.is_suspended = False
+        room.failed_poll_count = 0
+        room.needs_immediate_poll = True
+        room.last_revive_attempt = now_time
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[API_ERROR] Database commit failed when reviving Room {room.id}: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to update room status in database.'}), 500
 
     return jsonify({'message': 'Room revived successfully.'}), 200
 
