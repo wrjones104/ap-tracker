@@ -197,4 +197,12 @@ val MIGRATION_16_17 = object : Migration(16, 17) {
         db.execSQL("DELETE FROM history_items")
         db.execSQL("DELETE FROM hints")
     }
+}
+
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE rooms ADD COLUMN is_suspended INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE rooms ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+        db.execSQL("ALTER TABLE rooms ADD COLUMN web_url TEXT")
+    }
 }

@@ -49,6 +49,13 @@ cheese_semaphore = asyncio.Semaphore(CHEESE_POLL_SEMAPHORE_LIMIT)
 AP_POLL_SEMAPHORE_LIMIT = 5 
 ap_poll_semaphore = asyncio.Semaphore(AP_POLL_SEMAPHORE_LIMIT)
 
+import threading
+_active_immediate_polls = set()
+_active_immediate_polls_lock = threading.Lock()
+
+from concurrent.futures import ThreadPoolExecutor
+_immediate_poll_executor = ThreadPoolExecutor(max_workers=5)
+
 SEMAPHORE_WAIT_WARNING_THRESHOLD = 60
 
 
@@ -2359,9 +2366,14 @@ def db_run_cleanup():
 
 def trigger_immediate_room_poll(room_db_id):
     """
-    Spawns a one-shot background thread to immediately poll a room and backfill its slots.
+    Submits a one-shot background job to the global thread pool to immediately poll a room and backfill its slots.
     """
-    import threading
+    with _active_immediate_polls_lock:
+        if room_db_id in _active_immediate_polls:
+            logging.info(f"[POLLER_TRIGGER] Immediate poll already in progress for Room {room_db_id}. Skipping submit.")
+            return
+        _active_immediate_polls.add(room_db_id)
+
     def worker():
         loop = asyncio.new_event_loop()
         try:
@@ -2377,13 +2389,15 @@ def trigger_immediate_room_poll(room_db_id):
         except Exception as e:
             logging.error(f"[POLLER_TRIGGER] Failed to run immediate poll for room {room_db_id}: {e}", exc_info=True)
         finally:
+            with _active_immediate_polls_lock:
+                _active_immediate_polls.discard(room_db_id)
             try:
                 loop.run_until_complete(close_aiohttp_session())
             except Exception as e:
                 logging.error(f"[POLLER_TRIGGER] Failed to close aiohttp session: {e}", exc_info=True)
             loop.close()
 
-    threading.Thread(target=worker, name=f"ImmediateRoomPoll-{room_db_id}", daemon=True).start()
+    _immediate_poll_executor.submit(worker)
 
 def run_poller(app):
     loop = asyncio.new_event_loop()

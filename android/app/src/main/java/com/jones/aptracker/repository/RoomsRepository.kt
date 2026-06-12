@@ -94,7 +94,10 @@ class RoomsRepository(
                 total_slots_count = networkRoom.total_slots_count,
                 icon_name = networkRoom.icon_name,
                 sort_order = finalOrder,
-                is_archived = networkRoom.is_archived
+                is_archived = networkRoom.is_archived,
+                is_suspended = networkRoom.is_suspended,
+                status = networkRoom.status,
+                web_url = networkRoom.web_url
             )
         }
         roomDao.syncRooms(roomEntities)
@@ -112,5 +115,11 @@ class RoomsRepository(
 
     suspend fun refreshArchivedRooms(): List<com.jones.aptracker.network.Room> {
         return apiService.getRooms(archived = true)
+    }
+
+    suspend fun reviveRoom(roomId: Int) {
+        val response = apiService.reviveRoom(roomId)
+        if (!response.isSuccessful) throw Exception("Failed to revive room")
+        refreshRooms()
     }
 }

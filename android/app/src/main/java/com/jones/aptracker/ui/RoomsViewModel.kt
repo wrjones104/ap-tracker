@@ -14,6 +14,7 @@ import com.jones.aptracker.network.UpdateRoomRequest
 import com.jones.aptracker.repository.RoomsRepository
 import com.jones.aptracker.repository.UserRepository // Import this!
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +29,10 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: RoomsRepository
     private val userRepository: UserRepository // Add this
     private val settingsManager = SettingsManager(application)
+
+    private var syncJob: Job? = null
+    private var lastFetchTime = 0L
+    private val FETCH_COOLDOWN_MS = 10000L // 10 seconds
 
     private val _isSyncingCheese = MutableStateFlow(false)
     val isSyncingCheese: StateFlow<Boolean> = _isSyncingCheese.asStateFlow()
@@ -50,7 +55,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private val _rooms = MutableStateFlow<List<Room>>(emptyList())
     val rooms: StateFlow<List<Room>> = _rooms
 
-    private val _isLoadingRooms = MutableStateFlow(true)
+    private val _isLoadingRooms = MutableStateFlow(false)
     val isLoading = _isLoadingRooms.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -104,11 +109,18 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun fetchRooms() {
+    fun fetchRooms(force: Boolean = false) {
+        if (_isLoadingRooms.value) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastFetchTime < FETCH_COOLDOWN_MS) {
+            Log.d("RoomsViewModel", "fetchRooms: Cooldown active, skipping fetch.")
+            return
+        }
         _isLoadingRooms.value = true
         viewModelScope.launch {
             try {
                 repository.refreshRooms()
+                lastFetchTime = System.currentTimeMillis()
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to refresh rooms. Check connection."
                 e.printStackTrace()
@@ -149,6 +161,17 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 repository.refreshRooms()
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to delete room."
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun reviveRoom(roomId: Int) {
+        viewModelScope.launch {
+            try {
+                repository.reviveRoom(roomId)
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to revive room."
                 e.printStackTrace()
             }
         }
@@ -215,11 +238,16 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         _errorMessage.value = null
     }
 
+    fun cancelBackgroundSync() {
+        syncJob?.cancel()
+        _isSyncingCheese.value = false
+    }
+
     private fun triggerBackgroundSync() {
         if (_isSyncingCheese.value) return
         _isSyncingCheese.value = true
 
-        viewModelScope.launch {
+        syncJob = viewModelScope.launch {
             try {
                 // 1. Tell backend to START syncing
                 val response = RetrofitClient.instance.syncCheeseTracker()
@@ -240,14 +268,17 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                     retries++
                 }
 
-                _isSyncingCheese.value = false
-                fetchRooms()
+                fetchRooms(force = true)
                 Toast.makeText(getApplication(), "Cheese Sync Complete!", Toast.LENGTH_SHORT).show()
 
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.i("RoomsViewModel", "Background sync cancelled by user.")
+                throw e
             } catch (e: Exception) {
                 e.printStackTrace()
                 Log.w("RoomsViewModel", "Background sync failed: ${e.message}")
                 _errorMessage.value = "Background sync failed."
+            } finally {
                 _isSyncingCheese.value = false
             }
         }
@@ -261,7 +292,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         if (shouldSyncCheese) {
             triggerBackgroundSync()
         } else {
-            fetchRooms()
+            fetchRooms(force = true)
         }
     }
 }
