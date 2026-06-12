@@ -22,6 +22,9 @@ interface ApiService {
     @DELETE("rooms/{id}")
     suspend fun deleteRoom(@Path("id") roomId: Int): Response<Unit>
 
+    @POST("rooms/{id}/revive")
+    suspend fun reviveRoom(@Path("id") roomId: Int): Response<Unit>
+
     @PUT("rooms/{id}")
     suspend fun updateRoom(@Path("id") roomId: Int, @Body request: UpdateRoomRequest): Response<Unit>
 
@@ -191,7 +194,10 @@ data class Room(
     val total_slots_count: Int,
     val icon_name: String,
     val sort_order: Int = 0,
-    val is_archived: Boolean = false
+    val is_archived: Boolean = false,
+    val is_suspended: Boolean = false,
+    val status: String = "active",
+    val web_url: String? = null
 )
 
 data class AddRoomRequest(

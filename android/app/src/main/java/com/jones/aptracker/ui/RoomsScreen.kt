@@ -98,6 +98,9 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.window.Dialog
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -138,6 +141,7 @@ fun RoomsScreen(
     var roomToEdit by remember { mutableStateOf<Room?>(null) }
     var roomToArchive by remember { mutableStateOf<Room?>(null) }
     var roomForOptions by remember { mutableStateOf<Room?>(null) }
+    var roomToRevive by remember { mutableStateOf<Room?>(null) }
 
     // --- Drag and Drop State ---
     var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
@@ -152,7 +156,7 @@ fun RoomsScreen(
         SwipeRefresh(
             state = rememberSwipeRefreshState(isRefreshing = isLoading),
             onRefresh = {
-                roomsViewModel.fetchRooms()
+                roomsViewModel.fetchRooms(force = true)
                 userViewModel.fetchTrackedSlots()
                 userViewModel.fetchUserProfile()
             },
@@ -359,7 +363,13 @@ fun RoomsScreen(
                                         scaleY = scale
                                         alpha = if (isDragging) 0.9f else 1f
                                     }
-                                    .clickable { onRoomClick(room.id, room.alias) },
+                                    .clickable {
+                                        if (room.is_suspended) {
+                                            roomToRevive = room
+                                        } else {
+                                            onRoomClick(room.id, room.alias)
+                                        }
+                                    },
                                 elevation = CardDefaults.cardElevation(defaultElevation = elevation)
                             ) {
                                 Row(
@@ -373,7 +383,42 @@ fun RoomsScreen(
                                     )
                                     Spacer(Modifier.width(16.dp))
                                     Column(modifier = Modifier.weight(1f).padding(vertical = 12.dp)) {
-                                        Text(text = room.alias, style = MaterialTheme.typography.titleMedium)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(text = room.alias, style = MaterialTheme.typography.titleMedium)
+                                            if (room.is_suspended) {
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(
+                                                            color = MaterialTheme.colorScheme.errorContainer,
+                                                            shape = RoundedCornerShape(4.dp)
+                                                        )
+                                                        .border(
+                                                            width = 0.5.dp,
+                                                            color = MaterialTheme.colorScheme.error,
+                                                            shape = RoundedCornerShape(4.dp)
+                                                        )
+                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                ) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Warning,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(10.dp),
+                                                            tint = MaterialTheme.colorScheme.error
+                                                        )
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(
+                                                            text = "Suspended",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
                                             text = room.host ?: "Connecting...",
@@ -425,6 +470,10 @@ fun RoomsScreen(
                     onDelete = { r ->
                         roomForOptions = null
                         roomToDelete = r
+                    },
+                    onRevive = { r ->
+                        roomForOptions = null
+                        roomToRevive = r
                     }
                 )
             }
@@ -481,6 +530,48 @@ fun RoomsScreen(
                 }
             )
         }
+
+        roomToRevive?.let { room ->
+            val context = LocalContext.current
+            AlertDialog(
+                onDismissRequest = { roomToRevive = null },
+                title = { Text("Room Suspended") },
+                text = {
+                    Text(
+                        "This room is suspended. This can happen if there are communication errors or backend update issues.\n\n" +
+                        "To wake it, hit the button below to open the room in a browser, and resume tracking in Archipelago Alerts."
+                    )
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        val url = room.web_url ?: "https://archipelago.gg/room/${room.room_id}"
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        roomsViewModel.reviveRoom(room.id)
+                        roomToRevive = null
+                    }) {
+                        Text("Wake & Revive Room")
+                    }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            roomToRevive = null
+                            onRoomClick(room.id, room.alias)
+                        }) {
+                            Text("View History")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(onClick = { roomToRevive = null }) {
+                            Text("Cancel")
+                        }
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -493,12 +584,21 @@ fun RoomOptionsSheet(
     onDismiss: () -> Unit,
     onEdit: (Room) -> Unit,
     onArchive: (Room) -> Unit,
-    onDelete: (Room) -> Unit
+    onDelete: (Room) -> Unit,
+    onRevive: (Room) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp).navigationBarsPadding().imePadding()) {
         Text(room.alias, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 16.dp))
         HorizontalDivider()
 
+        if (room.is_suspended) {
+            ListItem(
+                headlineContent = { Text("Revive Room") },
+                supportingContent = { Text("Resume active status tracking") },
+                leadingContent = { Icon(Icons.Default.Link, null, tint = MaterialTheme.colorScheme.tertiary) },
+                modifier = Modifier.clickable { onRevive(room) }
+            )
+        }
         ListItem(
             headlineContent = { Text("Edit Room") },
             supportingContent = { Text("Change room name, icon, or manage slots") },

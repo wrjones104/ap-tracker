@@ -76,6 +76,8 @@ class TrackedRoom(Base):
     cached_players_json = Column(String, default='[]')
     is_setup = Column(Boolean, default=False, nullable=False)
     last_remote_activity = Column(DateTime, nullable=True)
+    last_revive_attempt = Column(DateTime, nullable=True)
+    needs_immediate_poll = Column(Boolean, default=False, nullable=False)
     subscriptions = relationship("UserRoomSubscription", back_populates="room", cascade="all, delete-orphan")
 
 class UserRoomSubscription(Base):

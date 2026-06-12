@@ -60,7 +60,10 @@ object RoomMapper {
             total_slots_count = entity.total_slots_count,
             icon_name = entity.icon_name,
             sort_order = entity.sort_order,
-            is_archived = entity.is_archived
+            is_archived = entity.is_archived,
+            is_suspended = entity.is_suspended,
+            status = entity.status,
+            web_url = entity.web_url
         )
     }
 
@@ -74,7 +77,10 @@ object RoomMapper {
             total_slots_count = domain.total_slots_count,
             icon_name = domain.icon_name,
             sort_order = sortOrder,
-            is_archived = domain.is_archived
+            is_archived = domain.is_archived,
+            is_suspended = domain.is_suspended,
+            status = domain.status,
+            web_url = domain.web_url
         )
     }
 

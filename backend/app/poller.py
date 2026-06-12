@@ -49,6 +49,13 @@ cheese_semaphore = asyncio.Semaphore(CHEESE_POLL_SEMAPHORE_LIMIT)
 AP_POLL_SEMAPHORE_LIMIT = 5 
 ap_poll_semaphore = asyncio.Semaphore(AP_POLL_SEMAPHORE_LIMIT)
 
+import threading
+_active_immediate_polls = set()
+_active_immediate_polls_lock = threading.Lock()
+
+from concurrent.futures import ThreadPoolExecutor
+_immediate_poll_executor = ThreadPoolExecutor(max_workers=5)
+
 SEMAPHORE_WAIT_WARNING_THRESHOLD = 60
 
 
@@ -1585,7 +1592,8 @@ def db_read_room_poll_state(db_id):
             'last_remote_activity': room.last_remote_activity,
             'cached_full_address': room.cached_full_address,
             'hostname': room.hostname,
-            'needs_backfill': needs_backfill
+            'needs_backfill': needs_backfill,
+            'is_setup': room.is_setup
         }
     except Exception as e:
         return None
@@ -2083,6 +2091,9 @@ def db_handle_setup_failure(db_id, last_remote_activity=None):
         if last_remote_activity:
             room.last_remote_activity = last_remote_activity
         
+        # Explicitly set is_setup to False since setup failed/is incomplete
+        room.is_setup = False
+
         if room.failed_poll_count >= 5:
             room.is_suspended = True
             logging.warning(f"[POLLER_ACTION][RoomDBID:{db_id}] Suspended room after repeated setup failures.")
@@ -2359,9 +2370,14 @@ def db_run_cleanup():
 
 def trigger_immediate_room_poll(room_db_id):
     """
-    Spawns a one-shot background thread to immediately poll a room and backfill its slots.
+    Submits a one-shot background job to the global thread pool to immediately poll a room and backfill its slots.
     """
-    import threading
+    with _active_immediate_polls_lock:
+        if room_db_id in _active_immediate_polls:
+            logging.info(f"[POLLER_TRIGGER] Immediate poll already in progress for Room {room_db_id}. Skipping submit.")
+            return
+        _active_immediate_polls.add(room_db_id)
+
     def worker():
         loop = asyncio.new_event_loop()
         try:
@@ -2373,22 +2389,74 @@ def trigger_immediate_room_poll(room_db_id):
             state = db_read_room_poll_state(room_db_id)
             if state:
                 room_info['hostname'] = state['hostname']
-                loop.run_until_complete(run_room_poll(room_info, loop))
+                room_info['room_uuid'] = state['room_uuid']
+                
+                is_setup = state.get('is_setup', False)
+                is_missing_data = not state.get('tracker_id') or not state.get('game_checksums_json_str') or state.get('game_checksums_json_str') == '{}'
+                is_missing_players = not state.get('cached_players_json_str') or state.get('cached_players_json_str') == '[]'
+                has_total_locations = '"total_locations":' in (state.get('cached_players_json_str') or "")
+                
+                needs_setup = (not is_setup) or is_missing_data or is_missing_players or (not has_total_locations)
+                
+                if needs_setup:
+                    logging.info(f"[POLLER_TRIGGER] Room {room_db_id} needs setup/repair (IsSetup: {is_setup}). Running immediate setup...")
+                    loop.run_until_complete(run_room_setup(room_info, loop))
+                else:
+                    loop.run_until_complete(run_room_poll(room_info, loop))
         except Exception as e:
-            logging.error(f"[POLLER_TRIGGER] Failed to run immediate poll for room {room_db_id}: {e}", exc_info=True)
+            logging.error(f"[POLLER_TRIGGER] Failed to run immediate poll/setup for room {room_db_id}: {e}", exc_info=True)
         finally:
+            with _active_immediate_polls_lock:
+                _active_immediate_polls.discard(room_db_id)
             try:
                 loop.run_until_complete(close_aiohttp_session())
             except Exception as e:
                 logging.error(f"[POLLER_TRIGGER] Failed to close aiohttp session: {e}", exc_info=True)
             loop.close()
 
-    threading.Thread(target=worker, name=f"ImmediateRoomPoll-{room_db_id}", daemon=True).start()
+    _immediate_poll_executor.submit(worker)
+
+async def immediate_poll_checker(app, loop):
+    """
+    Periodically checks the database for rooms requiring an immediate poll.
+    Resets needs_immediate_poll to False and triggers the poll inside the poller process.
+    """
+    while True:
+        try:
+            def check_and_get_rooms():
+                session = Session()
+                try:
+                    rooms = session.query(TrackedRoom).filter(
+                        TrackedRoom.needs_immediate_poll == True
+                    ).all()
+                    room_ids = []
+                    for r in rooms:
+                        r.needs_immediate_poll = False
+                        room_ids.append(r.id)
+                    if room_ids:
+                        session.commit()
+                    return room_ids
+                except Exception as e:
+                    logging.error(f"[IMMEDIATE_POLL_CHECKER_DB_ERROR] Failed to query/update needs_immediate_poll: {e}", exc_info=True)
+                    session.rollback()
+                    return []
+                finally:
+                    Session.remove()
+
+            room_ids = await loop.run_in_executor(None, check_and_get_rooms)
+            for rid in room_ids:
+                logging.info(f"[POLLER] Found needs_immediate_poll flag for Room {rid}. Triggering immediate poll.")
+                trigger_immediate_room_poll(rid)
+        except Exception as e:
+            logging.error(f"[IMMEDIATE_POLL_CHECKER_ERROR] Exception in loop: {e}", exc_info=True)
+
+        await asyncio.sleep(2)
 
 def run_poller(app):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     main_task = loop.create_task(poller_supervisor(app, loop))
+    poll_check_task = loop.create_task(immediate_poll_checker(app, loop))
     try:
         loop.run_until_complete(main_task)
     except Exception as e:
