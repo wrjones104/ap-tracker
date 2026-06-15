@@ -6,14 +6,15 @@ Archipelago Alerts (formerly AP Tracker) is a tool for tracking Archipelago mult
 
 This project was built to solve a simple problem: wanting to know when important things happen in an Archipelago game without having to constantly watch a tracker website or be at your computer.
 
-The app uses Discord for authentication. The backend service polls rooms you've added, and the Android app provides a clean interface for managing your tracked rooms, setting notification preferences, and viewing event history. When a significant event occurs, the backend sends a push notification via Firebase Cloud Messaging directly to your phone.
+The app uses Discord for authentication, but also supports an anonymous guest mode. The backend service polls rooms you've added, and the Android app provides a clean interface for managing your tracked rooms, setting notification preferences, and viewing event history. When a significant event occurs, the backend sends a push notification via Firebase Cloud Messaging directly to your phone.
 
 ---
 
 ### Key Features ✨
 
 * **Discord Authentication:** Securely log in using your existing Discord account via OAuth 2.0.
-* **Room Management:** Easily add, rename, and remove Archipelago rooms you want to track.
+* **Guest Accounts:** Quickly start tracking rooms without a Discord account using anonymous guest logins.
+* **Room Management:** Easily add, rename, remove, and revive Archipelago rooms you want to track.
 * **Player Selection:** Choose exactly which players in a room you want to receive notifications for.
 * **Per-Slot Preferences:** Fine-tune your notifications for *each specific player*, overriding your global defaults.
 * **Real-time Push Notifications:** Get notified for:
@@ -40,7 +41,7 @@ This project is a monorepo containing two main components:
     * **Jetpack Compose** for the declarative UI.
     * **Retrofit** & **OkHttp** for consuming the backend API and handling auth.
     * **Jetpack Room** for local database caching of rooms and history.
-    * **AppAuth** for handling the Discord OAuth 2.0 flow.
+    * **AppAuth** for handling the Discord OAuth 2.0 flow using native deep-linking.
     * **EncryptedSharedPreferences** for secure storage of auth tokens.
     * **Firebase Cloud Messaging (FCM)** for receiving push notifications.
 
@@ -98,7 +99,7 @@ This project uses a hybrid database setup. The backend is designed to run with *
     source backend/.env
     
     # Run the migrations
-    alembic upgrade head
+    PYTHONPATH=backend alembic -c alembic.ini upgrade head
     
 
 8.  **Run the Server**

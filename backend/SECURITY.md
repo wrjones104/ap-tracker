@@ -13,14 +13,13 @@ This document outlines the security measures in place to protect user data and e
 - **Secure Signing Algorithm**: JWTs are signed using the HMAC-SHA256 algorithm, which is a strong and widely-used symmetric signing algorithm.
 - **JTI (JWT ID) Claim**: Each JWT is issued with a unique `jti` claim, which is used to prevent token replay attacks.
 - **JWT Blocklist**: A JWT blocklist is implemented to allow for the immediate revocation of tokens in the event of a security incident. When a user logs out or deletes their account, their token's `jti` is added to the blocklist, rendering it unusable.
-- **Short-Lived Tokens**: JWTs have a 30-day expiration, which limits the window of opportunity for an attacker to use a stolen token.
+- **Short-Lived Tokens**: JWTs have an expiration time of 90 days for Discord users and 730 days for guest users, striking a balance between usability and restricting the window of opportunity for stolen tokens.
 
 ## API Security
 
 ### Input Validation
 - **Strict Input Validation**: All incoming data is strictly validated to ensure that it is of the correct type, length, and format. This prevents a wide range of attacks, including SQL injection, Cross-Site Scripting (XSS), and buffer overflows.
-- **Hostname Whitelist**: The `add_room` endpoint uses a hostname whitelist to restrict the servers that the application can connect to. This prevents Server-Side Request Forgery (SSRF) attacks, where an attacker could force the server to make requests to internal resources.
-- **IP Address Blacklist**: The `add_room` endpoint also uses an IP address blacklist to prevent users from adding rooms with IP addresses. This further mitigates the risk of SSRF attacks.
+- **SSRF Protection**: The application implements programmatic SSRF protections via `SSRFProtectedTCPConnector` and `SSRFProtectedResolver` using `aiohttp` to block private, loopback, and metadata IPs during external room connections.
 
 ### Insecure Deserialization
 - **Safe JSON Parsing**: All JSON data is parsed using the `json.loads` function, which is safe from insecure deserialization vulnerabilities. The application never uses `pickle` or other unsafe deserialization libraries.
