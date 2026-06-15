@@ -94,17 +94,52 @@ adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=retry_
 firebase_http_session = requests.Session()
 firebase_http_session.mount("https://", adapter)
 
-_firebase_app = None
-def get_firebase_app():
-    global _firebase_app
-    if _firebase_app is None:
-        try:
-            cred = credentials.Certificate(FIREBASE_KEY_FILE)
-            _firebase_app = firebase_admin.initialize_app(cred, {'http_client': firebase_http_session})
-            logging.info("[FIREBASE] Firebase initialized successfully.") # <-- MODIFIED
-        except Exception as e:
-            logging.critical(f"[FIREBASE] !!! FIREBASE ERROR: Could not initialize. Error: {e}") # <-- MODIFIED
-    return _firebase_app
+# Cache of initialized firebase app instances by platform
+import threading
+_firebase_apps = {}
+_firebase_lock = threading.Lock()
+
+def get_firebase_app(platform='android'):
+    global _firebase_apps
+    platform = (platform or 'android').lower().strip()
+    if platform not in ['android', 'ios']:
+        platform = 'android'
+        
+    if platform not in _firebase_apps:
+        with _firebase_lock:
+            if platform not in _firebase_apps:
+                try:
+                    if platform == 'android':
+                        key_file = os.environ.get('FIREBASE_KEY_FILE_ANDROID', 'service-account-key.json')
+                        if not os.path.exists(key_file):
+                            logging.error(f"[FIREBASE] Key file for {platform} not found: {key_file}")
+                            return None
+                        try:
+                            app = firebase_admin.get_app()
+                        except ValueError:
+                            cred = credentials.Certificate(key_file)
+                            app = firebase_admin.initialize_app(cred, {'http_client': firebase_http_session})
+                        _firebase_apps[platform] = app
+                        logging.info("[FIREBASE] Android Firebase app initialized successfully.")
+                    elif platform == 'ios':
+                        key_file = os.environ.get('FIREBASE_KEY_FILE_IOS', 'service-account-key-ios.json')
+                        if not os.path.exists(key_file):
+                            logging.warning(f"[FIREBASE] Key file for {platform} not found: {key_file}. iOS push notifications will be skipped.")
+                            return None
+                        try:
+                            app = firebase_admin.get_app(name='ios')
+                        except ValueError:
+                            cred = credentials.Certificate(key_file)
+                            app = firebase_admin.initialize_app(cred, {'http_client': firebase_http_session}, name='ios')
+                        _firebase_apps[platform] = app
+                        logging.info("[FIREBASE] iOS Firebase app initialized successfully.")
+                except Exception as e:
+                    if platform == 'ios':
+                        logging.warning(f"[FIREBASE] Could not initialize iOS Firebase app: {e}. iOS push notifications will be skipped.")
+                    else:
+                        logging.critical(f"[FIREBASE] !!! Android Firebase app error: Could not initialize. Error: {e}")
+            
+    return _firebase_apps.get(platform)
 
 # ==============================================================================
 # 4. APPLICATION FACTORY

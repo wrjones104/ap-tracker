@@ -233,7 +233,11 @@ def get_public_config():
     unauthenticated so the app can check it on launch.
     """
     try:
-        min_version = 9
+        platform = request.args.get('platform', 'android').lower().strip()
+        if platform == 'ios':
+            min_version = 1
+        else:
+            min_version = 9
         
         return jsonify({
             'min_app_version': min_version
@@ -259,7 +263,10 @@ def register_device(current_user):
     """
     data = request.json or {}
     fcm_token = data.get('fcm_token')
-    android_id = data.get('android_id') 
+    device_id = data.get('device_id') or data.get('android_id') 
+    platform = str(data.get('platform') or 'android').lower().strip()
+    if platform not in ['android', 'ios']:
+        platform = 'android'
 
     if not fcm_token:
         return jsonify({'error': 'Missing fcm_token'}), 400
@@ -282,38 +289,40 @@ def register_device(current_user):
 
     device = None
 
-    if android_id:
-        # Modern App Logic (Version 9+)
-        # We look for a device record belonging to THIS user with THIS android_id
+    if device_id:
+        # Modern App Logic (Version 9+ and iOS)
+        # We look for a device record belonging to THIS user with THIS device_id and platform
         device = session.query(Device).filter_by(
             user_id=current_user.id,
-            android_id=android_id
+            android_id=device_id,
+            platform=platform
         ).first()
 
         if device:
             # Update existing record for this user
             if device.fcm_token != fcm_token:
                 device.fcm_token = fcm_token
-                logging.info(f"[API] Refreshed FCM token for existing device (Android ID: {android_id}) for user {current_user.id}")
+                logging.info(f"[API] Refreshed FCM token for existing device ({platform.capitalize()} ID: {device_id}) for user {current_user.id}")
         else:
             # Create new record
             device = Device(
                 fcm_token=fcm_token, 
                 user_id=current_user.id, 
-                android_id=android_id
+                android_id=device_id,
+                platform=platform
             )
             session.add(device)
-            logging.info(f"[API] Registered new device (Android ID: {android_id}) for user {current_user.id}")
+            logging.info(f"[API] Registered new device ({platform.capitalize()} ID: {device_id}) for user {current_user.id}")
     
     else:
         # Legacy Logic (< Version 9)
         # We look for a device by token belonging to THIS user (since we pruned others above)
-        device = session.query(Device).filter_by(fcm_token=fcm_token, user_id=current_user.id).first()
+        device = session.query(Device).filter_by(fcm_token=fcm_token, user_id=current_user.id, platform=platform).first()
         
         if not device:
-            device = Device(fcm_token=fcm_token, user_id=current_user.id)
+            device = Device(fcm_token=fcm_token, user_id=current_user.id, platform=platform)
             session.add(device)
-            logging.info(f"[API] Registered new device (legacy) for user {current_user.id}")
+            logging.info(f"[API] Registered new device (legacy {platform}) for user {current_user.id}")
 
     session.commit()
     return jsonify({'message': 'Device registered successfully'}), 201

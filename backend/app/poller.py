@@ -123,8 +123,11 @@ def _extract_ap_room_id(url_string):
     return None
 
 
-async def send_push_notifications(notifications, device_tokens, loop):
-    firebase_app = get_firebase_app()
+async def send_push_notifications(notifications, device_tokens, loop, platform='android'):
+    platform = (platform or 'android').lower().strip()
+    if platform not in ['android', 'ios']:
+        platform = 'android'
+    firebase_app = get_firebase_app(platform=platform)
     if not firebase_app or not notifications or not device_tokens: return
 
     from firebase_admin import messaging
@@ -132,7 +135,7 @@ async def send_push_notifications(notifications, device_tokens, loop):
     messages = []
     for content in notifications:
         try:
-            logging.info(f"[NOTIFIER] Preparing notification for {len(device_tokens)} devices. Title: {content['title']} | Body: {content['body']}")
+            logging.info(f"[NOTIFIER] Preparing {platform} notification for {len(device_tokens)} devices. Title: {content['title']} | Body: {content['body']}")
         except Exception as e:
             logging.error(f"[NOTIFIER] Error creating log message: {e}")
             
@@ -145,12 +148,32 @@ async def send_push_notifications(notifications, device_tokens, loop):
                 data_payload['bundle_type'] = content['type']
 
         for token in device_tokens:
-            android_config = messaging.AndroidConfig(priority='high')
-            
+            android_config = None
+            apns_config = None
+
+            if platform == 'android':
+                android_config = messaging.AndroidConfig(priority='high')
+            elif platform == 'ios':
+                apns_config = messaging.APNSConfig(
+                    headers={'apns-priority': '10'},
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            alert=messaging.ApsAlert(
+                                title=content['title'],
+                                body=content['body']
+                            ),
+                            sound='default',
+                            badge=1,
+                            content_available=True
+                        )
+                    )
+                )
+
             messages.append(messaging.Message(
                 notification=messaging.Notification(title=content['title'], body=content['body']),
                 token=token,
                 android=android_config,
+                apns=apns_config,
                 data=data_payload if data_payload else None
             ))
 
@@ -159,8 +182,8 @@ async def send_push_notifications(notifications, device_tokens, loop):
     for i in range(0, len(messages), 10):
         chunk = messages[i:i + 10]
         try:
-            logging.info(f"[FCM] Sending a chunk of {len(chunk)} messages...")
-            response = await loop.run_in_executor(None, lambda: messaging.send_each(chunk))
+            logging.info(f"[FCM] Sending a chunk of {len(chunk)} messages for {platform}...")
+            response = await loop.run_in_executor(None, lambda: messaging.send_each(chunk, app=firebase_app))
             
             unregistered_tokens = []
             for idx, res in enumerate(response.responses):
@@ -1162,12 +1185,15 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         if notifications_to_send:
             devices_to_notify = session.query(Device).filter(Device.user_id.in_(notifications_to_send.keys())).all()
             tokens_by_user = {}
-            for device in devices_to_notify: 
-                tokens_by_user.setdefault(device.user_id, []).append(device.fcm_token)
+            for device in devices_to_notify:
+                platform = (device.platform or 'android').lower().strip()
+                if platform not in ['android', 'ios']:
+                    platform = 'android'
+                tokens_by_user.setdefault(device.user_id, {}).setdefault(platform, []).append(device.fcm_token)
 
             for user_id, raw_notifs in notifications_to_send.items():
                 user_tokens = tokens_by_user.get(user_id)
-                if user_tokens:
+                if user_tokens and any(user_tokens.values()):
                     user_prefs = users_by_id.get(user_id)
                     
                     # Dedupe first
@@ -1516,7 +1542,13 @@ async def run_room_poll(room_info, loop):
         if notifications_to_send:
             for user_id, data in notifications_to_send.items():
                 logging.info(f"[NOTIFY] Sending {len(data['notifications'])} notification(s) to user {user_id}")
-                await send_push_notifications(data['notifications'], data['tokens'], loop)
+                tokens_data = data['tokens']
+                if isinstance(tokens_data, dict):
+                    for platform, tokens in tokens_data.items():
+                        if tokens:
+                            await send_push_notifications(data['notifications'], tokens, loop, platform=platform)
+                else:
+                    await send_push_notifications(data['notifications'], tokens_data, loop, platform='android')
 
     except Exception as e:
         logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Error in run_room_poll!", exc_info=True)
@@ -1566,7 +1598,13 @@ async def run_cheese_poll(room_info, loop):
     if notifications_payload:
         for user_id, data in notifications_payload.items():
             logging.info(f"[CHEESE_NOTIFY] Sending {len(data['notifications'])} to user {user_id}")
-            await send_push_notifications(data['notifications'], data['tokens'], loop)
+            tokens_data = data['tokens']
+            if isinstance(tokens_data, dict):
+                for platform, tokens in tokens_data.items():
+                    if tokens:
+                        await send_push_notifications(data['notifications'], tokens, loop, platform=platform)
+            else:
+                await send_push_notifications(data['notifications'], tokens_data, loop, platform='android')
 
 def db_read_room_poll_state(db_id):
     session = Session()
