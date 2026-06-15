@@ -149,8 +149,8 @@ Once your iOS app retrieves the FCM token and the IDFV, send them to the backend
   ```json
   [
     {
-      "id": 14, // This is the database Room/Subscription ID (<subscription_id>)
-      "room_id": "YOUR_ROOM_UUID", // This is the Archipelago UUID
+      "id": 14,
+      "room_id": "YOUR_ROOM_UUID",
       "alias": "My AP Co-op Game",
       "host": "archipelago.gg:38291",
       "status": "active",
@@ -314,8 +314,8 @@ When a push notification is delivered via FCM to iOS, it will contain standard n
     "badge": 1,
     "content-available": 1
   },
-  "bundled_items": "[{\"item_id\": 12345, \"loc_id\": 67890}]", // JSON serialized string of items
-  "bundle_type": "item_progression" // e.g. item_progression, item_useful, hint, player_finish
+  "bundled_items": "[{\"item_id\": 12345, \"loc_id\": 67890}]",
+  "bundle_type": "item_progression"
 }
 ```
 Use the `bundle_type` and `bundled_items` keys to load the notification details context inside the iOS app when the notification is tapped.

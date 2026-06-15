@@ -264,7 +264,7 @@ def register_device(current_user):
     data = request.json or {}
     fcm_token = data.get('fcm_token')
     device_id = data.get('device_id') or data.get('android_id') 
-    platform = (data.get('platform') or 'android').lower().strip()
+    platform = str(data.get('platform') or 'android').lower().strip()
     if platform not in ['android', 'ios']:
         platform = 'android'
 

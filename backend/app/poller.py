@@ -125,6 +125,8 @@ def _extract_ap_room_id(url_string):
 
 async def send_push_notifications(notifications, device_tokens, loop, platform='android'):
     platform = (platform or 'android').lower().strip()
+    if platform not in ['android', 'ios']:
+        platform = 'android'
     firebase_app = get_firebase_app(platform=platform)
     if not firebase_app or not notifications or not device_tokens: return
 
