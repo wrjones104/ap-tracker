@@ -11,14 +11,14 @@ Follow these 4 steps to get notifications functioning on your app using standard
 ### Step 1: Authenticate on App Launch
 Request a persistent guest access token when the app first starts:
 ```bash
-curl -X POST https://your-backend.com/auth/guest
+curl -X POST https://archipelagoalerts.com/auth/guest
 ```
 **Action**: Save the returned JWT `"token"`. You must pass this token in the `Authorization: Bearer <JWT>` header on all subsequent calls. Note that guest tokens are exceptionally long-lived, lasting 730 days (2 years).
 
 ### Step 2: Register the Device Token
 Get the **FCM token** from the Firebase SDK, retrieve the iOS **IDFV** (Identifier for Vendor) as a raw string, and register the device platform context:
 ```bash
-curl -X POST https://your-backend.com/devices \
+curl -X POST https://archipelagoalerts.com/devices \
   -H "Authorization: Bearer <JWT>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -31,7 +31,7 @@ curl -X POST https://your-backend.com/devices \
 ### Step 3: Subscribe to a Room
 Subscribe to an active Archipelago room URL. Note that success yields a `201 Created` status code:
 ```bash
-curl -X POST https://your-backend.com/rooms \
+curl -X POST https://archipelagoalerts.com/rooms \
   -H "Authorization: Bearer <JWT>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -46,7 +46,7 @@ Call `GET /rooms` to fetch your active user subscriptions. The returned `id` fie
 
 Update the list of player slot IDs you want to monitor:
 ```bash
-curl -X PUT https://your-backend.com/rooms/<subscription_id>/slots \
+curl -X PUT https://archipelagoalerts.com/rooms/<subscription_id>/slots \
   -H "Authorization: Bearer <JWT>" \
   -H "Content-Type: application/json" \
   -d '{
