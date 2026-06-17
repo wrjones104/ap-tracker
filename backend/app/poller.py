@@ -635,46 +635,16 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                         val = getattr(slot_prefs, attr)
                     return val
 
-                suppress_own = get_pref('suppress_own_events', 'suppress_own_events_default')
-                suppress_self = get_pref('suppress_self_found', 'suppress_self_found_default')
-                should_suppress_connected = get_pref('suppress_connected', 'suppress_connected_default')
-                
-                if should_suppress_connected and (rid in connected_slots_set):
-                    logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Slot {rid} is connected.")
-                    continue
-                
                 remove_emojis = get_pref('remove_emojis', 'remove_emojis_default')
 
-                # 2. Suppression Logic
-                is_from_self = (rid == send_id)
-                
-                if is_from_self:
-                    if suppress_self:
-                        logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Self-found item (Slot {rid}).")
-                        continue
-                elif send_id in tracked_slots:
-                    if suppress_own:
-                        logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Cross-slot item (From {send_id} to {rid}).")
-                        continue
-                
-                room_alias = aliases_by_user.get(user_id, "Unknown Room")
-                receiver_alias = short_name_map.get(rid, f"Slot {rid}")
-                receiver_original = full_name_map.get(rid, f"Slot {rid}")
-
-                # Check Finished Suppression
-                wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
-                if rid in finished_player_ids and not wants_finished_notifs:
-                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed item for Slot {rid} (Slot Finished).")
-                    continue
-
-                # Check Backfill Suppression
+                # Check Backfill Suppression (always respected, even for milestones)
                 if (user_id, rid) in backfill_check_set:
                     logging.debug(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
                     continue
 
                 normalized_item_name = item_name.lower().strip()
 
-                # --- THRESHOLD CHECK ---
+                # --- THRESHOLD CHECK (evaluated early so milestones bypass preference suppressions) ---
                 is_threshold_hit = False
                 current_total_count = 0
                 threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
@@ -692,6 +662,38 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                     if not is_threshold_hit:
                         logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} item '{item_name}' count ({current_total_count}) did not match milestones {threshold}. Suppressing.")
                         continue
+
+                # --- PREFERENCE-BASED SUPPRESSION (skipped for milestone hits) ---
+                if not is_threshold_hit:
+                    suppress_own = get_pref('suppress_own_events', 'suppress_own_events_default')
+                    suppress_self = get_pref('suppress_self_found', 'suppress_self_found_default')
+                    should_suppress_connected = get_pref('suppress_connected', 'suppress_connected_default')
+
+                    if should_suppress_connected and (rid in connected_slots_set):
+                        logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Slot {rid} is connected.")
+                        continue
+
+                    # Suppression Logic
+                    is_from_self = (rid == send_id)
+
+                    if is_from_self:
+                        if suppress_self:
+                            logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Self-found item (Slot {rid}).")
+                            continue
+                    elif send_id in tracked_slots:
+                        if suppress_own:
+                            logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Cross-slot item (From {send_id} to {rid}).")
+                            continue
+
+                    # Check Finished Suppression
+                    wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
+                    if rid in finished_player_ids and not wants_finished_notifs:
+                        logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed item for Slot {rid} (Slot Finished).")
+                        continue
+
+                room_alias = aliases_by_user.get(user_id, "Unknown Room")
+                receiver_alias = short_name_map.get(rid, f"Slot {rid}")
+                receiver_original = full_name_map.get(rid, f"Slot {rid}")
 
                 # --- IGNORE LIST CHECK (Only evaluated if it's NOT a threshold milestone) ---
                 if not is_threshold_hit:
