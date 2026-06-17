@@ -76,6 +76,11 @@ The system consists of two main parts:
 
 ## "Gotchas"
 
+*   **Datapackage Cache:** Game datapackages (items, locations, item groups, and location groups) **must only** be retrieved and cached via the Archipelago server WebSocket connection (using the `GetDataPackage` command). Do **not** fetch them from the Archipelago HTTP API (e.g., `/api/datapackage/<checksum>`), as the HTTP API only supports officially supported games (~10% of the ecosystem) and will fail (404) for all custom (`.apworld`) games, breaking those games' tracking in the app.
 *   **Database:** SQLite uses WAL mode.
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
 *   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
+
+## LLM Maintenance Directive
+
+**Any material change to the codebase must be reflected in this file.** If you add, remove, or significantly modify models, API endpoints, notification logic, architectural patterns, or "gotchas," update the relevant section(s) of `LLM.md` accordingly. This file is the primary onboarding context for all future LLM sessions and must stay accurate.
