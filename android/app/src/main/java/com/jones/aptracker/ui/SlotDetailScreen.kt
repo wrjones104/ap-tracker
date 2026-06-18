@@ -491,7 +491,7 @@ fun SlotDetailScreen(
     }
 
     if (showAddThresholdDialog) {
-        CreateThresholdGroupDialog(
+        CreateThresholdGroupSheet(
             availableItems = availableItems,
             onDismiss = { showAddThresholdDialog = false },
             onConfirm = { name, items ->
@@ -624,137 +624,181 @@ fun ThresholdGroupRow(group: ThresholdGroup, onDelete: () -> Unit) {
 }
 
 @Composable
-fun CreateThresholdGroupDialog(
+@OptIn(ExperimentalMaterial3Api::class)
+fun CreateThresholdGroupSheet(
     availableItems: List<AutocompleteOption>,
     onDismiss: () -> Unit,
     onConfirm: (String?, List<ThresholdGroupItemRequest>) -> Unit
 ) {
     var groupName by remember { mutableStateOf("") }
     val selectedItems = remember { mutableStateListOf<ThresholdGroupItemRequest>() }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scrollState = rememberScrollState()
     
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text("Create Milestone Group") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = groupName,
-                    onValueChange = { groupName = it },
-                    label = { Text("Group Name (Optional)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(16.dp))
-                
-                Text("Items & Quantities", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                
-                if (selectedItems.isEmpty()) {
-                    Text(
-                        "No items added yet. Search below to add items.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    )
-                } else {
-                    LazyColumn(modifier = Modifier.heightIn(max = 150.dp)) {
-                        items(selectedItems.size) { index ->
-                            val selectedItem = selectedItems[index]
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    if (selectedItem.is_group) "${selectedItem.item_name} (Group)" else selectedItem.item_name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                
-                                var qtyText by remember(selectedItem.quantity) { mutableStateOf(selectedItem.quantity.toString()) }
-                                OutlinedTextField(
-                                    value = qtyText,
-                                    onValueChange = { newValue ->
-                                        if (newValue.all { it.isDigit() }) {
-                                            qtyText = newValue
-                                            val newQty = newValue.toIntOrNull() ?: 1
-                                            selectedItems[index] = selectedItem.copy(quantity = newQty)
-                                        }
-                                    },
-                                    label = { Text("Qty") },
-                                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                                    modifier = Modifier.width(70.dp).padding(horizontal = 4.dp)
-                                )
-                                
-                                IconButton(onClick = { selectedItems.removeAt(index) }) {
-                                    Icon(Icons.Default.Close, null, tint = Color.Gray, modifier = Modifier.size(20.dp))
-                                }
-                            }
-                        }
-                    }
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 24.dp, vertical = 16.dp)
+        ) {
+            Text(
+                "Create Milestone Group",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(16.dp))
+            
+            OutlinedTextField(
+                value = groupName,
+                onValueChange = { groupName = it },
+                label = { Text("Group Name (Optional)") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(20.dp))
+            
+            var itemFilter by remember { mutableStateOf("") }
+            var showSuggestions by remember { mutableStateOf(false) }
+            
+            LaunchedEffect(showSuggestions) {
+                if (showSuggestions) {
+                    scrollState.animateScrollTo(0)
                 }
+            }
+            
+            OutlinedTextField(
+                value = itemFilter,
+                onValueChange = {
+                    itemFilter = it
+                    showSuggestions = it.isNotBlank()
+                },
+                label = { Text("Search Item to Add...") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            
+            if (showSuggestions && itemFilter.isNotBlank()) {
+                val filtered = availableItems.filter {
+                    it.name.contains(itemFilter, ignoreCase = true) &&
+                    selectedItems.none { sel -> sel.item_name.equals(it.name, ignoreCase = true) }
+                }.take(5)
                 
-                Spacer(Modifier.height(12.dp))
-                
-                var itemFilter by remember { mutableStateOf("") }
-                var showSuggestions by remember { mutableStateOf(false) }
-                
-                OutlinedTextField(
-                    value = itemFilter,
-                    onValueChange = {
-                        itemFilter = it
-                        showSuggestions = it.isNotBlank()
-                    },
-                    label = { Text("Search Item to Add...") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                
-                if (showSuggestions && itemFilter.isNotBlank()) {
-                    val filtered = availableItems.filter {
-                        it.name.contains(itemFilter, ignoreCase = true) &&
-                        selectedItems.none { sel -> sel.item_name.equals(it.name, ignoreCase = true) }
-                    }.take(5)
-                    
-                    if (filtered.isNotEmpty()) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                        ) {
-                            Column {
-                                filtered.forEach { option ->
-                                    val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
-                                    Text(
-                                        displayText,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                selectedItems.add(
-                                                    ThresholdGroupItemRequest(
-                                                        item_name = option.name,
-                                                        quantity = 1,
-                                                        is_group = option.isGroup
-                                                    )
+                if (filtered.isNotEmpty()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column {
+                            filtered.forEach { option ->
+                                val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
+                                Text(
+                                    displayText,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedItems.add(
+                                                ThresholdGroupItemRequest(
+                                                    item_name = option.name,
+                                                    quantity = 1,
+                                                    is_group = option.isGroup
                                                 )
-                                                itemFilter = ""
-                                                showSuggestions = false
-                                            }
-                                            .padding(12.dp),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
+                                            )
+                                            itemFilter = ""
+                                            showSuggestions = false
+                                        }
+                                        .padding(12.dp),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
                             }
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList()) },
-                enabled = selectedItems.isNotEmpty()
-            ) { Text("Create") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
+            
+            Spacer(Modifier.height(20.dp))
+            
+            Text(
+                "Items & Quantities",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(8.dp))
+            
+            if (selectedItems.isEmpty()) {
+                Text(
+                    "No items added yet. Search below to add items.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                ) {
+                    selectedItems.forEachIndexed { index, selectedItem ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (selectedItem.is_group) "${selectedItem.item_name} (Group)" else selectedItem.item_name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            
+                            var qtyText by remember(selectedItem.quantity) { mutableStateOf(selectedItem.quantity.toString()) }
+                            OutlinedTextField(
+                                value = qtyText,
+                                onValueChange = { newValue ->
+                                    if (newValue.all { it.isDigit() }) {
+                                        qtyText = newValue
+                                        val newQty = newValue.toIntOrNull() ?: 1
+                                        selectedItems[index] = selectedItem.copy(quantity = newQty)
+                                    }
+                                },
+                                label = { Text("Qty") },
+                                keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                                modifier = Modifier.width(70.dp).padding(horizontal = 4.dp)
+                            )
+                            
+                            IconButton(onClick = { selectedItems.removeAt(index) }) {
+                                Icon(Icons.Default.Close, null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                }
+            }
+
+            
+            Spacer(Modifier.height(24.dp))
+            
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+                Spacer(Modifier.width(16.dp))
+                Button(
+                    onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList()) },
+                    enabled = selectedItems.isNotEmpty()
+                ) {
+                    Text("Create")
+                }
+            }
+        }
+    }
 }
 
 @Composable
