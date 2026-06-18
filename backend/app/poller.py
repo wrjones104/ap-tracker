@@ -945,17 +945,18 @@ def _evaluate_threshold_groups(session, room_db_id, room_uuid, game_checksums, g
             return notifications_by_user
     
     # 3. Batch-fetch item counts for all relevant slots
-    counts_by_slot = {}
-    for db_slot_id, info in evaluation_targets.items():
-        slot_id = info['slot_id']
+    counts_by_slot = {info['slot_id']: {} for info in evaluation_targets.values()}
+    slot_ids = list(counts_by_slot.keys())
+    if slot_ids:
         try:
-            counts = session.query(SlotItemCount).filter_by(
-                room_id=room_uuid, slot_id=slot_id
+            counts = session.query(SlotItemCount).filter(
+                SlotItemCount.room_id == room_uuid,
+                SlotItemCount.slot_id.in_(slot_ids)
             ).all()
-            counts_by_slot[slot_id] = {c.item_id: c.count for c in counts}
+            for c in counts:
+                counts_by_slot[c.slot_id][c.item_id] = c.count
         except Exception as e:
-            logging.error(f"[THRESHOLD_GROUP_ERROR] Failed to fetch counts for slot {slot_id}: {e}")
-            counts_by_slot[slot_id] = {}
+            logging.error(f"[THRESHOLD_GROUP_ERROR] Failed to batch fetch counts: {e}")
     
     # 4. Evaluate each group
     for db_slot_id, info in evaluation_targets.items():

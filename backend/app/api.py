@@ -2114,6 +2114,7 @@ def create_threshold_group(current_user, room_db_id, slot_id):
         session.add(group)
         session.flush()  # Get group.id
         
+        valid_items_count = 0
         for item_data in items_data:
             item_name = item_data.get('item_name', '').strip()
             quantity = item_data.get('quantity', 1)
@@ -2129,6 +2130,11 @@ def create_threshold_group(current_user, room_db_id, slot_id):
                 is_group=is_group
             )
             session.add(group_item)
+            valid_items_count += 1
+            
+        if valid_items_count == 0:
+            session.rollback()
+            return jsonify({'error': 'No valid items provided'}), 400
             
         session.commit()
         return jsonify({

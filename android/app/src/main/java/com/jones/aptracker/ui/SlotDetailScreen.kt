@@ -756,13 +756,16 @@ fun CreateThresholdGroupSheet(
                                 modifier = Modifier.weight(1f)
                             )
                             
-                            var qtyText by remember(selectedItem.quantity) { mutableStateOf(selectedItem.quantity.toString()) }
+                            var qtyText by remember(selectedItem.item_name) { mutableStateOf(selectedItem.quantity.toString()) }
                             OutlinedTextField(
                                 value = qtyText,
                                 onValueChange = { newValue ->
-                                    if (newValue.all { it.isDigit() }) {
+                                    if (newValue.isEmpty()) {
+                                        qtyText = ""
+                                        selectedItems[index] = selectedItem.copy(quantity = 0)
+                                    } else if (newValue.all { it.isDigit() }) {
                                         qtyText = newValue
-                                        val newQty = newValue.toIntOrNull() ?: 1
+                                        val newQty = newValue.toIntOrNull() ?: 0
                                         selectedItems[index] = selectedItem.copy(quantity = newQty)
                                     }
                                 },
@@ -792,7 +795,7 @@ fun CreateThresholdGroupSheet(
                 Spacer(Modifier.width(16.dp))
                 Button(
                     onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList()) },
-                    enabled = selectedItems.isNotEmpty()
+                    enabled = selectedItems.isNotEmpty() && selectedItems.all { it.quantity >= 1 }
                 ) {
                     Text("Create")
                 }

@@ -56,6 +56,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _thresholdGroups = MutableStateFlow<List<ThresholdGroup>>(emptyList())
     val thresholdGroups = _thresholdGroups.asStateFlow()
+    private var latestThresholdGroupsKey: Pair<Int, Int>? = null
 
     private val _availableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val availableItems = _availableItems.asStateFlow()
@@ -619,12 +620,21 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     // ============================================================================================
 
     fun fetchThresholdGroups(roomDbId: Int, slotId: Int) {
+        val requestKey = roomDbId to slotId
+        latestThresholdGroupsKey = requestKey
+        _thresholdGroups.value = emptyList()
         viewModelScope.launch {
             try {
                 val groups = RetrofitClient.instance.getThresholdGroups(roomDbId, slotId)
-                _thresholdGroups.value = groups
+                if (latestThresholdGroupsKey == requestKey) {
+                    _thresholdGroups.value = groups
+                }
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to fetch threshold groups", e)
+                if (latestThresholdGroupsKey == requestKey) {
+                    _thresholdGroups.value = emptyList()
+                    _errorMessage.value = "Failed to load milestone groups."
+                }
             }
         }
     }

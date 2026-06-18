@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from sqlalchemy import text
-from app.models import Base
+from app.models import Base, ThresholdGroup, ThresholdGroupItem
 from app import engine, Session
 
 
@@ -46,16 +46,21 @@ def migrate():
                 # Create a group named after the item
                 group_name = item_name.strip()
                 
-                session.execute(text(
-                    "INSERT INTO threshold_groups (user_tracked_slot_id, name, is_triggered) VALUES (:slot_id, :name, 0)"
-                ), {"slot_id": slot_db_id, "name": group_name})
+                group = ThresholdGroup(
+                    user_tracked_slot_id=slot_db_id,
+                    name=group_name,
+                    is_triggered=False
+                )
+                session.add(group)
+                session.flush()  # Populates group.id automatically via SQLAlchemy returning/lastrowid abstraction
                 
-                # Get the ID of the group we just inserted
-                group_id = session.execute(text("SELECT last_insert_rowid()")).scalar()
-                
-                session.execute(text(
-                    "INSERT INTO threshold_group_items (group_id, item_name, quantity, is_group) VALUES (:gid, :item, :qty, 0)"
-                ), {"gid": group_id, "item": item_name.strip(), "qty": threshold_count})
+                group_item = ThresholdGroupItem(
+                    group_id=group.id,
+                    item_name=item_name.strip(),
+                    quantity=threshold_count,
+                    is_group=False
+                )
+                session.add(group_item)
             
             session.commit()
             print(f"[MIGRATE] Successfully migrated {len(old_rows)} threshold(s) into groups.")
