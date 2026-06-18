@@ -48,7 +48,9 @@ import com.jones.aptracker.network.ConnectionStatus
 import com.jones.aptracker.network.RoomDatapackage
 import com.jones.aptracker.network.TrackedSlotDetail
 import com.jones.aptracker.network.UserProfile
-import com.jones.aptracker.network.SlotItemThreshold
+import com.jones.aptracker.network.ThresholdGroup
+import com.jones.aptracker.network.ThresholdGroupItem
+import com.jones.aptracker.network.ThresholdGroupItemRequest
 import com.jones.aptracker.network.AutocompleteOption
 import com.jones.aptracker.ui.theme.*
 import java.time.Duration
@@ -117,12 +119,12 @@ fun SlotDetailScreen(
     }
 
     LaunchedEffect(roomDbId, slotId) {
-        userViewModel.fetchSlotThresholds(roomDbId, slotId)
+        userViewModel.fetchThresholdGroups(roomDbId, slotId)
         userViewModel.fetchAvailableItems(roomDbId, slotId)
         textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
     }
 
-    val thresholds by userViewModel.slotThresholds.collectAsState()
+    val thresholdGroups by userViewModel.thresholdGroups.collectAsState()
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -225,7 +227,7 @@ fun SlotDetailScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Item Notification Thresholds", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                    Text("Milestone Groups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
                     TextButton(onClick = { showAddThresholdDialog = true }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
@@ -241,20 +243,20 @@ fun SlotDetailScreen(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                        if (thresholds.isEmpty()) {
+                        if (thresholdGroups.isEmpty()) {
                             Text(
-                                "No thresholds set",
+                                "No milestone groups set",
                                 modifier = Modifier.padding(16.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color.Gray
                             )
                         } else {
-                            thresholds.forEachIndexed { index, threshold ->
-                                ThresholdRow(
-                                    threshold = threshold,
-                                    onDelete = { userViewModel.deleteSlotThreshold(roomDbId, slotId, threshold.id) }
+                            thresholdGroups.forEachIndexed { index, group ->
+                                ThresholdGroupRow(
+                                    group = group,
+                                    onDelete = { userViewModel.deleteThresholdGroup(roomDbId, slotId, group.id) }
                                 )
-                                if (index < thresholds.size - 1) {
+                                if (index < thresholdGroups.size - 1) {
                                     HorizontalDivider(
                                         modifier = Modifier.padding(horizontal = 16.dp),
                                         color = Color.DarkGray.copy(alpha = 0.5f)
@@ -489,11 +491,11 @@ fun SlotDetailScreen(
     }
 
     if (showAddThresholdDialog) {
-        AddThresholdDialog(
+        CreateThresholdGroupDialog(
             availableItems = availableItems,
             onDismiss = { showAddThresholdDialog = false },
-            onConfirm = { itemName, threshold ->
-                userViewModel.saveSlotThreshold(roomDbId, slotId, itemName, threshold)
+            onConfirm = { name, items ->
+                userViewModel.createThresholdGroup(roomDbId, slotId, name, items)
                 showAddThresholdDialog = false
             }
         )
@@ -573,7 +575,7 @@ fun ActionCard(icon: ImageVector, title: String, subtitle: String, onClick: () -
 }
 
 @Composable
-fun ThresholdRow(threshold: SlotItemThreshold, onDelete: () -> Unit) {
+fun ThresholdGroupRow(group: ThresholdGroup, onDelete: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -581,8 +583,39 @@ fun ThresholdRow(threshold: SlotItemThreshold, onDelete: () -> Unit) {
         Icon(Icons.Outlined.Notifications, null, modifier = Modifier.size(20.dp), tint = Color.Gray)
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(threshold.item_name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Notify at ${threshold.threshold} received", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    group.name ?: "Unnamed Milestone",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (group.is_triggered) {
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            "Triggered",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            val itemsText = group.items.joinToString(", ") { item ->
+                val groupSuffix = if (item.is_group) " (Group)" else ""
+                "${item.quantity}× ${item.item_name}$groupSuffix"
+            }
+            Text(
+                itemsText,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
         }
         IconButton(onClick = onDelete) {
             Icon(Icons.Default.Delete, null, tint = Color(0xFFCF6679), modifier = Modifier.size(20.dp))
@@ -591,49 +624,134 @@ fun ThresholdRow(threshold: SlotItemThreshold, onDelete: () -> Unit) {
 }
 
 @Composable
-fun AddThresholdDialog(availableItems: List<AutocompleteOption>, onDismiss: () -> Unit, onConfirm: (String, Int) -> Unit) {
-    var filter by remember { mutableStateOf("") }
-    var selectedItem by remember { mutableStateOf("") }
-    var threshold by remember { mutableStateOf("1") }
+fun CreateThresholdGroupDialog(
+    availableItems: List<AutocompleteOption>,
+    onDismiss: () -> Unit,
+    onConfirm: (String?, List<ThresholdGroupItemRequest>) -> Unit
+) {
+    var groupName by remember { mutableStateOf("") }
+    val selectedItems = remember { mutableStateListOf<ThresholdGroupItemRequest>() }
     
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add Threshold") },
+        title = { Text("Create Milestone Group") },
         text = {
             Column {
                 OutlinedTextField(
-                    value = filter, 
-                    onValueChange = { filter = it }, 
-                    label = { Text("Search Item") },
+                    value = groupName,
+                    onValueChange = { groupName = it },
+                    label = { Text("Group Name (Optional)") },
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(16.dp))
+                
+                Text("Items & Quantities", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
-                LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
-                    val filtered = availableItems.filter { it.name.contains(filter, ignoreCase = true) }.take(50)
-                    items(filtered) { item ->
-                        val displayText = if (item.isGroup) "${item.name} (Group)" else item.name
-                        Text(
-                            displayText, 
-                            modifier = Modifier.fillMaxWidth().clickable { selectedItem = item.name; filter = item.name }.padding(12.dp),
-                            color = if (selectedItem == item.name) MaterialTheme.colorScheme.primary else Color.Unspecified
-                        )
+                
+                if (selectedItems.isEmpty()) {
+                    Text(
+                        "No items added yet. Search below to add items.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 150.dp)) {
+                        items(selectedItems.size) { index ->
+                            val selectedItem = selectedItems[index]
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    if (selectedItem.is_group) "${selectedItem.item_name} (Group)" else selectedItem.item_name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                
+                                var qtyText by remember(selectedItem.quantity) { mutableStateOf(selectedItem.quantity.toString()) }
+                                OutlinedTextField(
+                                    value = qtyText,
+                                    onValueChange = { newValue ->
+                                        if (newValue.all { it.isDigit() }) {
+                                            qtyText = newValue
+                                            val newQty = newValue.toIntOrNull() ?: 1
+                                            selectedItems[index] = selectedItem.copy(quantity = newQty)
+                                        }
+                                    },
+                                    label = { Text("Qty") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                                    modifier = Modifier.width(70.dp).padding(horizontal = 4.dp)
+                                )
+                                
+                                IconButton(onClick = { selectedItems.removeAt(index) }) {
+                                    Icon(Icons.Default.Close, null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                        }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
-                TextField(
-                    value = threshold,
-                    onValueChange = { if (it.all { char -> char.isDigit() }) threshold = it },
-                    label = { Text("Notify at count") },
-                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                
+                Spacer(Modifier.height(12.dp))
+                
+                var itemFilter by remember { mutableStateOf("") }
+                var showSuggestions by remember { mutableStateOf(false) }
+                
+                OutlinedTextField(
+                    value = itemFilter,
+                    onValueChange = {
+                        itemFilter = it
+                        showSuggestions = it.isNotBlank()
+                    },
+                    label = { Text("Search Item to Add...") },
                     modifier = Modifier.fillMaxWidth()
                 )
+                
+                if (showSuggestions && itemFilter.isNotBlank()) {
+                    val filtered = availableItems.filter {
+                        it.name.contains(itemFilter, ignoreCase = true) &&
+                        selectedItems.none { sel -> sel.item_name.equals(it.name, ignoreCase = true) }
+                    }.take(5)
+                    
+                    if (filtered.isNotEmpty()) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Column {
+                                filtered.forEach { option ->
+                                    val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
+                                    Text(
+                                        displayText,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                selectedItems.add(
+                                                    ThresholdGroupItemRequest(
+                                                        item_name = option.name,
+                                                        quantity = 1,
+                                                        is_group = option.isGroup
+                                                    )
+                                                )
+                                                itemFilter = ""
+                                                showSuggestions = false
+                                            }
+                                            .padding(12.dp),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { if (selectedItem.isNotBlank()) onConfirm(selectedItem, threshold.toIntOrNull() ?: 1) },
-                enabled = selectedItem.isNotBlank()
-            ) { Text("Add") }
+                onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList()) },
+                enabled = selectedItems.isNotEmpty()
+            ) { Text("Create") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )

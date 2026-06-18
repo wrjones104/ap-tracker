@@ -66,24 +66,24 @@ interface ApiService {
     @GET("users/me/tracked-slots")
     suspend fun getUserTrackedSlots(): List<RoomWithTrackedSlots>
 
-    @GET("rooms/{id}/slots/{slot_id}/thresholds")
-    suspend fun getSlotThresholds(
+    @GET("rooms/{id}/slots/{slot_id}/threshold-groups")
+    suspend fun getThresholdGroups(
         @Path("id") roomId: Int,
         @Path("slot_id") slotId: Int
-    ): List<SlotItemThreshold>
+    ): List<ThresholdGroup>
 
-    @POST("rooms/{id}/slots/{slot_id}/thresholds")
-    suspend fun updateSlotThreshold(
+    @POST("rooms/{id}/slots/{slot_id}/threshold-groups")
+    suspend fun createThresholdGroup(
         @Path("id") roomId: Int,
         @Path("slot_id") slotId: Int,
-        @Body request: UpdateThresholdRequest
+        @Body request: CreateThresholdGroupRequest
     ): Response<Unit>
 
-    @DELETE("rooms/{id}/slots/{slot_id}/thresholds/{threshold_id}")
-    suspend fun deleteSlotThreshold(
+    @DELETE("rooms/{id}/slots/{slot_id}/threshold-groups/{group_id}")
+    suspend fun deleteThresholdGroup(
         @Path("id") roomId: Int,
         @Path("slot_id") slotId: Int,
-        @Path("threshold_id") thresholdId: Int
+        @Path("group_id") groupId: Int
     ): Response<Unit>
 
     @GET("rooms/{id}/slots/{slot_id}/items")
@@ -398,10 +398,29 @@ data class SnoozeResponse(
     val snooze_until: String?
 )
 
-data class SlotItemThreshold(
+data class ThresholdGroup(
     val id: Int,
+    val name: String?,
+    val is_triggered: Boolean = false,
+    val items: List<ThresholdGroupItem>
+)
+
+data class ThresholdGroupItem(
+    val id: Int? = null,
     val item_name: String,
-    val threshold: Int
+    val quantity: Int,
+    val is_group: Boolean = false
+)
+
+data class CreateThresholdGroupRequest(
+    val name: String?,
+    val items: List<ThresholdGroupItemRequest>
+)
+
+data class ThresholdGroupItemRequest(
+    val item_name: String,
+    val quantity: Int,
+    val is_group: Boolean = false
 )
 
 data class RoomDatapackage(
@@ -410,11 +429,6 @@ data class RoomDatapackage(
     val item_flags: Map<String, Int> = emptyMap(),
     val locations: Map<String, String> = emptyMap(),
     val slot_to_checksum: Map<String, String> = emptyMap()
-)
-
-data class UpdateThresholdRequest(
-    val item_name: String,
-    val threshold: Int
 )
 
 data class HistorySyncRequest(

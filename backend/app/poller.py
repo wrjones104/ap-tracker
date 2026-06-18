@@ -23,7 +23,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from . import Session, get_firebase_app, process, is_sqlite
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
-    DatapackageCache, NotifiedItem, NotifiedHint, SlotItemThreshold, SlotItemCount
+    DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
 from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id
 
@@ -512,7 +512,7 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 
     return hints_to_add, new_hints_for_notify, cache_keys_to_fetch, just_found_hint_item_loc_pairs
 
-def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids, connected_slots_set, item_counts):  
+def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids, connected_slots_set, item_counts):  
     """
     Fetches names from DB in chunks and constructs final notification payloads.
     Applies filtering, backfill checks, ignore lists, alias/condensed formatting, and snooze logic.
@@ -523,23 +523,26 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     # We capture the current time once at the start of the batch for consistent comparison
     now_utc = datetime.now(timezone.utc)
 
-    # 0. Pre-fetch Thresholds for all slots in this batch
-    thresholds_lookup = {}
+    # 0. Pre-fetch Threshold Groups for all slots in this batch
     all_db_slot_ids = []
     for user_slots in prefs_by_user_slot.values():
         for slot_obj in user_slots.values():
             all_db_slot_ids.append(slot_obj.id)
     
+    groups_by_slot = {}  # user_tracked_slot_id -> [ThresholdGroup]
     if all_db_slot_ids:
         try:
-            thresholds = session.query(SlotItemThreshold).filter(SlotItemThreshold.user_tracked_slot_id.in_(all_db_slot_ids)).all()
-            for t in thresholds:
-                key = (t.user_tracked_slot_id, t.item_name.lower().strip())
-                if key not in thresholds_lookup:
-                    thresholds_lookup[key] = set()
-                thresholds_lookup[key].add(t.threshold)
+            from sqlalchemy.orm import selectinload
+            groups = session.query(ThresholdGroup).options(
+                selectinload(ThresholdGroup.items)
+            ).filter(
+                ThresholdGroup.user_tracked_slot_id.in_(all_db_slot_ids),
+                ThresholdGroup.is_triggered == False
+            ).all()
+            for g in groups:
+                groups_by_slot.setdefault(g.user_tracked_slot_id, []).append(g)
         except Exception as e:
-            logging.error(f"[POLLER_THRESHOLD_ERROR] Failed to fetch thresholds: {e}")
+            logging.error(f"[POLLER_THRESHOLD_ERROR] Failed to fetch threshold groups: {e}")
 
     # 0.5. Pre-fetch group memberships for the checksums involved in this poll batch
     group_members_lookup = set()
@@ -644,27 +647,8 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
 
                 normalized_item_name = item_name.lower().strip()
 
-                # --- THRESHOLD CHECK (evaluated early so milestones bypass preference suppressions) ---
-                is_threshold_hit = False
-                current_total_count = 0
-                threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
-                if threshold:
-                    try:
-                        current_total_count = item_data.get('current_total_count', 0)
-                        logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': Total={current_total_count}, Thresholds={threshold}")
-
-                        if current_total_count in threshold:
-                            is_threshold_hit = True
-                            logging.info(f"[THRESHOLD_HIT] User {user_id}: Slot {rid} reached threshold milestone {current_total_count} for '{item_name}'. Notifying!")
-                    except Exception as e:
-                        logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to check threshold: {e}")
-
-                    if not is_threshold_hit:
-                        logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} item '{item_name}' count ({current_total_count}) did not match milestones {threshold}. Suppressing.")
-                        continue
-
-                # --- PREFERENCE-BASED SUPPRESSION (skipped for milestone hits) ---
-                if not is_threshold_hit:
+                # --- PREFERENCE-BASED SUPPRESSION ---
+                if True:
                     suppress_own = get_pref('suppress_own_events', 'suppress_own_events_default')
                     suppress_self = get_pref('suppress_self_found', 'suppress_self_found_default')
                     should_suppress_connected = get_pref('suppress_connected', 'suppress_connected_default')
@@ -695,8 +679,8 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 receiver_alias = short_name_map.get(rid, f"Slot {rid}")
                 receiver_original = full_name_map.get(rid, f"Slot {rid}")
 
-                # --- IGNORE LIST CHECK (Only evaluated if it's NOT a threshold milestone) ---
-                if not is_threshold_hit:
+                # --- IGNORE LIST CHECK ---
+                if True:
                     should_ignore = False
                     if user_prefs.ignore_items:
                         for ignore_rule in user_prefs.ignore_items:
@@ -746,14 +730,9 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 # Icons
                 icon_prog = "" if remove_emojis else "🏆 "
                 icon_useful = "" if remove_emojis else "✅ "
-                icon_milestone = "" if remove_emojis else "🚩 "
                 icon_bulb = "" if remove_emojis else "💡 "
                 
-                if is_threshold_hit:
-                    title_prefix = f"{icon_milestone}Milestone! {item_name} ({current_total_count})"
-                    item_type = "item_milestone"
-                    should_notify = True # Threshold milestones always notify
-                elif is_progression:
+                if is_progression:
                     title_prefix = f"{icon_prog}{item_name}"
                     item_type = "item_progression"
                     notify_override = slot_prefs.notify_progression
@@ -881,6 +860,201 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 
                 notifications_by_user.setdefault(user_id, []).append({
                     'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']
+                })
+    
+    # 4. Evaluate Threshold Groups
+    group_notifs = _evaluate_threshold_groups(
+        session, room_db_id, room_uuid, game_checksums,
+        groups_by_slot, new_items_for_notify,
+        users_by_id, prefs_by_user_slot, tracked_slots_by_user,
+        aliases_by_user, full_name_map, short_name_map,
+        backfill_check_set, now_utc
+    )
+    for uid, notif_list in group_notifs.items():
+        notifications_by_user.setdefault(uid, []).extend(notif_list)
+
+    return notifications_by_user
+
+
+def _evaluate_threshold_groups(session, room_db_id, room_uuid, game_checksums, groups_by_slot, new_items_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, now_utc):
+    """
+    Evaluates threshold groups for slots that received items in this batch.
+    For each untriggered group, checks if ALL item conditions are met (AND logic).
+    Supports both individual items and item_group expansion.
+    Returns notifications_by_user dict.
+    """
+    notifications_by_user = {}
+    
+    if not groups_by_slot or not new_items_for_notify:
+        return notifications_by_user
+    
+    # 1. Identify which (user_tracked_slot_id) received items and have groups to evaluate
+    evaluation_targets = {}  # user_tracked_slot_id -> {slot_id, game_checksum, user_id}
+    for item_data in new_items_for_notify:
+        rid = item_data['receiving_slot_id']
+        game_checksum = item_data.get('game_checksum')
+        
+        for user_id, tracked_slots in tracked_slots_by_user.items():
+            if rid in tracked_slots:
+                sp = prefs_by_user_slot.get(user_id, {}).get(rid)
+                if sp and sp.id in groups_by_slot:
+                    if sp.id not in evaluation_targets:
+                        evaluation_targets[sp.id] = {
+                            'slot_id': rid,
+                            'game_checksum': game_checksum,
+                            'user_id': user_id
+                        }
+    
+    if not evaluation_targets:
+        return notifications_by_user
+    
+    # 2. Batch-fetch name-to-ID maps and group expansions for involved checksums
+    all_checksums = set(info['game_checksum'] for info in evaluation_targets.values() if info['game_checksum'])
+    
+    name_to_id_by_checksum = {}
+    group_expansion_by_checksum = {}
+    
+    if all_checksums:
+        try:
+            # Name -> ID mapping (items only)
+            name_results = session.query(
+                DatapackageCache.checksum, DatapackageCache.entity_name, DatapackageCache.entity_id
+            ).filter(
+                DatapackageCache.checksum.in_(all_checksums),
+                DatapackageCache.entity_type == 'item'
+            ).all()
+            for chk, name, eid in name_results:
+                name_to_id_by_checksum.setdefault(chk, {})[name.lower().strip()] = eid
+            
+            # Group expansion: group_name -> set(member_item_names)
+            member_results = session.query(
+                DatapackageCache.checksum, DatapackageCache.entity_name
+            ).filter(
+                DatapackageCache.checksum.in_(all_checksums),
+                DatapackageCache.entity_type == 'item_group_member'
+            ).all()
+            for chk, member_key in member_results:
+                parsed_pair = None
+                try:
+                    parsed = json.loads(member_key)
+                    if isinstance(parsed, list) and len(parsed) == 2:
+                        parsed_pair = (parsed[0].lower().strip(), parsed[1].lower().strip())
+                except Exception:
+                    pass
+                if not parsed_pair and ':' in member_key:
+                    parts = member_key.split(':', 1)
+                    parsed_pair = (parts[0].lower().strip(), parts[1].lower().strip())
+                if parsed_pair:
+                    group_expansion_by_checksum.setdefault(chk, {}).setdefault(
+                        parsed_pair[0], set()
+                    ).add(parsed_pair[1])
+        except Exception as e:
+            logging.error(f"[THRESHOLD_GROUP_ERROR] Failed to fetch name/group mappings: {e}", exc_info=True)
+            return notifications_by_user
+    
+    # 3. Batch-fetch item counts for all relevant slots
+    counts_by_slot = {}
+    for db_slot_id, info in evaluation_targets.items():
+        slot_id = info['slot_id']
+        try:
+            counts = session.query(SlotItemCount).filter_by(
+                room_id=room_uuid, slot_id=slot_id
+            ).all()
+            counts_by_slot[slot_id] = {c.item_id: c.count for c in counts}
+        except Exception as e:
+            logging.error(f"[THRESHOLD_GROUP_ERROR] Failed to fetch counts for slot {slot_id}: {e}")
+            counts_by_slot[slot_id] = {}
+    
+    # 4. Evaluate each group
+    for db_slot_id, info in evaluation_targets.items():
+        slot_id = info['slot_id']
+        user_id = info['user_id']
+        game_checksum = info['game_checksum']
+        
+        if not game_checksum:
+            continue
+        
+        # Check backfill
+        if (user_id, slot_id) in backfill_check_set:
+            continue
+        
+        # Check snooze
+        user_prefs = users_by_id.get(user_id)
+        slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_id)
+        if not user_prefs or not slot_prefs:
+            continue
+        if is_snoozed(user_prefs, slot_prefs, now_utc, user_id, slot_id, "milestone"):
+            continue
+        
+        name_to_id = name_to_id_by_checksum.get(game_checksum, {})
+        group_expansions = group_expansion_by_checksum.get(game_checksum, {})
+        item_counts_for_slot = counts_by_slot.get(slot_id, {})
+        
+        groups = groups_by_slot.get(db_slot_id, [])
+        
+        for group in groups:
+            if group.is_triggered:
+                continue
+            
+            all_met = True
+            for item_req in group.items:
+                if item_req.is_group:
+                    # Expand group and sum counts of all member items
+                    members = group_expansions.get(item_req.item_name.lower().strip(), set())
+                    total = 0
+                    for member_name in members:
+                        member_id = name_to_id.get(member_name)
+                        if member_id is not None:
+                            total += item_counts_for_slot.get(member_id, 0)
+                    if total < item_req.quantity:
+                        all_met = False
+                        break
+                else:
+                    item_id = name_to_id.get(item_req.item_name.lower().strip())
+                    if item_id is None:
+                        all_met = False
+                        break
+                    if item_counts_for_slot.get(item_id, 0) < item_req.quantity:
+                        all_met = False
+                        break
+            
+            if all_met:
+                group.is_triggered = True
+                logging.info(f"[THRESHOLD_GROUP_HIT] User {user_id}: Slot {slot_id} group '{group.name or 'unnamed'}' (ID={group.id}) triggered!")
+                
+                # Build notification
+                remove_emojis = user_prefs.remove_emojis_default
+                if slot_prefs and slot_prefs.remove_emojis is not None:
+                    remove_emojis = slot_prefs.remove_emojis
+                
+                icon_milestone = "" if remove_emojis else "🚩 "
+                room_alias = aliases_by_user.get(user_id, "Unknown Room")
+                
+                # Build title
+                if group.name:
+                    title = f"{icon_milestone}{group.name} - [{room_alias}]"
+                else:
+                    # Dynamic fallback: "Milestone Reached! Item1 + N others"
+                    first_item = group.items[0].item_name if group.items else "Unknown"
+                    if len(group.items) > 1:
+                        title = f"{icon_milestone}Milestone Reached! {first_item} + {len(group.items) - 1} others - [{room_alias}]"
+                    else:
+                        title = f"{icon_milestone}Milestone Reached! {first_item} - [{room_alias}]"
+                
+                # Build body: list all items with quantities
+                item_parts = []
+                for item_req in group.items:
+                    suffix = " (Group)" if item_req.is_group else ""
+                    item_parts.append(f"{item_req.quantity}× {item_req.item_name}{suffix}")
+                
+                player_name = full_name_map.get(slot_id, f"Slot {slot_id}")
+                body = f"{player_name}: {', '.join(item_parts)}"
+                
+                notifications_by_user.setdefault(user_id, []).append({
+                    'title': title,
+                    'body': body,
+                    'type': 'item_milestone',
+                    'details': (room_db_id, user_id, group.id)
                 })
     
     return notifications_by_user
@@ -1126,11 +1300,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         # --- LOGIC STEP 5: Resolve Names & Build Notifications ---
         all_cache_keys = item_cache_keys | hint_cache_keys
         data_notifs = _resolve_names_and_notify(
-            session, db_id, all_cache_keys, new_items_notif, new_hints_notif,
+            session, db_id, room_uuid, game_checksums,
+            all_cache_keys, new_items_notif, new_hints_notif,
             users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, 
             full_name_map, short_name_map,
             backfill_check_set, just_found_hints, finished_player_ids, connected_slots_set,
-            count_updates # Pass the updated counts for threshold checks
+            count_updates
         )
 
         # Combine notifications (Finished + Items + Hints)

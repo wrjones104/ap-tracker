@@ -14,8 +14,9 @@ import com.jones.aptracker.network.UpdateSlotPrefsRequest
 import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.network.SnoozeRequest
 import com.jones.aptracker.network.AutocompleteOption
-import com.jones.aptracker.network.SlotItemThreshold
-import com.jones.aptracker.network.UpdateThresholdRequest
+import com.jones.aptracker.network.ThresholdGroup
+import com.jones.aptracker.network.CreateThresholdGroupRequest
+import com.jones.aptracker.network.ThresholdGroupItemRequest
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.UserRepository
@@ -53,8 +54,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _trackedSlotsByRoom = MutableStateFlow<List<RoomWithTrackedSlots>>(emptyList())
     val trackedSlotsByRoom = _trackedSlotsByRoom.asStateFlow()
 
-    private val _slotThresholds = MutableStateFlow<List<SlotItemThreshold>>(emptyList())
-    val slotThresholds = _slotThresholds.asStateFlow()
+    private val _thresholdGroups = MutableStateFlow<List<ThresholdGroup>>(emptyList())
+    val thresholdGroups = _thresholdGroups.asStateFlow()
 
     private val _availableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val availableItems = _availableItems.asStateFlow()
@@ -617,46 +618,52 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     // THRESHOLDS
     // ============================================================================================
 
-    fun fetchSlotThresholds(roomDbId: Int, slotId: Int) {
+    fun fetchThresholdGroups(roomDbId: Int, slotId: Int) {
         viewModelScope.launch {
             try {
-                val thresholds = RetrofitClient.instance.getSlotThresholds(roomDbId, slotId)
-                _slotThresholds.value = thresholds
+                val groups = RetrofitClient.instance.getThresholdGroups(roomDbId, slotId)
+                _thresholdGroups.value = groups
             } catch (e: Exception) {
-                Log.e("UserViewModel", "Failed to fetch thresholds", e)
+                Log.e("UserViewModel", "Failed to fetch threshold groups", e)
             }
         }
     }
 
-    fun saveSlotThreshold(roomDbId: Int, slotId: Int, itemName: String, threshold: Int) {
+    fun createThresholdGroup(
+        roomDbId: Int,
+        slotId: Int,
+        name: String?,
+        items: List<ThresholdGroupItemRequest>
+    ) {
         viewModelScope.launch {
             try {
-                val request = UpdateThresholdRequest(itemName, threshold)
-                val response = RetrofitClient.instance.updateSlotThreshold(roomDbId, slotId, request)
+                val request = CreateThresholdGroupRequest(name, items)
+                val response = RetrofitClient.instance.createThresholdGroup(roomDbId, slotId, request)
                 if (response.isSuccessful) {
-                    fetchSlotThresholds(roomDbId, slotId) // Refresh
+                    fetchThresholdGroups(roomDbId, slotId)
+                    _integrationMessage.value = "Milestone group created."
                 } else {
-                    _errorMessage.value = "Failed to save threshold: ${response.code()}"
+                    _errorMessage.value = "Failed to create milestone group: ${response.code()}"
                 }
             } catch (e: Exception) {
-                Log.e("UserViewModel", "Failed to save threshold", e)
-                _errorMessage.value = "Failed to save threshold. Check connection."
+                Log.e("UserViewModel", "Failed to create threshold group", e)
+                _errorMessage.value = "Failed to create milestone group. Check connection."
             }
         }
     }
 
-    fun deleteSlotThreshold(roomDbId: Int, slotId: Int, thresholdId: Int) {
+    fun deleteThresholdGroup(roomDbId: Int, slotId: Int, groupId: Int) {
         viewModelScope.launch {
             try {
-                val response = RetrofitClient.instance.deleteSlotThreshold(roomDbId, slotId, thresholdId)
+                val response = RetrofitClient.instance.deleteThresholdGroup(roomDbId, slotId, groupId)
                 if (response.isSuccessful) {
-                    fetchSlotThresholds(roomDbId, slotId) // Refresh
+                    fetchThresholdGroups(roomDbId, slotId)
                 } else {
-                    _errorMessage.value = "Failed to delete threshold: ${response.code()}"
+                    _errorMessage.value = "Failed to delete milestone group: ${response.code()}"
                 }
             } catch (e: Exception) {
-                Log.e("UserViewModel", "Failed to delete threshold", e)
-                _errorMessage.value = "Failed to delete threshold. Check connection."
+                Log.e("UserViewModel", "Failed to delete threshold group", e)
+                _errorMessage.value = "Failed to delete milestone group. Check connection."
             }
         }
     }

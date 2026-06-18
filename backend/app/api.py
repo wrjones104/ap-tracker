@@ -22,7 +22,7 @@ from .utils import verify_ap_server, generate_negative_id
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
     DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist, UserIgnoreItem,
-    SlotItemThreshold, SlotItemCount
+    ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
 
 bp = Blueprint('api', __name__)
@@ -2052,11 +2052,11 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
         Session.remove()
 
 
-@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/thresholds', methods=['GET'])
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups', methods=['GET'])
 @handle_db_errors
 @log_api_call
 @token_required
-def get_slot_thresholds(current_user, room_db_id, slot_id):
+def get_threshold_groups(current_user, room_db_id, slot_id):
     session = Session()
     try:
         tracked_slot = session.query(UserTrackedSlot).filter_by(
@@ -2067,26 +2067,34 @@ def get_slot_thresholds(current_user, room_db_id, slot_id):
         if not tracked_slot:
             return jsonify({'error': 'Tracked slot not found'}), 404
         
-        thresholds = session.query(SlotItemThreshold).filter_by(user_tracked_slot_id=tracked_slot.id).all()
+        groups = session.query(ThresholdGroup).filter_by(
+            user_tracked_slot_id=tracked_slot.id
+        ).options(selectinload(ThresholdGroup.items)).all()
+
         return jsonify([{
-            'id': t.id,
-            'item_name': t.item_name,
-            'threshold': t.threshold
-        } for t in thresholds])
+            'id': g.id,
+            'name': g.name,
+            'is_triggered': g.is_triggered,
+            'items': [{
+                'id': item.id,
+                'item_name': item.item_name,
+                'quantity': item.quantity,
+                'is_group': item.is_group
+            } for item in g.items]
+        } for g in groups])
     finally:
         Session.remove()
 
-@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/thresholds', methods=['POST'])
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups', methods=['POST'])
 @handle_db_errors
 @log_api_call
 @token_required
-def update_slot_threshold(current_user, room_db_id, slot_id):
+def create_threshold_group(current_user, room_db_id, slot_id):
     data = request.json or {}
-    item_name = data.get('item_name')
-    threshold = data.get('threshold')
+    items_data = data.get('items', [])
     
-    if not item_name or threshold is None:
-        return jsonify({'error': 'Missing item_name or threshold'}), 400
+    if not items_data:
+        return jsonify({'error': 'At least one item is required'}), 400
         
     session = Session()
     try:
@@ -2098,33 +2106,47 @@ def update_slot_threshold(current_user, room_db_id, slot_id):
         if not tracked_slot:
             return jsonify({'error': 'Tracked slot not found'}), 404
             
-        # Normalize for search but keep original for display
-        search_name = item_name.lower().strip()
-            
-        obj = session.query(SlotItemThreshold).filter(
-            SlotItemThreshold.user_tracked_slot_id == tracked_slot.id,
-            func.lower(SlotItemThreshold.item_name) == search_name,
-            SlotItemThreshold.threshold == threshold
-        ).first()
+        group = ThresholdGroup(
+            user_tracked_slot_id=tracked_slot.id,
+            name=data.get('name', '').strip() or None,
+            is_triggered=False
+        )
+        session.add(group)
+        session.flush()  # Get group.id
         
-        if not obj:
-            obj = SlotItemThreshold(
-                user_tracked_slot_id=tracked_slot.id,
-                item_name=item_name.strip(), # Keep original casing
-                threshold=threshold
+        for item_data in items_data:
+            item_name = item_data.get('item_name', '').strip()
+            quantity = item_data.get('quantity', 1)
+            is_group = item_data.get('is_group', False)
+            
+            if not item_name or quantity < 1:
+                continue
+                
+            group_item = ThresholdGroupItem(
+                group_id=group.id,
+                item_name=item_name,
+                quantity=quantity,
+                is_group=is_group
             )
-            session.add(obj)
+            session.add(group_item)
             
         session.commit()
-        return jsonify({'message': 'Threshold updated', 'item_name': item_name, 'threshold': threshold})
+        return jsonify({
+            'message': 'Threshold group created',
+            'id': group.id
+        }), 201
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Failed to create threshold group: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to create threshold group'}), 500
     finally:
         Session.remove()
 
-@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/thresholds/<int:threshold_id>', methods=['DELETE'])
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups/<int:group_id>', methods=['DELETE'])
 @handle_db_errors
 @log_api_call
 @token_required
-def delete_slot_threshold(current_user, room_db_id, slot_id, threshold_id):
+def delete_threshold_group(current_user, room_db_id, slot_id, group_id):
     session = Session()
     try:
         tracked_slot = session.query(UserTrackedSlot).filter_by(
@@ -2135,17 +2157,17 @@ def delete_slot_threshold(current_user, room_db_id, slot_id, threshold_id):
         if not tracked_slot:
             return jsonify({'error': 'Tracked slot not found'}), 404
             
-        obj = session.query(SlotItemThreshold).filter_by(
-            id=threshold_id,
+        group = session.query(ThresholdGroup).filter_by(
+            id=group_id,
             user_tracked_slot_id=tracked_slot.id
         ).first()
         
-        if not obj:
-            return jsonify({'error': 'Threshold not found'}), 404
+        if not group:
+            return jsonify({'error': 'Threshold group not found'}), 404
             
-        session.delete(obj)
+        session.delete(group)
         session.commit()
-        return jsonify({'message': 'Threshold deleted'})
+        return jsonify({'message': 'Threshold group deleted'})
     finally:
         Session.remove()
 
