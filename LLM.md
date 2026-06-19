@@ -64,18 +64,25 @@ The system consists of two main parts:
 *   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias.
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
 *   `Device`: Stores FCM tokens for push notifications.
+*   `ThresholdGroup` / `ThresholdGroupItem`: Replaced the old single-item `SlotItemThreshold`. Allows users to define named milestone groups of multiple items (or item groups), triggering a notification only when all conditions are satisfied (AND logic).
 *   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
-*   `DatapackageCache`: Caches game data (Item/Location names) to reduce API calls.
+*   `DatapackageCache`: Caches game data (Item/Location names, group memberships) to reduce API calls.
 
 ## Development Notes
 
 1.  **Environment Variables:** The backend relies on environment variables (often in `backend/.env`). Key vars include `DATABASE_URL`, `DISCORD_CLIENT_ID`, `SECRET_KEY`, and `ENCRYPTION_KEY`.
 2.  **Polling Logic:** The `poller.py` is complex. It manages concurrent setups, regular polling, and "Cheese" polling. It handles "backfilling" history for new subscriptions to avoid notification spam.
-3.  **No Tests:** The project currently lacks a formal test suite. Changes should be verified carefully, preferably by running the backend locally.
-4.  **Frontend/Backend Sync:** Changes to API response formats in `backend/app/api.py` usually require corresponding updates in the Android app (specifically the Retrofit interfaces).
+3.  **Threshold Groups Evaluation:** The poller evaluates milestone groups when a slot receives new items. It expands `item_group` conditions (e.g. "Swords") using the cached datapackage item group members in `DatapackageCache` to check sum total counts.
+4.  **No Tests:** The project currently lacks a formal test suite. Changes should be verified carefully, preferably by running the backend locally.
+5.  **Frontend/Backend Sync:** Changes to API response formats in `backend/app/api.py` usually require corresponding updates in the Android app (specifically the Retrofit interfaces).
 
 ## "Gotchas"
 
+*   **Datapackage Cache:** Game datapackages (items, locations, item groups, and location groups) **must only** be retrieved and cached via the Archipelago server WebSocket connection. Crucially, group lists are not stored within the standard `DataPackage` network payload. Instead, they reside in the server's global `DataStorage` keys (`_read_item_name_groups_{game}` and `_read_location_name_groups_{game}`). To query these keys using the `Get` command, the client **must first authenticate** as a player slot (using a `Connect` packet, even as a read-only `Tracker`). An unauthenticated connection can fetch the basic items/locations list via the `GetDataPackage` command but will receive empty/missing group mappings. Do **not** fetch datapackages from the Archipelago HTTP API (e.g., `/api/datapackage/<checksum>`), as the HTTP API only supports officially supported games (~10% of the ecosystem) and will fail (404) for all custom (`.apworld`) games, breaking those games' tracking in the app.
 *   **Database:** SQLite uses WAL mode.
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
 *   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
+
+## LLM Maintenance Directive
+
+**Any material change to the codebase must be reflected in this file.** If you add, remove, or significantly modify models, API endpoints, notification logic, architectural patterns, or "gotchas," update the relevant section(s) of `LLM.md` accordingly. This file is the primary onboarding context for all future LLM sessions and must stay accurate.

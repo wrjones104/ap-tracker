@@ -120,20 +120,27 @@ class UserTrackedSlot(Base):
         UniqueConstraint('user_id', 'room_id', 'slot_id', name='_user_room_slot_uc'),
     )
     subscription = relationship("UserRoomSubscription", back_populates="tracked_slots")
-    item_thresholds = relationship("SlotItemThreshold", back_populates="tracked_slot", cascade="all, delete-orphan")
+    threshold_groups = relationship("ThresholdGroup", back_populates="tracked_slot", cascade="all, delete-orphan")
 
-class SlotItemThreshold(Base):
-    __tablename__ = 'slot_item_thresholds'
+class ThresholdGroup(Base):
+    __tablename__ = 'threshold_groups'
     id = Column(Integer, primary_key=True)
     user_tracked_slot_id = Column(Integer, ForeignKey('user_tracked_slots.id'), nullable=False)
-    item_name = Column(String(255), nullable=False)
-    threshold = Column(Integer, nullable=False, default=1)
+    name = Column(String(255), nullable=True)
+    is_triggered = Column(Boolean, default=False, nullable=False)
     
-    tracked_slot = relationship("UserTrackedSlot", back_populates="item_thresholds")
+    tracked_slot = relationship("UserTrackedSlot", back_populates="threshold_groups")
+    items = relationship("ThresholdGroupItem", back_populates="group", cascade="all, delete-orphan")
 
-    __table_args__ = (
-        UniqueConstraint('user_tracked_slot_id', 'item_name', 'threshold', name='_slot_item_threshold_uc'),
-    )
+class ThresholdGroupItem(Base):
+    __tablename__ = 'threshold_group_items'
+    id = Column(Integer, primary_key=True)
+    group_id = Column(Integer, ForeignKey('threshold_groups.id'), nullable=False)
+    item_name = Column(String(255), nullable=False)
+    quantity = Column(Integer, nullable=False, default=1)
+    is_group = Column(Boolean, default=False, nullable=False)
+    
+    group = relationship("ThresholdGroup", back_populates="items")
 
 class UserIgnoreItem(Base):
     __tablename__ = 'user_ignore_items'

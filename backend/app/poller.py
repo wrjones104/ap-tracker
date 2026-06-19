@@ -23,7 +23,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from . import Session, get_firebase_app, process, is_sqlite
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
-    DatapackageCache, NotifiedItem, NotifiedHint, SlotItemThreshold, SlotItemCount
+    DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
 from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id
 
@@ -535,7 +535,7 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 
     return hints_to_add, new_hints_for_notify, cache_keys_to_fetch, just_found_hint_item_loc_pairs
 
-def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids, connected_slots_set, item_counts):  
+def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, finished_player_ids, connected_slots_set, item_counts):  
     """
     Fetches names from DB in chunks and constructs final notification payloads.
     Applies filtering, backfill checks, ignore lists, alias/condensed formatting, and snooze logic.
@@ -546,23 +546,26 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
     # We capture the current time once at the start of the batch for consistent comparison
     now_utc = datetime.now(timezone.utc)
 
-    # 0. Pre-fetch Thresholds for all slots in this batch
-    thresholds_lookup = {}
+    # 0. Pre-fetch Threshold Groups for all slots in this batch
     all_db_slot_ids = []
     for user_slots in prefs_by_user_slot.values():
         for slot_obj in user_slots.values():
             all_db_slot_ids.append(slot_obj.id)
     
+    groups_by_slot = {}  # user_tracked_slot_id -> [ThresholdGroup]
     if all_db_slot_ids:
         try:
-            thresholds = session.query(SlotItemThreshold).filter(SlotItemThreshold.user_tracked_slot_id.in_(all_db_slot_ids)).all()
-            for t in thresholds:
-                key = (t.user_tracked_slot_id, t.item_name.lower().strip())
-                if key not in thresholds_lookup:
-                    thresholds_lookup[key] = set()
-                thresholds_lookup[key].add(t.threshold)
+            from sqlalchemy.orm import selectinload
+            groups = session.query(ThresholdGroup).options(
+                selectinload(ThresholdGroup.items)
+            ).filter(
+                ThresholdGroup.user_tracked_slot_id.in_(all_db_slot_ids),
+                ThresholdGroup.is_triggered == False
+            ).all()
+            for g in groups:
+                groups_by_slot.setdefault(g.user_tracked_slot_id, []).append(g)
         except Exception as e:
-            logging.error(f"[POLLER_THRESHOLD_ERROR] Failed to fetch thresholds: {e}")
+            logging.error(f"[POLLER_THRESHOLD_ERROR] Failed to fetch threshold groups: {e}")
 
     # 0.5. Pre-fetch group memberships for the checksums involved in this poll batch
     group_members_lookup = set()
@@ -572,23 +575,19 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
             try:
                 member_results = session.query(DatapackageCache.checksum, DatapackageCache.entity_name).filter(
                     DatapackageCache.checksum.in_(checksums),
-                    DatapackageCache.entity_type == 'item_group_member'
+                    DatapackageCache.entity_type == 'item_name_groups_json'
                 ).all()
-                for chk, name in member_results:
-                    parsed_pair = None
+                for chk, name_groups_str in member_results:
                     try:
-                        parsed = json.loads(name)
-                        if isinstance(parsed, list) and len(parsed) == 2:
-                            parsed_pair = (parsed[0].lower().strip(), parsed[1].lower().strip())
+                        parsed_data = json.loads(name_groups_str)
+                        if isinstance(parsed_data, dict):
+                            for g_name, items in parsed_data.items():
+                                if isinstance(items, list):
+                                    g_name_lower = g_name.lower().strip()
+                                    for item in items:
+                                        group_members_lookup.add((chk, (g_name_lower, item.lower().strip())))
                     except Exception:
                         pass
-                    
-                    if not parsed_pair and ':' in name:
-                        parts = name.split(':', 1)
-                        parsed_pair = (parts[0].lower().strip(), parts[1].lower().strip())
-                        
-                    if parsed_pair:
-                        group_members_lookup.add((chk, parsed_pair))
             except Exception as e:
                 logging.error(f"[POLLER_DB_ERROR] Failed to fetch group members: {e}")
 
@@ -658,66 +657,49 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                         val = getattr(slot_prefs, attr)
                     return val
 
-                suppress_own = get_pref('suppress_own_events', 'suppress_own_events_default')
-                suppress_self = get_pref('suppress_self_found', 'suppress_self_found_default')
-                should_suppress_connected = get_pref('suppress_connected', 'suppress_connected_default')
-                
-                if should_suppress_connected and (rid in connected_slots_set):
-                    logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Slot {rid} is connected.")
-                    continue
-                
                 remove_emojis = get_pref('remove_emojis', 'remove_emojis_default')
 
-                # 2. Suppression Logic
-                is_from_self = (rid == send_id)
-                
-                if is_from_self:
-                    if suppress_self:
-                        logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Self-found item (Slot {rid}).")
-                        continue
-                elif send_id in tracked_slots:
-                    if suppress_own:
-                        logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Cross-slot item (From {send_id} to {rid}).")
-                        continue
-                
-                room_alias = aliases_by_user.get(user_id, "Unknown Room")
-                receiver_alias = short_name_map.get(rid, f"Slot {rid}")
-                receiver_original = full_name_map.get(rid, f"Slot {rid}")
-
-                # Check Finished Suppression
-                wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
-                if rid in finished_player_ids and not wants_finished_notifs:
-                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed item for Slot {rid} (Slot Finished).")
-                    continue
-
-                # Check Backfill Suppression
+                # Check Backfill Suppression (always respected, even for milestones)
                 if (user_id, rid) in backfill_check_set:
                     logging.debug(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
                     continue
 
                 normalized_item_name = item_name.lower().strip()
 
-                # --- THRESHOLD CHECK ---
-                is_threshold_hit = False
-                current_total_count = 0
-                threshold = thresholds_lookup.get((slot_prefs.id, normalized_item_name))
-                if threshold:
-                    try:
-                        current_total_count = item_data.get('current_total_count', 0)
-                        logging.debug(f"[THRESHOLD_DEBUG] User {user_id} Slot {rid} checking '{normalized_item_name}': Total={current_total_count}, Thresholds={threshold}")
+                # --- PREFERENCE-BASED SUPPRESSION ---
+                if True:
+                    suppress_own = get_pref('suppress_own_events', 'suppress_own_events_default')
+                    suppress_self = get_pref('suppress_self_found', 'suppress_self_found_default')
+                    should_suppress_connected = get_pref('suppress_connected', 'suppress_connected_default')
 
-                        if current_total_count in threshold:
-                            is_threshold_hit = True
-                            logging.info(f"[THRESHOLD_HIT] User {user_id}: Slot {rid} reached threshold milestone {current_total_count} for '{item_name}'. Notifying!")
-                    except Exception as e:
-                        logging.error(f"[POLLER_THRESHOLD_COUNT_ERROR] Failed to check threshold: {e}")
-
-                    if not is_threshold_hit:
-                        logging.debug(f"[THRESHOLD_SKIP] User {user_id}: Slot {rid} item '{item_name}' count ({current_total_count}) did not match milestones {threshold}. Suppressing.")
+                    if should_suppress_connected and (rid in connected_slots_set):
+                        logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Slot {rid} is connected.")
                         continue
 
-                # --- IGNORE LIST CHECK (Only evaluated if it's NOT a threshold milestone) ---
-                if not is_threshold_hit:
+                    # Suppression Logic
+                    is_from_self = (rid == send_id)
+
+                    if is_from_self:
+                        if suppress_self:
+                            logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Self-found item (Slot {rid}).")
+                            continue
+                    elif send_id in tracked_slots:
+                        if suppress_own:
+                            logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Cross-slot item (From {send_id} to {rid}).")
+                            continue
+
+                    # Check Finished Suppression
+                    wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
+                    if rid in finished_player_ids and not wants_finished_notifs:
+                        logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed item for Slot {rid} (Slot Finished).")
+                        continue
+
+                room_alias = aliases_by_user.get(user_id, "Unknown Room")
+                receiver_alias = short_name_map.get(rid, f"Slot {rid}")
+                receiver_original = full_name_map.get(rid, f"Slot {rid}")
+
+                # --- IGNORE LIST CHECK ---
+                if True:
                     should_ignore = False
                     if user_prefs.ignore_items:
                         for ignore_rule in user_prefs.ignore_items:
@@ -767,14 +749,9 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 # Icons
                 icon_prog = "" if remove_emojis else "🏆 "
                 icon_useful = "" if remove_emojis else "✅ "
-                icon_milestone = "" if remove_emojis else "🚩 "
                 icon_bulb = "" if remove_emojis else "💡 "
                 
-                if is_threshold_hit:
-                    title_prefix = f"{icon_milestone}Milestone! {item_name} ({current_total_count})"
-                    item_type = "item_milestone"
-                    should_notify = True # Threshold milestones always notify
-                elif is_progression:
+                if is_progression:
                     title_prefix = f"{icon_prog}{item_name}"
                     item_type = "item_progression"
                     notify_override = slot_prefs.notify_progression
@@ -902,6 +879,198 @@ def _resolve_names_and_notify(session, room_db_id, cache_keys_to_fetch, new_item
                 
                 notifications_by_user.setdefault(user_id, []).append({
                     'title': title, 'body': body, 'type': 'hint', 'details': hint_data['hint_key_batch']
+                })
+    
+    # 4. Evaluate Threshold Groups
+    group_notifs = _evaluate_threshold_groups(
+        session, room_db_id, room_uuid, game_checksums,
+        groups_by_slot, new_items_for_notify,
+        users_by_id, prefs_by_user_slot, tracked_slots_by_user,
+        aliases_by_user, full_name_map, short_name_map,
+        backfill_check_set, now_utc
+    )
+    for uid, notif_list in group_notifs.items():
+        notifications_by_user.setdefault(uid, []).extend(notif_list)
+
+    return notifications_by_user
+
+
+def _evaluate_threshold_groups(session, room_db_id, room_uuid, game_checksums, groups_by_slot, new_items_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, now_utc):
+    """
+    Evaluates threshold groups for slots that received items in this batch.
+    For each untriggered group, checks if ALL item conditions are met (AND logic).
+    Supports both individual items and item_group expansion.
+    Returns notifications_by_user dict.
+    """
+    notifications_by_user = {}
+    
+    if not groups_by_slot or not new_items_for_notify:
+        return notifications_by_user
+    
+    # 1. Identify which (user_tracked_slot_id) received items and have groups to evaluate
+    evaluation_targets = {}  # user_tracked_slot_id -> {slot_id, game_checksum, user_id}
+    for item_data in new_items_for_notify:
+        rid = item_data['receiving_slot_id']
+        game_checksum = item_data.get('game_checksum')
+        
+        for user_id, tracked_slots in tracked_slots_by_user.items():
+            if rid in tracked_slots:
+                sp = prefs_by_user_slot.get(user_id, {}).get(rid)
+                if sp and sp.id in groups_by_slot:
+                    if sp.id not in evaluation_targets:
+                        evaluation_targets[sp.id] = {
+                            'slot_id': rid,
+                            'game_checksum': game_checksum,
+                            'user_id': user_id
+                        }
+    
+    if not evaluation_targets:
+        return notifications_by_user
+    
+    # 2. Batch-fetch name-to-ID maps and group expansions for involved checksums
+    all_checksums = set(info['game_checksum'] for info in evaluation_targets.values() if info['game_checksum'])
+    
+    name_to_id_by_checksum = {}
+    group_expansion_by_checksum = {}
+    
+    if all_checksums:
+        try:
+            # Name -> ID mapping (items only)
+            name_results = session.query(
+                DatapackageCache.checksum, DatapackageCache.entity_name, DatapackageCache.entity_id
+            ).filter(
+                DatapackageCache.checksum.in_(all_checksums),
+                DatapackageCache.entity_type == 'item'
+            ).all()
+            for chk, name, eid in name_results:
+                name_to_id_by_checksum.setdefault(chk, {})[name.lower().strip()] = eid
+            
+            # Group expansion: group_name -> set(member_item_names)
+            member_results = session.query(
+                DatapackageCache.checksum, DatapackageCache.entity_name
+            ).filter(
+                DatapackageCache.checksum.in_(all_checksums),
+                DatapackageCache.entity_type == 'item_name_groups_json'
+            ).all()
+            for chk, name_groups_str in member_results:
+                try:
+                    parsed_data = json.loads(name_groups_str)
+                    if isinstance(parsed_data, dict):
+                        for g_name, items in parsed_data.items():
+                            if isinstance(items, list):
+                                group_expansion_by_checksum.setdefault(chk, {}).setdefault(
+                                    g_name.lower().strip(), set()
+                                ).update(item.lower().strip() for item in items)
+                except Exception:
+                    pass
+        except Exception as e:
+            logging.error(f"[THRESHOLD_GROUP_ERROR] Failed to fetch name/group mappings: {e}", exc_info=True)
+            return notifications_by_user
+    
+    # 3. Batch-fetch item counts for all relevant slots
+    counts_by_slot = {info['slot_id']: {} for info in evaluation_targets.values()}
+    slot_ids = list(counts_by_slot.keys())
+    if slot_ids:
+        try:
+            counts = session.query(SlotItemCount).filter(
+                SlotItemCount.room_id == room_uuid,
+                SlotItemCount.slot_id.in_(slot_ids)
+            ).all()
+            for c in counts:
+                counts_by_slot[c.slot_id][c.item_id] = c.count
+        except Exception as e:
+            logging.error(f"[THRESHOLD_GROUP_ERROR] Failed to batch fetch counts: {e}")
+    
+    # 4. Evaluate each group
+    for db_slot_id, info in evaluation_targets.items():
+        slot_id = info['slot_id']
+        user_id = info['user_id']
+        game_checksum = info['game_checksum']
+        
+        if not game_checksum:
+            continue
+        
+        # Check backfill
+        if (user_id, slot_id) in backfill_check_set:
+            continue
+        
+        # Check snooze
+        user_prefs = users_by_id.get(user_id)
+        slot_prefs = prefs_by_user_slot.get(user_id, {}).get(slot_id)
+        if not user_prefs or not slot_prefs:
+            continue
+        if is_snoozed(user_prefs, slot_prefs, now_utc, user_id, slot_id, "milestone"):
+            continue
+        
+        name_to_id = name_to_id_by_checksum.get(game_checksum, {})
+        group_expansions = group_expansion_by_checksum.get(game_checksum, {})
+        item_counts_for_slot = counts_by_slot.get(slot_id, {})
+        
+        groups = groups_by_slot.get(db_slot_id, [])
+        
+        for group in groups:
+            if group.is_triggered:
+                continue
+            
+            all_met = True
+            for item_req in group.items:
+                if item_req.is_group:
+                    # Expand group and sum counts of all member items
+                    members = group_expansions.get(item_req.item_name.lower().strip(), set())
+                    total = 0
+                    for member_name in members:
+                        member_id = name_to_id.get(member_name)
+                        if member_id is not None:
+                            total += item_counts_for_slot.get(member_id, 0)
+                    if total < item_req.quantity:
+                        all_met = False
+                        break
+                else:
+                    item_id = name_to_id.get(item_req.item_name.lower().strip())
+                    if item_id is None:
+                        all_met = False
+                        break
+                    if item_counts_for_slot.get(item_id, 0) < item_req.quantity:
+                        all_met = False
+                        break
+            
+            if all_met:
+                group.is_triggered = True
+                logging.info(f"[THRESHOLD_GROUP_HIT] User {user_id}: Slot {slot_id} group '{group.name or 'unnamed'}' (ID={group.id}) triggered!")
+                
+                # Build notification
+                remove_emojis = user_prefs.remove_emojis_default
+                if slot_prefs and slot_prefs.remove_emojis is not None:
+                    remove_emojis = slot_prefs.remove_emojis
+                
+                icon_milestone = "" if remove_emojis else "🚩 "
+                room_alias = aliases_by_user.get(user_id, "Unknown Room")
+                
+                # Build title
+                if group.name:
+                    title = f"{icon_milestone}{group.name} - [{room_alias}]"
+                else:
+                    # Dynamic fallback: "Milestone Reached! Item1 + N others"
+                    first_item = group.items[0].item_name if group.items else "Unknown"
+                    if len(group.items) > 1:
+                        title = f"{icon_milestone}Milestone Reached! {first_item} + {len(group.items) - 1} others - [{room_alias}]"
+                    else:
+                        title = f"{icon_milestone}Milestone Reached! {first_item} - [{room_alias}]"
+                
+                # Build body: list all items with quantities
+                item_parts = []
+                for item_req in group.items:
+                    suffix = " (Group)" if item_req.is_group else ""
+                    item_parts.append(f"{item_req.quantity}× {item_req.item_name}{suffix}")
+                
+                player_name = full_name_map.get(slot_id, f"Slot {slot_id}")
+                body = f"{player_name}: {', '.join(item_parts)}"
+                
+                notifications_by_user.setdefault(user_id, []).append({
+                    'title': title,
+                    'body': body,
+                    'type': 'item_milestone',
+                    'details': (room_db_id, user_id, group.id)
                 })
     
     return notifications_by_user
@@ -1147,11 +1316,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         # --- LOGIC STEP 5: Resolve Names & Build Notifications ---
         all_cache_keys = item_cache_keys | hint_cache_keys
         data_notifs = _resolve_names_and_notify(
-            session, db_id, all_cache_keys, new_items_notif, new_hints_notif,
+            session, db_id, room_uuid, game_checksums,
+            all_cache_keys, new_items_notif, new_hints_notif,
             users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, 
             full_name_map, short_name_map,
             backfill_check_set, just_found_hints, finished_player_ids, connected_slots_set,
-            count_updates # Pass the updated counts for threshold checks
+            count_updates
         )
 
         # Combine notifications (Finished + Items + Hints)
@@ -1785,6 +1955,56 @@ async def run_room_setup(room_info, loop):
                                 checksums = room_info_msg[0].get('datapackage_checksums', {})
                                 ws_success = True
                                 
+                                # --- TRACKER AUTHENTICATION ---
+                                authenticated = False
+                                server_version = room_info_msg[0].get('version', {"major": 0, "minor": 4, "build": 4, "class": "Version"})
+                                
+                                tracker_player = None
+                                for p in players_raw:
+                                    if len(p) >= 2 and p[1] != 'Archipelago':
+                                        tracker_player = p
+                                        break
+                                if not tracker_player and players_raw:
+                                    tracker_player = players_raw[0]
+                                    
+                                if tracker_player:
+                                    p_name, p_game = tracker_player[0], tracker_player[1]
+                                    connect_packet = {
+                                        "cmd": "Connect",
+                                        "password": "",
+                                        "game": p_game,
+                                        "name": p_name,
+                                        "uuid": f"poller-uuid-{db_id}",
+                                        "tags": ["Tracker"],
+                                        "version": server_version,
+                                        "items_handling": 0
+                                    }
+                                    try:
+                                        logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Attempting Tracker handshake as '{p_name}' ({p_game})...")
+                                        await ws.send_json([connect_packet])
+                                        
+                                        connect_timeout = 3.0
+                                        start_conn_time = time.time()
+                                        while time.time() - start_conn_time < connect_timeout:
+                                            conn_msg = await ws.receive(timeout=1.0)
+                                            if conn_msg.type == aiohttp.WSMsgType.TEXT:
+                                                payload = json.loads(conn_msg.data)
+                                                if isinstance(payload, list):
+                                                     connected_cmd = next((p for p in payload if p.get("cmd") == "Connected"), None)
+                                                     refused_cmd = next((p for p in payload if p.get("cmd") == "ConnectionRefused"), None)
+                                                     if connected_cmd:
+                                                         logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Tracker authentication succeeded.")
+                                                         authenticated = True
+                                                         break
+                                                     elif refused_cmd:
+                                                         logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Tracker authentication refused: {refused_cmd.get('errors')}")
+                                                         break
+                                            elif conn_msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                                                logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket closed during Tracker handshake.")
+                                                break
+                                    except Exception as conn_err:
+                                        logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Tracker handshake exception: {conn_err}")
+                                
                                 if base_domain and (uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}")):
                                     setup_data['cached_full_address'] = f"{base_domain}:{port}"
                                 if checksums:
@@ -1798,133 +2018,167 @@ async def run_room_setup(room_info, loop):
                                         batches = [missing_games[i:i + batch_size] for i in range(0, len(missing_games), batch_size)]
                                         
                                         for batch_idx, batch in enumerate(batches):
-                                            logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Fetching batch {batch_idx + 1}/{len(batches)} ({len(batch)} games): {batch}")
-                                            await ws.send_json([{"cmd": "GetDataPackage", "games": batch}])
-                                            
-                                            remaining_in_batch = set(batch)
-                                            batch_timeout = 30
-                                            start_batch_time = time.time()
-                                            
-                                            while remaining_in_batch:
-                                                elapsed = time.time() - start_batch_time
-                                                remaining_time = batch_timeout - elapsed
-                                                if remaining_time <= 0:
-                                                    logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket timeout waiting for DataPackage payload for batch.")
-                                                    any_datapackage_failed = True
-                                                    break
-                                                
-                                                try:
-                                                    ws_msg = await ws.receive(timeout=remaining_time)
-                                                    if ws_msg.type == aiohttp.WSMsgType.TEXT:
-                                                        payload = json.loads(ws_msg.data)
-                                                        if isinstance(payload, list):
-                                                            dp_packet = next((p for p in payload if p.get("cmd") == "DataPackage"), None)
-                                                            if dp_packet:
-                                                                dp_data = dp_packet.get("data") or dp_packet.get("datapackage")
-                                                                actual_datapackage = dp_data.get("games") if isinstance(dp_data, dict) else {}
-                                                                if not isinstance(actual_datapackage, dict):
-                                                                    actual_datapackage = {}
-                                                                for game_name, game_data in actual_datapackage.items():
-                                                                    matched_game = next((g for g in remaining_in_batch if g.lower() == game_name.lower()), None)
-                                                                    if not matched_game:
-                                                                        continue
-                                                                    
-                                                                    chk = checksums.get(matched_game)
-                                                                    if not chk or not isinstance(game_data, dict):
-                                                                        continue
-                                                                    
-                                                                    # Use a lock keyed by checksum to prevent concurrent writes/insertions
-                                                                    if chk not in datapackage_locks:
-                                                                        if len(datapackage_locks) > 500:
-                                                                            to_remove = [k for k, v in datapackage_locks.items() if not v.locked()]
-                                                                            for k in to_remove[:100]:
-                                                                                del datapackage_locks[k]
-                                                                        datapackage_locks[chk] = asyncio.Lock()
-                                                                    
-                                                                    async with datapackage_locks[chk]:
-                                                                        still_missing = await loop.run_in_executor(None, db_get_missing_checksums, [chk])
-                                                                        if not still_missing:
-                                                                            remaining_in_batch.discard(matched_game)
-                                                                            continue
-                                                                            
-                                                                        current_game_entries = []
-                                                                        seen_ids = set()
-                                                                        
-                                                                        # 1. Items
-                                                                        for n, eid in game_data.get('item_name_to_id', {}).items():
-                                                                            if ('item', eid) in seen_ids:
-                                                                                continue
-                                                                            seen_ids.add(('item', eid))
-                                                                            current_game_entries.append(DatapackageCache(
-                                                                                game=matched_game, checksum=chk, entity_type='item', entity_id=eid, entity_name=n
-                                                                            ))
-                                                                            
-                                                                        # 2. Locations
-                                                                        for n, eid in game_data.get('location_name_to_id', {}).items():
-                                                                            if ('location', eid) in seen_ids:
-                                                                                continue
-                                                                            seen_ids.add(('location', eid))
-                                                                            current_game_entries.append(DatapackageCache(
-                                                                                game=matched_game, checksum=chk, entity_type='location', entity_id=eid, entity_name=n
-                                                                            ))
-                                                                            
-                                                                        # 3. Process Item Groups & Members
-                                                                        for g_name, g_items in game_data.get('item_name_groups', {}).items():
-                                                                            g_id = generate_negative_id('item_group', g_name)
-                                                                            current_game_entries.append(DatapackageCache(
-                                                                                game=matched_game, checksum=chk, entity_type='item_group', entity_id=g_id, entity_name=g_name
-                                                                            ))
-                                                                            if isinstance(g_items, list):
-                                                                                for item_name in g_items:
-                                                                                    membership_key = json.dumps([g_name, item_name])
-                                                                                    m_id = generate_negative_id('item_group_member', membership_key)
-                                                                                    current_game_entries.append(DatapackageCache(
-                                                                                        game=matched_game, checksum=chk, entity_type='item_group_member', entity_id=m_id, entity_name=membership_key
-                                                                                    ))
-                                                                                    
-                                                                        # 4. Process Location Groups & Members
-                                                                        for g_name, g_locations in game_data.get('location_name_groups', {}).items():
-                                                                            g_id = generate_negative_id('location_group', g_name)
-                                                                            current_game_entries.append(DatapackageCache(
-                                                                                game=matched_game, checksum=chk, entity_type='location_group', entity_id=g_id, entity_name=g_name
-                                                                            ))
-                                                                            if isinstance(g_locations, list):
-                                                                                for loc_name in g_locations:
-                                                                                    membership_key = json.dumps([g_name, loc_name])
-                                                                                    m_id = generate_negative_id('location_group_member', membership_key)
-                                                                                    current_game_entries.append(DatapackageCache(
-                                                                                        game=matched_game, checksum=chk, entity_type='location_group_member', entity_id=m_id, entity_name=membership_key
-                                                                                    ))
-                                                                                    
-                                                                        if not current_game_entries:
-                                                                            current_game_entries.append(DatapackageCache(
-                                                                                game=matched_game, checksum=chk, entity_type='_metadata', entity_id=0, entity_name='_empty_datapackage'
-                                                                            ))
-                                                                        else:
-                                                                            current_game_entries.append(DatapackageCache(
-                                                                                game=matched_game, checksum=chk, entity_type='_metadata', entity_id=0, entity_name='_completed_v2'
-                                                                            ))
-                                                                            
-                                                                        try:
-                                                                            await loop.run_in_executor(None, db_cache_datapackage, current_game_entries)
-                                                                        except Exception as e:
-                                                                            logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to save WS datapackage: {e}")
-                                                                            any_datapackage_failed = True
-                                                                        finally:
-                                                                            remaining_in_batch.discard(matched_game)
-                                                    elif ws_msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                                                        logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket connection closed while fetching datapackages.")
-                                                        any_datapackage_failed = True
-                                                        break
-                                                except asyncio.TimeoutError:
-                                                    logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket timeout waiting for DataPackage payload for batch.")
-                                                    any_datapackage_failed = True
-                                                    break
-                                            
-                                            if remaining_in_batch:
-                                                any_datapackage_failed = True
-                                                logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch all missing datapackages in batch via WebSocket. Remaining: {remaining_in_batch}")
-                                                break
+                                             logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Fetching batch {batch_idx + 1}/{len(batches)} ({len(batch)} games): {batch}")
+                                             
+                                             # Request name groups if authenticated
+                                             if authenticated:
+                                                 get_keys = []
+                                                 for game in batch:
+                                                     get_keys.extend([
+                                                         f"_read_item_name_groups_{game}",
+                                                         f"_read_location_name_groups_{game}"
+                                                     ])
+                                                 logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Requesting name groups for: {batch}")
+                                                 await ws.send_json([{"cmd": "Get", "keys": get_keys}])
+                                             
+                                             await ws.send_json([{"cmd": "GetDataPackage", "games": batch}])
+                                             
+                                             remaining_in_batch = set(batch)
+                                             batch_timeout = 30
+                                             start_batch_time = time.time()
+                                             
+                                             received_game_data = {}
+                                             retrieved_groups = {game: {"item_name_groups": {}, "location_name_groups": {}} for game in batch}
+                                             
+                                             while remaining_in_batch:
+                                                 elapsed = time.time() - start_batch_time
+                                                 remaining_time = batch_timeout - elapsed
+                                                 if remaining_time <= 0:
+                                                     logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket timeout waiting for DataPackage payload for batch.")
+                                                     any_datapackage_failed = True
+                                                     break
+                                                 
+                                                 try:
+                                                     ws_msg = await ws.receive(timeout=remaining_time)
+                                                     if ws_msg.type == aiohttp.WSMsgType.TEXT:
+                                                         payload = json.loads(ws_msg.data)
+                                                         if isinstance(payload, list):
+                                                             for packet in payload:
+                                                                 cmd = packet.get("cmd")
+                                                                 if cmd == "Retrieved":
+                                                                     keys_dict = packet.get("keys", {})
+                                                                     for k_name, k_val in keys_dict.items():
+                                                                         if not isinstance(k_val, dict):
+                                                                             continue
+                                                                         if k_name.startswith("_read_item_name_groups_"):
+                                                                             g_name = k_name[len("_read_item_name_groups_"):]
+                                                                             if g_name in retrieved_groups:
+                                                                                 retrieved_groups[g_name]["item_name_groups"] = k_val
+                                                                         elif k_name.startswith("_read_location_name_groups_"):
+                                                                             g_name = k_name[len("_read_location_name_groups_"):]
+                                                                             if g_name in retrieved_groups:
+                                                                                 retrieved_groups[g_name]["location_name_groups"] = k_val
+                                                                 elif cmd == "DataPackage":
+                                                                     dp_data = packet.get("data") or packet.get("datapackage")
+                                                                     actual_datapackage = dp_data.get("games") if isinstance(dp_data, dict) else {}
+                                                                     if not isinstance(actual_datapackage, dict):
+                                                                         actual_datapackage = {}
+                                                                     for game_name, game_data in actual_datapackage.items():
+                                                                         matched_game = next((g for g in remaining_in_batch if g.lower() == game_name.lower()), None)
+                                                                         if matched_game:
+                                                                             received_game_data[matched_game] = game_data
+                                                                             remaining_in_batch.discard(matched_game)
+                                                     elif ws_msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                                                         logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket connection closed while fetching datapackages.")
+                                                         any_datapackage_failed = True
+                                                         break
+                                                 except asyncio.TimeoutError:
+                                                     logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] WebSocket timeout waiting for DataPackage payload for batch.")
+                                                     any_datapackage_failed = True
+                                                     break
+                                             
+                                             # Process and write all received games in this batch to DB
+                                             for game_name, game_data in received_game_data.items():
+                                                 chk = checksums.get(game_name)
+                                                 if not chk or not isinstance(game_data, dict):
+                                                     continue
+                                                 
+                                                 # Inject retrieved groups into game_data
+                                                 if game_name in retrieved_groups:
+                                                     if retrieved_groups[game_name]["item_name_groups"]:
+                                                         game_data["item_name_groups"] = retrieved_groups[game_name]["item_name_groups"]
+                                                     if retrieved_groups[game_name]["location_name_groups"]:
+                                                         game_data["location_name_groups"] = retrieved_groups[game_name]["location_name_groups"]
+                                                 
+                                                 # Use a lock keyed by checksum to prevent concurrent writes/insertions
+                                                 if chk not in datapackage_locks:
+                                                     if len(datapackage_locks) > 500:
+                                                         to_remove = [k for k, v in datapackage_locks.items() if not v.locked()]
+                                                         for k in to_remove[:100]:
+                                                             del datapackage_locks[k]
+                                                     datapackage_locks[chk] = asyncio.Lock()
+                                                 
+                                                 async with datapackage_locks[chk]:
+                                                     still_missing = await loop.run_in_executor(None, db_get_missing_checksums, [chk])
+                                                     if not still_missing:
+                                                         continue
+                                                         
+                                                     current_game_entries = []
+                                                     seen_ids = set()
+                                                     
+                                                     # 1. Items
+                                                     for n, eid in game_data.get('item_name_to_id', {}).items():
+                                                         if ('item', eid) in seen_ids:
+                                                             continue
+                                                         seen_ids.add(('item', eid))
+                                                         current_game_entries.append(DatapackageCache(
+                                                             game=game_name, checksum=chk, entity_type='item', entity_id=eid, entity_name=n
+                                                         ))
+                                                         
+                                                     # 2. Locations
+                                                     for n, eid in game_data.get('location_name_to_id', {}).items():
+                                                         if ('location', eid) in seen_ids:
+                                                             continue
+                                                         seen_ids.add(('location', eid))
+                                                         current_game_entries.append(DatapackageCache(
+                                                             game=game_name, checksum=chk, entity_type='location', entity_id=eid, entity_name=n
+                                                         ))
+                                                         
+                                                     # 3. Process Item Groups
+                                                     for g_name, g_items in game_data.get('item_name_groups', {}).items():
+                                                         g_id = generate_negative_id('item_group', g_name)
+                                                         current_game_entries.append(DatapackageCache(
+                                                             game=game_name, checksum=chk, entity_type='item_group', entity_id=g_id, entity_name=g_name
+                                                         ))
+                                                         
+                                                     item_groups = game_data.get('item_name_groups', {})
+                                                     if item_groups:
+                                                         current_game_entries.append(DatapackageCache(
+                                                             game=game_name, checksum=chk, entity_type='item_name_groups_json', entity_id=0, entity_name=json.dumps(item_groups)
+                                                         ))
+                                                         
+                                                     # 4. Process Location Groups
+                                                     for g_name, g_locations in game_data.get('location_name_groups', {}).items():
+                                                         g_id = generate_negative_id('location_group', g_name)
+                                                         current_game_entries.append(DatapackageCache(
+                                                             game=game_name, checksum=chk, entity_type='location_group', entity_id=g_id, entity_name=g_name
+                                                         ))
+                                                         
+                                                     loc_groups = game_data.get('location_name_groups', {})
+                                                     if loc_groups:
+                                                         current_game_entries.append(DatapackageCache(
+                                                             game=game_name, checksum=chk, entity_type='location_name_groups_json', entity_id=0, entity_name=json.dumps(loc_groups)
+                                                         ))
+                                                                 
+                                                     if not current_game_entries:
+                                                         current_game_entries.append(DatapackageCache(
+                                                             game=game_name, checksum=chk, entity_type='_metadata', entity_id=0, entity_name='_empty_datapackage'
+                                                         ))
+                                                     else:
+                                                         current_game_entries.append(DatapackageCache(
+                                                             game=game_name, checksum=chk, entity_type='_metadata', entity_id=0, entity_name='_completed_v2'
+                                                         ))
+                                                         
+                                                     try:
+                                                         await loop.run_in_executor(None, db_cache_datapackage, current_game_entries)
+                                                     except Exception as e:
+                                                         logging.error(f"[POLLER_SETUP_ERROR][RoomDBID:{db_id}] Failed to save WS datapackage: {e}")
+                                                         any_datapackage_failed = True
+                                             
+                                             if remaining_in_batch:
+                                                 any_datapackage_failed = True
+                                                 logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Failed to fetch all missing datapackages in batch via WebSocket. Remaining: {remaining_in_batch}")
+                                                 break
                                 break
                             
                     except Exception as ws_e:
@@ -2009,19 +2263,19 @@ def db_get_missing_checksums(checksums_to_check):
             for chk in checksums_without_data:
                 checksums_to_delete.add(chk)
 
-            # Check if any cache version has item groups but lacks group members
+            # Check if any cache version has item groups but lacks the serialized JSON row
             # We fetch both sets separately and do a set difference in Python to avoid slow SQL NOT IN subqueries
             has_groups = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
                 DatapackageCache.checksum.in_(completed_v2_checksums),
                 DatapackageCache.entity_type == 'item_group'
             ).distinct().all() if c and c[0])
             
-            has_members = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
+            has_json = set(c[0] for c in session.query(DatapackageCache.checksum).filter(
                 DatapackageCache.checksum.in_(completed_v2_checksums),
-                DatapackageCache.entity_type == 'item_group_member'
+                DatapackageCache.entity_type == 'item_name_groups_json'
             ).distinct().all() if c and c[0])
             
-            bad_checksums = list(has_groups - has_members)
+            bad_checksums = list(has_groups - has_json)
             for chk in bad_checksums:
                 checksums_to_delete.add(chk)
                     
