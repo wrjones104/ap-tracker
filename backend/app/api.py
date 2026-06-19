@@ -22,7 +22,7 @@ from .utils import verify_ap_server, generate_negative_id
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
     DatapackageCache, NotifiedItem, NotifiedHint, JWTBlocklist, UserIgnoreItem,
-    SlotItemThreshold, SlotItemCount
+    ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
 
 bp = Blueprint('api', __name__)
@@ -2052,11 +2052,11 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
         Session.remove()
 
 
-@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/thresholds', methods=['GET'])
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups', methods=['GET'])
 @handle_db_errors
 @log_api_call
 @token_required
-def get_slot_thresholds(current_user, room_db_id, slot_id):
+def get_threshold_groups(current_user, room_db_id, slot_id):
     session = Session()
     try:
         tracked_slot = session.query(UserTrackedSlot).filter_by(
@@ -2067,26 +2067,34 @@ def get_slot_thresholds(current_user, room_db_id, slot_id):
         if not tracked_slot:
             return jsonify({'error': 'Tracked slot not found'}), 404
         
-        thresholds = session.query(SlotItemThreshold).filter_by(user_tracked_slot_id=tracked_slot.id).all()
+        groups = session.query(ThresholdGroup).filter_by(
+            user_tracked_slot_id=tracked_slot.id
+        ).options(selectinload(ThresholdGroup.items)).all()
+
         return jsonify([{
-            'id': t.id,
-            'item_name': t.item_name,
-            'threshold': t.threshold
-        } for t in thresholds])
+            'id': g.id,
+            'name': g.name,
+            'is_triggered': g.is_triggered,
+            'items': [{
+                'id': item.id,
+                'item_name': item.item_name,
+                'quantity': item.quantity,
+                'is_group': item.is_group
+            } for item in g.items]
+        } for g in groups])
     finally:
         Session.remove()
 
-@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/thresholds', methods=['POST'])
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups', methods=['POST'])
 @handle_db_errors
 @log_api_call
 @token_required
-def update_slot_threshold(current_user, room_db_id, slot_id):
+def create_threshold_group(current_user, room_db_id, slot_id):
     data = request.json or {}
-    item_name = data.get('item_name')
-    threshold = data.get('threshold')
+    items_data = data.get('items', [])
     
-    if not item_name or threshold is None:
-        return jsonify({'error': 'Missing item_name or threshold'}), 400
+    if not items_data:
+        return jsonify({'error': 'At least one item is required'}), 400
         
     session = Session()
     try:
@@ -2098,33 +2106,53 @@ def update_slot_threshold(current_user, room_db_id, slot_id):
         if not tracked_slot:
             return jsonify({'error': 'Tracked slot not found'}), 404
             
-        # Normalize for search but keep original for display
-        search_name = item_name.lower().strip()
-            
-        obj = session.query(SlotItemThreshold).filter(
-            SlotItemThreshold.user_tracked_slot_id == tracked_slot.id,
-            func.lower(SlotItemThreshold.item_name) == search_name,
-            SlotItemThreshold.threshold == threshold
-        ).first()
+        group = ThresholdGroup(
+            user_tracked_slot_id=tracked_slot.id,
+            name=data.get('name', '').strip() or None,
+            is_triggered=False
+        )
+        session.add(group)
+        session.flush()  # Get group.id
         
-        if not obj:
-            obj = SlotItemThreshold(
-                user_tracked_slot_id=tracked_slot.id,
-                item_name=item_name.strip(), # Keep original casing
-                threshold=threshold
+        valid_items_count = 0
+        for item_data in items_data:
+            item_name = item_data.get('item_name', '').strip()
+            quantity = item_data.get('quantity', 1)
+            is_group = item_data.get('is_group', False)
+            
+            if not item_name or quantity < 1:
+                continue
+                
+            group_item = ThresholdGroupItem(
+                group_id=group.id,
+                item_name=item_name,
+                quantity=quantity,
+                is_group=is_group
             )
-            session.add(obj)
+            session.add(group_item)
+            valid_items_count += 1
+            
+        if valid_items_count == 0:
+            session.rollback()
+            return jsonify({'error': 'No valid items provided'}), 400
             
         session.commit()
-        return jsonify({'message': 'Threshold updated', 'item_name': item_name, 'threshold': threshold})
+        return jsonify({
+            'message': 'Threshold group created',
+            'id': group.id
+        }), 201
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Failed to create threshold group: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to create threshold group'}), 500
     finally:
         Session.remove()
 
-@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/thresholds/<int:threshold_id>', methods=['DELETE'])
+@bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups/<int:group_id>', methods=['DELETE'])
 @handle_db_errors
 @log_api_call
 @token_required
-def delete_slot_threshold(current_user, room_db_id, slot_id, threshold_id):
+def delete_threshold_group(current_user, room_db_id, slot_id, group_id):
     session = Session()
     try:
         tracked_slot = session.query(UserTrackedSlot).filter_by(
@@ -2135,43 +2163,44 @@ def delete_slot_threshold(current_user, room_db_id, slot_id, threshold_id):
         if not tracked_slot:
             return jsonify({'error': 'Tracked slot not found'}), 404
             
-        obj = session.query(SlotItemThreshold).filter_by(
-            id=threshold_id,
+        group = session.query(ThresholdGroup).filter_by(
+            id=group_id,
             user_tracked_slot_id=tracked_slot.id
         ).first()
         
-        if not obj:
-            return jsonify({'error': 'Threshold not found'}), 404
+        if not group:
+            return jsonify({'error': 'Threshold group not found'}), 404
             
-        session.delete(obj)
+        session.delete(group)
         session.commit()
-        return jsonify({'message': 'Threshold deleted'})
+        return jsonify({'message': 'Threshold group deleted'})
     finally:
         Session.remove()
 
 def rebuild_game_cache_synchronously(session, game_name):
     """
-    Finds a checksum and hostname for the game in existing rooms,
-    fetches the datapackage from the Archipelago server, and caches it synchronously.
+    Finds a checksum and hostname/port for the game in existing rooms,
+    fetches the datapackage from the Archipelago server via WebSocket, and caches it.
     """
-    import requests
-    
-    # Find a room that tracks this game using optimized column query
-    room_query = session.query(TrackedRoom.game_checksums_json, TrackedRoom.hostname).filter(
+    # Find a room that tracks this game
+    rooms = session.query(TrackedRoom).filter(
         TrackedRoom.game_checksums_json.isnot(None),
         TrackedRoom.game_checksums_json != '{}'
     ).all()
+    
     checksum = None
     hostname = "archipelago.gg"
+    target_room = None
     
-    for game_checksums_json, room_hostname in room_query:
+    for r in rooms:
         try:
-            checksums = json.loads(game_checksums_json)
+            checksums = json.loads(r.game_checksums_json)
             checksums_lower = {k.lower(): v for k, v in checksums.items()}
             if game_name.lower() in checksums_lower:
                 checksum = checksums_lower[game_name.lower()]
-                if room_hostname:
-                    hostname = room_hostname
+                target_room = r
+                if r.hostname:
+                    hostname = r.hostname
                 break
         except:
             pass
@@ -2188,29 +2217,192 @@ def rebuild_game_cache_synchronously(session, game_name):
         logging.warning(f"[SYNC_HEAL] Could not find checksum for game '{game_name}' to rebuild cache.")
         return False
         
-    logging.info(f"[SYNC_HEAL] Fetching datapackage for '{game_name}' ({checksum}) from {hostname}...")
+    port = None
+    if target_room and target_room.cached_full_address and ":" in target_room.cached_full_address:
+        try:
+            _, p_str = target_room.cached_full_address.split(":", 1)
+            if p_str.isdigit():
+                port = int(p_str)
+        except:
+            pass
+            
+    if not port and target_room:
+        # Fallback to fetching port from room status API
+        try:
+            import requests
+            resp = requests.get(f"https://{target_room.hostname}/api/room_status/{target_room.room_id}", timeout=5)
+            if resp.status_code == 200:
+                status_data = resp.json()
+                port = status_data.get('last_port')
+        except Exception as e:
+            logging.warning(f"[SYNC_HEAL] Failed to fetch port from room status API: {e}")
+            
+    if not port:
+        logging.warning(f"[SYNC_HEAL] Could not find port for game '{game_name}' to rebuild cache.")
+        return False
+        
+    logging.info(f"[SYNC_HEAL] Fetching datapackage for '{game_name}' ({checksum}) via WebSocket from {hostname}:{port}...")
+    
+    async def fetch_datapackage_via_ws(hostname, port, target_room, checksum):
+        import aiohttp
+        import time
+        from .utils import SSRFProtectedTCPConnector
+        
+        uris = [f"wss://{hostname}:{port}", f"ws://{hostname}:{port}"]
+        
+        parts = hostname.split('.')
+        if len(parts) > 2:
+            base_domain = ".".join(parts[1:])
+            uris.extend([f"wss://{base_domain}:{port}", f"ws://{base_domain}:{port}"])
+            
+        players = []
+        if target_room and target_room.cached_players_json:
+            try:
+                players = json.loads(target_room.cached_players_json)
+            except:
+                pass
+                
+        tracker_player = None
+        for p in players:
+            if isinstance(p, dict) and p.get('game') and p.get('game') != 'Archipelago':
+                tracker_player = p
+                break
+        if not tracker_player and players:
+            tracker_player = players[0]
+            
+        ws_success = False
+        game_data_res = None
+        retrieved_res = {"item_name_groups": {}, "location_name_groups": {}}
+        
+        connector = None
+        try:
+            connector = SSRFProtectedTCPConnector()
+        except:
+            pass
+            
+        async with aiohttp.ClientSession(connector=connector) as client:
+            for uri in uris:
+                if ws_success:
+                    break
+                try:
+                    logging.info(f"[SYNC_HEAL] Connecting to WS URI: {uri}...")
+                    async with client.ws_connect(uri, timeout=5) as ws:
+                        msg = await ws.receive(timeout=5)
+                        if msg.type != aiohttp.WSMsgType.TEXT:
+                            continue
+                            
+                        room_info_msg = json.loads(msg.data)
+                        server_version = room_info_msg[0].get('version', {"major": 0, "minor": 4, "build": 4, "class": "Version"})
+                        
+                        authenticated = False
+                        if tracker_player and isinstance(tracker_player, dict):
+                            p_name = tracker_player.get('name')
+                            p_game = tracker_player.get('game')
+                            connect_packet = {
+                                "cmd": "Connect",
+                                "password": "",
+                                "game": p_game,
+                                "name": p_name,
+                                "uuid": f"sync-heal-uuid-{target_room.room_id if target_room else 'unknown'}",
+                                "tags": ["Tracker"],
+                                "version": server_version,
+                                "items_handling": 0
+                            }
+                            try:
+                                logging.info(f"[SYNC_HEAL] Attempting Tracker handshake as '{p_name}' ({p_game})...")
+                                await ws.send_json([connect_packet])
+                                
+                                connect_timeout = 3.0
+                                start_conn_time = time.time()
+                                while time.time() - start_conn_time < connect_timeout:
+                                    conn_msg = await ws.receive(timeout=1.0)
+                                    if conn_msg.type == aiohttp.WSMsgType.TEXT:
+                                        payload = json.loads(conn_msg.data)
+                                        if isinstance(payload, list):
+                                            connected_cmd = next((p for p in payload if p.get("cmd") == "Connected"), None)
+                                            refused_cmd = next((p for p in payload if p.get("cmd") == "ConnectionRefused"), None)
+                                            if connected_cmd:
+                                                logging.info(f"[SYNC_HEAL] Tracker authentication succeeded.")
+                                                authenticated = True
+                                                break
+                                            elif refused_cmd:
+                                                logging.warning(f"[SYNC_HEAL] Tracker authentication refused: {refused_cmd.get('errors')}")
+                                                break
+                                    elif conn_msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                                        logging.warning(f"[SYNC_HEAL] WebSocket closed during Connect.")
+                                        break
+                            except Exception as conn_err:
+                                logging.warning(f"[SYNC_HEAL] Handshake exception: {conn_err}")
+                                
+                        if authenticated:
+                            logging.info(f"[SYNC_HEAL] Requesting name groups for '{game_name}'")
+                            await ws.send_json([{
+                                "cmd": "Get",
+                                "keys": [f"_read_item_name_groups_{game_name}", f"_read_location_name_groups_{game_name}"]
+                            }])
+                            
+                        await ws.send_json([{"cmd": "GetDataPackage", "games": [game_name]}])
+                        
+                        start_recv_time = time.time()
+                        timeout = 15
+                        dp_received = False
+                        
+                        while time.time() - start_recv_time < timeout:
+                            try:
+                                ws_msg = await ws.receive(timeout=1.0)
+                                if ws_msg.type == aiohttp.WSMsgType.TEXT:
+                                    payload = json.loads(ws_msg.data)
+                                    if isinstance(payload, list):
+                                        for packet in payload:
+                                            cmd = packet.get("cmd")
+                                            if cmd == "Retrieved":
+                                                keys_dict = packet.get("keys", {})
+                                                item_key = f"_read_item_name_groups_{game_name}"
+                                                loc_key = f"_read_location_name_groups_{game_name}"
+                                                if item_key in keys_dict and isinstance(keys_dict[item_key], dict):
+                                                    retrieved_res["item_name_groups"] = keys_dict[item_key]
+                                                if loc_key in keys_dict and isinstance(keys_dict[loc_key], dict):
+                                                    retrieved_res["location_name_groups"] = keys_dict[loc_key]
+                                            elif cmd == "DataPackage":
+                                                dp_data = packet.get("data") or packet.get("datapackage")
+                                                actual_datapackage = dp_data.get("games") if isinstance(dp_data, dict) else {}
+                                                if isinstance(actual_datapackage, dict):
+                                                    matched_game = next((g for g in actual_datapackage.keys() if g.lower() == game_name.lower()), None)
+                                                    if matched_game:
+                                                        game_data_res = actual_datapackage[matched_game]
+                                                        dp_received = True
+                                elif ws_msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                                    logging.warning(f"[SYNC_HEAL] WebSocket closed during receive loop.")
+                                    break
+                            except asyncio.TimeoutError:
+                                pass
+                                
+                            if dp_received:
+                                ws_success = True
+                                break
+                                
+                except Exception as ws_ex:
+                    logging.warning(f"[SYNC_HEAL] WebSocket connection/communication failed for {uri}: {ws_ex}")
+                    
+        if game_data_res and isinstance(game_data_res, dict):
+            if retrieved_res["item_name_groups"]:
+                game_data_res["item_name_groups"] = retrieved_res["item_name_groups"]
+            if retrieved_res["location_name_groups"]:
+                game_data_res["location_name_groups"] = retrieved_res["location_name_groups"]
+            return game_data_res
+        return None
+
+    actual_data = None
     try:
-        from .utils import fetch_json_with_status
-        url = f"https://{hostname}/api/datapackage/{checksum}"
-        game_data, status_code = asyncio.run(fetch_json_with_status(url, timeout=10))
-        if status_code != 200 or not game_data:
-            logging.error(f"[SYNC_HEAL] Failed to fetch datapackage from {url}: status {status_code}")
-            return False
-        actual_data = None
-        if 'games' in game_data and isinstance(game_data['games'], dict):
-            actual_data = game_data['games'].get(game_name)
-            if not actual_data:
-                game_lower = game_name.lower()
-                for g_key, g_val in game_data['games'].items():
-                    if g_key.lower() == game_lower:
-                        actual_data = g_val
-                        break
-            if not actual_data and game_data['games']:
-                if len(game_data['games']) == 1:
-                    actual_data = list(game_data['games'].values())[0]
-        if not actual_data:
-            actual_data = game_data
- 
+        actual_data = asyncio.run(fetch_datapackage_via_ws(hostname, port, target_room, checksum))
+    except Exception as e:
+        logging.error(f"[SYNC_HEAL] Exception running WebSocket datapackage fetch: {e}")
+        
+    if not actual_data:
+        logging.error(f"[SYNC_HEAL] Failed to fetch datapackage for game '{game_name}' via WebSocket.")
+        return False
+        
+    try:
         # Delete old entries to prevent duplicates
         session.query(DatapackageCache).filter_by(checksum=checksum).delete()
         
@@ -2233,33 +2425,31 @@ def rebuild_game_cache_synchronously(session, game_name):
                 game=game_name, checksum=checksum, entity_type='location', entity_id=eid, entity_name=n
             ))
  
-        # 3. Item Groups & Members
+        # 3. Item Groups
         for g_name, g_items in actual_data.get('item_name_groups', {}).items():
             g_id = generate_negative_id('item_group', g_name)
             current_game_entries.append(DatapackageCache(
                 game=game_name, checksum=checksum, entity_type='item_group', entity_id=g_id, entity_name=g_name
             ))
-            if isinstance(g_items, list):
-                for item in g_items:
-                    membership_key = json.dumps([g_name, item])
-                    m_id = generate_negative_id('item_group_member', membership_key)
-                    current_game_entries.append(DatapackageCache(
-                        game=game_name, checksum=checksum, entity_type='item_group_member', entity_id=m_id, entity_name=membership_key
-                    ))
-
-        # 4. Location Groups & Members
+            
+        item_groups = actual_data.get('item_name_groups', {})
+        if item_groups:
+            current_game_entries.append(DatapackageCache(
+                game=game_name, checksum=checksum, entity_type='item_name_groups_json', entity_id=0, entity_name=json.dumps(item_groups)
+            ))
+ 
+        # 4. Location Groups
         for g_name, g_locations in actual_data.get('location_name_groups', {}).items():
             g_id = generate_negative_id('location_group', g_name)
             current_game_entries.append(DatapackageCache(
                 game=game_name, checksum=checksum, entity_type='location_group', entity_id=g_id, entity_name=g_name
             ))
-            if isinstance(g_locations, list):
-                for loc in g_locations:
-                    membership_key = json.dumps([g_name, loc])
-                    m_id = generate_negative_id('location_group_member', membership_key)
-                    current_game_entries.append(DatapackageCache(
-                        game=game_name, checksum=checksum, entity_type='location_group_member', entity_id=m_id, entity_name=membership_key
-                    ))
+            
+        loc_groups = actual_data.get('location_name_groups', {})
+        if loc_groups:
+            current_game_entries.append(DatapackageCache(
+                game=game_name, checksum=checksum, entity_type='location_name_groups_json', entity_id=0, entity_name=json.dumps(loc_groups)
+            ))
  
         if not current_game_entries:
             current_game_entries.append(DatapackageCache(
@@ -2309,21 +2499,21 @@ def heal_datapackage_cache_if_outdated(session, game_name):
             rebuild_game_cache_synchronously(session, game_name)
             return
             
-        # Check if we have any 'item_group' entries but no 'item_group_member' entries for this game
+        # Check if we have any 'item_group' entries but no 'item_name_groups_json' entries for this game
         # Group by checksum to ensure we target only the invalid cache versions
-        member_query = session.query(DatapackageCache.checksum).filter(
+        json_query = session.query(DatapackageCache.checksum).filter(
             func.lower(DatapackageCache.game) == game_name.lower(),
-            DatapackageCache.entity_type == 'item_group_member'
+            DatapackageCache.entity_type == 'item_name_groups_json'
         )
         
         bad_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
             func.lower(DatapackageCache.game) == game_name.lower(),
             DatapackageCache.entity_type == 'item_group',
-            ~DatapackageCache.checksum.in_(member_query)
+            ~DatapackageCache.checksum.in_(json_query)
         ).distinct().all() if c and c[0]]
         
         if bad_checksums:
-            logging.info(f"[SELF_HEALING] Game '{game_name}' cache lacks group members for checksums {bad_checksums}. Wiping and rebuilding synchronously...")
+            logging.info(f"[SELF_HEALING] Game '{game_name}' cache lacks group JSON row for checksums {bad_checksums}. Wiping and rebuilding synchronously...")
             # Wipe only the item_group entries to prevent the loop while preserving fallback data
             session.query(DatapackageCache).filter(
                 DatapackageCache.checksum.in_(bad_checksums),
@@ -2381,6 +2571,7 @@ def get_item_groups(current_user, game_name, item_name):
     """
     session = Session()
     try:
+        heal_datapackage_cache_if_outdated(session, game_name)
         checksum = request.args.get('checksum') or request.args.get('datapackage_checksum')
         if not checksum:
             room_db_id = request.args.get('room_db_id')
@@ -2416,27 +2607,41 @@ def get_item_groups(current_user, game_name, item_name):
         if not checksum:
             return jsonify([])
         
-        # Query group members for the isolated game checksum
-        members = session.query(DatapackageCache.entity_name).filter(
+        # Query serialized groups JSON row
+        groups_json_row = session.query(DatapackageCache.entity_name).filter(
             DatapackageCache.checksum == checksum,
-            DatapackageCache.entity_type == 'item_group_member'
-        ).all()
+            DatapackageCache.entity_type == 'item_name_groups_json'
+        ).first()
         
         groups = set()
-        for (member_key,) in members:
+        if groups_json_row and groups_json_row[0]:
             try:
-                # Try structured JSON list decoding
-                parsed = json.loads(member_key)
-                if isinstance(parsed, list) and len(parsed) == 2:
-                    g_name, item = parsed
-                    if item.lower() == item_name.lower():
-                        groups.add(g_name)
+                groups_dict = json.loads(groups_json_row[0])
+                if isinstance(groups_dict, dict):
+                    for g_name, items in groups_dict.items():
+                        if isinstance(items, list):
+                            if any(item.lower() == item_name.lower() for item in items):
+                                groups.add(g_name)
             except Exception:
-                # Fallback to legacy colon-split format if parsing fails (old cache not yet rebuilt)
-                if ':' in member_key:
-                    parts = member_key.split(':', 1)
-                    if parts[1].lower() == item_name.lower():
-                        groups.add(parts[0])
+                pass
+        else:
+            # Fallback for legacy database rows not yet rebuilt
+            members = session.query(DatapackageCache.entity_name).filter(
+                DatapackageCache.checksum == checksum,
+                DatapackageCache.entity_type == 'item_group_member'
+            ).all()
+            for (member_key,) in members:
+                try:
+                    parsed = json.loads(member_key)
+                    if isinstance(parsed, list) and len(parsed) == 2:
+                        g_name, item = parsed
+                        if item.lower() == item_name.lower():
+                            groups.add(g_name)
+                except Exception:
+                    if ':' in member_key:
+                        parts = member_key.split(':', 1)
+                        if parts[1].lower() == item_name.lower():
+                            groups.add(parts[0])
                     
         sorted_groups = sorted(list(groups))
         return jsonify(sorted_groups)
@@ -2471,6 +2676,8 @@ def get_slot_available_items(current_user, room_db_id, slot_id):
         game = slot_info.get('game')
         if not game:
             return jsonify([])
+            
+        heal_datapackage_cache_if_outdated(session, game)
             
         try:
             game_checksums = json.loads(room.game_checksums_json or '{}')
@@ -2528,6 +2735,8 @@ def get_slot_available_locations(current_user, room_db_id, slot_id):
         game = slot_info.get('game')
         if not game:
             return jsonify([])
+            
+        heal_datapackage_cache_if_outdated(session, game)
             
         try:
             game_checksums = json.loads(room.game_checksums_json or '{}')

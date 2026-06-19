@@ -52,12 +52,12 @@ def heal_all_datapackages(limit, delay):
                 ).limit(1).scalar() is not None
                 
                 if has_groups:
-                    has_members = session.query(DatapackageCache.id).filter_by(
+                    has_json = session.query(DatapackageCache.id).filter_by(
                         game=game_name, 
-                        entity_type='item_group_member'
+                        entity_type='item_name_groups_json'
                     ).limit(1).scalar() is not None
                     
-                    if not has_members:
+                    if not has_json:
                         outdated_games.append(game_name)
 
         if not outdated_games:
