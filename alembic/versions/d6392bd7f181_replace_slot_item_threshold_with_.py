@@ -66,14 +66,31 @@ def upgrade() -> None:
         
         for old_id, slot_db_id, item_name, threshold_count in old_rows:
             group_name = item_name.strip()
-            result = connection.execute(
-                threshold_groups_tbl.insert().values(
-                    user_tracked_slot_id=slot_db_id,
-                    name=group_name,
-                    is_triggered=False
+            
+            if connection.dialect.name == 'postgresql':
+                result = connection.execute(
+                    threshold_groups_tbl.insert().values(
+                        user_tracked_slot_id=slot_db_id,
+                        name=group_name,
+                        is_triggered=False
+                    ).returning(threshold_groups_tbl.c.id)
                 )
-            )
-            group_id = result.inserted_primary_key[0]
+                group_id = result.scalar()
+            else:
+                result = connection.execute(
+                    threshold_groups_tbl.insert().values(
+                        user_tracked_slot_id=slot_db_id,
+                        name=group_name,
+                        is_triggered=False
+                    )
+                )
+                try:
+                    group_id = result.inserted_primary_key[0]
+                except Exception:
+                    if connection.dialect.name == 'sqlite':
+                        group_id = connection.execute(sa.text("SELECT last_insert_rowid()")).scalar()
+                    else:
+                        group_id = connection.execute(sa.text("SELECT LAST_INSERT_ID()")).scalar()
             
             connection.execute(
                 threshold_group_items_tbl.insert().values(
