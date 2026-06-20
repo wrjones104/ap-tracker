@@ -55,7 +55,7 @@ The system consists of two main parts:
     *   **JWT:** The backend issues JWTs for API access after Discord auth.
     *   **Guest Mode:** Supports anonymous guest accounts.
 *   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
-*   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted.
+*   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering, and slot collisions immediately trigger local untracking and FCM push notifications.
 
 ### Database Schema (Key Models)
 
@@ -73,7 +73,7 @@ The system consists of two main parts:
 1.  **Environment Variables:** The backend relies on environment variables (often in `backend/.env`). Key vars include `DATABASE_URL`, `DISCORD_CLIENT_ID`, `SECRET_KEY`, and `ENCRYPTION_KEY`.
 2.  **Polling Logic:** The `poller.py` is complex. It manages concurrent setups, regular polling, and "Cheese" polling. It handles "backfilling" history for new subscriptions to avoid notification spam.
 3.  **Threshold Groups Evaluation:** The poller evaluates milestone groups when a slot receives new items. It expands `item_group` conditions (e.g. "Swords") using the cached datapackage item group members in `DatapackageCache` to check sum total counts.
-4.  **No Tests:** The project currently lacks a formal test suite. Changes should be verified carefully, preferably by running the backend locally.
+4.  **Testing:** The project has unit tests for the Cheese Tracker claim/sync integration in `backend/tests/test_cheese_sync.py`. These can be run in the virtualenv using `python -m unittest backend/tests/test_cheese_sync.py`. Other parts of the project lack a formal test suite; verify those changes carefully by running the backend locally.
 5.  **Frontend/Backend Sync:** Changes to API response formats in `backend/app/api.py` usually require corresponding updates in the Android app (specifically the Retrofit interfaces).
 
 ## "Gotchas"
@@ -82,6 +82,7 @@ The system consists of two main parts:
 *   **Database:** SQLite uses WAL mode.
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
 *   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
+*   **Cheese Tracker Claim Checking:** Unauthenticated claims on Cheese Tracker leave `claimed_by_ct_user_id` as `None` but populate `discord_username` (which shows as `effective_discord_username` on GET requests). Checking for claim conflicts requires checking both for authenticated ID mismatches and unauthenticated Discord username mismatches.
 
 ## LLM Maintenance Directive
 
