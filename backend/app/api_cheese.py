@@ -570,19 +570,30 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
     Dedicated worker function to handle multiple slot pushes with a single DB session.
     """
     logging.info(f"[CHEESE_DEBUG_WORKER] Starting synchronous slot push for user {user_id} on tracker {tracker_id}")
+    notifications_outbox = []
     with app.app_context():
         session = Session()
         try:
             # Process removals
             for slot_id in removed_slots:
-                send_state(session, app, slot_id, False, user_id, my_ct_id, tracker_id, base_headers)
+                send_state(session, app, slot_id, False, user_id, my_ct_id, tracker_id, base_headers, notifications_outbox)
             
             # Process additions
             for slot_id in added_slots:
-                send_state(session, app, slot_id, True, user_id, my_ct_id, tracker_id, base_headers)
+                send_state(session, app, slot_id, True, user_id, my_ct_id, tracker_id, base_headers, notifications_outbox)
 
             session.commit()
             logging.info(f"[CHEESE_DEBUG_WORKER] Finished slot push.")
+            
+            # Send notifications AFTER successful commit
+            if notifications_outbox:
+                try:
+                    from firebase_admin import messaging
+                    for tokens, messages in notifications_outbox:
+                        messaging.send_each(messages)
+                        logging.info(f"[CHEESE_DEBUG] Sent collision push notification after commit to user {user_id}")
+                except Exception as p_err:
+                    logging.error(f"[CHEESE_DEBUG] Failed to send collision push after commit: {p_err}")
         except Exception as e:
             session.rollback()
             logging.error(f"[CHEESE_DEBUG_WORKER] Worker failed for user {user_id}: {e}")
@@ -637,7 +648,7 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
     except Exception as e:
         logging.error(f"Failed to run push worker for user {user_id}: {e}")
 
-def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread, initial_ct_id, tracker_id, base_headers):
+def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread, initial_ct_id, tracker_id, base_headers, notifications_outbox=None):
     """
     Helper function to send the state to Cheese Tracker.
     """
@@ -676,7 +687,8 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
 
         # 3. Guardrail Check
         user = session.query(User).filter_by(id=current_user_id_for_thread).first()
-        my_discord = user.discord_username.strip().lower() if (user and user.discord_username) else None
+        my_discord = user.discord_username.strip() if (user and user.discord_username) else None
+        my_discord_clean = my_discord.lower() if my_discord else None
 
         ct_discord_clean = ct_discord.strip().lower() if ct_discord else None
         ct_eff_discord_clean = ct_eff_discord.strip().lower() if ct_eff_discord else None
@@ -688,7 +700,7 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
         else:
             claim_username = ct_eff_discord_clean or ct_discord_clean
             if claim_username is not None:
-                if my_discord is None or claim_username != my_discord:
+                if my_discord_clean is None or claim_username != my_discord_clean:
                     is_other_claim = True
 
         if is_other_claim:
@@ -716,8 +728,12 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                                 if p.get('slot_id') == ap_position:
                                     player_name = p.get('alias') or p.get('name') or player_name
                                     break
-                        except:
-                            pass
+                        except (TypeError, json.JSONDecodeError, AttributeError) as err:
+                            logging.debug(
+                                "[CHEESE_DEBUG] Failed to parse cached players for room %s: %s",
+                                room.id,
+                                err,
+                            )
                         
                         room_alias = room.room_id
                         subscription = session.query(UserRoomSubscription).filter_by(
@@ -730,7 +746,9 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                         try:
                             from firebase_admin import messaging
                             from .models import Device
+                            from . import get_firebase_app
                             
+                            get_firebase_app()
                             devices = session.query(Device).filter_by(user_id=current_user_id_for_thread).all()
                             if devices:
                                 tokens = [d.fcm_token for d in devices]
@@ -745,10 +763,13 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                                     )
                                     for token in tokens
                                 ]
-                                messaging.send_each(messages)
-                                logging.info(f"[CHEESE_DEBUG] Sent collision push notification to user {current_user_id_for_thread}")
+                                if notifications_outbox is not None:
+                                    notifications_outbox.append((tokens, messages))
+                                else:
+                                    messaging.send_each(messages)
+                                    logging.info(f"[CHEESE_DEBUG] Sent collision push notification immediately to user {current_user_id_for_thread}")
                         except Exception as p_err:
-                            logging.error(f"[CHEESE_DEBUG] Failed to send collision push: {p_err}")
+                            logging.error(f"[CHEESE_DEBUG] Failed to queue collision push: {p_err}")
             return
 
         # 4. Prepare URL and Payload
@@ -757,7 +778,7 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
         
         if is_tracked:
             payload['claimed_by_ct_user_id'] = my_ct_id
-            payload['discord_username'] = None
+            payload['discord_username'] = None if my_ct_id is not None else my_discord
             payload['availability_status'] = "claimed"
         else:
             payload['claimed_by_ct_user_id'] = None

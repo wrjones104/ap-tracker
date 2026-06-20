@@ -1509,22 +1509,22 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
             if game_data:
                 # Case A: Slot exists in Cheese data.
                 remote_owner_id = game_data.get('claimed_by_ct_user_id')
-                eff_discord = game_data.get('effective_discord_username')
-                eff_discord_clean = eff_discord.strip().lower() if eff_discord else None
+                claim_discord = game_data.get('effective_discord_username') or game_data.get('discord_username')
+                claim_discord_clean = claim_discord.strip().lower() if claim_discord else None
                 my_discord_clean = user.discord_username.strip().lower() if user.discord_username else None
                 
                 # Check if it is claimed by someone else:
                 # 1. Claimed by another authenticated user
                 is_other_auth_claim = (remote_owner_id is not None and remote_owner_id != user.cheese_user_id)
                 # 2. Claimed by another unauthenticated user (or we don't have a Discord username to match)
-                is_other_unauth_claim = (remote_owner_id is None and eff_discord_clean is not None and (my_discord_clean is None or eff_discord_clean != my_discord_clean))
+                is_other_unauth_claim = (remote_owner_id is None and claim_discord_clean is not None and (my_discord_clean is None or claim_discord_clean != my_discord_clean))
                 
                 if is_other_auth_claim or is_other_unauth_claim:
-                    logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Owner mismatch: remote_owner_id={remote_owner_id}, eff_discord={eff_discord})")
+                    logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Owner mismatch: remote_owner_id={remote_owner_id}, claim_discord={claim_discord})")
                     session.delete(ts)
                 
                 # Truly unclaimed: Remote owner is None and no Discord username is associated with the slot
-                elif remote_owner_id is None and eff_discord_clean is None:
+                elif remote_owner_id is None and claim_discord_clean is None:
                     # CHECK: Is this the first sync?
                     if is_first_sync:
                          logging.info(f"[POLLER_SYNC] GRACE PERIOD: Keeping Slot {ts.slot_id} (First Sync - Waiting for push).")
