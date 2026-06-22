@@ -42,7 +42,7 @@ The system consists of two main parts:
 *   **Networking:** Retrofit for REST API requests with OkHttp interceptors (`AuthInterceptor.kt`) for handling JWT authentication headers.
 *   **Local Storage:**
     *   Room Database (`androidx.room`) for caching application data locally.
-    *   `EncryptedSharedPreferences` for securely storing JWT authentication tokens (`TokenManager.kt`).
+    *   `EncryptedSharedPreferences` for securely storing JWT authentication tokens (`TokenManager.kt`). This file is explicitly excluded from Android Auto Backup to prevent crash loops from restored un-decryptable preferences.
 *   **Authentication:** Integrates with Discord OAuth2 using the `net.openid.appauth` library via deep-linking schemes.
 
 ### Backend
@@ -52,8 +52,8 @@ The system consists of two main parts:
 *   **Asynchronous Processing:** The `poller.py` script uses `asyncio` and `aiohttp` for high-concurrency polling of multiple Archipelago rooms.
 *   **Authentication:**
     *   **Discord OAuth2:** Users log in via Discord.
-    *   **JWT:** The backend issues JWTs for API access after Discord auth.
-    *   **Guest Mode:** Supports anonymous guest accounts.
+    *   **JWT:** The backend issues JWTs for API access after Discord auth. Tokens expire after 90 days for Discord users and 730 days for guest accounts.
+    *   **Guest Mode:** Supports anonymous guest accounts, which are automatically pruned after 30 days of inactivity.
 *   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
 *   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering, and slot collisions immediately trigger local untracking and FCM push notifications.
 
@@ -83,6 +83,8 @@ The system consists of two main parts:
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
 *   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
 *   **Cheese Tracker Claim Checking:** Unauthenticated claims on Cheese Tracker leave `claimed_by_ct_user_id` as `None` but populate `discord_username` (which shows as `effective_discord_username` on GET requests). Checking for claim conflicts requires checking both for authenticated ID mismatches and unauthenticated Discord username mismatches.
+*   **SSRF Protections:** When testing locally against private/loopback IPs, ensure `FLASK_ENV='development'` is set, or the `SSRFProtectedTCPConnector` and `SSRFProtectedResolver` will aggressively block backend outgoing connections to those addresses.
+*   **aiohttp connector_owner:** When instantiating `aiohttp.ClientSession` directly instead of using the global session from the poller context, always explicitly pass `connector_owner=True` to avoid connection pooling warnings/resource leaks.
 
 ## LLM Maintenance Directive
 

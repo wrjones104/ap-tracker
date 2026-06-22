@@ -13,14 +13,14 @@ This document outlines the security measures in place to protect user data and e
 - **Secure Signing Algorithm**: JWTs are signed using the HMAC-SHA256 algorithm, which is a strong and widely-used symmetric signing algorithm.
 - **JTI (JWT ID) Claim**: Each JWT is issued with a unique `jti` claim, which is used to prevent token replay attacks.
 - **JWT Blocklist**: A JWT blocklist is implemented to allow for the immediate revocation of tokens in the event of a security incident. When a user logs out or deletes their account, their token's `jti` is added to the blocklist, rendering it unusable.
-- **Short-Lived Tokens**: JWTs have a 30-day expiration, which limits the window of opportunity for an attacker to use a stolen token.
+- **Token Expiration**: JWTs have a 90-day expiration for Discord users and a 730-day expiration for anonymous guest accounts, balancing user convenience with the window of opportunity for an attacker to use a stolen token.
+- **Android Backup Exclusion**: The Android app explicitly excludes the `EncryptedSharedPreferences` file storing authentication tokens from Android Auto Backup to prevent issues during device transfers.
 
 ## API Security
 
 ### Input Validation
 - **Strict Input Validation**: All incoming data is strictly validated to ensure that it is of the correct type, length, and format. This prevents a wide range of attacks, including SQL injection, Cross-Site Scripting (XSS), and buffer overflows.
-- **Hostname Whitelist**: The `add_room` endpoint uses a hostname whitelist to restrict the servers that the application can connect to. This prevents Server-Side Request Forgery (SSRF) attacks, where an attacker could force the server to make requests to internal resources.
-- **IP Address Blacklist**: The `add_room` endpoint also uses an IP address blacklist to prevent users from adding rooms with IP addresses. This further mitigates the risk of SSRF attacks.
+- **SSRF Protection**: Application endpoints use `SSRFProtectedTCPConnector` and `SSRFProtectedResolver` to prevent Server-Side Request Forgery (SSRF) attacks. This blocks connections to private, loopback, and metadata IPs during external room connections (unless bypassed in 'development' mode).
 
 ### Insecure Deserialization
 - **Safe JSON Parsing**: All JSON data is parsed using the `json.loads` function, which is safe from insecure deserialization vulnerabilities. The application never uses `pickle` or other unsafe deserialization libraries.
@@ -38,6 +38,9 @@ This document outlines the security measures in place to protect user data and e
 ### Database Security
 - **Row-Level Locking**: The application uses row-level locking when querying the user table to prevent race conditions and ensure data integrity.
 - **Parameterized Queries**: The application uses parameterized queries to prevent SQL injection attacks.
+
+## Data Retention
+- **Guest Account Pruning**: Inactive anonymous guest accounts (and their associated data) are automatically pruned after 30 days of inactivity to minimize unnecessary data retention.
 
 ## Best Practices
 

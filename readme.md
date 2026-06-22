@@ -13,7 +13,9 @@ The app uses Discord for authentication. The backend service polls rooms you've 
 ### Key Features ✨
 
 * **Discord Authentication:** Securely log in using your existing Discord account via OAuth 2.0.
+* **Guest Mode:** Start using the app immediately with an anonymous guest account, which can later be linked to Discord.
 * **Room Management:** Easily add, rename, and remove Archipelago rooms you want to track.
+* **Cheese Tracker Integration:** Seamlessly sync your rooms and slots with the Cheese Tracker service.
 * **Player Selection:** Choose exactly which players in a room you want to receive notifications for.
 * **Per-Slot Preferences:** Fine-tune your notifications for *each specific player*, overriding your global defaults.
 * **Real-time Push Notifications:** Get notified for:
