@@ -86,6 +86,14 @@ interface ApiService {
         @Path("group_id") groupId: Int
     ): Response<Unit>
 
+    @PUT("rooms/{id}/slots/{slot_id}/threshold-groups/{group_id}")
+    suspend fun updateThresholdGroup(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int,
+        @Path("group_id") groupId: Int,
+        @Body request: CreateThresholdGroupRequest
+    ): Response<Unit>
+
     @GET("rooms/{id}/slots/{slot_id}/items")
     suspend fun getAvailableItems(
         @Path("id") roomId: Int,

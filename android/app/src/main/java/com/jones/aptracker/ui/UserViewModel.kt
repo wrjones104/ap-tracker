@@ -662,6 +662,30 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateThresholdGroup(
+        roomDbId: Int,
+        slotId: Int,
+        groupId: Int,
+        name: String?,
+        items: List<ThresholdGroupItemRequest>
+    ) {
+        viewModelScope.launch {
+            try {
+                val request = CreateThresholdGroupRequest(name, items)
+                val response = RetrofitClient.instance.updateThresholdGroup(roomDbId, slotId, groupId, request)
+                if (response.isSuccessful) {
+                    fetchThresholdGroups(roomDbId, slotId)
+                    _integrationMessage.value = "Milestone group updated."
+                } else {
+                    _errorMessage.value = "Failed to update milestone group: ${response.code()}"
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to update threshold group", e)
+                _errorMessage.value = "Failed to update milestone group. Check connection."
+            }
+        }
+    }
+
     fun deleteThresholdGroup(roomDbId: Int, slotId: Int, groupId: Int) {
         viewModelScope.launch {
             try {
