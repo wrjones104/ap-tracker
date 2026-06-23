@@ -2179,9 +2179,9 @@ def delete_threshold_group(current_user, room_db_id, slot_id, group_id):
 
 
 @bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups/<int:group_id>', methods=['PUT'])
+@token_required
 @handle_db_errors
 @log_api_call
-@token_required
 def update_threshold_group(current_user, room_db_id, slot_id, group_id):
     data = request.json or {}
     items_data = data.get('items', [])
@@ -2189,66 +2189,56 @@ def update_threshold_group(current_user, room_db_id, slot_id, group_id):
     if not items_data:
         return jsonify({'error': 'At least one item is required'}), 400
         
+    # Validate items first to avoid partial database modifications on failure
+    valid_items = []
+    for item_data in items_data:
+        item_name = item_data.get('item_name', '').strip()
+        quantity = item_data.get('quantity', 1)
+        is_group = item_data.get('is_group', False)
+        
+        if item_name and quantity >= 1:
+            valid_items.append((item_name, quantity, is_group))
+            
+    if not valid_items:
+        return jsonify({'error': 'No valid items provided'}), 400
+        
     session = Session()
-    try:
-        tracked_slot = session.query(UserTrackedSlot).filter_by(
-            user_id=current_user.id,
-            room_id=room_db_id,
-            slot_id=slot_id
-        ).first()
-        if not tracked_slot:
-            return jsonify({'error': 'Tracked slot not found'}), 404
-            
-        group = session.query(ThresholdGroup).filter_by(
-            id=group_id,
-            user_tracked_slot_id=tracked_slot.id
-        ).first()
+    tracked_slot = session.query(UserTrackedSlot).filter_by(
+        user_id=current_user.id,
+        room_id=room_db_id,
+        slot_id=slot_id
+    ).first()
+    if not tracked_slot:
+        return jsonify({'error': 'Tracked slot not found'}), 404
         
-        if not group:
-            return jsonify({'error': 'Threshold group not found'}), 404
-            
-        if group.is_triggered:
-            return jsonify({'error': 'Cannot edit a satisfied milestone group'}), 400
-            
-        group.name = (data.get('name') or '').strip() or None
+    group = session.query(ThresholdGroup).filter_by(
+        id=group_id,
+        user_tracked_slot_id=tracked_slot.id
+    ).first()
+    
+    if not group:
+        return jsonify({'error': 'Threshold group not found'}), 404
         
-        # Clear existing items
-        group.items.clear()
+    if group.is_triggered:
+        return jsonify({'error': 'Cannot edit a satisfied milestone group'}), 400
         
-        # Add new items
-        valid_items_count = 0
-        for item_data in items_data:
-            item_name = item_data.get('item_name', '').strip()
-            quantity = item_data.get('quantity', 1)
-            is_group = item_data.get('is_group', False)
-            
-            if not item_name or quantity < 1:
-                continue
-                
-            group_item = ThresholdGroupItem(
-                group_id=group.id,
-                item_name=item_name,
-                quantity=quantity,
-                is_group=is_group
-            )
-            group.items.append(group_item)
-            valid_items_count += 1
-            
-        if valid_items_count == 0:
-            session.rollback()
-            return jsonify({'error': 'No valid items provided'}), 400
-            
-        session.commit()
-        return jsonify({
-            'message': 'Threshold group updated',
-            'id': group.id
-        }), 200
-    except Exception as e:
-        session.rollback()
-        logging.error(f"Failed to update threshold group: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to update threshold group'}), 500
-    finally:
-        Session.remove()
+    group.name = (data.get('name') or '').strip() or None
+    
+    # Clear existing items and add new ones
+    group.items.clear()
+    for item_name, quantity, is_group in valid_items:
+        group_item = ThresholdGroupItem(
+            group_id=group.id,
+            item_name=item_name,
+            quantity=quantity,
+            is_group=is_group
+        )
+        group.items.append(group_item)
+        
+    return jsonify({
+        'message': 'Threshold group updated',
+        'id': group.id
+    }), 200
 
 def rebuild_game_cache_synchronously(session, game_name):
     """

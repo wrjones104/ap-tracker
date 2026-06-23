@@ -509,8 +509,9 @@ fun SlotDetailScreen(
         )
     }
 
-    if (showEditThresholdDialog && editingThresholdGroup != null) {
-        val initialItems = editingThresholdGroup!!.items.map {
+    val groupToEdit = editingThresholdGroup
+    if (showEditThresholdDialog && groupToEdit != null) {
+        val initialItems = groupToEdit.items.map {
             ThresholdGroupItemRequest(
                 item_name = it.item_name,
                 quantity = it.quantity,
@@ -520,7 +521,7 @@ fun SlotDetailScreen(
         ThresholdGroupSheet(
             title = "Edit Milestone Group",
             confirmLabel = "Save",
-            initialName = editingThresholdGroup!!.name ?: "",
+            initialName = groupToEdit.name ?: "",
             initialItems = initialItems,
             availableItems = availableItems,
             onDismiss = {
@@ -528,7 +529,7 @@ fun SlotDetailScreen(
                 editingThresholdGroup = null
             },
             onConfirm = { name, items ->
-                userViewModel.updateThresholdGroup(roomDbId, slotId, editingThresholdGroup!!.id, name, items)
+                userViewModel.updateThresholdGroup(roomDbId, slotId, groupToEdit.id, name, items)
                 showEditThresholdDialog = false
                 editingThresholdGroup = null
             }
@@ -732,24 +733,25 @@ fun ThresholdGroupSheet(
             )
             
             if (showSuggestions && itemFilter.isNotBlank()) {
+                val selectedNames = selectedItems.map { it.item_name.lowercase() }.toSet()
                 val filtered = availableItems.filter {
                     it.name.contains(itemFilter, ignoreCase = true) &&
-                    selectedItems.none { sel -> sel.item_name.equals(it.name, ignoreCase = true) }
+                    !selectedNames.contains(it.name.lowercase())
                 }.sortedByDescending {
                     it.name.equals(itemFilter, ignoreCase = true)
-                }
+                }.take(10)
                 
                 if (filtered.isNotEmpty()) {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                     ) {
-                        LazyColumn(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 200.dp)
                         ) {
-                            items(filtered) { option ->
+                            filtered.forEach { option ->
                                 val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
                                 Text(
                                     displayText,
