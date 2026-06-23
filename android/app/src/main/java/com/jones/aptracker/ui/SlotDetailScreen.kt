@@ -80,6 +80,8 @@ fun SlotDetailScreen(
 
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showAddThresholdDialog by remember { mutableStateOf(false) }
+    var showEditThresholdDialog by remember { mutableStateOf(false) }
+    var editingThresholdGroup by remember { mutableStateOf<ThresholdGroup?>(null) }
     var isConsoleExpanded by remember { mutableStateOf(false) }
     var showHintDialog by remember { mutableStateOf(false) }
     var showLocationHintDialog by remember { mutableStateOf(false) }
@@ -254,6 +256,10 @@ fun SlotDetailScreen(
                             thresholdGroups.forEachIndexed { index, group ->
                                 ThresholdGroupRow(
                                     group = group,
+                                    onEdit = {
+                                        editingThresholdGroup = group
+                                        showEditThresholdDialog = true
+                                    },
                                     onDelete = { userViewModel.deleteThresholdGroup(roomDbId, slotId, group.id) }
                                 )
                                 if (index < thresholdGroups.size - 1) {
@@ -491,12 +497,40 @@ fun SlotDetailScreen(
     }
 
     if (showAddThresholdDialog) {
-        CreateThresholdGroupSheet(
+        ThresholdGroupSheet(
+            title = "Create Milestone Group",
+            confirmLabel = "Create",
             availableItems = availableItems,
             onDismiss = { showAddThresholdDialog = false },
             onConfirm = { name, items ->
                 userViewModel.createThresholdGroup(roomDbId, slotId, name, items)
                 showAddThresholdDialog = false
+            }
+        )
+    }
+
+    if (showEditThresholdDialog && editingThresholdGroup != null) {
+        val initialItems = editingThresholdGroup!!.items.map {
+            ThresholdGroupItemRequest(
+                item_name = it.item_name,
+                quantity = it.quantity,
+                is_group = it.is_group
+            )
+        }
+        ThresholdGroupSheet(
+            title = "Edit Milestone Group",
+            confirmLabel = "Save",
+            initialName = editingThresholdGroup!!.name ?: "",
+            initialItems = initialItems,
+            availableItems = availableItems,
+            onDismiss = {
+                showEditThresholdDialog = false
+                editingThresholdGroup = null
+            },
+            onConfirm = { name, items ->
+                userViewModel.updateThresholdGroup(roomDbId, slotId, editingThresholdGroup!!.id, name, items)
+                showEditThresholdDialog = false
+                editingThresholdGroup = null
             }
         )
     }
@@ -575,7 +609,11 @@ fun ActionCard(icon: ImageVector, title: String, subtitle: String, onClick: () -
 }
 
 @Composable
-fun ThresholdGroupRow(group: ThresholdGroup, onDelete: () -> Unit) {
+fun ThresholdGroupRow(
+    group: ThresholdGroup,
+    onEdit: (() -> Unit)? = null,
+    onDelete: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -617,6 +655,11 @@ fun ThresholdGroupRow(group: ThresholdGroup, onDelete: () -> Unit) {
                 color = Color.Gray
             )
         }
+        if (!group.is_triggered && onEdit != null) {
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            }
+        }
         IconButton(onClick = onDelete) {
             Icon(Icons.Default.Delete, null, tint = Color(0xFFCF6679), modifier = Modifier.size(20.dp))
         }
@@ -625,13 +668,19 @@ fun ThresholdGroupRow(group: ThresholdGroup, onDelete: () -> Unit) {
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-fun CreateThresholdGroupSheet(
+fun ThresholdGroupSheet(
+    title: String,
+    confirmLabel: String,
+    initialName: String = "",
+    initialItems: List<ThresholdGroupItemRequest> = emptyList(),
     availableItems: List<AutocompleteOption>,
     onDismiss: () -> Unit,
     onConfirm: (String?, List<ThresholdGroupItemRequest>) -> Unit
 ) {
-    var groupName by remember { mutableStateOf("") }
-    val selectedItems = remember { mutableStateListOf<ThresholdGroupItemRequest>() }
+    var groupName by remember(initialName) { mutableStateOf(initialName) }
+    val selectedItems = remember(initialItems) {
+        mutableStateListOf<ThresholdGroupItemRequest>().apply { addAll(initialItems) }
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
     
@@ -648,7 +697,7 @@ fun CreateThresholdGroupSheet(
                 .padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
             Text(
-                "Create Milestone Group",
+                title,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
@@ -686,15 +735,21 @@ fun CreateThresholdGroupSheet(
                 val filtered = availableItems.filter {
                     it.name.contains(itemFilter, ignoreCase = true) &&
                     selectedItems.none { sel -> sel.item_name.equals(it.name, ignoreCase = true) }
-                }.take(5)
+                }.sortedByDescending {
+                    it.name.equals(itemFilter, ignoreCase = true)
+                }
                 
                 if (filtered.isNotEmpty()) {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                     ) {
-                        Column {
-                            filtered.forEach { option ->
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                        ) {
+                            items(filtered) { option ->
                                 val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
                                 Text(
                                     displayText,
@@ -797,7 +852,7 @@ fun CreateThresholdGroupSheet(
                     onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList()) },
                     enabled = selectedItems.isNotEmpty() && selectedItems.all { it.quantity >= 1 }
                 ) {
-                    Text("Create")
+                    Text(confirmLabel)
                 }
             }
         }
@@ -826,7 +881,11 @@ fun SearchableSelectDialog(
                 )
                 Spacer(Modifier.height(8.dp))
                 LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                    val filtered = options.filter { it.name.contains(filter, ignoreCase = true) }
+                    val filtered = options.filter {
+                        it.name.contains(filter, ignoreCase = true)
+                    }.sortedByDescending {
+                        it.name.equals(filter, ignoreCase = true)
+                    }
                     items(filtered) { option ->
                         val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
                         Text(
