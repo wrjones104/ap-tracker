@@ -28,14 +28,14 @@ interface HistoryDao {
     suspend fun getLatestGlobalTimestamp(): String?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertHistoryItems(items: List<HistoryItemEntity>): Unit
+    suspend fun insertHistoryItems(items: List<HistoryItemEntity>)
 
     @Query("DELETE FROM history_items WHERE roomId = :roomId AND slot_id IN (:slotIds)")
-    suspend fun deleteHistoryForSlots(roomId: Int, slotIds: Set<Int>): Unit
+    suspend fun deleteHistoryForSlots(roomId: Int, slotIds: Set<Int>)
 
     @Query("DELETE FROM history_items")
-    suspend fun deleteAllHistory(): Unit
+    suspend fun deleteAllHistory()
 
     @Query("UPDATE history_items SET roomId = :newId WHERE roomId = :oldId")
-    suspend fun updateRoomIdForHistory(oldId: Int, newId: Int): Unit
+    suspend fun updateRoomIdForHistory(oldId: Int, newId: Int)
 }

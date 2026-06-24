@@ -18,22 +18,22 @@ interface RoomDao {
     suspend fun getAllRoomsOneShot(): List<RoomEntity>
 
     @Query("DELETE FROM rooms")
-    suspend fun clearAllRooms(): Unit
+    suspend fun clearAllRooms()
 
     @Query("DELETE FROM rooms WHERE id NOT IN (:validIds)")
-    suspend fun deleteObsoleteRooms(validIds: List<Int>): Unit
+    suspend fun deleteObsoleteRooms(validIds: List<Int>)
 
     @Query("SELECT * FROM rooms WHERE room_id = :uuid LIMIT 1")
     suspend fun getRoomByUuid(uuid: String): RoomEntity?
 
     @Query("DELETE FROM rooms WHERE id = :id")
-    suspend fun deleteRoomById(id: Int): Unit
+    suspend fun deleteRoomById(id: Int)
 
     @Update
-    suspend fun updateRooms(rooms: List<RoomEntity>): Unit
+    suspend fun updateRooms(rooms: List<RoomEntity>)
 
     @Transaction
-    suspend fun syncRooms(rooms: List<RoomEntity>): Unit {
+    suspend fun syncRooms(rooms: List<RoomEntity>) {
         if (rooms.isEmpty()) {
             clearAllRooms()
         } else {
@@ -44,5 +44,5 @@ interface RoomDao {
     }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertOrUpdateRooms(rooms: List<RoomEntity>): Unit
+    suspend fun insertOrUpdateRooms(rooms: List<RoomEntity>)
 }

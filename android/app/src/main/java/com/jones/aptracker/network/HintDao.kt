@@ -28,13 +28,13 @@ interface HintDao {
     suspend fun getLatestTimestampForRoom(roomId: Int): String?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertHints(hints: List<HintEntity>): Unit
+    suspend fun insertHints(hints: List<HintEntity>)
 
     @Query("DELETE FROM hints WHERE roomDbId = :roomId AND (itemOwnerId IN (:slotIds) OR locationOwnerId IN (:slotIds))")
-    suspend fun deleteHintsForSlots(roomId: Int, slotIds: Set<Int>): Unit
+    suspend fun deleteHintsForSlots(roomId: Int, slotIds: Set<Int>)
 
     @Query("DELETE FROM hints")
-    suspend fun deleteAllHints(): Unit
+    suspend fun deleteAllHints()
 
     @Query("SELECT COUNT(*) FROM hints WHERE roomDbId = :roomId AND isFound = 1")
     suspend fun countFoundHints(roomId: Int): Int
@@ -43,5 +43,5 @@ interface HintDao {
     suspend fun countGlobalFoundHints(): Int
 
     @Query("UPDATE hints SET roomDbId = :newId WHERE roomDbId = :oldId")
-    suspend fun updateRoomIdForHints(oldId: Int, newId: Int): Unit
+    suspend fun updateRoomIdForHints(oldId: Int, newId: Int)
 }
