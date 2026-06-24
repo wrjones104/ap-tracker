@@ -1,16 +1,17 @@
 [versions]
-agp = "8.13.2"
-kotlin = "2.1.0"
-coreKtx = "1.10.1"
+agp = "9.2.1"
+kotlin = "2.3.0"
+ksp = "2.3.6"
+coreKtx = "1.13.1"
 junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"
-lifecycleRuntimeKtx = "2.6.1"
-activityCompose = "1.8.0"
+lifecycleRuntimeKtx = "2.8.7"
+activityCompose = "1.9.3"
 composeBom = "2024.09.00"
-appcompat = "1.6.1"
+appcompat = "1.7.0"
 material = "1.10.0"
-activity = "1.11.0"
+activity = "1.9.3"
 constraintlayout = "2.1.4"
 
 [libraries]
@@ -38,4 +39,5 @@ androidx-constraintlayout = { group = "androidx.constraintlayout", name = "const
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 
