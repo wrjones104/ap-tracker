@@ -22,6 +22,9 @@ class TextClientViewModel : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
 
+    private val _isAutocompleteLoading = MutableStateFlow(false)
+    val isAutocompleteLoading = _isAutocompleteLoading.asStateFlow()
+
     private val _availableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val availableItems = _availableItems.asStateFlow()
 
@@ -105,6 +108,7 @@ class TextClientViewModel : ViewModel() {
     }
 
     fun fetchAutocompleteData(roomDbId: Int, slotId: Int) {
+        _isAutocompleteLoading.value = true
         viewModelScope.launch {
             try {
                 supervisorScope {
@@ -131,6 +135,8 @@ class TextClientViewModel : ViewModel() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fetch autocomplete/datapackage", e)
+            } finally {
+                _isAutocompleteLoading.value = false
             }
         }
     }
