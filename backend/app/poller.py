@@ -1904,7 +1904,7 @@ async def run_room_setup(room_info, loop):
                     try:
                         logging.debug(f"[POLLER_SETUP] WebSocket attempt {attempt}/{max_ws_retries} for {uri}")
                         session = get_aiohttp_session()
-                        async with session.ws_connect(uri, timeout=5) as ws:
+                        async with session.ws_connect(uri, timeout=5, max_msg_size=16*1024*1024) as ws:
                             msg = await ws.receive(timeout=5)
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 room_info_msg = json.loads(msg.data)
@@ -1981,13 +1981,13 @@ async def run_room_setup(room_info, loop):
                                     missing_games = [game for game, chk in checksums.items() if chk in missing_checksums]
                                     
                                     if missing_games:
-                                        logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Fetching {len(missing_games)} missing datapackages via WebSocket in batches...")
+                                        logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Fetching {len(missing_games)} missing datapackages via WebSocket (one at a time)...")
                                         
-                                        batch_size = 20
+                                        batch_size = 1
                                         batches = [missing_games[i:i + batch_size] for i in range(0, len(missing_games), batch_size)]
                                         
                                         for batch_idx, batch in enumerate(batches):
-                                             logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Fetching batch {batch_idx + 1}/{len(batches)} ({len(batch)} games): {batch}")
+                                             logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Fetching datapackage {batch_idx + 1}/{len(batches)}: {batch[0]}")
                                              
                                              # Request name groups if authenticated
                                              if authenticated:
@@ -2172,12 +2172,18 @@ async def run_room_setup(room_info, loop):
         setup_data['game_checksums_json'] = new_checksums_json_str
 
         if any_datapackage_failed:
-            logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Setup partially failed (missing datapackages).")
-            await loop.run_in_executor(None, db_handle_setup_failure, db_id, last_activity_dt)
-            return
-        else:
-            setup_data['is_setup'] = True 
-            logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup complete.")
+            # Re-check: some games may have been saved before the failure
+            still_missing_chks = await loop.run_in_executor(None, db_get_missing_checksums, list(checksums.values()))
+            if still_missing_chks:
+                still_missing_names = [g for g, c in checksums.items() if c in still_missing_chks]
+                logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Setup incomplete. Still missing datapackages for: {still_missing_names}")
+                await loop.run_in_executor(None, db_handle_setup_failure, db_id, last_activity_dt)
+                return
+            else:
+                logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] All datapackages now cached despite earlier errors. Proceeding with setup.")
+
+        setup_data['is_setup'] = True 
+        logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup complete.")
 
 
     except Exception as e:
