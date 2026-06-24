@@ -763,7 +763,7 @@ fun ThresholdGroupSheet(
                     }
                 )
 
-                val selectedNames = remember(selectedItems) {
+                val selectedNames = remember(selectedItems.toList()) {
                     selectedItems.map { it.item_name.lowercase() }.toSet()
                 }
 

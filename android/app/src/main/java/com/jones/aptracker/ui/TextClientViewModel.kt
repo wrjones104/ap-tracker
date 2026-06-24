@@ -108,6 +108,7 @@ class TextClientViewModel : ViewModel() {
     }
 
     fun fetchAutocompleteData(roomDbId: Int, slotId: Int) {
+        if (_isAutocompleteLoading.value) return
         _isAutocompleteLoading.value = true
         viewModelScope.launch {
             try {

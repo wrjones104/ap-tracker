@@ -133,6 +133,7 @@ def setup_cheese_user_task(app, user_id):
 
             stats = {'linked': 0, 'created': 0, 'slots_synced': 0, 'pruned': 0}
             found_cheese_tracker_ids = set()
+            processed_room_ids = set()
 
             for tracker_item in detailed_trackers:
                 ct_id = tracker_item['ct_id']
@@ -185,6 +186,9 @@ def setup_cheese_user_task(app, user_id):
                             room.cheese_updated_at = datetime.fromisoformat(full_data.get('updated_at').replace('Z', '+00:00'))
                         except ValueError: pass
 
+                if room:
+                    processed_room_ids.add(room.id)
+
                 # Subscribe User & Sync Slots
                 sub = session.query(UserRoomSubscription).filter_by(user_id=user.id, room_id=room.id).first()
                 if not sub:
@@ -232,6 +236,7 @@ def setup_cheese_user_task(app, user_id):
                     .filter(UserRoomSubscription.is_archived == False) \
                     .filter(TrackedRoom.cheese_tracker_id.isnot(None))\
                     .filter(TrackedRoom.cheese_tracker_id.notin_(found_cheese_tracker_ids))\
+                    .filter(UserRoomSubscription.room_id.notin_(processed_room_ids))\
                     .all()
 
                 for sub in stale_subs:
