@@ -104,6 +104,7 @@ fun SlotDetailScreen(
     val textClientError by textClientViewModel.error.collectAsState()
     val availableLocations by textClientViewModel.availableLocations.collectAsState()
     val availableItems by textClientViewModel.availableItems.collectAsState()
+    val isAutocompleteLoading by textClientViewModel.isAutocompleteLoading.collectAsState()
     val datapackage by textClientViewModel.datapackage.collectAsState()
     val keepScreenOn by textClientViewModel.keepScreenOn.collectAsState()
 
@@ -122,7 +123,6 @@ fun SlotDetailScreen(
 
     LaunchedEffect(roomDbId, slotId) {
         userViewModel.fetchThresholdGroups(roomDbId, slotId)
-        userViewModel.fetchAvailableItems(roomDbId, slotId)
         textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
     }
 
@@ -497,10 +497,16 @@ fun SlotDetailScreen(
     }
 
     if (showAddThresholdDialog) {
+        LaunchedEffect(Unit) {
+            if (availableItems.isEmpty()) {
+                textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
+            }
+        }
         ThresholdGroupSheet(
             title = "Create Milestone Group",
             confirmLabel = "Create",
             availableItems = availableItems,
+            isAutocompleteLoading = isAutocompleteLoading,
             onDismiss = { showAddThresholdDialog = false },
             onConfirm = { name, items ->
                 userViewModel.createThresholdGroup(roomDbId, slotId, name, items)
@@ -511,6 +517,11 @@ fun SlotDetailScreen(
 
     val groupToEdit = editingThresholdGroup
     if (showEditThresholdDialog && groupToEdit != null) {
+        LaunchedEffect(Unit) {
+            if (availableItems.isEmpty()) {
+                textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
+            }
+        }
         val initialItems = groupToEdit.items.map {
             ThresholdGroupItemRequest(
                 item_name = it.item_name,
@@ -524,6 +535,7 @@ fun SlotDetailScreen(
             initialName = groupToEdit.name ?: "",
             initialItems = initialItems,
             availableItems = availableItems,
+            isAutocompleteLoading = isAutocompleteLoading,
             onDismiss = {
                 showEditThresholdDialog = false
                 editingThresholdGroup = null
@@ -537,18 +549,30 @@ fun SlotDetailScreen(
     }
 
     if (showHintDialog) {
+        LaunchedEffect(Unit) {
+            if (availableItems.isEmpty()) {
+                textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
+            }
+        }
         SearchableSelectDialog(
             title = "Hint Item",
             options = availableItems,
+            isAutocompleteLoading = isAutocompleteLoading,
             onDismiss = { showHintDialog = false },
             onConfirm = { textClientViewModel.sendMessage("!hint $it"); showHintDialog = false }
         )
     }
 
     if (showLocationHintDialog) {
+        LaunchedEffect(Unit) {
+            if (availableLocations.isEmpty()) {
+                textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
+            }
+        }
         SearchableSelectDialog(
             title = "Hint Location",
             options = availableLocations,
+            isAutocompleteLoading = isAutocompleteLoading,
             onDismiss = { showLocationHintDialog = false },
             onConfirm = { textClientViewModel.sendMessage("!hint_location $it"); showLocationHintDialog = false }
         )
@@ -675,6 +699,7 @@ fun ThresholdGroupSheet(
     initialName: String = "",
     initialItems: List<ThresholdGroupItemRequest> = emptyList(),
     availableItems: List<AutocompleteOption>,
+    isAutocompleteLoading: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: (String?, List<ThresholdGroupItemRequest>) -> Unit
 ) {
@@ -722,57 +747,62 @@ fun ThresholdGroupSheet(
                 }
             }
             
-            OutlinedTextField(
-                value = itemFilter,
-                onValueChange = {
-                    itemFilter = it
-                    showSuggestions = it.isNotBlank()
-                },
-                label = { Text("Search Item to Add...") },
-                modifier = Modifier.fillMaxWidth()
-            )
-            
-            if (showSuggestions && itemFilter.isNotBlank()) {
-                val selectedNames = selectedItems.map { it.item_name.lowercase() }.toSet()
-                val filtered = availableItems.filter {
-                    it.name.contains(itemFilter, ignoreCase = true) &&
-                    !selectedNames.contains(it.name.lowercase())
-                }.sortedByDescending {
-                    it.name.equals(itemFilter, ignoreCase = true)
-                }.take(10)
-                
-                if (filtered.isNotEmpty()) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 200.dp)
-                        ) {
-                            filtered.forEach { option ->
-                                val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
-                                Text(
-                                    displayText,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            selectedItems.add(
-                                                ThresholdGroupItemRequest(
-                                                    item_name = option.name,
-                                                    quantity = 1,
-                                                    is_group = option.isGroup
-                                                )
-                                            )
-                                            itemFilter = ""
-                                            showSuggestions = false
-                                        }
-                                        .padding(12.dp),
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = itemFilter,
+                    onValueChange = {
+                        itemFilter = it
+                        showSuggestions = it.isNotBlank()
+                    },
+                    label = { Text("Search Item to Add...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        if (isAutocompleteLoading) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         }
+                    }
+                )
+
+                val selectedNames = remember(selectedItems.toList()) {
+                    selectedItems.map { it.item_name.lowercase() }.toSet()
+                }
+
+                val filtered = remember(itemFilter, availableItems, selectedNames) {
+                    if (itemFilter.isBlank()) emptyList()
+                    else {
+                        availableItems.filter {
+                            it.name.contains(itemFilter, ignoreCase = true) &&
+                            !selectedNames.contains(it.name.lowercase())
+                        }.sortedByDescending {
+                            it.name.equals(itemFilter, ignoreCase = true)
+                        }
+                    }
+                }
+
+                DropdownMenu(
+                    expanded = showSuggestions && itemFilter.isNotBlank() && filtered.isNotEmpty(),
+                    onDismissRequest = { showSuggestions = false },
+                    properties = androidx.compose.ui.window.PopupProperties(focusable = false),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 250.dp)
+                ) {
+                    filtered.forEach { option ->
+                        val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
+                        DropdownMenuItem(
+                            text = { Text(displayText, style = MaterialTheme.typography.bodyMedium) },
+                            onClick = {
+                                selectedItems.add(
+                                    ThresholdGroupItemRequest(
+                                        item_name = option.name,
+                                        quantity = 1,
+                                        is_group = option.isGroup
+                                    )
+                                )
+                                itemFilter = ""
+                                showSuggestions = false
+                            }
+                        )
                     }
                 }
             }
@@ -865,6 +895,7 @@ fun ThresholdGroupSheet(
 fun SearchableSelectDialog(
     title: String,
     options: List<AutocompleteOption>,
+    isAutocompleteLoading: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
@@ -879,34 +910,48 @@ fun SearchableSelectDialog(
                     value = filter, 
                     onValueChange = { filter = it }, 
                     label = { Text("Search...") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        if (isAutocompleteLoading) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        }
+                    }
                 )
                 Spacer(Modifier.height(8.dp))
-                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                    val filtered = options.filter {
-                        it.name.contains(filter, ignoreCase = true)
-                    }.sortedByDescending {
-                        it.name.equals(filter, ignoreCase = true)
+                if (isAutocompleteLoading && options.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(100.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
                     }
-                    items(filtered) { option ->
-                        val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
-                        Text(
-                            displayText, 
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onConfirm(option.name) }
-                                .padding(12.dp),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                    if (filtered.isEmpty() && options.isNotEmpty()) {
-                        item {
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                        val filtered = options.filter {
+                            it.name.contains(filter, ignoreCase = true)
+                        }.sortedByDescending {
+                            it.name.equals(filter, ignoreCase = true)
+                        }
+                        items(filtered) { option ->
+                            val displayText = if (option.isGroup) "${option.name} (Group)" else option.name
                             Text(
-                                "No matches found",
-                                modifier = Modifier.padding(16.dp),
-                                color = Color.Gray,
-                                style = MaterialTheme.typography.bodySmall
+                                displayText, 
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onConfirm(option.name) }
+                                    .padding(12.dp),
+                                style = MaterialTheme.typography.bodyMedium
                             )
+                        }
+                        if (filtered.isEmpty() && options.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "No matches found",
+                                    modifier = Modifier.padding(16.dp),
+                                    color = Color.Gray,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                         }
                     }
                 }
