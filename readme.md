@@ -12,10 +12,11 @@ The app uses Discord for authentication. The backend service polls rooms you've 
 
 ### Key Features ✨
 
-* **Discord Authentication:** Securely log in using your existing Discord account via OAuth 2.0.
+* **Authentication:** Securely log in using your existing Discord account via OAuth 2.0, or use a seamless Guest account.
 * **Room Management:** Easily add, rename, and remove Archipelago rooms you want to track.
 * **Player Selection:** Choose exactly which players in a room you want to receive notifications for.
 * **Per-Slot Preferences:** Fine-tune your notifications for *each specific player*, overriding your global defaults.
+* **Milestone Groups:** Define custom logic (AND/OR groups of items) so you are only notified when specific win conditions are met.
 * **Real-time Push Notifications:** Get notified for:
     * Progression items being received.
     * Useful items being received.
