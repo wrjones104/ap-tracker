@@ -52,9 +52,10 @@ The system consists of two main parts:
 *   **Asynchronous Processing:** The `poller.py` script uses `asyncio` and `aiohttp` for high-concurrency polling of multiple Archipelago rooms.
 *   **Authentication:**
     *   **Discord OAuth2:** Users log in via Discord.
-    *   **JWT:** The backend issues JWTs for API access after Discord auth.
+    *   **JWT:** The backend issues JWTs for API access after Discord auth (90 day expiration) or Guest creation (730 day expiration).
     *   **Guest Mode:** Supports anonymous guest accounts.
 *   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
+*   **SSRF Protection:** Programmatic SSRF protections (`SSRFProtectedTCPConnector` and `SSRFProtectedResolver`) via `aiohttp` block private, loopback, and metadata IPs during external room connections. These protections are intentionally bypassed when `FLASK_ENV='development'`.
 *   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering, and slot collisions immediately trigger local untracking and FCM push notifications.
 
 ### Database Schema (Key Models)
@@ -63,7 +64,8 @@ The system consists of two main parts:
 *   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
 *   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias.
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
-*   `Device`: Stores FCM tokens for push notifications.
+*   `Device`: Stores FCM tokens for push notifications, tracked by an optional `device_id` (formerly `android_id`).
+*   `JWTBlocklist`: A blocklist for immediate revocation of tokens upon logout or account deletion.
 *   `ThresholdGroup` / `ThresholdGroupItem`: Replaced the old single-item `SlotItemThreshold`. Allows users to define named milestone groups of multiple items (or item groups), triggering a notification only when all conditions are satisfied (AND logic).
 *   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
 *   `DatapackageCache`: Caches game data (Item/Location names, group memberships) to reduce API calls.
