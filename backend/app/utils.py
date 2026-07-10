@@ -131,7 +131,12 @@ async def verify_ap_server(hostname: str, room_id: str):
     if not hostname or not room_id:
         raise ValueError("Hostname and room_id are required.")
 
-    connector = SSRFProtectedTCPConnector()
+    # Create a strict default SSL context pointing to certifi's bundle
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+    # Pass the customized bundle context down into your secure custom connector
+    connector = SSRFProtectedTCPConnector(ssl=ssl_context)
+    
     async with aiohttp.ClientSession(connector=connector, connector_owner=True) as session:
         # Step 1: Check room status endpoint
         base_url = get_web_base_url(hostname)
@@ -222,7 +227,7 @@ async def verify_ap_server(hostname: str, room_id: str):
         final_address = f"{successful_hostname}:{port}"
 
         return {
-            'hostname': hostname, # Keep hostname (which may include port in local dev) intact for references
+            'hostname': hostname, 
             'room_id': room_id,
             'ap_tracker_id': ap_tracker_id,
             'cached_full_address': final_address,
