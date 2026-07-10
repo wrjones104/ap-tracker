@@ -242,8 +242,10 @@ def setup_cheese_user_task(app, user_id):
                 .join(TrackedRoom)\
                 .filter(UserRoomSubscription.user_id == user.id)\
                 .filter(UserRoomSubscription.is_archived == False) \
-                .filter(TrackedRoom.cheese_tracker_id.isnot(None))\
-                .filter(UserRoomSubscription.room_id.notin_(processed_room_ids))
+                .filter(TrackedRoom.cheese_tracker_id.isnot(None))
+
+            if processed_room_ids:
+                stale_subs_query = stale_subs_query.filter(UserRoomSubscription.room_id.notin_(processed_room_ids))
 
             if all_dashboard_tracker_ids:
                 stale_subs_query = stale_subs_query.filter(TrackedRoom.cheese_tracker_id.notin_(all_dashboard_tracker_ids))
