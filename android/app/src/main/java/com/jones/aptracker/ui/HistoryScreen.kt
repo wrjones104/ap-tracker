@@ -130,6 +130,8 @@ fun HistoryContent(
     // New Type Filter States (Traps Removed)
     val showProgression by historyViewModel.showProgression.collectAsState()
     val showUseful by historyViewModel.showUseful.collectAsState()
+    val showFiller by historyViewModel.showFiller.collectAsState()
+    val showTrap by historyViewModel.showTrap.collectAsState()
 
     // Ignored Items filter
     val showIgnoredItems by historyViewModel.showIgnoredItems.collectAsState()
@@ -278,12 +280,14 @@ fun HistoryContent(
                 onShowFoundHintsChange = { historyViewModel.setShowFoundHints(it) },
                 useCondensed = useCondensed,
                 onUseCondensedChange = { historyViewModel.setUseCondensed(it) },
-                // NEW (Traps Removed)
                 showProgression = showProgression,
                 onShowProgressionChange = { historyViewModel.setShowProgression(it) },
                 showUseful = showUseful,
                 onShowUsefulChange = { historyViewModel.setShowUseful(it) },
-                // ---
+                showFiller = showFiller,
+                onShowFillerChange = { historyViewModel.setShowFiller(it) },
+                showTrap = showTrap,
+                onShowTrapChange = { historyViewModel.setShowTrap(it) },
                 showIgnoredItems = showIgnoredItems,
                 onShowIgnoredItemsChange = { historyViewModel.setShowIgnoredItems(it) },
                 isHintTabSelected = pagerState.currentPage == 1,
@@ -375,6 +379,10 @@ fun HistoryFilterSheet(
     onShowProgressionChange: (Boolean) -> Unit,
     showUseful: Boolean,
     onShowUsefulChange: (Boolean) -> Unit,
+    showFiller: Boolean,
+    onShowFillerChange: (Boolean) -> Unit,
+    showTrap: Boolean,
+    onShowTrapChange: (Boolean) -> Unit,
     showIgnoredItems: Boolean,
     onShowIgnoredItemsChange: (Boolean) -> Unit,
 
@@ -400,7 +408,8 @@ fun HistoryFilterSheet(
             modifier = Modifier.padding(bottom = 8.dp),
             color = MaterialTheme.colorScheme.primary
         )
-        Row(
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        androidx.compose.foundation.layout.FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -417,6 +426,22 @@ fun HistoryFilterSheet(
                 onClick = { onShowUsefulChange(!showUseful) },
                 label = { Text("Useful") },
                 leadingIcon = if (showUseful) {
+                    { Icon(Icons.Default.Check, null) }
+                } else null
+            )
+            FilterChip(
+                selected = showFiller,
+                onClick = { onShowFillerChange(!showFiller) },
+                label = { Text("Filler") },
+                leadingIcon = if (showFiller) {
+                    { Icon(Icons.Default.Check, null) }
+                } else null
+            )
+            FilterChip(
+                selected = showTrap,
+                onClick = { onShowTrapChange(!showTrap) },
+                label = { Text("Trap") },
+                leadingIcon = if (showTrap) {
                     { Icon(Icons.Default.Check, null) }
                 } else null
             )
@@ -793,9 +818,11 @@ fun ItemHistoryTab(
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
     val useCondensed by historyViewModel.useCondensed.collectAsState()
 
-    // Type Filters (Traps Removed)
+    // Type Filters
     val showProgression by historyViewModel.showProgression.collectAsState()
     val showUseful by historyViewModel.showUseful.collectAsState()
+    val showFiller by historyViewModel.showFiller.collectAsState()
+    val showTrap by historyViewModel.showTrap.collectAsState()
 
     val historyFilter by historyViewModel.historyFilter.collectAsState()
     val activeRoomIds by historyViewModel.activeRoomIds.collectAsState()
@@ -812,7 +839,7 @@ fun ItemHistoryTab(
     // Filter Logic
     val itemsToShow = remember(
         fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, historyFilter,
-        activeRoomIds, archivedRoomIds, showProgression, showUseful, showIgnoredItems, ignoreList
+        activeRoomIds, archivedRoomIds, showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList
     ) {
         fun String.toWildcardRegex(): Regex {
             val parts = this.split("*")
@@ -874,15 +901,16 @@ fun ItemHistoryTab(
             // --- TYPE CHECK (Prioritized to match visual colors) ---
             val isProgression = (item.itemFlags and 1) != 0
             val isUseful = (item.itemFlags and 2) != 0
+            val isTrap = (item.itemFlags and 4) != 0
 
             val matchesType = if (isProgression) {
                 showProgression
             } else if (isUseful) {
                 showUseful
+            } else if (isTrap) {
+                showTrap
             } else {
-                // Determine behavior for items that are NEITHER (e.g. traps/junk/filler)
-                // Since we don't have a toggle for them, they are always visible (matching normal behavior).
-                true
+                showFiller
             }
 
             val lowerCaseItemName = item.itemName.lowercase()
@@ -1213,6 +1241,8 @@ fun HintHistoryTab(
     // Type Filters
     val showProgression by historyViewModel.showProgression.collectAsState()
     val showUseful by historyViewModel.showUseful.collectAsState()
+    val showFiller by historyViewModel.showFiller.collectAsState()
+    val showTrap by historyViewModel.showTrap.collectAsState()
 
     val availablePlayers by historyViewModel.availableHintPlayers.collectAsState()
     val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
@@ -1232,23 +1262,23 @@ fun HintHistoryTab(
     val filteredHintsForYou = remember(
         hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
         historyFilter, activeRoomIds, archivedRoomIds,
-        showProgression, showUseful, showIgnoredItems, ignoreList
+        showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList
     ) {
         filterHints(
             hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
             historyFilter, activeRoomIds, archivedRoomIds,
-            showProgression, showUseful, showIgnoredItems, ignoreList
+            showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList
         )
     }
     val filteredHintsByYou = remember(
         hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
         historyFilter, activeRoomIds, archivedRoomIds,
-        showProgression, showUseful, showIgnoredItems, ignoreList
+        showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList
     ) {
         filterHints(
             hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
             historyFilter, activeRoomIds, archivedRoomIds,
-            showProgression, showUseful, showIgnoredItems, ignoreList
+            showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList
         )
     }
 
@@ -1549,6 +1579,8 @@ private fun filterHints(
     archivedRoomIds: Set<Int>,
     showProgression: Boolean,
     showUseful: Boolean,
+    showFiller: Boolean,
+    showTrap: Boolean,
     showIgnoredItems: Boolean,
     ignoreList: List<IgnoreItem>
 ): List<HintEntity> {
@@ -1608,13 +1640,16 @@ private fun filterHints(
         // --- TYPE CHECK (Prioritized to match visual colors) ---
         val isProgression = (hint.itemFlags and 1) != 0
         val isUseful = (hint.itemFlags and 2) != 0
+        val isTrap = (hint.itemFlags and 4) != 0
 
         val matchesType = if (isProgression) {
             showProgression
         } else if (isUseful) {
             showUseful
+        } else if (isTrap) {
+            showTrap
         } else {
-            true
+            showFiller
         }
 
         // Note: HintEntity does not have receivingGame, so we just match on itemName

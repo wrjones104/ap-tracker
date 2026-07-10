@@ -120,6 +120,22 @@ fun SettingsScreen(
                         HorizontalDivider()
 
                         NotificationToggle(
+                            text = "Filler items",
+                            description = "Notify when a filler item is received.",
+                            checked = profile.notify_filler_default,
+                            onCheckedChange = { userViewModel.updateGlobalPreferences(filler = it) }
+                        )
+                        HorizontalDivider()
+
+                        NotificationToggle(
+                            text = "Trap items",
+                            description = "Notify when a trap item is received.",
+                            checked = profile.notify_trap_default,
+                            onCheckedChange = { userViewModel.updateGlobalPreferences(trap = it) }
+                        )
+                        HorizontalDivider()
+
+                        NotificationToggle(
                             text = "Hints in my world",
                             description = "Notify when someone hints for an item at one of your locations.",
                             checked = profile.notify_hints_default,
