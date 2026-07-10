@@ -229,20 +229,31 @@ def setup_cheese_user_task(app, user_id):
                             ))
                             stats['slots_synced'] += 1
 
-            if found_cheese_tracker_ids:
-                stale_subs = session.query(UserRoomSubscription)\
-                    .join(TrackedRoom)\
-                    .filter(UserRoomSubscription.user_id == user.id)\
-                    .filter(UserRoomSubscription.is_archived == False) \
-                    .filter(TrackedRoom.cheese_tracker_id.isnot(None))\
-                    .filter(TrackedRoom.cheese_tracker_id.notin_(found_cheese_tracker_ids))\
-                    .filter(UserRoomSubscription.room_id.notin_(processed_room_ids))\
-                    .all()
+            # 3. Prune stale subscriptions
+            # A subscription is stale if it is linked to a Cheese tracker that is no longer present on the user's dashboard.
+            # We use the list of all trackers returned by the dashboard API (all_dashboard_tracker_ids) rather than found_cheese_tracker_ids
+            # to avoid pruning rooms that are still on the user's dashboard but failed to fetch due to a timeout or other error.
+            all_dashboard_tracker_ids = {
+                t.get('tracker_id') for t in trackers_list 
+                if t.get('tracker_id') and t.get('dashboard_override_visibility') is not False
+            }
 
-                for sub in stale_subs:
-                    logging.info(f"[CHEESE_DEBUG] Pruning stale subscription for user {user.id}: Room {sub.room_id}")
-                    session.delete(sub)
-                    stats['pruned'] += 1
+            stale_subs_query = session.query(UserRoomSubscription)\
+                .join(TrackedRoom)\
+                .filter(UserRoomSubscription.user_id == user.id)\
+                .filter(UserRoomSubscription.is_archived == False) \
+                .filter(TrackedRoom.cheese_tracker_id.isnot(None))\
+                .filter(UserRoomSubscription.room_id.notin_(processed_room_ids))
+
+            if all_dashboard_tracker_ids:
+                stale_subs_query = stale_subs_query.filter(TrackedRoom.cheese_tracker_id.notin_(all_dashboard_tracker_ids))
+
+            stale_subs = stale_subs_query.all()
+
+            for sub in stale_subs:
+                logging.info(f"[CHEESE_DEBUG] Pruning stale subscription for user {user.id}: Room {sub.room_id}")
+                session.delete(sub)
+                stats['pruned'] += 1
             
             session.commit()
             logging.info(f"[CHEESE_DEBUG] Initial sync loop complete. Stats: {stats}")
