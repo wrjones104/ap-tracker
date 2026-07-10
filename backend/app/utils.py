@@ -2,6 +2,8 @@ import logging
 import aiohttp
 import os
 import re
+import ssl
+import certifi
 from urllib.parse import urlparse
 from datetime import timezone
 from app import Session
@@ -236,7 +238,8 @@ async def fetch_json_with_status(url, session=None, headers=None, timeout=60):
     """
     should_close_session = False
     if not session:
-        session = aiohttp.ClientSession(connector=SSRFProtectedTCPConnector(), connector_owner=True)
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        session = aiohttp.ClientSession(connector=SSRFProtectedTCPConnector(ssl=ssl_context), connector_owner=True)
         should_close_session = True
         
     json_data = None

@@ -9,6 +9,8 @@ import fnmatch
 import itertools
 import time
 import re
+import ssl
+import certifi
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
@@ -95,8 +97,10 @@ def get_aiohttp_session():
             "User-Agent": get_user_agent_string()
         }
 
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+
         thread_local_data.aiohttp_session = aiohttp.ClientSession(
-            connector=SSRFProtectedTCPConnector(),
+            connector=SSRFProtectedTCPConnector(ssl=ssl_context),
             connector_owner=True,
             headers=headers, 
             cookie_jar=aiohttp.DummyCookieJar()
@@ -364,10 +368,6 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
                 items_skipped_duplicate += 1
                 continue
 
-            if not (flags & 1 or flags & 2):
-                items_skipped_classification += 1
-                continue
-
             items_to_add.append(NotifiedItem(
                 room_id=room_uuid,
                 receiving_slot_id=rid,
@@ -446,10 +446,6 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                 flags = int(hint_data[6]) if len(hint_data) > 6 else 0
                 
             except (ValueError, IndexError):
-                continue
-
-            if not (flags & 0b011):
-                hints_skipped_classification += 1
                 continue
 
             hint_key_db = (io_id, lo_id, item_id, loc_id)
@@ -719,6 +715,9 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                     body = f"{sender_name} sent {item_name} to {receiver_name} ({loc_name})"
 
                 is_progression = bool(item_data['flags'] & 1)
+                is_useful = bool(item_data['flags'] & 2)
+                is_trap = bool(item_data['flags'] & 4)
+                
                 should_notify = False
                 title_prefix = ""
                 item_type = ""
@@ -726,6 +725,8 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                 # Icons
                 icon_prog = "" if remove_emojis else "🏆 "
                 icon_useful = "" if remove_emojis else "✅ "
+                icon_trap = "" if remove_emojis else "💣 "
+                icon_filler = "" if remove_emojis else "📃 "
                 icon_bulb = "" if remove_emojis else "💡 "
                 
                 if is_progression:
@@ -733,11 +734,21 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                     item_type = "item_progression"
                     notify_override = slot_prefs.notify_progression
                     should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
-                else:
+                elif is_useful:
                     title_prefix = f"{icon_useful}{item_name}"
                     item_type = "item_useful"
                     notify_override = slot_prefs.notify_useful
                     should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
+                elif is_trap:
+                    title_prefix = f"{icon_trap}{item_name}"
+                    item_type = "item_trap"
+                    notify_override = slot_prefs.notify_trap
+                    should_notify = notify_override if notify_override is not None else user_prefs.notify_trap_default
+                else:
+                    title_prefix = f"{icon_filler}{item_name}"
+                    item_type = "item_filler"
+                    notify_override = slot_prefs.notify_filler
+                    should_notify = notify_override if notify_override is not None else user_prefs.notify_filler_default
                 
                 if is_a_found_hint:
                     title_prefix = icon_bulb + title_prefix
@@ -842,7 +853,15 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                 icon_bulb = "" if remove_emojis else "💡 "
                 hint_sub_icon = ""
                 if not remove_emojis:
-                    hint_sub_icon = "🏆" if (hint_data.get('flags', 0) & 1) else "✅"
+                    flags = hint_data.get('flags', 0)
+                    if flags & 1:
+                        hint_sub_icon = "🏆"
+                    elif flags & 2:
+                        hint_sub_icon = "✅"
+                    elif flags & 4:
+                        hint_sub_icon = "💣"
+                    else:
+                        hint_sub_icon = "📃"
                 
                 if hint_sub_icon:
                       title = f"{icon_bulb}{hint_sub_icon} New Hint! - {item_name} - [{room_alias}]"
@@ -2937,6 +2956,11 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
     # Simple check: if NO notifications, return empty
     if not user_notifications: return []
     
+    # --- SLAM GUARD ---
+    item_notif_count = sum(1 for n in user_notifications if n.get('type', '').startswith('item_'))
+    if item_notif_count >= 10:
+        should_combine = True
+    
     if not should_combine:
         return user_notifications
 
@@ -2947,8 +2971,8 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
     others = []
 
     for n in user_notifications:
-        t = n.get('type')
-        if t in ['item_progression', 'item_useful']:
+        t = n.get('type', '')
+        if t.startswith('item_'):
             items.append(n)
         elif t == 'hint':
             hints.append(n)
@@ -2986,7 +3010,7 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
             else:
                 # Fallback to old parsing if context is missing (safety net)
                 raw = n['title'].split(" - [")[0]
-                clean = raw.replace("🏆 ", "").replace("✅ ", "").replace("💡 ", "")
+                clean = raw.replace("🏆 ", "").replace("✅ ", "").replace("💡 ", "").replace("💣 ", "").replace("📃 ", "")
                 item_strings.append(clean)
 
         count = len(item_strings)

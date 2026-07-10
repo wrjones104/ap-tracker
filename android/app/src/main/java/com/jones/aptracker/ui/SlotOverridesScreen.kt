@@ -304,6 +304,22 @@ fun SlotSettingsSheet(
                 Spacer(Modifier.height(16.dp))
 
                 OverrideToggle(
+                    title = "Filler items",
+                    currentValue = slot.notify_filler,
+                    defaultValue = profile.notify_filler_default,
+                    onValueChange = { onUpdate("notify_filler", it) }
+                )
+                Spacer(Modifier.height(16.dp))
+
+                OverrideToggle(
+                    title = "Trap items",
+                    currentValue = slot.notify_trap,
+                    defaultValue = profile.notify_trap_default,
+                    onValueChange = { onUpdate("notify_trap", it) }
+                )
+                Spacer(Modifier.height(16.dp))
+
+                OverrideToggle(
                     title = "Hints (World)",
                     currentValue = slot.notify_hints,
                     defaultValue = profile.notify_hints_default,

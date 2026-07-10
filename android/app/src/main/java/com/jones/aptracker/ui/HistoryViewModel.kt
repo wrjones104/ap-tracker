@@ -91,6 +91,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _showUseful = MutableStateFlow(true)
     val showUseful: StateFlow<Boolean> = _showUseful
 
+    private val _showFiller = MutableStateFlow(false)
+    val showFiller: StateFlow<Boolean> = _showFiller
+
+    private val _showTrap = MutableStateFlow(false)
+    val showTrap: StateFlow<Boolean> = _showTrap
+
     // Initialize from SharedPreferences (Default to false/OFF)
     private val _useCondensed = MutableStateFlow(prefs.getBoolean("ui_use_condensed", false))
     val useCondensed: StateFlow<Boolean> = _useCondensed
@@ -330,6 +336,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 _showFoundHints.value = profile.ui_show_found_hints_default
                 _showProgression.value = profile.ui_show_progression_default
                 _showUseful.value = profile.ui_show_useful_default
+                _showFiller.value = profile.ui_show_filler_default
+                _showTrap.value = profile.ui_show_trap_default
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to load user profile for settings", e)
             }
@@ -378,6 +386,20 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         if (_showUseful.value != show) {
             _showUseful.value = show
             saveViewPreferences(showUseful = show)
+        }
+    }
+    
+    fun setShowFiller(show: Boolean) {
+        if (_showFiller.value != show) {
+            _showFiller.value = show
+            saveViewPreferences(showFiller = show)
+        }
+    }
+
+    fun setShowTrap(show: Boolean) {
+        if (_showTrap.value != show) {
+            _showTrap.value = show
+            saveViewPreferences(showTrap = show)
         }
     }
 
@@ -681,7 +703,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         showFinished: Boolean? = null,
         showFoundHints: Boolean? = null,
         showProgression: Boolean? = null,
-        showUseful: Boolean? = null
+        showUseful: Boolean? = null,
+        showFiller: Boolean? = null,
+        showTrap: Boolean? = null
     ) {
         viewModelScope.launch {
             try {
@@ -690,6 +714,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 showFoundHints?.let { params["ui_show_found_hints"] = it }
                 showProgression?.let { params["ui_show_progression"] = it }
                 showUseful?.let { params["ui_show_useful"] = it }
+                showFiller?.let { params["ui_show_filler"] = it }
+                showTrap?.let { params["ui_show_trap"] = it }
                 // No longer sending use_condensed_messages to API
 
                 if (params.isNotEmpty()) {

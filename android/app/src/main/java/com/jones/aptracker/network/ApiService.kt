@@ -282,6 +282,8 @@ data class UserProfile(
     val is_guest: Boolean,
     val notify_progression_default: Boolean,
     val notify_useful_default: Boolean,
+    val notify_filler_default: Boolean,
+    val notify_trap_default: Boolean,
     val notify_hints_default: Boolean,
     val notify_hints_remote_items_default: Boolean,
     val combine_notifications_default: Boolean = false,
@@ -295,6 +297,8 @@ data class UserProfile(
     val ui_show_found_hints_default: Boolean = false,
     val ui_show_progression_default: Boolean = true,
     val ui_show_useful_default: Boolean = true,
+    val ui_show_filler_default: Boolean = false,
+    val ui_show_trap_default: Boolean = false,
     val is_cheese_connected: Boolean = false,
     val global_snooze_until: String? = null,
     val is_syncing_cheese: Boolean = false
@@ -303,6 +307,8 @@ data class UserProfile(
 data class UpdateGlobalPrefsRequest(
     val notify_progression: Boolean? = null,
     val notify_useful: Boolean? = null,
+    val notify_filler: Boolean? = null,
+    val notify_trap: Boolean? = null,
     val notify_hints: Boolean? = null,
     val notify_hints_remote_items: Boolean? = null,
     val combine_notifications: Boolean? = null,
@@ -312,12 +318,16 @@ data class UpdateGlobalPrefsRequest(
     val notify_finished: Boolean? = null,
     val use_condensed_messages: Boolean? = null,
     val ui_show_finished: Boolean? = null,
-    val ui_show_found_hints: Boolean? = null
+    val ui_show_found_hints: Boolean? = null,
+    val ui_show_filler: Boolean? = null,
+    val ui_show_trap: Boolean? = null
 )
 
 data class UpdateSlotPrefsRequest(
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
+    val notify_filler: Boolean?,
+    val notify_trap: Boolean?,
     val notify_hints: Boolean?,
     val notify_hints_remote_items: Boolean?,
     val combine_notifications: Boolean? = null,
@@ -350,6 +360,8 @@ data class TrackedSlotDetail(
     val needs_backfill: Boolean = false,
     val notify_progression: Boolean?,
     val notify_useful: Boolean?,
+    val notify_filler: Boolean?,
+    val notify_trap: Boolean?,
     val notify_hints: Boolean?,
     val notify_hints_remote_items: Boolean?,
     val combine_notifications: Boolean? = null,

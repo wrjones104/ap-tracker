@@ -170,6 +170,10 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         useful: Boolean? = null,
         hints: Boolean? = null,
         remoteHints: Boolean? = null,
+        filler: Boolean? = null,
+        trap: Boolean? = null,
+        uiShowFiller: Boolean? = null,
+        uiShowTrap: Boolean? = null,
         finished: Boolean? = null,
         useCondensed: Boolean? = null,
         suppressOwn: Boolean? = null,
@@ -185,6 +189,10 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
                 progression?.let { params["notify_progression"] = it }
                 useful?.let { params["notify_useful"] = it }
+                filler?.let { params["notify_filler"] = it }
+                trap?.let { params["notify_trap"] = it }
+                uiShowFiller?.let { params["ui_show_filler"] = it }
+                uiShowTrap?.let { params["ui_show_trap"] = it }
                 hints?.let { params["notify_hints"] = it }
                 remoteHints?.let { params["notify_hints_remote_items"] = it }
                 finished?.let { params["notify_finished"] = it }
@@ -226,6 +234,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 val request = UpdateSlotPrefsRequest(
                     notify_progression = if (key == "notify_progression") value else currentSlot.notify_progression,
                     notify_useful = if (key == "notify_useful") value else currentSlot.notify_useful,
+                    notify_filler = if (key == "notify_filler") value else currentSlot.notify_filler,
+                    notify_trap = if (key == "notify_trap") value else currentSlot.notify_trap,
                     notify_hints = if (key == "notify_hints") value else currentSlot.notify_hints,
                     notify_hints_remote_items = if (key == "notify_hints_remote_items") value else currentSlot.notify_hints_remote_items,
                     notify_finished = if (key == "notify_finished") value else currentSlot.notify_finished,
@@ -592,6 +602,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                         val request = UpdateSlotPrefsRequest(
                             notify_progression = sourceSlot.notify_progression,
                             notify_useful = sourceSlot.notify_useful,
+                            notify_filler = sourceSlot.notify_filler,
+                            notify_trap = sourceSlot.notify_trap,
                             notify_hints = sourceSlot.notify_hints,
                             notify_hints_remote_items = sourceSlot.notify_hints_remote_items,
                             notify_finished = sourceSlot.notify_finished,

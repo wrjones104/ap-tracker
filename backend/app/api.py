@@ -741,6 +741,8 @@ def get_room_players(current_user, room_db_id):
                 'is_tracked': is_tracked,
                 'notify_progression': tracked_slot_entry.notify_progression if tracked_slot_entry else None,
                 'notify_useful': tracked_slot_entry.notify_useful if tracked_slot_entry else None,
+                'notify_filler': tracked_slot_entry.notify_filler if tracked_slot_entry else None,
+                'notify_trap': tracked_slot_entry.notify_trap if tracked_slot_entry else None,
                 'notify_hints': tracked_slot_entry.notify_hints if tracked_slot_entry else None
             })
         
@@ -1720,6 +1722,8 @@ def get_current_user(current_user):
             'avatar_url': None,
             'notify_progression_default': current_user.notify_progression_default,
             'notify_useful_default': current_user.notify_useful_default,
+            'notify_filler_default': current_user.notify_filler_default,
+            'notify_trap_default': current_user.notify_trap_default,
             'notify_hints_default': current_user.notify_hints_default,
             'notify_finished_default': current_user.notify_finished_default,
             'use_condensed_messages_default': current_user.use_condensed_messages_default,
@@ -1734,6 +1738,8 @@ def get_current_user(current_user):
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
             'ui_show_progression_default': current_user.ui_show_progression_default,
             'ui_show_useful_default': current_user.ui_show_useful_default,
+            'ui_show_filler_default': current_user.ui_show_filler_default,
+            'ui_show_trap_default': current_user.ui_show_trap_default,
             'is_guest': True,
             'global_snooze_until': format_iso_z(current_user.global_snooze_until),
             'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False)
@@ -1757,6 +1763,8 @@ def get_current_user(current_user):
             'avatar_url': avatar_url,
             'notify_progression_default': current_user.notify_progression_default,
             'notify_useful_default': current_user.notify_useful_default,
+            'notify_filler_default': current_user.notify_filler_default,
+            'notify_trap_default': current_user.notify_trap_default,
             'notify_hints_default': current_user.notify_hints_default,
             'notify_finished_default': current_user.notify_finished_default,
             'use_condensed_messages_default': current_user.use_condensed_messages_default,
@@ -1771,6 +1779,8 @@ def get_current_user(current_user):
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
             'ui_show_progression_default': current_user.ui_show_progression_default,
             'ui_show_useful_default': current_user.ui_show_useful_default,
+            'ui_show_filler_default': current_user.ui_show_filler_default,
+            'ui_show_trap_default': current_user.ui_show_trap_default,
             'is_guest': False,
             'global_snooze_until': format_iso_z(current_user.global_snooze_until),
             'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False)
@@ -1855,6 +1865,8 @@ def get_user_tracked_slots(current_user):
                     'needs_backfill': slot.needs_backfill,
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,
+                    'notify_filler': slot.notify_filler,
+                    'notify_trap': slot.notify_trap,
                     'notify_hints': slot.notify_hints,
                     'notify_hints_remote_items': slot.notify_hints_remote_items,
                     'notify_finished': slot.notify_finished,
@@ -1968,6 +1980,10 @@ def update_user_preferences(current_user):
             setattr(user, 'notify_progression_default', bool(data['notify_progression']))
         if 'notify_useful' in data:
             setattr(user, 'notify_useful_default', bool(data['notify_useful']))
+        if 'notify_filler' in data:
+            setattr(user, 'notify_filler_default', bool(data['notify_filler']))
+        if 'notify_trap' in data:
+            setattr(user, 'notify_trap_default', bool(data['notify_trap']))
         if 'notify_hints' in data:
             setattr(user, 'notify_hints_default', bool(data['notify_hints']))
         if 'notify_finished' in data:
@@ -1984,6 +2000,10 @@ def update_user_preferences(current_user):
             setattr(user, 'ui_show_progression_default', bool(data['ui_show_progression']))
         if 'ui_show_useful' in data:
             setattr(user, 'ui_show_useful_default', bool(data['ui_show_useful']))
+        if 'ui_show_filler' in data:
+            setattr(user, 'ui_show_filler_default', bool(data['ui_show_filler']))
+        if 'ui_show_trap' in data:
+            setattr(user, 'ui_show_trap_default', bool(data['ui_show_trap']))
         if 'combine_notifications' in data:
             setattr(user, 'combine_notifications_default', bool(data['combine_notifications']))
         if 'suppress_own_events' in data:
@@ -2024,6 +2044,10 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
             tracked_slot.notify_progression = data['notify_progression']
         if 'notify_useful' in data:
             tracked_slot.notify_useful = data['notify_useful']
+        if 'notify_filler' in data:
+            tracked_slot.notify_filler = data['notify_filler']
+        if 'notify_trap' in data:
+            tracked_slot.notify_trap = data['notify_trap']
         if 'notify_hints' in data:
             tracked_slot.notify_hints = data['notify_hints']
         if 'notify_hints_remote_items' in data:
