@@ -27,6 +27,10 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column('ui_show_filler_default', sa.Boolean(), nullable=False, server_default=sa.text('0')))
         batch_op.add_column(sa.Column('ui_show_trap_default', sa.Boolean(), nullable=False, server_default=sa.text('0')))
 
+    with op.batch_alter_table('user_tracked_slots', schema=None) as batch_op:
+        batch_op.add_column(sa.Column('notify_filler', sa.Boolean(), nullable=True))
+        batch_op.add_column(sa.Column('notify_trap', sa.Boolean(), nullable=True))
+
     # ### end Alembic commands ###
 
 
