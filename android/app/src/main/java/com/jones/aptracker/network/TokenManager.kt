@@ -16,9 +16,6 @@ class TokenManager(private val context: Context) {
         initializeSharedPreferences()
     }
 
-    private var inMemoryToken: String? = null
-    private var inMemoryEndpoint: String? = null
-
     companion object {
         private var inMemoryToken: String? = null
         private var inMemoryEndpoint: String? = null

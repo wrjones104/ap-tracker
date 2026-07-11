@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload, aliased
 from sqlalchemy import or_, desc, tuple_, func
 from pywebpush import webpush
 
-from . import VAPID_CLAIMS, VAPID_PRIVATE_KEY_FILE, Session
+from . import get_vapid_claims, VAPID_PRIVATE_KEY_FILE, Session
 from .utils import verify_ap_server, generate_negative_id
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
@@ -263,8 +263,8 @@ def register_device(current_user):
     key_pub = data.get('key_pub')
     android_id = data.get('android_id')
 
-    if not endpoint:
-        return jsonify({'error': 'Missing endpoint'}), 400
+    if not endpoint or not key_auth or not key_pub:
+        return jsonify({'error': 'Missing endpoint or subscription keys'}), 400
 
     subscription_info = json.dumps({
         "endpoint": endpoint,
@@ -3507,8 +3507,8 @@ def send_test_notification(current_user):
         # 2. Send a message to each token
         for token in tokens:
             try:
-                subscription_info = json.loads(token)
-                webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, VAPID_CLAIMS)
+                subscription_info = json.loads(json.dumps(token))
+                webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims())
                 success_count += 1
             except Exception as e:
                 logging.error(f"[API_WARN] Failed to send test push to token {token[:10]}...: {e}")

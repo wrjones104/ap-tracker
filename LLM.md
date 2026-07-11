@@ -63,7 +63,7 @@ The system consists of two main parts:
 *   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
 *   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias.
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
-*   `Device`: Stores Unified Push Data for push notifications.
+*   `Device`: Stores serialized Unified Push subscriptions or (legacy) FCM tokens for push notifications.
 *   `ThresholdGroup` / `ThresholdGroupItem`: Replaced the old single-item `SlotItemThreshold`. Allows users to define named milestone groups of multiple items (or item groups), triggering a notification only when all conditions are satisfied (AND logic).
 *   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
 *   `DatapackageCache`: Caches game data (Item/Location names, group memberships) to reduce API calls.

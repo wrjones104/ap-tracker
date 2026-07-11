@@ -4,6 +4,7 @@ import psutil
 import logging
 import sys
 import base64
+import copy
 
 from flask import Flask
 from sqlalchemy import create_engine, event
@@ -40,14 +41,15 @@ logging.info(f"Logging level set to {logging.getLevelName(log_level)} for '{FLAS
 # 1. CONFIGURATION & CONSTANTS
 # ==============================================================================
 
+_base_dir = Path(__file__).resolve().parent.parent
 DATABASE_URL = os.environ.get('DATABASE_URL', "sqlite:///./ap_tracker.db")
 POLLING_INTERVAL_SECONDS = 300
 SUPERVISOR_INTERVAL_SECONDS = 60
-VAPID_PRIVATE_KEY_FILE = "vapid/private_key.pem"
-VAPID_PUBLIC_KEY_FILE = "vapid/public_key.pem"
+VAPID_PRIVATE_KEY_FILE = str(_base_dir / "vapid" / "private_key.pem")
+VAPID_PUBLIC_KEY_FILE = str(_base_dir / "vapid" / "public_key.pem")
 VAPID_PUBLIC_KEY = ""
-VAPID_CLAIMS_FILE = "vapid/claims.json"
-VAPID_CLAIMS = "{}"
+VAPID_CLAIMS_FILE = str(_base_dir / "vapid" / "claims.json")
+VAPID_CLAIMS = {}
 
 process = psutil.Process(os.getpid())
 process.cpu_percent(interval=None)
@@ -99,6 +101,9 @@ if (Path(VAPID_CLAIMS_FILE).exists()):
   with open(VAPID_CLAIMS_FILE, "rb") as f:
       claims = json.load(f)
   VAPID_CLAIMS = claims
+
+def get_vapid_claims():# -> Any | dict[Any, Any]:
+    return copy.deepcopy(VAPID_CLAIMS)
 
 # ==============================================================================
 # 4. APPLICATION FACTORY

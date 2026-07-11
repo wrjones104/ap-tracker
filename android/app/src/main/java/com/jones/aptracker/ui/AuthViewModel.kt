@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.SettingsManager
+import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.SessionManager
 import com.jones.aptracker.network.TokenManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -75,12 +76,17 @@ class AuthViewModel : ViewModel() {
 
     fun onLogout(context: Context) {
         viewModelScope.launch {
-            // --- UNIFIED PUSH UNREGISTRATION ---
-            // This will trigger onUnregistered in NotificationHandler.
+            try {
+                RetrofitClient.instance.logout()
+                Log.d("AuthViewModel", "Token blocklisted on server.")
+            } catch (e: Exception) {
+                Log.e("AuthViewModel", "Failed to clear session on server.", e)
+            }
+
             try {
                 UnifiedPush.unregister(context)
             } catch (e: Exception) {
-                Log.e("AuthViewModel", "Failed to clear session on server. Proceeding with local logout.", e)
+                Log.e("AuthViewModel", "Failed to unregister UnifiedPush.", e)
             } finally {
                  try {
                     val settingsManager = SettingsManager(context)

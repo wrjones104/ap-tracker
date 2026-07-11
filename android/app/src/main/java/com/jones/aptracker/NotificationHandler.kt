@@ -151,20 +151,19 @@ class NotificationHandler : PushService() {
 
     override fun onUnregistered(instance: String) {
         Log.d("NotificationHandler", "UnifiedPush instance unregistered: $instance")
-        
-        val endpoint = TokenManager(this).getEndpoint()
 
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val request = RegisterDeviceRequest(endpoint = endpoint)
-                RetrofitClient.instance.unregisterDevice(request)
-                Log.i("NotificationHandler", "Successfully notified backend of unregistration")
-            } catch (e: Exception) {
-                Log.e("NotificationHandler", "Error notifying backend of unregistration", e)
+        val tokenManager = TokenManager(this)
+        val endpoint = tokenManager.getEndpoint()
+        if (tokenManager.getToken() != null && endpoint != null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val request = RegisterDeviceRequest(endpoint = endpoint)
+                    RetrofitClient.instance.unregisterDevice(request)
+                    Log.i("NotificationHandler", "Successfully notified backend of unregistration")
+                } catch (e: Exception) {
+                    Log.e("NotificationHandler", "Error notifying backend of unregistration", e)
+                }
             }
-
-            RetrofitClient.instance.logout()
-            Log.d("NotificationHandler", "Token blocklisted on server.")
         }
     }
 }

@@ -1,9 +1,7 @@
 package com.jones.aptracker.ui
 
-import android.app.Application
 import android.util.Log
 import androidx.lifecycle.*
-import com.jones.aptracker.MyFirebaseMessagingService
 import com.jones.aptracker.network.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow

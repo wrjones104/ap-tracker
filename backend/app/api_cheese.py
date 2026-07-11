@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from pywebpush import webpush
 
-from . import VAPID_CLAIMS, VAPID_PRIVATE_KEY_FILE, Session
+from . import get_vapid_claims, VAPID_PRIVATE_KEY_FILE, Session
 from .models import User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
 from .api import token_required, log_api_call, handle_db_errors
 from .encryption import encrypt_api_key, decrypt_api_key
@@ -621,7 +621,7 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
                 try:
                     for messages in notifications_outbox:
                       for (subscription_info, data) in messages:
-                        webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, VAPID_CLAIMS)
+                        webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims())
                     logging.info(f"[CHEESE_DEBUG] Sent collision push notification after commit to user {user_id}")
                 except Exception as p_err:
                     logging.error(f"[CHEESE_DEBUG] Failed to send collision push after commit: {p_err}")
@@ -782,7 +782,7 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                                 tokens = [d.fcm_token for d in devices]
                                 messages = [
                                     (
-                                        json.loads(token),
+                                        json.loads(json.dumps(token)),
                                         json.dumps(
                                             {
                                               "title": "Slot Sync Conflict",
@@ -796,8 +796,11 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                                     notifications_outbox.append(messages)
                                 else:
                                     for (subscription_info, data) in messages:
-                                      webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, VAPID_CLAIMS)
-                                    logging.info(f"[CHEESE_DEBUG] Sent collision push notification immediately to user {current_user_id_for_thread}")
+                                      try:
+                                        webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims())
+                                      except Exception as wp_err:
+                                        logging.error(f"[CHEESE_DEBUG] WebPush failed: {wp_err}")
+                                    logging.info(msg=f"[CHEESE_DEBUG] Sent collision push notification immediately to user {current_user_id_for_thread}")
                         except Exception as p_err:
                             logging.error(f"[CHEESE_DEBUG] Failed to queue collision push: {p_err}")
             return

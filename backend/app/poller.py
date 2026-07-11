@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
 from threading import local
+from requests import Response
 from sqlalchemy import or_, tuple_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import OperationalError
@@ -24,7 +25,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from pywebpush import webpush
 
-from . import VAPID_CLAIMS, VAPID_PRIVATE_KEY_FILE, Session, process, is_sqlite
+from . import get_vapid_claims, VAPID_PRIVATE_KEY_FILE, Session, process, is_sqlite
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, SlotItemCount
@@ -152,33 +153,22 @@ async def send_push_notifications(notifications, device_tokens, loop):
                 data_payload['data']['bundle_type'] = content['type']
 
         for token in device_tokens:
-            subscription_info = json.loads(token)
+            subscription_info = json.loads(json.dumps(token))
             messages.append((subscription_info, json.dumps(data_payload)))
 
     if not messages: return
 
-    for i in range(0, len(messages), 10):
-        chunk = messages[i:i + 10]
+    unregistered_tokens = []
+    for (subscription_info, data) in messages:
         try:
-            logging.info(f"[FCM] Sending a chunk of {len(chunk)} messages...")
-            response = await loop.run_in_executor(None, lambda: [webpush(si, data, VAPID_PRIVATE_KEY_FILE, VAPID_CLAIMS) for si, data in chunk])
-            
-            unregistered_tokens = []
-            for idx, res in enumerate(response.responses):
-                if not res.success:
-                    error_code = res.exception.code if hasattr(res.exception, 'code') else "UNKNOWN"
-                    if error_code in ['UNREGISTERED', 'NOT_FOUND']:
-                        unregistered_tokens.append(chunk[idx][0]['endpoint'])
-
-            if unregistered_tokens:
-                logging.info(f"[FCM] Found {len(unregistered_tokens)} invalid devices. Removing from DB.")
-                await loop.run_in_executor(None, db_remove_invalid_tokens, unregistered_tokens)
-                
+            response = webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims())
+            if isinstance(response, Response) and str(response.status_code).startswith("4"):
+                unregistered_tokens.append(json.dumps(subscription_info))
         except Exception as e:
             logging.error(f"[FCM] A critical error occurred while sending a chunk: {e}", exc_info=True)
-        
-        if i + 10 < len(messages):
-            await asyncio.sleep(1)
+    if unregistered_tokens:
+        logging.info(f"[FCM] Found {len(unregistered_tokens)} invalid devices. Removing from DB.")
+        await loop.run_in_executor(None, db_remove_invalid_tokens, unregistered_tokens)
 
 def db_remove_invalid_tokens(tokens_to_remove):
     """Synchronously removes invalid FCM tokens from the database."""

@@ -89,7 +89,7 @@ This project uses a hybrid database setup. The backend is designed to run with *
     * Create a file at `backend/.env` and add your database URL:
     
     **For local dev (SQLite) - this is optional as it's the default** </br>
-    export DATABASE_URL='sqlite:///../ap_tracker.db'
+    export DATABASE_URL='sqlite:///./ap_tracker.db'
     
     **For production (Postgres)** </br>
     export DATABASE_URL='postgresql://ap_tracker_user:your_password@localhost/ap_tracker_db'
@@ -107,12 +107,7 @@ This project uses a hybrid database setup. The backend is designed to run with *
     
 
 8.  **Run the Server**
-    
-    **Load your environment variables** </br>
-    source backend/.env
-    
-    **Run the Flask development server** </br>
-    flask --app backend.run:app run --debug
+    * From the `backend` directory, start the `run.py` file directly.
     
 
 #### Android App Setup
