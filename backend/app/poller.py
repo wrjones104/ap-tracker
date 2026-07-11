@@ -141,7 +141,6 @@ async def send_push_notifications(notifications, device_tokens, loop):
             logging.error(f"[NOTIFIER] Error creating log message: {e}")
             
         # We check if the 'bundled_items' key exists (created by our bundling logic)
-        # FCM 'data' fields must be strings, so we ensure it's passed correctly.
         data_payload = {
             "title": content['title'],
             "body": content['body'],
@@ -158,26 +157,35 @@ async def send_push_notifications(notifications, device_tokens, loop):
 
     if not messages: return
 
-    unregistered_tokens = []
-    for (subscription_info, data) in messages:
+    for i in range(0, len(messages), 10):
+        chunk = messages[i:i + 10]
         try:
-            response = webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims())
-            if isinstance(response, Response) and str(response.status_code).startswith("4"):
-                unregistered_tokens.append(json.dumps(subscription_info))
+            logging.info(f"[WebPush] Sending a chunk of {len(chunk)} messages...")
+            responses = await loop.run_in_executor(None, lambda: [webpush(si, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims()) for (si, data) in chunk])
+            
+            unregistered_tokens = []
+            for idx, res in enumerate(responses):
+                if isinstance(res, Response) and str(res.status_code).startswith("4"):
+                    unregistered_tokens.append(chunk[idx][0])
+
+            if unregistered_tokens:
+                logging.info(f"[WebPush] Found {len(unregistered_tokens)} invalid devices. Removing from DB.")
+                await loop.run_in_executor(None, db_remove_invalid_tokens, unregistered_tokens)
+                
         except Exception as e:
-            logging.error(f"[FCM] A critical error occurred while sending a chunk: {e}", exc_info=True)
-    if unregistered_tokens:
-        logging.info(f"[FCM] Found {len(unregistered_tokens)} invalid devices. Removing from DB.")
-        await loop.run_in_executor(None, db_remove_invalid_tokens, unregistered_tokens)
+            logging.error(f"[WebPush] A critical error occurred while sending a chunk: {e}", exc_info=True)
+        
+        if i + 10 < len(messages):
+            await asyncio.sleep(1)
 
 def db_remove_invalid_tokens(tokens_to_remove):
-    """Synchronously removes invalid FCM tokens from the database."""
+    """Synchronously removes invalid WebPush tokens from the database."""
     session = Session()
     try:
         session.query(Device).filter(Device.fcm_token.in_(tokens_to_remove)).delete(synchronize_session=False)
         session.commit()
     except Exception as e:
-        logging.error(f"[FCM_DB_ERROR] Error removing invalid tokens: {e}")
+        logging.error(f"[WebPush_DB_ERROR] Error removing invalid tokens: {e}")
         session.rollback()
     finally:
         Session.remove()

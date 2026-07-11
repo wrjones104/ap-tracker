@@ -621,7 +621,10 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
                 try:
                     for messages in notifications_outbox:
                       for (subscription_info, data) in messages:
-                        webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims())
+                        try:
+                            webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims())
+                        except Exception as wp_err:
+                            logging.error(f"[CHEESE_DEBUG] WebPush failed: {wp_err}")
                     logging.info(f"[CHEESE_DEBUG] Sent collision push notification after commit to user {user_id}")
                 except Exception as p_err:
                     logging.error(f"[CHEESE_DEBUG] Failed to send collision push after commit: {p_err}")
@@ -796,10 +799,10 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                                     notifications_outbox.append(messages)
                                 else:
                                     for (subscription_info, data) in messages:
-                                      try:
-                                        webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims())
-                                      except Exception as wp_err:
-                                        logging.error(f"[CHEESE_DEBUG] WebPush failed: {wp_err}")
+                                        try:
+                                            webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, get_vapid_claims())
+                                        except Exception as wp_err:
+                                            logging.error(f"[CHEESE_DEBUG] WebPush failed: {wp_err}")
                                     logging.info(msg=f"[CHEESE_DEBUG] Sent collision push notification immediately to user {current_user_id_for_thread}")
                         except Exception as p_err:
                             logging.error(f"[CHEESE_DEBUG] Failed to queue collision push: {p_err}")

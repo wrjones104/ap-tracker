@@ -253,8 +253,8 @@ def get_public_config():
 @token_required
 def register_device(current_user):
     """
-    Registers a new device (FCM token) for the current user.
-    Ensures that the FCM token is unique to the current active user by 
+    Registers a new device (WebPush token) for the current user.
+    Ensures that the WebPush token is unique to the current active user by 
     removing it from any other users (e.g., previous guest accounts).
     """
     data = request.json or {}
@@ -277,7 +277,7 @@ def register_device(current_user):
     session = Session()
 
     # --- Prune Duplicate Tokens ---
-    # If this FCM token exists for ANY user other than the current one, delete it.
+    # If this WebPush token exists for ANY user other than the current one, delete it.
     # This handles app reinstalls (new Guest ID) or account switching.
     stale_devices = session.query(Device).filter(
         Device.fcm_token == subscription_info,
@@ -286,7 +286,7 @@ def register_device(current_user):
 
     if stale_devices:
         for stale in stale_devices:
-            logging.info(f"[API] Unlinking FCM token from old User {stale.user_id} to assign to Current User {current_user.id}")
+            logging.info(f"[API] Unlinking WebPush token from old User {stale.user_id} to assign to Current User {current_user.id}")
             session.delete(stale)
     # --------------------------------------------------
 
@@ -304,7 +304,7 @@ def register_device(current_user):
             # Update existing record for this user
             if device.fcm_token != subscription_info:
                 device.fcm_token = subscription_info
-                logging.info(f"[API] Refreshed FCM token for existing device (Android ID: {android_id}) for user {current_user.id}")
+                logging.info(f"[API] Refreshed WebPush token for existing device (Android ID: {android_id}) for user {current_user.id}")
         else:
             # Create new record
             device = Device(
@@ -3164,32 +3164,32 @@ def get_room_hint_history(current_user, room_db_id):
 @token_required
 def unregister_device(current_user):
     """
-    Deletes a specific device (identified by its FCM token)
+    Deletes a specific device (identified by its WebPush token)
     from the user's account to stop notifications.
     """
     data = request.json
-    fcm_token = data.get('fcm_token')
+    subscription_info = data.get('endpoint')
 
-    if not fcm_token:
-        return jsonify({'error': 'Missing fcm_token'}), 400
+    if not subscription_info:
+        return jsonify({'error': 'Missing endpoint'}), 400
 
     session = Session()
     try:
         # Find the specific device for this user
         device = session.query(Device).filter_by(
             user_id=current_user.id,
-            fcm_token=fcm_token
+            fcm_token=subscription_info
         ).first()
 
         if not device:
             # This is not really an error, the device just isn't registered.
-            logging.info(f"[API] Device {fcm_token} not found for user {current_user.id}, cannot unregister.")
+            logging.info(f"[API] Device {subscription_info} not found for user {current_user.id}, cannot unregister.")
             return jsonify({'message': 'Device not found'}), 404
 
         # Delete the device
         session.delete(device)
         session.commit()
-        logging.info(f"[API] User {current_user.id} unregistered device {fcm_token}.")
+        logging.info(f"[API] User {current_user.id} unregistered device {subscription_info}.")
         return jsonify({'message': 'Device unregistered successfully'}), 200
 
     except Exception as e:
@@ -3484,7 +3484,7 @@ def set_slot_snooze(current_user, room_db_id, slot_id):
 def send_test_notification(current_user):
     """
     Triggers a fake push notification to all of the user's registered devices.
-    Useful for debugging FCM and Notification Actions.
+    Useful for debugging WebPush and Notification Actions.
     """
     session = Session()
     try:

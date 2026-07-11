@@ -9,6 +9,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.net.toUri
+import com.google.gson.JsonParser
 import com.jones.aptracker.network.RegisterDeviceRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.TokenManager
@@ -16,7 +17,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import org.json.JSONObject
+import org.json.JSONStringer
 import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.PushService
 import org.unifiedpush.android.connector.UnifiedPush
@@ -104,7 +107,7 @@ class NotificationHandler : PushService() {
 
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
         Log.d("NotificationHandler", "New UnifiedPush endpoint: ${endpoint.url}")
-        TokenManager(this).saveEndpoint(endpoint.url)
+        TokenManager(this).saveEndpoint(Json.encodeToString(endpoint))
         
         val androidId = Settings.Secure.getString(
             contentResolver,
