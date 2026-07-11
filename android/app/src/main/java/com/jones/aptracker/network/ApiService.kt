@@ -191,7 +191,12 @@ interface ApiService {
 
     @POST("history/sync")
     suspend fun syncHistory(@Body request: HistorySyncRequest): HistorySyncResponse
+
+    @GET("auth/vapid")
+    suspend fun getVapidKey(): VapidResponse
 }
+
+data class VapidResponse(val public_key: String)
 
 data class Room(
     val id: Int,
@@ -258,7 +263,9 @@ data class HistoryItem(
 )
 
 data class RegisterDeviceRequest(
-    val fcm_token: String,
+    val endpoint: String? = null,
+    val key_auth: String? = null,
+    val key_pub: String? = null,
     val android_id: String? = null
 )
 

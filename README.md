@@ -6,7 +6,7 @@ Archipelago Alerts (formerly AP Tracker) is a tool for tracking Archipelago mult
 
 This project was built to solve a simple problem: wanting to know when important things happen in an Archipelago game without having to constantly watch a tracker website or be at your computer.
 
-The app uses Discord for authentication. The backend service polls rooms you've added, and the Android app provides a clean interface for managing your tracked rooms, setting notification preferences, and viewing event history. When a significant event occurs, the backend sends a push notification via Firebase Cloud Messaging directly to your phone.
+The app uses Discord for authentication. The backend service polls rooms you've added, and the Android app provides a clean interface for managing your tracked rooms, setting notification preferences, and viewing event history. When a significant event occurs, the backend sends a push notification via Unified Push directly to your phone.
 
 ---
 
@@ -34,7 +34,7 @@ This project is a monorepo containing two main components:
     * **SQLAlchemy** as the ORM.
     * **PostgreSQL** (for production/UAT) & **SQLite** (for local dev).
     * **Alembic** for handling database migrations.
-    * **Firebase Admin SDK** for sending push notifications.
+    * **WebPush** for sending push notifications.
 
 * **Android App (Kotlin)**
     * **Jetpack Compose** for the declarative UI.
@@ -42,7 +42,7 @@ This project is a monorepo containing two main components:
     * **Jetpack Room** for local database caching of rooms and history.
     * **AppAuth** for handling the Discord OAuth 2.0 flow.
     * **EncryptedSharedPreferences** for secure storage of auth tokens.
-    * **Firebase Cloud Messaging (FCM)** for receiving push notifications.
+    * **Unified Push** for receiving push notifications.
 
 ---
 
@@ -65,9 +65,14 @@ This project uses a hybrid database setup. The backend is designed to run with *
     
     pip install -r requirements.txt
 
-4.  **Set up Firebase Admin**
-    * In your Firebase project settings, generate a new private key for the Service Account.
-    * Download the resulting JSON file and save it as `service-account-key.json` in the `backend/app/` directory.
+4.  **Prepare VAPID for Unified Push**
+    * After installing the requirements, you should have a new binary `vapid` in your venv.
+    * Execute it from the `backend/vapid` directory to generate a new key pair set.
+    * You should also add a `claims.json` to the same directory containing an email as the subject:
+
+    ```json
+    { "sub": "mailto:your@email.com" }
+    ```
 
 5.  **Set up the Database (Choose one)**
 
@@ -83,10 +88,10 @@ This project uses a hybrid database setup. The backend is designed to run with *
     * The backend is configured using environment variables, typically in a `.env` file.
     * Create a file at `backend/.env` and add your database URL:
     
-    # For local dev (SQLite) - this is optional as it's the default
+    **For local dev (SQLite) - this is optional as it's the default** </br>
     export DATABASE_URL='sqlite:///../ap_tracker.db'
     
-    # For production (Postgres)
+    **For production (Postgres)** </br>
     export DATABASE_URL='postgresql://ap_tracker_user:your_password@localhost/ap_tracker_db'
     
 
@@ -94,19 +99,19 @@ This project uses a hybrid database setup. The backend is designed to run with *
     * Before the first run, you must build the database schema.
     * From the **project root** (not the `backend` directory), run:
     
-    # Load your environment variables
+    **Load your environment variables** </br>
     source backend/.env
     
-    # Run the migrations
+    **Run the migrations** </br>
     alembic upgrade head
     
 
 8.  **Run the Server**
     
-    # Load your environment variables
+    **Load your environment variables** </br>
     source backend/.env
     
-    # Run the Flask development server
+    **Run the Flask development server** </br>
     flask --app backend.run:app run --debug
     
 
@@ -115,24 +120,19 @@ This project uses a hybrid database setup. The backend is designed to run with *
 1.  **Open in Android Studio**
     * Open Android Studio and select `Open`, then navigate to and select the `android/` folder.
 
-2.  **Set up Firebase Services**
-    * In your Firebase project, go to the Android app settings.
-    * Download the `google-services.json` file.
-    * Place this file in the `android/app/` directory.
-
-3.  **Configure API & Secrets**
+2.  **Configure API & Secrets**
     * The app's secrets (like API keys) are **not** stored in version control. They are managed in a local `local.properties` file.
     * Create a new file at `android/app/local.properties`.
     * Add the following keys. The `build.gradle.kts` file is already configured to read them.
 
     
-    # Your computer's local IP (for testing with your local backend)
+    **Your computer's local IP (for testing with your local backend)** </br>
     DEV_API_BASE_URL=http://192.168.1.100:5000/
     
-    # Your Discord App's Client ID
+    **Your Discord App's Client ID** </br>
     DISCORD_CLIENT_ID=YOUR_DISCORD_CLIENT_ID
     
 
-4.  **Build and Run**
+3.  **Build and Run**
     * Select the **`devDebug`** build variant in Android Studio.
     * Run the app on an emulator or a physical device connected to the same local network as your computer. The app will now connect to your local backend.

@@ -2,10 +2,10 @@
 # Python Environment Variables
 .env
 .env.*
-# Firebase Admin SDK (Backend)
-service-account-key.json
-# Firebase Configs (Android - covering all variants)
-**/google-services.json
+# VAPID keys and claims
+claims.json
+private_key.pem
+public_key.pem
 ag_review/
 
 # --- ANDROID ---
@@ -27,6 +27,7 @@ captures/
 *.keystore
 *.p12
 *.pem
+gradle-daemon-jvm.properties
 
 # --- PYTHON / BACKEND ---
 # Virtual Environments
@@ -40,6 +41,8 @@ __pycache__/
 # Distribution / Packaging
 *.egg-info/
 dist/
+# Visual Studio configs
+.vscode/
 
 # --- DATABASE ---
 # SQLite (Dev)

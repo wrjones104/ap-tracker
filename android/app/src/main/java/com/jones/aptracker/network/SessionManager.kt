@@ -34,6 +34,7 @@ object SessionManager {
         if (isLoggingOut.compareAndSet(false, true)) {
             CoroutineScope(Dispatchers.IO).launch {
                 tokenManager.deleteToken()
+                tokenManager.deleteEndpoint()
                 appDatabase.clearAllTables()
 
                 _logoutEvent.emit(reason)

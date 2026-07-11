@@ -15,9 +15,9 @@ from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.orm import selectinload, aliased
 from sqlalchemy import or_, desc, tuple_, func
-from firebase_admin import messaging
+from pywebpush import webpush
 
-from . import Session, get_firebase_app
+from . import VAPID_CLAIMS, VAPID_PRIVATE_KEY_FILE, Session
 from .utils import verify_ap_server, generate_negative_id
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot, 
@@ -258,11 +258,21 @@ def register_device(current_user):
     removing it from any other users (e.g., previous guest accounts).
     """
     data = request.json or {}
-    fcm_token = data.get('fcm_token')
-    android_id = data.get('android_id') 
+    endpoint = data.get('endpoint')
+    key_auth = data.get('key_auth')
+    key_pub = data.get('key_pub')
+    android_id = data.get('android_id')
 
-    if not fcm_token:
-        return jsonify({'error': 'Missing fcm_token'}), 400
+    if not endpoint:
+        return jsonify({'error': 'Missing endpoint'}), 400
+
+    subscription_info = json.dumps({
+        "endpoint": endpoint,
+        "keys": {
+            "auth": key_auth,
+            "p256dh": key_pub
+        }
+    })
 
     session = Session()
 
@@ -270,7 +280,7 @@ def register_device(current_user):
     # If this FCM token exists for ANY user other than the current one, delete it.
     # This handles app reinstalls (new Guest ID) or account switching.
     stale_devices = session.query(Device).filter(
-        Device.fcm_token == fcm_token,
+        Device.fcm_token == subscription_info,
         Device.user_id != current_user.id
     ).all()
 
@@ -292,13 +302,13 @@ def register_device(current_user):
 
         if device:
             # Update existing record for this user
-            if device.fcm_token != fcm_token:
-                device.fcm_token = fcm_token
+            if device.fcm_token != subscription_info:
+                device.fcm_token = subscription_info
                 logging.info(f"[API] Refreshed FCM token for existing device (Android ID: {android_id}) for user {current_user.id}")
         else:
             # Create new record
             device = Device(
-                fcm_token=fcm_token, 
+                fcm_token=subscription_info, 
                 user_id=current_user.id, 
                 android_id=android_id
             )
@@ -308,10 +318,10 @@ def register_device(current_user):
     else:
         # Legacy Logic (< Version 9)
         # We look for a device by token belonging to THIS user (since we pruned others above)
-        device = session.query(Device).filter_by(fcm_token=fcm_token, user_id=current_user.id).first()
+        device = session.query(Device).filter_by(fcm_token=subscription_info, user_id=current_user.id).first()
         
         if not device:
-            device = Device(fcm_token=fcm_token, user_id=current_user.id)
+            device = Device(fcm_token=subscription_info, user_id=current_user.id)
             session.add(device)
             logging.info(f"[API] Registered new device (legacy) for user {current_user.id}")
 
@@ -3476,7 +3486,6 @@ def send_test_notification(current_user):
     Triggers a fake push notification to all of the user's registered devices.
     Useful for debugging FCM and Notification Actions.
     """
-    get_firebase_app()
     session = Session()
     try:
         # 1. Get user's devices
@@ -3486,21 +3495,20 @@ def send_test_notification(current_user):
 
         tokens = [d.fcm_token for d in devices]
         success_count = 0
+
+        data = json.dumps({
+            "title": "Test Notification",
+            "body": "This is a test bundle! Click me to see the sheet.",
+            "data": {
+                'bundled_items': json.dumps(["Test Sword", "Debug Shield", "Potion of Coding"])
+            }
+        })
         
         # 2. Send a message to each token
         for token in tokens:
             try:
-                message = messaging.Message(
-                    notification=messaging.Notification(
-                        title="Test Notification",
-                        body="This is a test bundle! Click me to see the sheet."
-                    ),
-                    data={
-                        'bundled_items': json.dumps(["Test Sword", "Debug Shield", "Potion of Coding"])
-                    },
-                    token=token
-                )
-                messaging.send(message)
+                subscription_info = json.loads(token)
+                webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, VAPID_CLAIMS)
                 success_count += 1
             except Exception as e:
                 logging.error(f"[API_WARN] Failed to send test push to token {token[:10]}...: {e}")

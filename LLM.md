@@ -54,8 +54,8 @@ The system consists of two main parts:
     *   **Discord OAuth2:** Users log in via Discord.
     *   **JWT:** The backend issues JWTs for API access after Discord auth.
     *   **Guest Mode:** Supports anonymous guest accounts.
-*   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
-*   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering, and slot collisions immediately trigger local untracking and FCM push notifications.
+*   **Push Notifications:** Unified Push via `pywebpush`.
+*   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering, and slot collisions immediately trigger local untracking and push notifications.
 
 ### Database Schema (Key Models)
 
@@ -63,7 +63,7 @@ The system consists of two main parts:
 *   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
 *   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias.
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
-*   `Device`: Stores FCM tokens for push notifications.
+*   `Device`: Stores Unified Push Data for push notifications.
 *   `ThresholdGroup` / `ThresholdGroupItem`: Replaced the old single-item `SlotItemThreshold`. Allows users to define named milestone groups of multiple items (or item groups), triggering a notification only when all conditions are satisfied (AND logic).
 *   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
 *   `DatapackageCache`: Caches game data (Item/Location names, group memberships) to reduce API calls.

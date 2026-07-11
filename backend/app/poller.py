@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Any
 import aiohttp
 import json
 import zlib
@@ -15,17 +16,18 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
 from threading import local
-from sqlalchemy import or_, exc, tuple_, func
+from sqlalchemy import or_, tuple_
 from sqlalchemy.orm import selectinload
-from sqlalchemy.exc import OperationalError, IntegrityError
+from sqlalchemy.exc import OperationalError
 from email.utils import parsedate_to_datetime
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from pywebpush import webpush
 
-from . import Session, get_firebase_app, process, is_sqlite
+from . import VAPID_CLAIMS, VAPID_PRIVATE_KEY_FILE, Session, process, is_sqlite
 from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
-    DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
+    DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, SlotItemCount
 )
 from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id
 
@@ -128,12 +130,9 @@ def _extract_ap_room_id(url_string):
 
 
 async def send_push_notifications(notifications, device_tokens, loop):
-    firebase_app = get_firebase_app()
-    if not firebase_app or not notifications or not device_tokens: return
-
-    from firebase_admin import messaging
+    if not notifications or not device_tokens: return
   
-    messages = []
+    messages: list[tuple] = []
     for content in notifications:
         try:
             logging.info(f"[NOTIFIER] Preparing notification for {len(device_tokens)} devices. Title: {content['title']} | Body: {content['body']}")
@@ -142,21 +141,19 @@ async def send_push_notifications(notifications, device_tokens, loop):
             
         # We check if the 'bundled_items' key exists (created by our bundling logic)
         # FCM 'data' fields must be strings, so we ensure it's passed correctly.
-        data_payload = {}
+        data_payload = {
+            "title": content['title'],
+            "body": content['body'],
+            "data": {}
+        }
         if 'bundled_items' in content:
-            data_payload['bundled_items'] = content['bundled_items']
+            data_payload['data']['bundled_items'] = content['bundled_items']
             if 'type' in content:
-                data_payload['bundle_type'] = content['type']
+                data_payload['data']['bundle_type'] = content['type']
 
         for token in device_tokens:
-            android_config = messaging.AndroidConfig(priority='high')
-            
-            messages.append(messaging.Message(
-                notification=messaging.Notification(title=content['title'], body=content['body']),
-                token=token,
-                android=android_config,
-                data=data_payload if data_payload else None
-            ))
+            subscription_info = json.loads(token)
+            messages.append((subscription_info, json.dumps(data_payload)))
 
     if not messages: return
 
@@ -164,14 +161,14 @@ async def send_push_notifications(notifications, device_tokens, loop):
         chunk = messages[i:i + 10]
         try:
             logging.info(f"[FCM] Sending a chunk of {len(chunk)} messages...")
-            response = await loop.run_in_executor(None, lambda: messaging.send_each(chunk))
+            response = await loop.run_in_executor(None, lambda: [webpush(si, data, VAPID_PRIVATE_KEY_FILE, VAPID_CLAIMS) for si, data in chunk])
             
             unregistered_tokens = []
             for idx, res in enumerate(response.responses):
                 if not res.success:
                     error_code = res.exception.code if hasattr(res.exception, 'code') else "UNKNOWN"
                     if error_code in ['UNREGISTERED', 'NOT_FOUND']:
-                        unregistered_tokens.append(chunk[idx].token)
+                        unregistered_tokens.append(chunk[idx][0]['endpoint'])
 
             if unregistered_tokens:
                 logging.info(f"[FCM] Found {len(unregistered_tokens)} invalid devices. Removing from DB.")

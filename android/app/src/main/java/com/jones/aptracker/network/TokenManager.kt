@@ -5,6 +5,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 import android.util.Log
 import android.content.SharedPreferences
+import androidx.security.crypto.MasterKey
 
 class TokenManager(private val context: Context) {
 
@@ -16,9 +17,11 @@ class TokenManager(private val context: Context) {
     }
 
     private var inMemoryToken: String? = null
+    private var inMemoryEndpoint: String? = null
 
     companion object {
         private var inMemoryToken: String? = null
+        private var inMemoryEndpoint: String? = null
     }
 
     private fun initializeSharedPreferences(): SharedPreferences? {
@@ -72,5 +75,20 @@ class TokenManager(private val context: Context) {
     fun deleteToken() {
         sharedPreferences?.edit()?.remove("auth_token")?.apply()
         inMemoryToken = null
+    }
+
+    fun saveEndpoint(endpoint: String) {
+        sharedPreferences?.edit()?.putString("endpoint", endpoint)?.apply() ?: run {
+            inMemoryEndpoint = endpoint
+        }
+    }
+
+    fun getEndpoint(): String? {
+        return sharedPreferences?.getString("endpoint", null) ?: inMemoryEndpoint
+    }
+
+    fun deleteEndpoint() {
+        sharedPreferences?.edit()?.remove("endpoint")?.apply()
+        inMemoryEndpoint = null
     }
 }

@@ -3,12 +3,21 @@ import requests
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from flask import Blueprint, request, jsonify, current_app, url_for
+from flask import Blueprint, request, jsonify, current_app
 
 from .models import User
-from . import Session
+from . import VAPID_PUBLIC_KEY, Session
 
 bp = Blueprint('auth', __name__, url_prefix='/auth')
+
+@bp.route('/vapid', methods=['GET'])
+def get_vapid_key():
+  """
+  Returns the raw VAPID public key.
+  """
+  return jsonify({
+      "public_key": VAPID_PUBLIC_KEY
+  })
 
 @bp.route('/guest', methods=['POST'])
 def create_guest_user():

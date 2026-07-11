@@ -4,14 +4,14 @@ import threading
 import os
 import json
 import time
-import re
 from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from pywebpush import webpush
 
-from . import Session
+from . import VAPID_CLAIMS, VAPID_PRIVATE_KEY_FILE, Session
 from .models import User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
 from .api import token_required, log_api_call, handle_db_errors
 from .encryption import encrypt_api_key, decrypt_api_key
@@ -619,10 +619,10 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
             # Send notifications AFTER successful commit
             if notifications_outbox:
                 try:
-                    from firebase_admin import messaging
-                    for tokens, messages in notifications_outbox:
-                        messaging.send_each(messages)
-                        logging.info(f"[CHEESE_DEBUG] Sent collision push notification after commit to user {user_id}")
+                    for messages in notifications_outbox:
+                      for (subscription_info, data) in messages:
+                        webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, VAPID_CLAIMS)
+                    logging.info(f"[CHEESE_DEBUG] Sent collision push notification after commit to user {user_id}")
                 except Exception as p_err:
                     logging.error(f"[CHEESE_DEBUG] Failed to send collision push after commit: {p_err}")
         except Exception as e:
@@ -775,29 +775,28 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                             room_alias = subscription.alias or room_alias
                             
                         try:
-                            from firebase_admin import messaging
                             from .models import Device
-                            from . import get_firebase_app
-                            
-                            get_firebase_app()
+
                             devices = session.query(Device).filter_by(user_id=current_user_id_for_thread).all()
                             if devices:
                                 tokens = [d.fcm_token for d in devices]
                                 messages = [
-                                    messaging.Message(
-                                        notification=messaging.Notification(
-                                            title="Slot Sync Conflict",
-                                            body=f"Slot '{player_name}' in room '{room_alias}' is already claimed by another user on Cheese Tracker. Untracked slot."
-                                        ),
-                                        token=token,
-                                        android=messaging.AndroidConfig(priority='high')
+                                    (
+                                        json.loads(token),
+                                        json.dumps(
+                                            {
+                                              "title": "Slot Sync Conflict",
+                                              "body": f"Slot '{player_name}' in room '{room_alias}' is already claimed by another user on Cheese Tracker. Untracked slot."
+                                            }
+                                        )
                                     )
                                     for token in tokens
                                 ]
                                 if notifications_outbox is not None:
-                                    notifications_outbox.append((tokens, messages))
+                                    notifications_outbox.append(messages)
                                 else:
-                                    messaging.send_each(messages)
+                                    for (subscription_info, data) in messages:
+                                      webpush(subscription_info, data, VAPID_PRIVATE_KEY_FILE, VAPID_CLAIMS)
                                     logging.info(f"[CHEESE_DEBUG] Sent collision push notification immediately to user {current_user_id_for_thread}")
                         except Exception as p_err:
                             logging.error(f"[CHEESE_DEBUG] Failed to queue collision push: {p_err}")

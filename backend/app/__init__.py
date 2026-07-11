@@ -1,20 +1,16 @@
 import os
 import json
-import requests
-import firebase_admin
 import psutil
 import logging
-import sys    
+import sys
+import base64
 
 from flask import Flask
-from waitress import serve
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.engine import Engine
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from dotenv import load_dotenv
-from firebase_admin import credentials, messaging
+from pathlib import Path
+from cryptography.hazmat.primitives import serialization
 from config import app_config
 
 load_dotenv()
@@ -47,7 +43,11 @@ logging.info(f"Logging level set to {logging.getLevelName(log_level)} for '{FLAS
 DATABASE_URL = os.environ.get('DATABASE_URL', "sqlite:///./ap_tracker.db")
 POLLING_INTERVAL_SECONDS = 300
 SUPERVISOR_INTERVAL_SECONDS = 60
-FIREBASE_KEY_FILE = "service-account-key.json"
+VAPID_PRIVATE_KEY_FILE = "vapid/private_key.pem"
+VAPID_PUBLIC_KEY_FILE = "vapid/public_key.pem"
+VAPID_PUBLIC_KEY = ""
+VAPID_CLAIMS_FILE = "vapid/claims.json"
+VAPID_CLAIMS = "{}"
 
 process = psutil.Process(os.getpid())
 process.cpu_percent(interval=None)
@@ -83,28 +83,22 @@ session_factory = sessionmaker(bind=engine)
 Session = scoped_session(session_factory)
 
 # ==============================================================================
-# 3. GLOBAL SERVICES (Firebase, HTTP Session)
+# 3. GLOBAL SERVICES (VAPID Keys and Claims)
 # ==============================================================================
 
-retry_strategy = Retry(
-    total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["HEAD", "GET", "OPTIONS", "POST"]
-)
-adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=retry_strategy)
-firebase_http_session = requests.Session()
-firebase_http_session.mount("https://", adapter)
+if (Path(VAPID_PUBLIC_KEY_FILE).exists()):
+  with open(VAPID_PUBLIC_KEY_FILE, "rb") as f:
+      public_key = serialization.load_pem_public_key(f.read())
+  raw = public_key.public_bytes(
+      encoding=serialization.Encoding.X962,
+      format=serialization.PublicFormat.UncompressedPoint,
+  )
+  VAPID_PUBLIC_KEY = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
-_firebase_app = None
-def get_firebase_app():
-    global _firebase_app
-    if _firebase_app is None:
-        try:
-            cred = credentials.Certificate(FIREBASE_KEY_FILE)
-            _firebase_app = firebase_admin.initialize_app(cred, {'http_client': firebase_http_session})
-            logging.info("[FIREBASE] Firebase initialized successfully.") # <-- MODIFIED
-        except Exception as e:
-            logging.critical(f"[FIREBASE] !!! FIREBASE ERROR: Could not initialize. Error: {e}") # <-- MODIFIED
-    return _firebase_app
+if (Path(VAPID_CLAIMS_FILE).exists()):
+  with open(VAPID_CLAIMS_FILE, "rb") as f:
+      claims = json.load(f)
+  VAPID_CLAIMS = claims
 
 # ==============================================================================
 # 4. APPLICATION FACTORY

@@ -10,7 +10,6 @@ if (localPropertiesFile.exists()) {
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    id("com.google.gms.google-services")
     alias(libs.plugins.kotlin.ksp)
 }
 
@@ -108,8 +107,6 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    implementation(platform("com.google.firebase:firebase-bom:33.9.0"))
-    implementation("com.google.firebase:firebase-messaging-ktx")
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
@@ -129,4 +126,8 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.6.0")
     implementation(libs.androidx.compose.foundation)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("org.unifiedpush.android:connector:3.3.3") {
+        exclude(group = "com.google.crypto.tink", module = "tink")
+    }
+    implementation("org.unifiedpush.android:embedded-fcm-distributor:3.1.0")
 }
