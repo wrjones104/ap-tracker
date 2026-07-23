@@ -218,44 +218,73 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateSlotPreferences(roomId: Int, slotId: Int, key: String, value: Boolean?) {
         viewModelScope.launch {
+            val previousRooms = _trackedSlotsByRoom.value
             try {
                 // 1. Find the current state of the slot from your local list
-                //    This ensures we preserve existing overrides instead of resetting them.
-                val currentRoom = _trackedSlotsByRoom.value.find { it.room_db_id == roomId }
+                val currentRoom = previousRooms.find { it.room_db_id == roomId }
                 val currentSlot = currentRoom?.tracked_slots?.find { it.slot_id == slotId }
 
                 if (currentSlot == null) {
-                    // Safety check: If data is missing, don't attempt an update
                     return@launch
                 }
 
-                // 2. Construct the request using the NEW value for the target key,
-                //    and the EXISTING values for everything else.
+                // 2. Create the updated slot object optimistically
+                val updatedSlot = when (key) {
+                    "notify_progression" -> currentSlot.copy(notify_progression = value)
+                    "notify_useful" -> currentSlot.copy(notify_useful = value)
+                    "notify_filler" -> currentSlot.copy(notify_filler = value)
+                    "notify_trap" -> currentSlot.copy(notify_trap = value)
+                    "notify_hints" -> currentSlot.copy(notify_hints = value)
+                    "notify_hints_remote_items" -> currentSlot.copy(notify_hints_remote_items = value)
+                    "notify_finished" -> currentSlot.copy(notify_finished = value)
+                    "combine_notifications" -> currentSlot.copy(combine_notifications = value)
+                    "suppress_own_events" -> currentSlot.copy(suppress_own_events = value)
+                    "remove_emojis" -> currentSlot.copy(remove_emojis = value)
+                    "suppress_self_found" -> currentSlot.copy(suppress_self_found = value)
+                    "use_condensed_messages" -> currentSlot.copy(use_condensed_messages = value)
+                    "suppress_connected" -> currentSlot.copy(suppress_connected = value)
+                    else -> currentSlot
+                }
+
+                // 3. Optimistically update local UI state immediately
+                val updatedRooms = previousRooms.map { room ->
+                    if (room.room_db_id == roomId) {
+                        room.copy(
+                            tracked_slots = room.tracked_slots.map { slot ->
+                                if (slot.slot_id == slotId) updatedSlot else slot
+                            }
+                        )
+                    } else {
+                        room
+                    }
+                }
+                _trackedSlotsByRoom.value = updatedRooms
+
+                // 4. Construct request payload and send to backend
                 val request = UpdateSlotPrefsRequest(
-                    notify_progression = if (key == "notify_progression") value else currentSlot.notify_progression,
-                    notify_useful = if (key == "notify_useful") value else currentSlot.notify_useful,
-                    notify_filler = if (key == "notify_filler") value else currentSlot.notify_filler,
-                    notify_trap = if (key == "notify_trap") value else currentSlot.notify_trap,
-                    notify_hints = if (key == "notify_hints") value else currentSlot.notify_hints,
-                    notify_hints_remote_items = if (key == "notify_hints_remote_items") value else currentSlot.notify_hints_remote_items,
-                    notify_finished = if (key == "notify_finished") value else currentSlot.notify_finished,
-                    combine_notifications = if (key == "combine_notifications") value else currentSlot.combine_notifications,
-                    suppress_own_events = if (key == "suppress_own_events") value else currentSlot.suppress_own_events,
-                    remove_emojis = if (key == "remove_emojis") value else currentSlot.remove_emojis,
-                    suppress_self_found = if (key == "suppress_self_found") value else currentSlot.suppress_self_found,
-                    use_condensed_messages = if (key == "use_condensed_messages") value else currentSlot.use_condensed_messages,
-                    suppress_connected = if (key == "suppress_connected") value else currentSlot.suppress_connected
+                    notify_progression = updatedSlot.notify_progression,
+                    notify_useful = updatedSlot.notify_useful,
+                    notify_filler = updatedSlot.notify_filler,
+                    notify_trap = updatedSlot.notify_trap,
+                    notify_hints = updatedSlot.notify_hints,
+                    notify_hints_remote_items = updatedSlot.notify_hints_remote_items,
+                    notify_finished = updatedSlot.notify_finished,
+                    combine_notifications = updatedSlot.combine_notifications,
+                    suppress_own_events = updatedSlot.suppress_own_events,
+                    remove_emojis = updatedSlot.remove_emojis,
+                    suppress_self_found = updatedSlot.suppress_self_found,
+                    use_condensed_messages = updatedSlot.use_condensed_messages,
+                    suppress_connected = updatedSlot.suppress_connected
                 )
 
-                // 3. Send the complete update object
                 val response = RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
 
-                if (response.isSuccessful) {
-                    fetchTrackedSlots() // Refresh UI with new state
-                } else {
+                if (!response.isSuccessful) {
+                    _trackedSlotsByRoom.value = previousRooms
                     _errorMessage.value = "Failed to update settings: ${response.code()}"
                 }
             } catch (e: Exception) {
+                _trackedSlotsByRoom.value = previousRooms
                 _errorMessage.value = "Failed to save slot settings."
                 e.printStackTrace()
             }
