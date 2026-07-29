@@ -55,9 +55,10 @@ class Device(Base):
     fcm_token = Column(String, nullable=False, unique=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     android_id = Column(String, nullable=True, index=True)
+    platform = Column(String, nullable=False, default='android', server_default='android')
     user = relationship("User", back_populates="devices")
     __table_args__ = (
-        UniqueConstraint('user_id', 'android_id', name='_user_android_id_uc'),
+        UniqueConstraint('user_id', 'android_id', 'platform', name='_user_android_id_uc'),
     )
 
 class TrackedRoom(Base):
