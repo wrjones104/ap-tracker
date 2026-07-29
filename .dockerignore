@@ -1,0 +1,18 @@
+# Ignore virtual environments, cache, database, and android project files
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.db
+*.db-shm
+*.db-wal
+.git/
+.gitignore
+.env
+.env.*
+android/
+service-account-key*.json

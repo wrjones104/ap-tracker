@@ -9,10 +9,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copy backend application source
+COPY backend/ /app/
+
+# Copy Alembic database migrations and configuration
+COPY alembic/ /app/alembic/
+COPY alembic.ini /app/alembic.ini
 
 ENV PYTHONUNBUFFERED=1
 
