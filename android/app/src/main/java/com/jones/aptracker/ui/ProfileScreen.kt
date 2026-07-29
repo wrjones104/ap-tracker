@@ -90,6 +90,24 @@ fun ProfileScreen(
         }
     }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val integrationMessage by userViewModel.integrationMessage.collectAsState()
+    val errorMessage by userViewModel.errorMessage.collectAsState()
+
+    LaunchedEffect(integrationMessage) {
+        integrationMessage?.let {
+            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
+            userViewModel.clearIntegrationMessage()
+        }
+    }
+
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_LONG).show()
+            userViewModel.clearErrorMessage()
+        }
+    }
+
     val globalSnoozeRaw = userProfile?.global_snooze_until
     val isGlobalSnoozeActive = remember(globalSnoozeRaw, now) {
         if (globalSnoozeRaw == null) false else {
