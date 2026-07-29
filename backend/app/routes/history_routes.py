@@ -432,35 +432,44 @@ def sync_history(current_user):
         if (r_id, s_id) in tracked_set:
             item_watermarks_map[(r_id, s_id)] = last_ts
 
-    room_uuids = list(set(room_db_id_to_uuid.values()))
-    all_tracked_slot_ids = list(set(s_id for (r_id, s_id) in tracked_set))
-
     items = []
-    if room_uuids and all_tracked_slot_ids:
-        min_since_dt = None
-        has_unwatermarked = False
+    if tracked_set:
+        unwatermarked_room_uuids = set()
+        unwatermarked_slot_ids = set()
+        
         for (r_id, s_id), last_ts in item_watermarks_map.items():
-            if not last_ts:
-                has_unwatermarked = True
-                break
-            try:
-                dt = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
-                if dt.tzinfo:
-                    dt = dt.replace(tzinfo=None)
-                if min_since_dt is None or dt < min_since_dt:
-                    min_since_dt = dt
-            except (ValueError, TypeError):
-                has_unwatermarked = True
-                break
+            room_uuid = room_db_id_to_uuid.get(r_id)
+            if room_uuid and not last_ts:
+                unwatermarked_room_uuids.add(room_uuid)
+                unwatermarked_slot_ids.add(s_id)
 
-        item_query = session.query(NotifiedItem).filter(
-            NotifiedItem.room_id.in_(room_uuids),
-            NotifiedItem.receiving_slot_id.in_(all_tracked_slot_ids)
-        )
-        if not has_unwatermarked and min_since_dt is not None:
-            item_query = item_query.filter(NotifiedItem.timestamp > min_since_dt)
+        if unwatermarked_room_uuids and unwatermarked_slot_ids:
+            items = session.query(NotifiedItem).filter(
+                NotifiedItem.room_id.in_(list(unwatermarked_room_uuids)),
+                NotifiedItem.receiving_slot_id.in_(list(unwatermarked_slot_ids))
+            ).order_by(NotifiedItem.id.asc()).limit(200).all()
 
-        items = item_query.order_by(NotifiedItem.id.asc()).limit(200).all()
+        if not items and room_uuids and all_tracked_slot_ids:
+            min_since_dt = None
+            for (r_id, s_id), last_ts in item_watermarks_map.items():
+                if last_ts:
+                    try:
+                        dt = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
+                        if dt.tzinfo:
+                            dt = dt.replace(tzinfo=None)
+                        if min_since_dt is None or dt < min_since_dt:
+                            min_since_dt = dt
+                    except (ValueError, TypeError):
+                        pass
+
+            item_query = session.query(NotifiedItem).filter(
+                NotifiedItem.room_id.in_(room_uuids),
+                NotifiedItem.receiving_slot_id.in_(all_tracked_slot_ids)
+            )
+            if min_since_dt is not None:
+                item_query = item_query.filter(NotifiedItem.timestamp > min_since_dt)
+
+            items = item_query.order_by(NotifiedItem.id.asc()).limit(200).all()
 
     hint_watermarks_map = {}
     for hint in data.get('hints', []):

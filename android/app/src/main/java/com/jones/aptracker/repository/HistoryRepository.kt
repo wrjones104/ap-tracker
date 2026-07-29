@@ -90,9 +90,10 @@ class HistoryRepository(
 
     suspend fun syncHistoryBatch(
         trackedRooms: List<com.jones.aptracker.network.RoomWithTrackedSlots>,
+        priorityRoomId: Int? = null,
         onBatchReceived: (suspend () -> Unit)? = null
     ) {
-        Log.d("HISTORY_DEBUG", "Starting batch history sync...")
+        Log.d("HISTORY_DEBUG", "Starting batch history sync (priority room: ${priorityRoomId ?: "None"})...")
         
         try {
             realignRoomIdsIfMismatched(trackedRooms)
@@ -100,15 +101,21 @@ class HistoryRepository(
             Log.e("HISTORY_DEBUG", "Failed to align room IDs: ${e.message}", e)
         }
 
+        val sortedRooms = if (priorityRoomId != null) {
+            trackedRooms.sortedByDescending { it.room_db_id == priorityRoomId }
+        } else {
+            trackedRooms
+        }
+
         var hasMoreData = true
         var loopCount = 0
-        val maxLoops = 25 // Safeguard limit against infinite loops
+        val maxLoops = 100 // Allow up to 100 loops (20,000 items) to fully catch up
         
         while (hasMoreData && loopCount < maxLoops) {
             val itemWatermarks = mutableListOf<com.jones.aptracker.network.SlotSyncWatermark>()
             val hintWatermarks = mutableListOf<com.jones.aptracker.network.RoomSyncWatermark>()
 
-            trackedRooms.forEach { room ->
+            sortedRooms.forEach { room ->
                 val roomId = room.room_db_id
 
                 val hintKey = "hint_watermark_$roomId"

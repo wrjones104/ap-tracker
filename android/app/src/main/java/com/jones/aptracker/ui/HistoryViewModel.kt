@@ -511,7 +511,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
                 // --- STEP 3: Background delta sync with real-time UI streaming ---
                 try {
-                    repository.syncHistoryBatch(trackedRooms) {
+                    repository.syncHistoryBatch(trackedRooms, priorityRoomId = currentRoomId) {
                         reloadHistory(showSpinner = false)
                     }
                     reloadHistory(showSpinner = false)
