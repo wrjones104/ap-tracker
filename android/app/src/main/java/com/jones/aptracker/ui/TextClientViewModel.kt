@@ -150,11 +150,10 @@ class TextClientViewModel : ViewModel() {
             if (hasCachedData) {
                 _isAutocompleteLoading.value = false
                 lastAutocompleteKey = key
-                return@launch
+            } else {
+                if (_isAutocompleteLoading.value) return@launch
+                _isAutocompleteLoading.value = true
             }
-
-            if (_isAutocompleteLoading.value) return@launch
-            _isAutocompleteLoading.value = true
 
             try {
                 supervisorScope {

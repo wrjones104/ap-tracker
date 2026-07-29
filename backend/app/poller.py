@@ -2697,19 +2697,19 @@ def db_run_cleanup():
     finally:
         Session.remove()
 
-def trigger_immediate_room_poll(room_db_id):
+def trigger_immediate_room_poll(room_db_id, publish_to_redis=True):
     """
     Submits an immediate room poll event via Redis Pub/Sub if connected,
     or falls back to the in-process worker thread pool.
     """
     _global_setup_cooldowns.pop(room_db_id, None)
 
-    # 1. Try publishing event to Redis queue
-    if publish_event('immediate_poll', {'room_db_id': room_db_id}):
+    # 1. Try publishing event to Redis queue if requested
+    if publish_to_redis and publish_event('immediate_poll', {'room_db_id': room_db_id}):
         logging.info(f"[POLLER_TRIGGER] Published immediate_poll event to Redis for Room {room_db_id}.")
         return
 
-    # 2. Fallback to in-process worker thread pool if Redis is unavailable
+    # 2. Fallback to in-process worker thread pool if Redis is unavailable or processing Redis event
     with _active_immediate_polls_lock:
         if room_db_id in _active_immediate_polls:
             logging.info(f"[POLLER_TRIGGER] Immediate poll already in progress for Room {room_db_id}. Skipping submit.")
@@ -2774,7 +2774,7 @@ async def immediate_poll_checker(app, loop):
                         room_db_id = data.get('room_db_id')
                         if room_db_id:
                             logging.info(f"[POLLER_EVENT] Received immediate_poll event from Redis for Room {room_db_id}.")
-                            trigger_immediate_room_poll(room_db_id)
+                            trigger_immediate_room_poll(room_db_id, publish_to_redis=False)
                     except Exception as ex:
                         logging.error(f"[POLLER_EVENT_ERROR] Failed parsing Redis message: {ex}")
                 await asyncio.sleep(0.1)

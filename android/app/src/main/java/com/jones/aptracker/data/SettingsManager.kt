@@ -64,9 +64,13 @@ class SettingsManager(context: Context) {
      */
     val expandedRoomIds: Flow<Set<Int>> = dataStore.data
         .map { preferences ->
-            val raw = preferences[EXPANDED_ROOM_IDS_KEY] ?: ""
-            if (raw.isBlank()) emptySet()
-            else raw.split(",").mapNotNull { it.trim().toIntOrNull() }.toSet()
+            try {
+                val raw = preferences[EXPANDED_ROOM_IDS_KEY] ?: ""
+                if (raw.isBlank()) emptySet()
+                else raw.split(",").mapNotNull { it.trim().toIntOrNull() }.toSet()
+            } catch (e: Exception) {
+                emptySet()
+            }
         }
 
     /**

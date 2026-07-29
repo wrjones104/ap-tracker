@@ -9,7 +9,7 @@ Please refer to the primary project documentation files:
 ### Backend Execution & Testing
 ```bash
 # Run unit test suite
-python -m unittest backend/tests/test_cheese_sync.py
+$env:PYTHONPATH="backend;." ; python -m unittest backend/tests/test_cheese_sync.py
 
 # Run local development server
 python backend/run.py
