@@ -432,6 +432,9 @@ def sync_history(current_user):
         if (r_id, s_id) in tracked_set:
             item_watermarks_map[(r_id, s_id)] = last_ts
 
+    room_uuids = list(set(room_db_id_to_uuid.values()))
+    all_tracked_slot_ids = list(set(s_id for (r_id, s_id) in tracked_set))
+
     items = []
     if tracked_set:
         unwatermarked_room_uuids = set()
