@@ -502,16 +502,21 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                // --- STEP 2: Instantly load cached history and unblock UI ---
+                // --- STEP 2: Load cached history and manage loading state ---
                 reloadHistory()
-                isLoading.value = false
+                val hasLocalItems = itemHistory.value.isNotEmpty()
+                if (hasLocalItems) {
+                    isLoading.value = false
+                }
 
-                // --- STEP 3: Silent background delta sync ---
+                // --- STEP 3: Background delta sync ---
                 try {
                     repository.syncHistoryBatch(trackedRooms)
                     reloadHistory(showSpinner = false)
                 } catch (e: Exception) {
                     Log.e("HistoryViewModel", "Background sync failed", e)
+                } finally {
+                    isLoading.value = false
                 }
 
             } catch (e: Exception) {
