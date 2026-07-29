@@ -464,7 +464,8 @@ data class HistorySyncRequest(
 data class SlotSyncWatermark(
     val room_db_id: Int,
     val slot_id: Int,
-    val last_timestamp: String?
+    val last_timestamp: String? = null,
+    val last_id: Int? = null
 )
 
 data class RoomSyncWatermark(
@@ -475,6 +476,6 @@ data class RoomSyncWatermark(
 data class HistorySyncResponse(
     val new_items: List<HistoryItem>,
     val updated_hints: List<HintDetail>,
-    val item_watermarks: Map<String, String>,
-    val hint_watermarks: Map<String, String>
+    val item_watermarks: Map<String, Any> = emptyMap(),
+    val hint_watermarks: Map<String, String?> = emptyMap()
 )

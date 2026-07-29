@@ -428,24 +428,38 @@ def sync_history(current_user):
     for item in data.get('items', []):
         r_id = item.get('room_db_id')
         s_id = item.get('slot_id')
+        last_id = item.get('last_id')
         last_ts = item.get('last_timestamp')
         if (r_id, s_id) in tracked_set:
-            item_watermarks_map[(r_id, s_id)] = last_ts
+            item_watermarks_map[(r_id, s_id)] = {
+                'last_id': last_id if isinstance(last_id, int) else None,
+                'last_ts': last_ts
+            }
 
     for (r_id, s_id) in tracked_set:
         if (r_id, s_id) not in item_watermarks_map:
-            item_watermarks_map[(r_id, s_id)] = None
+            item_watermarks_map[(r_id, s_id)] = {'last_id': None, 'last_ts': None}
 
     items = []
     if tracked_set:
         slot_filters = []
-        for (r_id, s_id), last_ts in item_watermarks_map.items():
+        for (r_id, s_id), w_info in item_watermarks_map.items():
             room_uuid = room_db_id_to_uuid.get(r_id)
             if not room_uuid:
                 continue
-            if last_ts:
+            
+            last_id = w_info.get('last_id')
+            last_ts = w_info.get('last_ts')
+
+            if last_id is not None and last_id > 0:
+                slot_filters.append(
+                    (NotifiedItem.room_id == room_uuid) &
+                    (NotifiedItem.receiving_slot_id == s_id) &
+                    (NotifiedItem.id > last_id)
+                )
+            elif last_ts:
                 try:
-                    dt = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
+                    dt = datetime.fromisoformat(str(last_ts).replace('Z', '+00:00'))
                     if dt.tzinfo:
                         dt = dt.replace(tzinfo=None)
                     slot_filters.append(
@@ -465,7 +479,7 @@ def sync_history(current_user):
                 )
 
         if slot_filters:
-            items = session.query(NotifiedItem).filter(or_(*slot_filters)).order_by(NotifiedItem.timestamp.asc(), NotifiedItem.id.asc()).limit(200).all()
+            items = session.query(NotifiedItem).filter(or_(*slot_filters)).order_by(NotifiedItem.id.asc()).limit(200).all()
 
     hint_watermarks_map = {}
     for hint in data.get('hints', []):
@@ -704,26 +718,25 @@ def sync_history(current_user):
             "item_flags": hint.item_flags or 0
         })
 
-    max_item_dts = {}
+    max_item_ids = {}
     for item in items:
         room_data = room_map_by_uuid.get(item.room_id)
         if room_data:
             key = f"{room_data.id}_{item.receiving_slot_id}"
-            dt = item.timestamp
-            if dt:
-                if dt.tzinfo is not None:
-                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            if key not in max_item_ids or item.id > max_item_ids[key]:
+                max_item_ids[key] = item.id
+
     now_iso = format_iso_z(datetime.now(timezone.utc))
 
     new_item_watermarks = {}
     for (r_id, s_id) in tracked_set:
         key = f"{r_id}_{s_id}"
-        if key in max_item_dts:
-            new_item_watermarks[key] = format_iso_z(max_item_dts[key])
-        elif item_watermarks_map.get((r_id, s_id)):
-            new_item_watermarks[key] = item_watermarks_map[(r_id, s_id)]
+        if key in max_item_ids:
+            new_item_watermarks[key] = max_item_ids[key]
         else:
-            new_item_watermarks[key] = now_iso
+            w_info = item_watermarks_map.get((r_id, s_id))
+            last_id = w_info.get('last_id') if isinstance(w_info, dict) else None
+            new_item_watermarks[key] = last_id if last_id is not None else 0
 
     max_hint_dts = {}
     for hint in hints:

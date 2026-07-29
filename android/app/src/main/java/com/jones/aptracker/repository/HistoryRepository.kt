@@ -124,9 +124,8 @@ class HistoryRepository(
 
                 room.tracked_slots.forEach { slot ->
                     val slotId = slot.slot_id
-                    val itemKey = "item_watermark_${roomId}_$slotId"
-                    val lastItemTs = prefs.getString(itemKey, null)
-                    itemWatermarks.add(com.jones.aptracker.network.SlotSyncWatermark(roomId, slotId, lastItemTs))
+                    val maxLocalId = historyDao.getMaxIdForSlot(roomId, slotId)
+                    itemWatermarks.add(com.jones.aptracker.network.SlotSyncWatermark(roomId, slotId, last_id = maxLocalId))
                 }
             }
 
