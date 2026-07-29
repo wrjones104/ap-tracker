@@ -35,11 +35,16 @@ interface ApiService {
     suspend fun updateTrackedSlots(@Path("id") roomId: Int, @Body request: UpdateSlotsRequest): Response<Unit>
 
     @GET("rooms/{id}/history/items")
-    suspend fun getItemHistory(@Path("id") roomId: Int, @Query("since") since: String?): List<HistoryItem>
+    suspend fun getItemHistory(
+        @Path("id") roomId: Int,
+        @Query("since") since: String? = null,
+        @Query("limit") limit: Int? = null,
+        @Query("offset") offset: Int? = null
+    ): List<HistoryItem>
 
     @GET("history/items")
     suspend fun getGlobalItemHistory(
-        @Query("since") since: String?,
+        @Query("since") since: String? = null,
         @Query("limit") limit: Int? = null,
         @Query("offset") offset: Int? = null
     ): List<HistoryItem>

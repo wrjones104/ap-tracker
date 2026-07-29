@@ -509,14 +509,20 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     isLoading.value = false
                 }
 
-                // --- STEP 3: Background delta sync with real-time UI streaming ---
+                // --- STEP 3: Background server feed fetch & delta sync ---
                 try {
+                    val initialFeed = repository.fetchItemHistoryFeed(currentRoomId, PAGE_SIZE, 0)
+                    if (initialFeed.isNotEmpty()) {
+                        reloadHistory(showSpinner = false)
+                    }
+                    repository.refreshHintHistory(currentRoomId)
+
                     repository.syncHistoryBatch(trackedRooms, priorityRoomId = currentRoomId) {
                         reloadHistory(showSpinner = false)
                     }
                     reloadHistory(showSpinner = false)
                 } catch (e: Exception) {
-                    Log.e("HistoryViewModel", "Background sync failed", e)
+                    Log.e("HistoryViewModel", "Background sync/feed fetch failed", e)
                 } finally {
                     isLoading.value = false
                 }
@@ -536,12 +542,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             _isNextPageLoading.value = true
             try {
                 Log.d("HistoryViewModel", "Loading next page of history at offset $currentPageOffset for room: $currentRoomId")
-                val nextEntities = if (currentRoomId != null) {
+                var nextEntities = if (currentRoomId != null) {
                     repository.getHistoryForRoomPaged(currentRoomId!!, PAGE_SIZE, currentPageOffset)
                 } else {
                     repository.getGlobalHistoryPaged(PAGE_SIZE, currentPageOffset)
                 }
                 
+                if (nextEntities.isEmpty()) {
+                    // Fetch next page directly from server feed
+                    nextEntities = repository.fetchItemHistoryFeed(currentRoomId, PAGE_SIZE, currentPageOffset)
+                }
+
                 if (nextEntities.isEmpty()) {
                     isAllDataLoaded = true
                 } else {

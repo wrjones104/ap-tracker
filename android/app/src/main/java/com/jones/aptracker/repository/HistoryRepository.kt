@@ -214,6 +214,47 @@ class HistoryRepository(
         Log.d("HISTORY_DEBUG", "Batch sync successfully completed in $loopCount loops and all history is complete.")
     }
 
+    suspend fun fetchItemHistoryFeed(roomId: Int?, limit: Int = 50, offset: Int = 0): List<HistoryItemEntity> {
+        Log.d("HISTORY_DEBUG", "Fetching item history feed for room ${roomId ?: "Global"} (limit: $limit, offset: $offset)...")
+        val items = if (roomId != null) {
+            apiService.getItemHistory(roomId = roomId, limit = limit, offset = offset)
+        } else {
+            apiService.getGlobalItemHistory(limit = limit, offset = offset)
+        }
+
+        val entities = items.mapNotNull { item ->
+            try {
+                HistoryItemEntity(
+                    id = item.id,
+                    roomId = item.room_db_id ?: roomId,
+                    playerName = item.playerName,
+                    playerAlias = item.playerAlias,
+                    receivingGame = item.receivingGame,
+                    itemName = item.itemName,
+                    senderName = item.senderName,
+                    senderAlias = item.senderAlias,
+                    senderGame = item.senderGame,
+                    locationName = item.locationName,
+                    isPlayerFinished = item.isPlayerFinished,
+                    itemFlags = item.itemFlags,
+                    timestamp = normalizeTimestamp(item.timestamp),
+                    tracker_id = item.tracker_id,
+                    slot_id = item.slot_id,
+                    icon_name = item.icon_name,
+                    host = item.host,
+                    receivedCount = item.receivedCount
+                )
+            } catch (e: Exception) {
+                Log.e("HISTORY_DEBUG", "!!! FAILED to process history feed item: ${e.message}")
+                null
+            }
+        }
+        if (entities.isNotEmpty()) {
+            historyDao.insertHistoryItems(entities)
+        }
+        return entities
+    }
+
     // --- ITEM HISTORY (Safe to use 'since' optimization) ---
     suspend fun refreshItemHistory() {
         Log.d("HISTORY_DEBUG", "Starting ITEM history refresh...")

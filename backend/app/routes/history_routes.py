@@ -432,47 +432,40 @@ def sync_history(current_user):
         if (r_id, s_id) in tracked_set:
             item_watermarks_map[(r_id, s_id)] = last_ts
 
-    room_uuids = list(set(room_db_id_to_uuid.values()))
-    all_tracked_slot_ids = list(set(s_id for (r_id, s_id) in tracked_set))
+    for (r_id, s_id) in tracked_set:
+        if (r_id, s_id) not in item_watermarks_map:
+            item_watermarks_map[(r_id, s_id)] = None
 
     items = []
     if tracked_set:
-        unwatermarked_room_uuids = set()
-        unwatermarked_slot_ids = set()
-        
+        slot_filters = []
         for (r_id, s_id), last_ts in item_watermarks_map.items():
             room_uuid = room_db_id_to_uuid.get(r_id)
-            if room_uuid and not last_ts:
-                unwatermarked_room_uuids.add(room_uuid)
-                unwatermarked_slot_ids.add(s_id)
+            if not room_uuid:
+                continue
+            if last_ts:
+                try:
+                    dt = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
+                    if dt.tzinfo:
+                        dt = dt.replace(tzinfo=None)
+                    slot_filters.append(
+                        (NotifiedItem.room_id == room_uuid) &
+                        (NotifiedItem.receiving_slot_id == s_id) &
+                        (NotifiedItem.timestamp > dt)
+                    )
+                except (ValueError, TypeError):
+                    slot_filters.append(
+                        (NotifiedItem.room_id == room_uuid) &
+                        (NotifiedItem.receiving_slot_id == s_id)
+                    )
+            else:
+                slot_filters.append(
+                    (NotifiedItem.room_id == room_uuid) &
+                    (NotifiedItem.receiving_slot_id == s_id)
+                )
 
-        if unwatermarked_room_uuids and unwatermarked_slot_ids:
-            items = session.query(NotifiedItem).filter(
-                NotifiedItem.room_id.in_(list(unwatermarked_room_uuids)),
-                NotifiedItem.receiving_slot_id.in_(list(unwatermarked_slot_ids))
-            ).order_by(NotifiedItem.timestamp.asc(), NotifiedItem.id.asc()).limit(200).all()
-
-        if not items and room_uuids and all_tracked_slot_ids:
-            min_since_dt = None
-            for (r_id, s_id), last_ts in item_watermarks_map.items():
-                if last_ts:
-                    try:
-                        dt = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
-                        if dt.tzinfo:
-                            dt = dt.replace(tzinfo=None)
-                        if min_since_dt is None or dt < min_since_dt:
-                            min_since_dt = dt
-                    except (ValueError, TypeError):
-                        pass
-
-            item_query = session.query(NotifiedItem).filter(
-                NotifiedItem.room_id.in_(room_uuids),
-                NotifiedItem.receiving_slot_id.in_(all_tracked_slot_ids)
-            )
-            if min_since_dt is not None:
-                item_query = item_query.filter(NotifiedItem.timestamp > min_since_dt)
-
-            items = item_query.order_by(NotifiedItem.timestamp.asc(), NotifiedItem.id.asc()).limit(200).all()
+        if slot_filters:
+            items = session.query(NotifiedItem).filter(or_(*slot_filters)).order_by(NotifiedItem.timestamp.asc(), NotifiedItem.id.asc()).limit(200).all()
 
     hint_watermarks_map = {}
     for hint in data.get('hints', []):
@@ -486,30 +479,29 @@ def sync_history(current_user):
             hint_watermarks_map[r_id] = None
 
     hints = []
+    room_uuids = list(set(room_db_id_to_uuid.values()))
     if room_uuids:
-        min_hint_upd = None
-        has_unwatermarked_hint = False
+        hint_filters = []
         for r_id, last_upd in hint_watermarks_map.items():
-            if not last_upd:
-                has_unwatermarked_hint = True
-                break
-            try:
-                dt = datetime.fromisoformat(last_upd.replace('Z', '+00:00'))
-                if dt.tzinfo:
-                    dt = dt.replace(tzinfo=None)
-                if min_hint_upd is None or dt < min_hint_upd:
-                    min_hint_upd = dt
-            except (ValueError, TypeError):
-                has_unwatermarked_hint = True
-                break
+            room_uuid = room_db_id_to_uuid.get(r_id)
+            if not room_uuid:
+                continue
+            if last_upd:
+                try:
+                    dt = datetime.fromisoformat(last_upd.replace('Z', '+00:00'))
+                    if dt.tzinfo:
+                        dt = dt.replace(tzinfo=None)
+                    hint_filters.append(
+                        (NotifiedHint.room_id == room_uuid) &
+                        (NotifiedHint.updated_at > dt)
+                    )
+                except (ValueError, TypeError):
+                    hint_filters.append(NotifiedHint.room_id == room_uuid)
+            else:
+                hint_filters.append(NotifiedHint.room_id == room_uuid)
 
-        hint_query = session.query(NotifiedHint).filter(
-            NotifiedHint.room_id.in_(room_uuids)
-        )
-        if not has_unwatermarked_hint and min_hint_upd is not None:
-            hint_query = hint_query.filter(NotifiedHint.updated_at > min_hint_upd)
-
-        hints = hint_query.order_by(NotifiedHint.updated_at.asc()).limit(100).all()
+        if hint_filters:
+            hints = session.query(NotifiedHint).filter(or_(*hint_filters)).order_by(NotifiedHint.updated_at.asc()).limit(100).all()
 
     room_uuids = set(item.room_id for item in items) | set(hint.room_id for hint in hints)
     rooms_to_map = session.query(TrackedRoom).filter(TrackedRoom.room_id.in_(room_uuids)).all()
@@ -721,12 +713,17 @@ def sync_history(current_user):
             if dt:
                 if dt.tzinfo is not None:
                     dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-                if key not in max_item_dts or dt > max_item_dts[key]:
-                    max_item_dts[key] = dt
+    now_iso = format_iso_z(datetime.now(timezone.utc))
 
-    new_item_watermarks = {
-        key: format_iso_z(dt) for key, dt in max_item_dts.items()
-    }
+    new_item_watermarks = {}
+    for (r_id, s_id) in tracked_set:
+        key = f"{r_id}_{s_id}"
+        if key in max_item_dts:
+            new_item_watermarks[key] = format_iso_z(max_item_dts[key])
+        elif item_watermarks_map.get((r_id, s_id)):
+            new_item_watermarks[key] = item_watermarks_map[(r_id, s_id)]
+        else:
+            new_item_watermarks[key] = now_iso
 
     max_hint_dts = {}
     for hint in hints:
@@ -740,9 +737,15 @@ def sync_history(current_user):
                 if key not in max_hint_dts or dt > max_hint_dts[key]:
                     max_hint_dts[key] = dt
 
-    new_hint_watermarks = {
-        key: format_iso_z(dt) for key, dt in max_hint_dts.items()
-    }
+    new_hint_watermarks = {}
+    for r_id in room_db_id_to_uuid.keys():
+        key = f"{r_id}"
+        if key in max_hint_dts:
+            new_hint_watermarks[key] = format_iso_z(max_hint_dts[key])
+        elif hint_watermarks_map.get(r_id):
+            new_hint_watermarks[key] = hint_watermarks_map[r_id]
+        else:
+            new_hint_watermarks[key] = now_iso
 
     return jsonify({
         "new_items": response_items,
