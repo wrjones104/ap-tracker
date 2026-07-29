@@ -13,7 +13,26 @@ CHEESE_USER_AGENT_BASE = 'ArchipelagoAlerts'
 CHEESE_CONTACT = 'github.com/wrjones104'
 
 def get_app_version():
-    """Extracts version from the Android build.gradle.kts file."""
+    """Extracts version from APP_VERSION env var, VERSION file, or build.gradle.kts."""
+    env_version = os.environ.get("APP_VERSION")
+    if env_version:
+        return env_version.lstrip("v")
+
+    # Try VERSION file
+    version_file = os.path.join(os.path.dirname(__file__), '../VERSION')
+    if not os.path.exists(version_file):
+        version_file = os.path.join(os.path.dirname(__file__), '../../VERSION')
+    
+    if os.path.exists(version_file):
+        try:
+            with open(version_file, 'r') as f:
+                ver = f.read().strip()
+                if ver:
+                    return ver.lstrip("v")
+        except Exception:
+            pass
+
+    # Try android/app/build.gradle.kts
     try:
         gradle_path = os.path.join(os.path.dirname(__file__), '../../android/app/build.gradle.kts')
         if os.path.exists(gradle_path):
@@ -25,7 +44,7 @@ def get_app_version():
     except Exception as e:
         logging.warning(f"[VERSION] Could not read version from gradle: {e}")
     
-    return "1.0.0" # Fallback
+    return "1.6.18"
 
 def get_user_agent_string():
     """Returns the raw User-Agent string for use in any HTTP client."""

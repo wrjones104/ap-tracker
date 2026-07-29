@@ -15,9 +15,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend application source
 COPY backend/ /app/
 
-# Copy Alembic database migrations and configuration
+# Copy Alembic database migrations, configuration, and VERSION
 COPY alembic/ /app/alembic/
 COPY alembic.ini /app/alembic.ini
+COPY VERSION /app/VERSION
 
 ENV PYTHONUNBUFFERED=1
 
