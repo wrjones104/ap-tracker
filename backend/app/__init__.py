@@ -24,13 +24,17 @@ load_dotenv()
 # ==============================================================================
 
 FLASK_ENV = os.getenv('FLASK_ENV', 'production')
+LOG_LEVEL_ENV = os.getenv('LOG_LEVEL', '').upper()
 
-log_levels = {
-    'development': logging.DEBUG,
-    'uat': logging.INFO,
-    'production': logging.INFO, 
-}
-log_level = log_levels.get(FLASK_ENV, logging.INFO)
+if LOG_LEVEL_ENV and hasattr(logging, LOG_LEVEL_ENV):
+    log_level = getattr(logging, LOG_LEVEL_ENV)
+else:
+    log_levels = {
+        'development': logging.DEBUG,
+        'uat': logging.DEBUG,
+        'production': logging.INFO, 
+    }
+    log_level = log_levels.get(FLASK_ENV, logging.INFO)
 
 logging.basicConfig(
     level=log_level,

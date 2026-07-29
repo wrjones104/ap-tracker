@@ -4,20 +4,87 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: ap_tracker_db_dev
+    restart: always
     environment:
-      POSTGRES_USER: ap_user
-      POSTGRES_PASSWORD: ap_password
-      POSTGRES_DB: ap_tracker_dev
+      POSTGRES_USER: ${POSTGRES_USER:-ap_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ap_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ap_tracker_dev}
     ports:
       - "5432:5432"
     volumes:
       - pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ap_user} -d ${POSTGRES_DB:-ap_tracker_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
     container_name: ap_tracker_redis_dev
+    restart: always
     ports:
       - "6379:6379"
+    volumes:
+      - redisdata_dev:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ap_tracker_api_dev
+    restart: always
+    command: python run_api_only.py
+    env_file:
+      - backend/.env
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - LOG_LEVEL=DEBUG
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=postgresql://ap_user:ap_password@postgres:5432/ap_tracker_dev
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend:/app/backend
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  poller:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ap_tracker_poller_dev
+    restart: always
+    command: python run_poller_only.py
+    env_file:
+      - backend/.env
+    environment:
+      - FLASK_ENV=development
+      - LOG_LEVEL=DEBUG
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=postgresql://ap_user:ap_password@postgres:5432/ap_tracker_dev
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend:/app/backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   pgdata_dev:
+  redisdata_dev:

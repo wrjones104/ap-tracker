@@ -365,19 +365,14 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
     added_items_details = []
 
     existing_items_by_index = set()
-    existing_items_legacy = set()
     if isinstance(existing_items_in_db, set):
         for entry in existing_items_in_db:
             if len(entry) == 2:
                 existing_items_by_index.add(entry)
-            elif len(entry) == 3:
-                existing_items_legacy.add(entry)
             elif len(entry) == 4:
                 r_id, idx, i_id, l_id = entry
                 if idx is not None:
                     existing_items_by_index.add((r_id, idx))
-                else:
-                    existing_items_legacy.add((r_id, i_id, l_id))
 
     for p_items in tracker_data.get('player_items_received', []):
         rid = p_items.get('player')
@@ -401,10 +396,9 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
                 continue 
 
             item_key_db_index = (rid, item_index)
-            item_key_db_legacy = (rid, item_id, loc_id)
             item_key_batch = (room_uuid, rid, item_index) 
 
-            is_in_db = (item_key_db_index in existing_items_by_index) or (item_key_db_legacy in existing_items_legacy)
+            is_in_db = (item_key_db_index in existing_items_by_index)
             if is_in_db or (item_key_batch in items_in_this_batch):
                 items_skipped_duplicate += 1
                 continue
@@ -1210,6 +1204,15 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                 short_name_map[p['slot_id']] = original_name
 
         game_map = {p['slot_id']: p['game'] for p in players}
+
+        # Purge legacy un-indexed items for this room so items 0..N backfill cleanly with exact sequence indices
+        try:
+            legacy_count = session.query(NotifiedItem).filter(NotifiedItem.room_id == room_uuid, NotifiedItem.item_index == None).delete(synchronize_session=False)
+            if legacy_count > 0:
+                session.commit()
+                logging.info(f"[POLLER_MIGRATION][RoomDBID:{db_id}] Purged {legacy_count} legacy un-indexed items to allow full sequence backfill.")
+        except Exception as e:
+            session.rollback()
 
         has_item_history = session.query(NotifiedItem.id).filter_by(room_id=room_uuid).limit(1).scalar() is not None
         has_hint_history = session.query(NotifiedHint.id).filter_by(room_id=room_uuid).limit(1).scalar() is not None
