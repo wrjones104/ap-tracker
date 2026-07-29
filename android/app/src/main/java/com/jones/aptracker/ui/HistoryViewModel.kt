@@ -413,9 +413,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private var refreshJob: kotlinx.coroutines.Job? = null
+
     fun refreshAllHistory() {
         Log.d("HistoryViewModel", "Triggering refresh for Room ID: ${currentRoomId ?: "Global"}")
-        viewModelScope.launch {
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             isLoading.value = true
             errorMessage.value = null
 
