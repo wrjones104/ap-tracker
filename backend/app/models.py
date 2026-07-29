@@ -182,10 +182,11 @@ class NotifiedItem(Base):
     sending_slot_id = Column(Integer, nullable=True) 
     item_id = Column(BigInteger, nullable=False)
     location_id = Column(BigInteger, nullable=False)
+    item_index = Column(Integer, nullable=True, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     item_flags = Column(Integer, nullable=True)
     __table_args__ = (
-        UniqueConstraint('room_id', 'receiving_slot_id', 'item_id', 'location_id', name='_item_event_uc'),
+        UniqueConstraint('room_id', 'receiving_slot_id', 'item_index', name='_item_event_index_uc'),
         Index('ix_notifieditem_timestamp', 'timestamp'),
         Index('ix_notifieditem_room_receiving_time', 'room_id', 'receiving_slot_id', 'timestamp'),
     )

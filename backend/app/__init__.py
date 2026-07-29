@@ -164,12 +164,30 @@ def create_app():
 
     if is_sqlite:
         # For local dev, auto-create all tables on startup.
-        # This lets you just delete the .db file and restart.
         models.Base.metadata.create_all(engine)
         logging.info("[MAIN] SQLite DB detected. Tables verified/created.")
     else:
         # For prod (Postgres), we trust Alembic to handle the schema.
         logging.info("[MAIN] Production database engine initialized.")
+
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        if 'notified_items' in inspector.get_table_names():
+            columns = [c['name'] for c in inspector.get_columns('notified_items')]
+            if 'item_index' not in columns:
+                logging.info("[MAIN] Migrating notified_items schema: Adding 'item_index' column...")
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE notified_items ADD COLUMN item_index INTEGER;"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notifieditem_item_index ON notified_items (item_index);"))
+                    try:
+                        conn.execute(text("ALTER TABLE notified_items DROP CONSTRAINT IF EXISTS _item_event_uc;"))
+                    except Exception:
+                        pass
+                    conn.commit()
+                logging.info("[MAIN] Schema migration for notified_items complete.")
+    except Exception as e:
+        logging.warning(f"[MAIN] Automatic schema migration check skipped: {e}")
 
     @app.teardown_appcontext
     def shutdown_session(exception=None):

@@ -364,6 +364,21 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
     items_skipped_backfill = 0
     added_items_details = []
 
+    existing_items_by_index = set()
+    existing_items_legacy = set()
+    if isinstance(existing_items_in_db, set):
+        for entry in existing_items_in_db:
+            if len(entry) == 2:
+                existing_items_by_index.add(entry)
+            elif len(entry) == 3:
+                existing_items_legacy.add(entry)
+            elif len(entry) == 4:
+                r_id, idx, i_id, l_id = entry
+                if idx is not None:
+                    existing_items_by_index.add((r_id, idx))
+                else:
+                    existing_items_legacy.add((r_id, i_id, l_id))
+
     for p_items in tracker_data.get('player_items_received', []):
         rid = p_items.get('player')
         if not isinstance(rid, int): continue
@@ -376,7 +391,7 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
         if not is_tracked_by_anyone:
             continue
 
-        for item_tuple_data in p_items.get('items', []):
+        for item_index, item_tuple_data in enumerate(p_items.get('items', [])):
             items_processed_count += 1
             try:
                 if len(item_tuple_data) < 4: continue
@@ -385,10 +400,12 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
             except (ValueError, TypeError, IndexError) as e:
                 continue 
 
-            item_key_db = (rid, item_id, loc_id)
-            item_key_batch = (room_uuid, rid, item_id, loc_id) 
+            item_key_db_index = (rid, item_index)
+            item_key_db_legacy = (rid, item_id, loc_id)
+            item_key_batch = (room_uuid, rid, item_index) 
 
-            if (item_key_db in existing_items_in_db) or (item_key_batch in items_in_this_batch):
+            is_in_db = (item_key_db_index in existing_items_by_index) or (item_key_db_legacy in existing_items_legacy)
+            if is_in_db or (item_key_batch in items_in_this_batch):
                 items_skipped_duplicate += 1
                 continue
 
@@ -398,12 +415,13 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
                 sending_slot_id=send_id,
                 item_id=item_id,
                 location_id=loc_id,
+                item_index=item_index,
                 item_flags=flags,
                 timestamp=datetime.now(timezone.utc)
             ))
             items_in_this_batch.add(item_key_batch)
             items_added_count += 1
-            added_items_details.append(f"(Slot:{rid}, Item:{item_id}, Loc:{loc_id})")
+            added_items_details.append(f"(Slot:{rid}, Index:{item_index}, Item:{item_id})")
 
             if has_item_history: 
                 receiver_game = game_map.get(rid, "Unknown")
@@ -1196,7 +1214,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         has_item_history = session.query(NotifiedItem.id).filter_by(room_id=room_uuid).limit(1).scalar() is not None
         has_hint_history = session.query(NotifiedHint.id).filter_by(room_id=room_uuid).limit(1).scalar() is not None
 
-        existing_items_in_db = set(session.query(NotifiedItem.receiving_slot_id, NotifiedItem.item_id, NotifiedItem.location_id).filter_by(room_id=room_uuid))
+        existing_items_in_db = set(session.query(NotifiedItem.receiving_slot_id, NotifiedItem.item_index, NotifiedItem.item_id, NotifiedItem.location_id).filter_by(room_id=room_uuid).all())
         existing_hints_map = {
             (h.item_owner_id, h.location_owner_id, h.item_id, h.location_id): h
             for h in session.query(NotifiedHint).filter_by(room_id=room_uuid)
