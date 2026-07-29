@@ -450,7 +450,7 @@ def sync_history(current_user):
             items = session.query(NotifiedItem).filter(
                 NotifiedItem.room_id.in_(list(unwatermarked_room_uuids)),
                 NotifiedItem.receiving_slot_id.in_(list(unwatermarked_slot_ids))
-            ).order_by(NotifiedItem.id.asc()).limit(200).all()
+            ).order_by(NotifiedItem.timestamp.asc(), NotifiedItem.id.asc()).limit(200).all()
 
         if not items and room_uuids and all_tracked_slot_ids:
             min_since_dt = None
@@ -472,7 +472,7 @@ def sync_history(current_user):
             if min_since_dt is not None:
                 item_query = item_query.filter(NotifiedItem.timestamp > min_since_dt)
 
-            items = item_query.order_by(NotifiedItem.id.asc()).limit(200).all()
+            items = item_query.order_by(NotifiedItem.timestamp.asc(), NotifiedItem.id.asc()).limit(200).all()
 
     hint_watermarks_map = {}
     for hint in data.get('hints', []):
