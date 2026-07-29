@@ -47,6 +47,9 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
     depends_on:
       postgres:
         condition: service_healthy
