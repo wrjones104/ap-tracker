@@ -509,9 +509,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     isLoading.value = false
                 }
 
-                // --- STEP 3: Background delta sync ---
+                // --- STEP 3: Background delta sync with real-time UI streaming ---
                 try {
-                    repository.syncHistoryBatch(trackedRooms)
+                    repository.syncHistoryBatch(trackedRooms) {
+                        reloadHistory(showSpinner = false)
+                    }
                     reloadHistory(showSpinner = false)
                 } catch (e: Exception) {
                     Log.e("HistoryViewModel", "Background sync failed", e)

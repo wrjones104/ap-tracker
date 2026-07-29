@@ -88,7 +88,10 @@ class HistoryRepository(
         }
     }
 
-    suspend fun syncHistoryBatch(trackedRooms: List<com.jones.aptracker.network.RoomWithTrackedSlots>) {
+    suspend fun syncHistoryBatch(
+        trackedRooms: List<com.jones.aptracker.network.RoomWithTrackedSlots>,
+        onBatchReceived: (suspend () -> Unit)? = null
+    ) {
         Log.d("HISTORY_DEBUG", "Starting batch history sync...")
         
         try {
@@ -184,6 +187,9 @@ class HistoryRepository(
                         putString("hint_watermark_$key", timestamp)
                     }
                 }
+
+                // Stream batch to UI immediately!
+                onBatchReceived?.invoke()
 
                 // If both lists are below limits, it means we fully caught up
                 if (response.new_items.size < 200 && response.updated_hints.size < 100) {
