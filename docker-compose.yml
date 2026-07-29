@@ -43,7 +43,6 @@ services:
       - "5000:5000"
     environment:
       - FLASK_ENV=${FLASK_ENV:-production}
-      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-ap_user}:${POSTGRES_PASSWORD:-ap_password}@postgres:5432/${POSTGRES_DB:-ap_tracker}}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -67,7 +66,6 @@ services:
       - backend/.env
     environment:
       - FLASK_ENV=${FLASK_ENV:-production}
-      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-ap_user}:${POSTGRES_PASSWORD:-ap_password}@postgres:5432/${POSTGRES_DB:-ap_tracker}}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
