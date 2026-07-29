@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -10,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ap_password}
       POSTGRES_DB: ${POSTGRES_DB:-ap_tracker}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -39,15 +37,16 @@ services:
       dockerfile: Dockerfile
     container_name: ap_tracker_api
     restart: always
+    env_file:
+      - backend/.env
     ports:
       - "5000:5000"
     environment:
-      - FLASK_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-ap_user}:${POSTGRES_PASSWORD:-ap_password}@postgres:5432/${POSTGRES_DB:-ap_tracker}
-      - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-dev-fallback-key}
-      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
-      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET}
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-ap_user}:${POSTGRES_PASSWORD:-ap_password}@postgres:5432/${POSTGRES_DB:-ap_tracker}}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -61,10 +60,14 @@ services:
     container_name: ap_tracker_poller
     restart: always
     command: python run_poller_only.py
+    env_file:
+      - backend/.env
     environment:
-      - FLASK_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-ap_user}:${POSTGRES_PASSWORD:-ap_password}@postgres:5432/${POSTGRES_DB:-ap_tracker}
-      - REDIS_URL=redis://redis:6379/0
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-ap_user}:${POSTGRES_PASSWORD:-ap_password}@postgres:5432/${POSTGRES_DB:-ap_tracker}}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
