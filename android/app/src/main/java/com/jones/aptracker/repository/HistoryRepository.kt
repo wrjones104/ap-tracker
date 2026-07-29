@@ -186,8 +186,8 @@ class HistoryRepository(
 
                 // Persist new watermarks immediately to allow the next loop to fetch next batch
                 prefs.edit {
-                    response.item_watermarks.forEach { (key, timestamp) ->
-                        putString("item_watermark_$key", timestamp)
+                    response.item_watermarks.forEach { (key, value) ->
+                        putString("item_watermark_$key", value.toString())
                     }
                     response.hint_watermarks.forEach { (key, timestamp) ->
                         putString("hint_watermark_$key", timestamp)
