@@ -76,13 +76,15 @@ fun SlotsScreen(
     }
 
     var searchQuery by remember { mutableStateOf("") }
-    var showFinished by remember { mutableStateOf(false) }
-    val expandedRooms = remember { mutableStateMapOf<Int, Boolean>() }
-    var allExpanded by remember { mutableStateOf(false) }
-
+    val showFinished by userViewModel.slotsShowFinished.collectAsState()
+    val expandedRoomIds by userViewModel.expandedRoomIds.collectAsState()
     // Filter: hide archived rooms
     val activeRooms = remember(trackedSlotsByRoom) {
         trackedSlotsByRoom.filter { !it.is_archived }
+    }
+
+    val allExpanded = remember(expandedRoomIds, activeRooms) {
+        activeRooms.isNotEmpty() && activeRooms.all { it.room_db_id in expandedRoomIds }
     }
 
     // Apply search and finished filters
@@ -101,13 +103,6 @@ fun SlotsScreen(
             } else {
                 null
             }
-        }
-    }
-
-    // Initialize expand state for new rooms
-    filteredRooms.forEach { room ->
-        if (room.room_db_id !in expandedRooms) {
-            expandedRooms[room.room_db_id] = false
         }
     }
 
@@ -143,7 +138,7 @@ fun SlotsScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
                             selected = showFinished,
-                            onClick = { showFinished = !showFinished },
+                            onClick = { userViewModel.setSlotsShowFinished(!showFinished) },
                             label = { Text("Show Finished") },
                             leadingIcon = if (showFinished) {
                                 { Text("🏁", style = MaterialTheme.typography.labelSmall) }
@@ -162,10 +157,7 @@ fun SlotsScreen(
 
                     // Expand/Collapse All toggle
                     IconButton(onClick = {
-                        allExpanded = !allExpanded
-                        filteredRooms.forEach { room ->
-                            expandedRooms[room.room_db_id] = allExpanded
-                        }
+                        userViewModel.setAllRoomsExpanded(filteredRooms.map { it.room_db_id }, !allExpanded)
                     }) {
                         Icon(
                             imageVector = if (allExpanded) Icons.Default.UnfoldLess else Icons.Default.UnfoldMore,
@@ -212,7 +204,7 @@ fun SlotsScreen(
                         )
                     ) {
                         filteredRooms.forEach { room ->
-                            val isExpanded = expandedRooms[room.room_db_id] ?: false
+                            val isExpanded = room.room_db_id in expandedRoomIds
 
                             // Room Group Header
                             item(key = "header_${room.room_db_id}") {
@@ -220,7 +212,7 @@ fun SlotsScreen(
                                     room = room,
                                     isExpanded = isExpanded,
                                     onToggleExpand = {
-                                        expandedRooms[room.room_db_id] = !isExpanded
+                                        userViewModel.setRoomExpanded(room.room_db_id, !isExpanded)
                                     }
                                 )
                             }

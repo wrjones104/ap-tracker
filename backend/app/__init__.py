@@ -142,6 +142,7 @@ def create_app():
 
     from . import api
     app.register_blueprint(api.bp)
+    api.register_api_routes(app)
 
     from . import auth
     app.register_blueprint(auth.bp)

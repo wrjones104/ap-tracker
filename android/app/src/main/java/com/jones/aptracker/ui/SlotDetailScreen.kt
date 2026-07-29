@@ -121,9 +121,9 @@ fun SlotDetailScreen(
         }
     }
 
-    LaunchedEffect(roomDbId, slotId) {
+    LaunchedEffect(roomDbId, slotId, slot?.game) {
         userViewModel.fetchThresholdGroups(roomDbId, slotId)
-        textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
+        textClientViewModel.fetchAutocompleteData(roomDbId, slotId, slot?.game, context.applicationContext as? android.app.Application)
     }
 
     val thresholdGroups by userViewModel.thresholdGroups.collectAsState()
@@ -499,7 +499,7 @@ fun SlotDetailScreen(
     if (showAddThresholdDialog) {
         LaunchedEffect(Unit) {
             if (availableItems.isEmpty()) {
-                textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
+                textClientViewModel.fetchAutocompleteData(roomDbId, slotId, slot?.game, context.applicationContext as? android.app.Application)
             }
         }
         ThresholdGroupSheet(
@@ -519,7 +519,7 @@ fun SlotDetailScreen(
     if (showEditThresholdDialog && groupToEdit != null) {
         LaunchedEffect(Unit) {
             if (availableItems.isEmpty()) {
-                textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
+                textClientViewModel.fetchAutocompleteData(roomDbId, slotId, slot?.game, context.applicationContext as? android.app.Application)
             }
         }
         val initialItems = groupToEdit.items.map {
@@ -551,7 +551,7 @@ fun SlotDetailScreen(
     if (showHintDialog) {
         LaunchedEffect(Unit) {
             if (availableItems.isEmpty()) {
-                textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
+                textClientViewModel.fetchAutocompleteData(roomDbId, slotId, slot?.game, context.applicationContext as? android.app.Application)
             }
         }
         SearchableSelectDialog(
@@ -566,7 +566,7 @@ fun SlotDetailScreen(
     if (showLocationHintDialog) {
         LaunchedEffect(Unit) {
             if (availableLocations.isEmpty()) {
-                textClientViewModel.fetchAutocompleteData(roomDbId, slotId)
+                textClientViewModel.fetchAutocompleteData(roomDbId, slotId, slot?.game, context.applicationContext as? android.app.Application)
             }
         }
         SearchableSelectDialog(

@@ -41,8 +41,10 @@ __pycache__/
 *.egg-info/
 dist/
 
-# --- DATABASE ---
 # SQLite (Dev)
+*.db
+*.db-shm
+*.db-wal
 backend/ap_tracker.db
 backend/ap_tracker.db-shm
 backend/ap_tracker.db-wal

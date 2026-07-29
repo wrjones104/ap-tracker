@@ -20,6 +20,8 @@ class SettingsManager(context: Context) {
         val CHEESE_AUTO_SYNC_KEY = booleanPreferencesKey("cheese_auto_sync")
         val IS_CHEESE_CONNECTED_KEY = booleanPreferencesKey("is_cheese_connected")
         val DATE_FORMAT_PRESET_KEY = stringPreferencesKey("date_format_preset")
+        val SLOTS_SHOW_FINISHED_KEY = booleanPreferencesKey("slots_show_finished")
+        val EXPANDED_ROOM_IDS_KEY = stringPreferencesKey("expanded_room_ids")
     }
 
     /**
@@ -50,6 +52,24 @@ class SettingsManager(context: Context) {
         }
 
     /**
+     * A flow that emits whether finished slots should be shown on the slots screen.
+     */
+    val slotsShowFinished: Flow<Boolean> = dataStore.data
+        .map { preferences ->
+            preferences[SLOTS_SHOW_FINISHED_KEY] ?: false
+        }
+
+    /**
+     * A flow that emits the set of expanded room DB IDs.
+     */
+    val expandedRoomIds: Flow<Set<Int>> = dataStore.data
+        .map { preferences ->
+            val raw = preferences[EXPANDED_ROOM_IDS_KEY] ?: ""
+            if (raw.isBlank()) emptySet()
+            else raw.split(",").mapNotNull { it.trim().toIntOrNull() }.toSet()
+        }
+
+    /**
      * Saves the new auto-sync preference.
      */
     suspend fun setAutoSync(isEnabled: Boolean) {
@@ -73,6 +93,24 @@ class SettingsManager(context: Context) {
     suspend fun setDateFormatPreset(preset: String) {
         dataStore.edit { preferences ->
             preferences[DATE_FORMAT_PRESET_KEY] = preset
+        }
+    }
+
+    /**
+     * Saves whether finished slots are shown.
+     */
+    suspend fun setSlotsShowFinished(show: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[SLOTS_SHOW_FINISHED_KEY] = show
+        }
+    }
+
+    /**
+     * Saves the expanded room IDs.
+     */
+    suspend fun setExpandedRoomIds(roomIds: Set<Int>) {
+        dataStore.edit { preferences ->
+            preferences[EXPANDED_ROOM_IDS_KEY] = roomIds.joinToString(",")
         }
     }
 }

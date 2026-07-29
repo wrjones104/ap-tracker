@@ -28,6 +28,7 @@ from .models import (
     DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
 from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id
+from app.services.redis_service import get_redis_client, publish_event
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -2453,6 +2454,8 @@ async def setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop):
                 except (ValueError, RuntimeError):
                     pass # Loop might be closing
 
+_global_setup_cooldowns = {}
+
 async def poller_supervisor(app, loop):
     logging.info("[POLLER] Background polling service starting...")
     running_tasks = {}
@@ -2468,7 +2471,6 @@ async def poller_supervisor(app, loop):
     last_cache_check = datetime.utcnow() - timedelta(minutes=15)
     last_revive_check = datetime.utcnow() - timedelta(hours=2)
     missing_checksums = set()
-    setup_cooldowns = {}
     
     while True:
         try:
@@ -2536,15 +2538,18 @@ async def poller_supervisor(app, loop):
                     needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations) or is_missing_players or is_missing_cache
 
                     if needs_setup:
-                        # Cooldown check: Don't spam setup/repair attempts
-                        cooldown_until = setup_cooldowns.get(room.id)
+                        # Exponential backoff based on failed_poll_count instead of hardcoded 10-minute delay
+                        backfill_failures = getattr(room, 'failed_poll_count', 0) or 0
+                        delay_seconds = min(10 * (2 ** backfill_failures), 300)
+                        
+                        cooldown_until = _global_setup_cooldowns.get(room.id)
                         if cooldown_until and now < cooldown_until:
                             continue
 
                         if room.id not in running_tasks and room.id not in rooms_in_setup:
-                            logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup (Missing Cache: {is_missing_cache}).")
+                            logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup (Failures: {backfill_failures}, Retry in {delay_seconds}s).")
                             rooms_in_setup.add(room.id)
-                            setup_cooldowns[room.id] = now + timedelta(minutes=10)
+                            _global_setup_cooldowns[room.id] = now + timedelta(seconds=delay_seconds)
                             await setup_queue.put(room_info)
                             # THROTTLE: Stagger setup queuing
                             await asyncio.sleep(0.02)
@@ -2552,7 +2557,7 @@ async def poller_supervisor(app, loop):
                         elif room.id in running_tasks and room.id not in rooms_in_setup:
                             logging.info(f"[SUPERVISOR] Re-queuing running room {room.id} for metadata repair.")
                             rooms_in_setup.add(room.id)
-                            setup_cooldowns[room.id] = now + timedelta(minutes=10)
+                            _global_setup_cooldowns[room.id] = now + timedelta(seconds=delay_seconds)
                             await setup_queue.put(room_info)
                             # THROTTLE: Stagger setup repair
                             await asyncio.sleep(0.02)
@@ -2656,8 +2661,17 @@ def db_run_cleanup():
 
 def trigger_immediate_room_poll(room_db_id):
     """
-    Submits a one-shot background job to the global thread pool to immediately poll a room and backfill its slots.
+    Submits an immediate room poll event via Redis Pub/Sub if connected,
+    or falls back to the in-process worker thread pool.
     """
+    _global_setup_cooldowns.pop(room_db_id, None)
+
+    # 1. Try publishing event to Redis queue
+    if publish_event('immediate_poll', {'room_db_id': room_db_id}):
+        logging.info(f"[POLLER_TRIGGER] Published immediate_poll event to Redis for Room {room_db_id}.")
+        return
+
+    # 2. Fallback to in-process worker thread pool if Redis is unavailable
     with _active_immediate_polls_lock:
         if room_db_id in _active_immediate_polls:
             logging.info(f"[POLLER_TRIGGER] Immediate poll already in progress for Room {room_db_id}. Skipping submit.")
@@ -2704,9 +2718,32 @@ def trigger_immediate_room_poll(room_db_id):
 
 async def immediate_poll_checker(app, loop):
     """
-    Periodically checks the database for rooms requiring an immediate poll.
-    Resets needs_immediate_poll to False and triggers the poll inside the poller process.
+    Subscribes to Redis 'immediate_poll' channel for instant event handling.
+    Falls back to periodic database check if Redis is disabled.
     """
+    redis_client = get_redis_client()
+    if redis_client:
+        try:
+            pubsub = redis_client.pubsub()
+            pubsub.subscribe('immediate_poll')
+            logging.info("[POLLER] Subscribed to Redis 'immediate_poll' channel.")
+            
+            while True:
+                message = await loop.run_in_executor(None, pubsub.get_message, True, 1.0)
+                if message and message['type'] == 'message':
+                    try:
+                        data = json.loads(message['data'])
+                        room_db_id = data.get('room_db_id')
+                        if room_db_id:
+                            logging.info(f"[POLLER_EVENT] Received immediate_poll event from Redis for Room {room_db_id}.")
+                            trigger_immediate_room_poll(room_db_id)
+                    except Exception as ex:
+                        logging.error(f"[POLLER_EVENT_ERROR] Failed parsing Redis message: {ex}")
+                await asyncio.sleep(0.1)
+        except Exception as e:
+            logging.error(f"[POLLER_REDIS_ERROR] Redis pubsub loop error: {e}. Falling back to DB poll mode.")
+
+    # Fallback to periodic DB check (10-second interval to eliminate DB load)
     while True:
         try:
             def check_and_get_rooms():
@@ -2723,7 +2760,7 @@ async def immediate_poll_checker(app, loop):
                         session.commit()
                     return room_ids
                 except Exception as e:
-                    logging.error(f"[IMMEDIATE_POLL_CHECKER_DB_ERROR] Failed to query/update needs_immediate_poll: {e}", exc_info=True)
+                    logging.error(f"[IMMEDIATE_POLL_CHECKER_DB_ERROR] Failed to query needs_immediate_poll: {e}", exc_info=True)
                     session.rollback()
                     return []
                 finally:
@@ -2736,7 +2773,7 @@ async def immediate_poll_checker(app, loop):
         except Exception as e:
             logging.error(f"[IMMEDIATE_POLL_CHECKER_ERROR] Exception in loop: {e}", exc_info=True)
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(10)
 
 def run_poller(app):
     loop = asyncio.new_event_loop()

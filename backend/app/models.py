@@ -123,6 +123,7 @@ class UserTrackedSlot(Base):
     __table_args__ = (
         ForeignKeyConstraint(['user_id', 'room_id'], ['user_room_subscriptions.user_id', 'user_room_subscriptions.room_id']),
         UniqueConstraint('user_id', 'room_id', 'slot_id', name='_user_room_slot_uc'),
+        Index('ix_usertrackedslot_user_room', 'user_id', 'room_id'),
     )
     subscription = relationship("UserRoomSubscription", back_populates="tracked_slots")
     threshold_groups = relationship("ThresholdGroup", back_populates="tracked_slot", cascade="all, delete-orphan")
@@ -185,6 +186,7 @@ class NotifiedItem(Base):
     __table_args__ = (
         UniqueConstraint('room_id', 'receiving_slot_id', 'item_id', 'location_id', name='_item_event_uc'),
         Index('ix_notifieditem_timestamp', 'timestamp'),
+        Index('ix_notifieditem_room_receiving_time', 'room_id', 'receiving_slot_id', 'timestamp'),
     )
 
 class NotifiedHint(Base):
@@ -202,6 +204,7 @@ class NotifiedHint(Base):
     __table_args__ = (
         UniqueConstraint('room_id', 'item_id', 'location_id', 'item_owner_id', 'location_owner_id', name='_hint_event_uc'),
         Index('ix_notifiedhint_timestamp', 'timestamp'), 
+        Index('ix_notifiedhint_room_owner_time', 'room_id', 'item_owner_id', 'timestamp'),
     )
 
 class JWTBlocklist(Base):

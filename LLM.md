@@ -12,12 +12,15 @@ The system consists of two main parts:
 
 ## Directory Structure
 
+*   `architecture.md`: **[Detailed Architecture Document](architecture.md)** — Explains system design, Mermaid diagrams, Redis event queues, service engines, PostgreSQL composite indexes, and Docker container topology.
 *   `backend/`: Contains the Python backend code.
     *   `app/`: Main application package.
-        *   `api.py`: Core REST API endpoints (Rooms, Slots, History).
+        *   `routes/`: Domain-driven REST API blueprint modules (`auth_routes.py`, `user_routes.py`, `rooms_routes.py`, `slots_routes.py`, `thresholds_routes.py`, `history_routes.py`, `game_routes.py`).
+        *   `services/`: Background service modules (`poller_service.py`, `redis_service.py`, `datapackage_service.py`, `threshold_service.py`, `notification_service.py`, `cheese_service.py`, `retention_service.py`).
+        *   `api.py`: Composite entry router maintaining 100% backward compatibility.
         *   `auth.py`: Authentication logic (Discord OAuth2, JWT).
-        *   `poller.py`: The background worker that polls Archipelago servers and Cheese Tracker.
-        *   `models.py`: SQLAlchemy database models.
+        *   `poller.py`: Background poller supervisor and room setup engine.
+        *   `models.py`: SQLAlchemy database models & composite performance indexes.
         *   `api_cheese.py`: Integration logic for "Cheese Tracker".
         *   `templates/`: HTML templates for simple web pages (Privacy Policy, Delete Account).
     *   `alembic/`: Database migration scripts.
@@ -45,16 +48,21 @@ The system consists of two main parts:
     *   `EncryptedSharedPreferences` for securely storing JWT authentication tokens (`TokenManager.kt`).
 *   **Authentication:** Integrates with Discord OAuth2 using the `net.openid.appauth` library via deep-linking schemes.
 
-### Backend
+### Backend & Production Infrastructure
 
-*   **Framework:** Flask with Gunicorn/Waitress.
-*   **Database:** SQLAlchemy ORM. Supports SQLite (local) and PostgreSQL (production).
-*   **Asynchronous Processing:** The `poller.py` script uses `asyncio` and `aiohttp` for high-concurrency polling of multiple Archipelago rooms.
+*   **Hosting & Topology:** Deployed on a Google Cloud Platform (GCP) Virtual Machine using PostgreSQL for UAT and Production environments (SQLite is strictly for local dev). Redis is deployed alongside PostgreSQL for caching and background task queue management.
+*   **Framework:** Flask WSGI / ASGI app managed by Gunicorn.
+*   **Database:** SQLAlchemy ORM over PostgreSQL in Production (MVCC concurrent writes enabled).
+*   **Polling & Networking Architecture:**
+    *   **Stateless HTTP Polling:** Room tracking uses HTTP GET requests to `/api/room_status/<room_uuid>` and `/api/tracker/<tracker_id>`. This stateless design accommodates Archipelago server timeouts (rooms sleep/close after 2 hours of inactivity) without maintaining fragile persistent WebSocket streams.
+    *   **Adaptive Polling:** Active rooms are polled at normal intervals, while idle or stale rooms back off to save bandwidth and CPU.
+    *   **WebSocket DataPackage Caching:** WebSockets are used *exclusively* during room setup to fetch `DataStorage` group keys (`_read_item_name_groups_{game}`). Once fetched, group mapping data is cached in Redis / DB.
 *   **Authentication:**
     *   **Discord OAuth2:** Users log in via Discord.
     *   **JWT:** The backend issues JWTs for API access after Discord auth.
     *   **Guest Mode:** Supports anonymous guest accounts.
 *   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
+*   **Data Retention:** Historical events (`notified_items` and `notified_hints`) are maintained with a default 90-day retention policy to support long-running async multiworlds.
 *   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering, and slot collisions immediately trigger local untracking and FCM push notifications.
 
 ### Database Schema (Key Models)
