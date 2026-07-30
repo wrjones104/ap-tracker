@@ -68,6 +68,7 @@ fun MainScreen(
     onGuestUpgradeClick: () -> Unit,
     onNavigateToPlayers: (Int, String) -> Unit,
     onNavigateToIgnoreList: () -> Unit,
+    onNavigateToWhitelist: () -> Unit,
     onNavigateToCredits: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToArchived: () -> Unit,
@@ -362,6 +363,7 @@ fun MainScreen(
                     onLogoutClick = onLogoutClick,
                     onGuestUpgradeClick = onGuestUpgradeClick,
                     onIgnoreListClick = onNavigateToIgnoreList,
+                    onWhitelistClick = onNavigateToWhitelist,
                     onCreditsClick = onNavigateToCredits,
                     onNavigateToSettings = onNavigateToSettings,
                     onNavigateToArchived = onNavigateToArchived

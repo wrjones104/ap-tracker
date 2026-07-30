@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.network.CheeseAuthRequest
 import com.jones.aptracker.network.IgnoreItem
+import com.jones.aptracker.network.WhitelistItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.UpdateSlotPrefsRequest
@@ -130,10 +131,18 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _ignoreSortOption = MutableStateFlow(IgnoreSortOption.NEWEST)
     val ignoreSortOption = _ignoreSortOption.asStateFlow()
 
+    // --- Whitelist & Sorting State ---
+    private val _whitelist = MutableStateFlow<List<WhitelistItem>>(emptyList())
+    val whitelist = _whitelist.asStateFlow()
+
+    private val _whitelistSortOption = MutableStateFlow(IgnoreSortOption.NEWEST)
+    val whitelistSortOption = _whitelistSortOption.asStateFlow()
+
     init {
         fetchUserProfile()
         fetchTrackedSlots()
         fetchIgnoreList()
+        fetchWhitelist()
         loadSortPreference()
     }
 
@@ -533,6 +542,70 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e("UserViewModel", "Failed to remove rule", e)
                 _errorMessage.value = "Failed to remove rule."
                 fetchIgnoreList() // Revert UI on failure
+            }
+        }
+    }
+
+    fun setWhitelistSortOption(option: IgnoreSortOption) {
+        _whitelistSortOption.value = option
+    }
+
+    fun fetchWhitelist() {
+        viewModelScope.launch {
+            try {
+                _whitelist.value = userRepository.getWhitelist()
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to fetch whitelist", e)
+                _errorMessage.value = "Failed to load whitelist. Check connection."
+            }
+        }
+    }
+
+    fun addWhitelistItem(itemName: String, gameName: String?, isGroup: Boolean = false) {
+        viewModelScope.launch {
+            try {
+                userRepository.addWhitelistItem(itemName, gameName, isGroup)
+                fetchWhitelist()
+                _integrationMessage.value = "Item whitelisted."
+            } catch (e: retrofit2.HttpException) {
+                if (e.code() == 409) {
+                    _errorMessage.value = "'$itemName' is already on your whitelist."
+                } else {
+                    Log.e("UserViewModel", "Failed to add whitelist rule (HTTP ${e.code()})", e)
+                    _errorMessage.value = "Failed to add whitelist rule (HTTP ${e.code()})."
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to add whitelist rule", e)
+                _errorMessage.value = "Failed to add whitelist rule. Check connection."
+            }
+        }
+    }
+
+    fun updateWhitelistItem(id: Int, itemName: String, gameName: String?, isGroup: Boolean = false) {
+        viewModelScope.launch {
+            try {
+                userRepository.updateWhitelistItem(id, itemName, gameName, isGroup)
+                fetchWhitelist()
+                _integrationMessage.value = "Rule updated."
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to update rule", e)
+                _errorMessage.value = "Failed to update rule. Check connection."
+            }
+        }
+    }
+
+    fun deleteWhitelistItem(itemId: Int) {
+        viewModelScope.launch {
+            try {
+                // Optimistic UI update
+                val currentList = _whitelist.value
+                _whitelist.value = currentList.filter { it.id != itemId }
+
+                userRepository.deleteWhitelistItem(itemId)
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to remove whitelist rule", e)
+                _errorMessage.value = "Failed to remove rule."
+                fetchWhitelist() // Revert UI on failure
             }
         }
     }

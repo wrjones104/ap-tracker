@@ -9,7 +9,7 @@ from sqlalchemy import func as sa_func
 from app import Session
 from app.models import (
     User, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
-    UserIgnoreItem, NotifiedItem
+    UserIgnoreItem, UserWhitelistItem, NotifiedItem
 )
 from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z
 
@@ -394,6 +394,176 @@ def remove_ignore_item(current_user, item_id):
         session.commit()
         logging.info(f"[API] User {current_user.id} removed ignore rule {item_id}")
         return jsonify({'message': 'Item removed from ignore list.'})
+    except Exception as e:
+        session.rollback()
+        raise e
+    finally:
+        Session.remove()
+
+@slots_bp.route('/users/me/whitelist', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_whitelist(current_user):
+    session = Session()
+    try:
+        whitelist_items = session.query(UserWhitelistItem).filter_by(user_id=current_user.id).all()
+        items = []
+        for item in whitelist_items:
+            items.append({
+                'id': item.id,
+                'item_name': item.item_name,
+                'game_name': item.game_name,
+                'is_group': getattr(item, 'is_group', False),
+                'created_at': item.created_at.isoformat()
+            })
+        return jsonify(items)
+    finally:
+        Session.remove()
+
+@slots_bp.route('/users/me/whitelist', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def add_whitelist_item(current_user):
+    data = request.json or {}
+    item_name = data.get('item_name', '').strip()
+    game_name = data.get('game_name')
+    raw_is_group = data.get('is_group', False)
+
+    if isinstance(raw_is_group, bool):
+        is_group = raw_is_group
+    elif isinstance(raw_is_group, str):
+        val_lower = raw_is_group.strip().lower()
+        if val_lower in ("true", "1"):
+            is_group = True
+        elif val_lower in ("false", "0"):
+            is_group = False
+        else:
+            return jsonify({'error': 'is_group must be a boolean or a valid string representation'}), 400
+    elif raw_is_group is None:
+        is_group = False
+    else:
+        return jsonify({'error': 'is_group must be a boolean or a valid string representation'}), 400
+    
+    if game_name:
+        game_name = game_name.strip()
+
+    if is_group and not game_name:
+        return jsonify({'error': 'game_name is required for group whitelist rules'}), 400
+
+    if not item_name:
+        return jsonify({'error': 'item_name is required'}), 400
+
+    session = Session()
+    try:
+        existing = session.query(UserWhitelistItem).filter_by(
+            user_id=current_user.id,
+            item_name=item_name,
+            game_name=game_name
+        ).first()
+
+        if existing:
+            return jsonify({'error': 'This item is already in your whitelist.'}), 409
+
+        new_item = UserWhitelistItem(
+            user_id=current_user.id,
+            item_name=item_name,
+            game_name=game_name,
+            is_group=is_group
+        )
+        session.add(new_item)
+        session.commit()
+        
+        logging.info(f"[API] User {current_user.id} whitelisted '{item_name}' (Game: {game_name or 'Global'}, Group: {is_group})")
+        return jsonify({
+            'message': 'Item added to whitelist.',
+            'id': new_item.id
+        }), 201
+    except Exception as e:
+        session.rollback()
+        raise e
+    finally:
+        Session.remove()
+
+@slots_bp.route('/users/me/whitelist/<int:item_id>', methods=['PUT'])
+@handle_db_errors
+@log_api_call
+@token_required
+def update_whitelist_item(current_user, item_id):
+    data = request.json or {}
+    new_item_name = data.get('item_name', '').strip()
+    raw_is_group = data.get('is_group', False)
+
+    if isinstance(raw_is_group, bool):
+        new_is_group = raw_is_group
+    elif isinstance(raw_is_group, str):
+        val_lower = raw_is_group.strip().lower()
+        if val_lower in ("true", "1"):
+            new_is_group = True
+        elif val_lower in ("false", "0"):
+            new_is_group = False
+        else:
+            return jsonify({'error': 'is_group must be a boolean or a valid string representation'}), 400
+    elif raw_is_group is None:
+        new_is_group = False
+    else:
+        return jsonify({'error': 'is_group must be a boolean or a valid string representation'}), 400
+    
+    new_game_name = data.get('game_name')
+    if new_game_name:
+        new_game_name = new_game_name.strip()
+
+    if new_is_group and not new_game_name:
+        return jsonify({'error': 'game_name is required for group whitelist rules'}), 400
+
+    if not new_item_name:
+        return jsonify({'error': 'item_name is required'}), 400
+
+    session = Session()
+    try:
+        item = session.query(UserWhitelistItem).filter_by(id=item_id, user_id=current_user.id).first()
+        if not item:
+            return jsonify({'error': 'Rule not found'}), 404
+
+        existing = session.query(UserWhitelistItem).filter(
+            UserWhitelistItem.user_id == current_user.id,
+            UserWhitelistItem.item_name == new_item_name,
+            UserWhitelistItem.game_name == new_game_name,
+            UserWhitelistItem.id != item_id 
+        ).first()
+
+        if existing:
+            return jsonify({'error': 'A rule for this item/game already exists.'}), 409
+
+        item.item_name = new_item_name
+        item.game_name = new_game_name
+        item.is_group = new_is_group
+        
+        session.commit()
+        return jsonify({'message': 'Rule updated.'})
+    finally:
+        Session.remove()
+
+@slots_bp.route('/users/me/whitelist/<int:item_id>', methods=['DELETE'])
+@handle_db_errors
+@log_api_call
+@token_required
+def remove_whitelist_item(current_user, item_id):
+    session = Session()
+    try:
+        item = session.query(UserWhitelistItem).filter_by(
+            id=item_id, 
+            user_id=current_user.id
+        ).first()
+
+        if not item:
+            return jsonify({'error': 'Item not found'}), 404
+
+        session.delete(item)
+        session.commit()
+        logging.info(f"[API] User {current_user.id} removed whitelist rule {item_id}")
+        return jsonify({'message': 'Item removed from whitelist.'})
     except Exception as e:
         session.rollback()
         raise e

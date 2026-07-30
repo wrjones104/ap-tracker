@@ -652,11 +652,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun ignoreItem(itemName: String, gameName: String?) {
+    fun ignoreItem(itemName: String, gameName: String?, onComplete: (() -> Unit)? = null) {
         viewModelScope.launch {
             try {
                 userRepository.addIgnoreItem(itemName, gameName)
                 _actionMessage.value = "Ignored '$itemName'"
+                onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
                     errorMessage.value = "'$itemName' is already on your ignore list."
@@ -711,7 +712,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         _isFetchingGroups.value = false
     }
 
-    fun ignoreItemGroup(groupName: String, gameName: String) {
+    fun ignoreItemGroup(groupName: String, gameName: String, onComplete: (() -> Unit)? = null) {
         viewModelScope.launch {
             try {
                 val request = com.jones.aptracker.network.AddIgnoreItemRequest(
@@ -721,6 +722,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 )
                 RetrofitClient.instance.addIgnoreItem(request)
                 _actionMessage.value = "Ignored group '$groupName'"
+                onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
                     errorMessage.value = "Group '$groupName' is already ignored for this game."
@@ -731,6 +733,51 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to ignore item group", e)
                 errorMessage.value = "Failed to ignore item group. Check connection."
+            }
+        }
+    }
+
+    fun whitelistItem(itemName: String, gameName: String?, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                userRepository.addWhitelistItem(itemName, gameName)
+                _actionMessage.value = "Whitelisted '$itemName'"
+                onComplete?.invoke()
+            } catch (e: HttpException) {
+                if (e.code() == 409) {
+                    errorMessage.value = "'$itemName' is already on your whitelist."
+                } else {
+                    Log.e("HistoryViewModel", "Failed to whitelist item (HTTP ${e.code()})", e)
+                    errorMessage.value = "Failed to whitelist item."
+                }
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to whitelist item", e)
+                errorMessage.value = "Failed to whitelist item. Check connection."
+            }
+        }
+    }
+
+    fun whitelistItemGroup(groupName: String, gameName: String, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                val request = com.jones.aptracker.network.AddWhitelistItemRequest(
+                    itemName = groupName,
+                    gameName = gameName,
+                    isGroup = true
+                )
+                RetrofitClient.instance.addWhitelistItem(request)
+                _actionMessage.value = "Whitelisted group '$groupName'"
+                onComplete?.invoke()
+            } catch (e: HttpException) {
+                if (e.code() == 409) {
+                    errorMessage.value = "Group '$groupName' is already whitelisted for this game."
+                } else {
+                    Log.e("HistoryViewModel", "Failed to whitelist item group (HTTP ${e.code()})", e)
+                    errorMessage.value = "Failed to whitelist item group."
+                }
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to whitelist item group", e)
+                errorMessage.value = "Failed to whitelist item group. Check connection."
             }
         }
     }

@@ -707,8 +707,33 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                 receiver_alias = short_name_map.get(rid, f"Slot {rid}")
                 receiver_original = full_name_map.get(rid, f"Slot {rid}")
 
+                # --- WHITELIST CHECK ---
+                is_whitelisted = False
+                if getattr(user_prefs, 'whitelist_items', None):
+                    for whitelist_rule in user_prefs.whitelist_items:
+                        rule_pattern = whitelist_rule.item_name.lower().strip()
+                        if getattr(whitelist_rule, 'is_group', False):
+                            # Group whitelist: Only supports game-specific level
+                            if whitelist_rule.game_name and whitelist_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                lookup_key = (item_data['game_checksum'], (rule_pattern, normalized_item_name))
+                                if lookup_key in group_members_lookup:
+                                    is_whitelisted = True
+                                    break
+                        else:
+                            # Single item whitelist (supports wildcard matching)
+                            if fnmatch.fnmatch(normalized_item_name, rule_pattern):
+                                if not whitelist_rule.game_name:
+                                    is_whitelisted = True
+                                    break
+                                elif whitelist_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                    is_whitelisted = True
+                                    break
+
+                if is_whitelisted:
+                    logging.info(f"[NOTIFY_WHITELISTED] User {user_id} whitelisted item '{item_name}' for game '{item_data['receiver_game']}'.")
+
                 # --- IGNORE LIST CHECK ---
-                if True:
+                if not is_whitelisted:
                     should_ignore = False
                     if user_prefs.ignore_items:
                         for ignore_rule in user_prefs.ignore_items:
@@ -769,22 +794,22 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                     title_prefix = f"{icon_prog}{item_name}"
                     item_type = "item_progression"
                     notify_override = slot_prefs.notify_progression
-                    should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
+                    should_notify = is_whitelisted or (notify_override if notify_override is not None else user_prefs.notify_progression_default)
                 elif is_useful:
                     title_prefix = f"{icon_useful}{item_name}"
                     item_type = "item_useful"
                     notify_override = slot_prefs.notify_useful
-                    should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
+                    should_notify = is_whitelisted or (notify_override if notify_override is not None else user_prefs.notify_useful_default)
                 elif is_trap:
                     title_prefix = f"{icon_trap}{item_name}"
                     item_type = "item_trap"
                     notify_override = slot_prefs.notify_trap
-                    should_notify = notify_override if notify_override is not None else user_prefs.notify_trap_default
+                    should_notify = is_whitelisted or (notify_override if notify_override is not None else user_prefs.notify_trap_default)
                 else:
                     title_prefix = f"{icon_filler}{item_name}"
                     item_type = "item_filler"
                     notify_override = slot_prefs.notify_filler
-                    should_notify = notify_override if notify_override is not None else user_prefs.notify_filler_default
+                    should_notify = is_whitelisted or (notify_override if notify_override is not None else user_prefs.notify_filler_default)
                 
                 if is_a_found_hint:
                     title_prefix = icon_bulb + title_prefix
@@ -1248,7 +1273,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
 
         users_by_id = {
             u.id: u for u in session.query(User)
-            .options(selectinload(User.ignore_items))
+            .options(selectinload(User.ignore_items), selectinload(User.whitelist_items))
             .filter(User.id.in_(all_user_ids_in_room))
         }
         

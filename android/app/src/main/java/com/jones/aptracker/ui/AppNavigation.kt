@@ -92,6 +92,9 @@ fun MainNavHost(
                 onNavigateToIgnoreList = {
                     navController.navigate("ignore_list")
                 },
+                onNavigateToWhitelist = {
+                    navController.navigate("whitelist")
+                },
                 onNavigateToCredits = {
                     navController.navigate("credits")
                 },
@@ -109,6 +112,12 @@ fun MainNavHost(
 
         composable("ignore_list") {
             IgnoreListScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+
+        composable("whitelist") {
+            WhitelistScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }

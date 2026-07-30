@@ -48,6 +48,7 @@ class User(Base):
     ui_show_trap_default = Column(Boolean, default=True, nullable=False)
     global_snooze_until = Column(DateTime, nullable=True)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
+    whitelist_items = relationship("UserWhitelistItem", back_populates="user", cascade="all, delete-orphan")
 
 class Device(Base):
     __tablename__ = 'devices'
@@ -162,6 +163,21 @@ class UserIgnoreItem(Base):
 
     __table_args__ = (
         UniqueConstraint('user_id', 'item_name', 'game_name', name='_user_ignore_item_uc'),
+    )
+
+class UserWhitelistItem(Base):
+    __tablename__ = 'user_whitelist_items'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    item_name = Column(String(255), nullable=False)
+    game_name = Column(String(255), nullable=True)
+    is_group = Column(Boolean, default=False, nullable=False, server_default='f')
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="whitelist_items")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'item_name', 'game_name', name='_user_whitelist_item_uc'),
     )
 
 class DatapackageCache(Base):

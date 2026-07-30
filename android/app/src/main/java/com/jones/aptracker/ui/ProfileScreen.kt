@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -67,6 +68,7 @@ fun ProfileScreen(
     onLogoutClick: () -> Unit,
     onGuestUpgradeClick: () -> Unit,
     onIgnoreListClick: () -> Unit,
+    onWhitelistClick: () -> Unit,
     onCreditsClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToArchived: () -> Unit
@@ -220,6 +222,13 @@ fun ProfileScreen(
                 title = "Ignore List",
                 subtitle = "Manage muted items",
                 onClick = onIgnoreListClick
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.Visibility,
+                title = "Whitelist",
+                subtitle = "Always deliver notifications for specific items",
+                onClick = onWhitelistClick
             )
 
             HorizontalDivider(Modifier.padding(vertical = 16.dp))

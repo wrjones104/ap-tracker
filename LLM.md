@@ -73,6 +73,8 @@ The system consists of two main parts:
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
 *   `Device`: Stores FCM tokens for push notifications.
 *   `ThresholdGroup` / `ThresholdGroupItem`: Replaced the old single-item `SlotItemThreshold`. Allows users to define named milestone groups of multiple items (or item groups), triggering a notification only when all conditions are satisfied (AND logic).
+*   `UserIgnoreItem`: Muted items/groups (global or per-game) suppressed during polling and feed display.
+*   `UserWhitelistItem`: Whitelisted items/groups (global or per-game) that always trigger push notifications and bypass ignore rules and category preference mutes (e.g., filler item mutes).
 *   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
 *   `DatapackageCache`: Caches game data (Item/Location names, group memberships) to reduce API calls.
 

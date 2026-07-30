@@ -181,6 +181,21 @@ interface ApiService {
         @Body request: AddIgnoreItemRequest
     ): Response<Unit>
 
+    @GET("users/me/whitelist")
+    suspend fun getWhitelist(): List<WhitelistItem>
+
+    @POST("users/me/whitelist")
+    suspend fun addWhitelistItem(@Body request: AddWhitelistItemRequest): AddWhitelistItemResponse
+
+    @PUT("users/me/whitelist/{id}")
+    suspend fun updateWhitelistItem(
+        @Path("id") itemId: Int,
+        @Body request: AddWhitelistItemRequest
+    ): Response<Unit>
+
+    @DELETE("users/me/whitelist/{id}")
+    suspend fun deleteWhitelistItem(@Path("id") itemId: Int): Response<Unit>
+
     @POST("users/me/snooze")
     suspend fun setGlobalSnooze(@Body request: SnoozeRequest): SnoozeResponse
 
