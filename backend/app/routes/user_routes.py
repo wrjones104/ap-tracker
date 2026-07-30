@@ -1,7 +1,9 @@
 import logging
 import json
+import jwt
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
+
 from firebase_admin import messaging
 from datetime import datetime, timezone
 
