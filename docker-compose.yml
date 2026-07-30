@@ -3,6 +3,8 @@ services:
     image: postgres:15-alpine
     container_name: ap_tracker_db
     restart: always
+    env_file:
+      - backend/.env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-ap_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env or shell}
