@@ -5,14 +5,10 @@ services:
     restart: always
     env_file:
       - backend/.env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-ap_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env or shell}
-      POSTGRES_DB: ${POSTGRES_DB:-ap_tracker}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ap_user} -d ${POSTGRES_DB:-ap_tracker}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-ap_user} -d $${POSTGRES_DB:-ap_tracker}"]
       interval: 5s
       timeout: 5s
       retries: 5
