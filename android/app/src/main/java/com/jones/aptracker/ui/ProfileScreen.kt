@@ -71,8 +71,12 @@ fun ProfileScreen(
     onWhitelistClick: () -> Unit,
     onCreditsClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToGuide: () -> Unit = {},
+    onShowWhatsNew: () -> Unit = {},
     onNavigateToArchived: () -> Unit
 ) {
+
+
     val userProfile by userViewModel.userProfile.collectAsState()
     val isAutoSyncEnabled by userViewModel.isAutoSyncEnabled.collectAsState()
 
@@ -193,6 +197,27 @@ fun ProfileScreen(
             // --- Menu Options ---
 
             ProfileMenuItem(
+                icon = Icons.Default.Info,
+                title = "Guide & FAQ",
+                subtitle = "Learn room tracking, mutes, whitelists, and milestones",
+                onClick = onNavigateToGuide
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.Info,
+                title = "What's New in v${com.jones.aptracker.BuildConfig.VERSION_NAME}",
+                subtitle = "View recent patch highlights and feature updates",
+                onClick = onShowWhatsNew
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.Settings,
+                title = "Notification Settings",
+                subtitle = "Global defaults for new rooms",
+                onClick = onNavigateToSettings
+            )
+
+            ProfileMenuItem(
                 icon = Icons.Default.NotificationsPaused,
                 title = "Snooze All Notifications",
                 subtitle = if (isGlobalSnoozeActive) {
@@ -204,23 +229,17 @@ fun ProfileScreen(
             )
 
             ProfileMenuItem(
-                icon = Icons.Default.Settings,
-                title = "Notification Settings",
-                subtitle = "Global defaults for new rooms",
-                onClick = onNavigateToSettings
-            )
-
-            ProfileMenuItem(
                 icon = Icons.Default.Inventory2,
                 title = "Archived Rooms",
                 subtitle = "View finished or inactive games",
                 onClick = onNavigateToArchived
             )
 
+
             ProfileMenuItem(
                 icon = Icons.Default.VisibilityOff,
                 title = "Ignore List",
-                subtitle = "Manage muted items",
+                subtitle = "Mute notifications for specific items",
                 onClick = onIgnoreListClick
             )
 

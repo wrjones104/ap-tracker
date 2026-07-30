@@ -15,6 +15,7 @@ from app.routes.slots_routes import slots_bp
 from app.routes.thresholds_routes import thresholds_bp
 from app.routes.history_routes import history_bp
 from app.routes.game_routes import game_bp
+from app.routes.whats_new_routes import whats_new_bp
 
 bp = Blueprint('api', __name__)
 
@@ -37,4 +38,6 @@ def register_api_routes(app):
     app.register_blueprint(thresholds_bp)
     app.register_blueprint(history_bp)
     app.register_blueprint(game_bp)
+    app.register_blueprint(whats_new_bp)
     logging.info("[API] All modular route blueprints registered successfully.")
+

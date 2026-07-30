@@ -209,6 +209,15 @@ interface ApiService {
     @POST("users/me/test-notification")
     suspend fun sendTestNotification(): Response<Unit>
 
+    @GET("whats_new")
+    suspend fun getWhatsNew(): WhatsNewResponse
+
+    @GET("whats_new/latest")
+    suspend fun getLatestRelease(
+        @Query("version") version: String? = null
+    ): LatestReleaseResponse
+
+
     @POST("history/sync")
     suspend fun syncHistory(@Body request: HistorySyncRequest): HistorySyncResponse
 }

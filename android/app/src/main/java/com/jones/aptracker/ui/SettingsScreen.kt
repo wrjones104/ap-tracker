@@ -1,6 +1,8 @@
 package com.jones.aptracker.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,7 +14,9 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Tune
+
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -46,6 +50,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 fun SettingsScreen(
     onBackClick: () -> Unit,
     onNavigateToSlotOverrides: () -> Unit,
+    onNavigateToGuide: () -> Unit = {},
+    onShowWhatsNew: () -> Unit = {},
     userViewModel: UserViewModel = viewModel()
 ) {
     val userProfile by userViewModel.userProfile.collectAsState()
@@ -63,7 +69,7 @@ fun SettingsScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("Notification Settings") },
+                title = { Text("Settings & Preferences") },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -78,6 +84,7 @@ fun SettingsScreen(
                 .padding(top = padding.calculateTopPadding())
                 .padding(horizontal = 16.dp)
         ) {
+
             // --- TOP SECTION: OVERRIDES ---
             item {
                 Text(
@@ -97,6 +104,7 @@ fun SettingsScreen(
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }
+
 
             // --- MAIN TOGGLES ---
             item {
@@ -259,9 +267,26 @@ fun SettingsScreen(
                             }
                         }
 
+                        // 4. HELP & INFORMATION SECTION
+                        SectionHeader("Help & Information")
+
+                        SettingsNavigationItem(
+                            title = "Guide & FAQ",
+                            description = "Learn room tracking, mutes, whitelists, and thresholds",
+                            onClick = onNavigateToGuide
+                        )
+                        HorizontalDivider()
+
+                        SettingsNavigationItem(
+                            title = "What's New in v${com.jones.aptracker.BuildConfig.VERSION_NAME}",
+                            description = "View recent patch highlights and feature updates",
+                            onClick = onShowWhatsNew
+                        )
+
                         // Bottom padding
                         Box(Modifier.padding(bottom = 32.dp))
                     }
+
                 } ?: Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
@@ -313,6 +338,35 @@ fun NotificationToggle(
             checked = checked,
             onCheckedChange = null,
             modifier = Modifier.padding(start = 16.dp)
+        )
+    }
+}
+
+@Composable
+fun SettingsNavigationItem(
+    title: String,
+    description: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Icon(
+            imageVector = Icons.Default.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

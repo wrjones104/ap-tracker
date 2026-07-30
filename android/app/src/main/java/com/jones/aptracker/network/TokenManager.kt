@@ -73,4 +73,29 @@ class TokenManager(private val context: Context) {
         sharedPreferences?.edit()?.remove("auth_token")?.apply()
         inMemoryToken = null
     }
+
+    fun getLastSeenVersionCode(): Int {
+        return sharedPreferences?.getInt("last_seen_version_code", 0) ?: 0
+    }
+
+    fun setLastSeenVersionCode(versionCode: Int) {
+        sharedPreferences?.edit()?.putInt("last_seen_version_code", versionCode)?.apply()
+    }
+
+    fun isFirstLaunch(): Boolean {
+        return sharedPreferences?.getBoolean("has_seen_welcome_modal", false) != true
+    }
+
+    fun setWelcomeModalSeen() {
+        sharedPreferences?.edit()?.putBoolean("has_seen_welcome_modal", true)?.apply()
+    }
+
+    fun hasDismissedBadge(featureKey: String): Boolean {
+        return sharedPreferences?.getBoolean("dismissed_badge_$featureKey", false) ?: false
+    }
+
+    fun dismissFeatureBadge(featureKey: String) {
+        sharedPreferences?.edit()?.putBoolean("dismissed_badge_$featureKey", true)?.apply()
+    }
 }
+

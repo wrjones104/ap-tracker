@@ -14,8 +14,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.NotificationsPaused
+
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
@@ -71,12 +73,16 @@ fun MainScreen(
     onNavigateToWhitelist: () -> Unit,
     onNavigateToCredits: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToGuide: () -> Unit = {},
+    onShowWhatsNew: () -> Unit = {},
     onNavigateToArchived: () -> Unit,
+
     onNavigateToSlotDetail: (Int, Int) -> Unit,
     userViewModel: UserViewModel = viewModel(),
     roomsViewModel: RoomsViewModel = viewModel(),
     historyViewModel: HistoryViewModel = viewModel()
 ) {
+
     val bottomNavController = rememberNavController()
 
     val historyFilter by historyViewModel.historyFilter.collectAsState()
@@ -206,12 +212,20 @@ fun MainScreen(
             TopAppBar(
                 title = { Text(titleText) },
                 actions = {
-                    if (currentRoute == BottomNavItem.Rooms.route) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(end = 16.dp) // Right margin
-                        ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        IconButton(onClick = onNavigateToGuide) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Guide & FAQ",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
+
+                        if (currentRoute == BottomNavItem.Rooms.route) {
                             val profile = userProfile
                             val isCheeseConnected = profile?.is_cheese_connected == true
 
@@ -240,18 +254,16 @@ fun MainScreen(
 
                             // 2. CHEESE ICONS
                             if (isCheeseConnected) {
-
                                 Text(
                                     text = "🧀",
                                     style = MaterialTheme.typography.titleMedium,
                                     modifier = Modifier
                                         .clickable { uriHandler.openUri("https://cheesetrackers.theincrediblewheelofchee.se/") }
-                                        .padding(1.dp) // Small hit target padding
+                                        .padding(1.dp)
                                 )
 
                                 Spacer(modifier = Modifier.width(8.dp))
 
-                                // Sync Button (Direct Clickable Icon)
                                 val infiniteTransition = rememberInfiniteTransition(label = "spin")
                                 val angle by infiniteTransition.animateFloat(
                                     initialValue = 0f,
@@ -266,18 +278,19 @@ fun MainScreen(
                                     imageVector = Icons.Default.Refresh,
                                     contentDescription = "Sync",
                                     modifier = Modifier
-                                        .size(24.dp) // Standard Icon size
+                                        .size(24.dp)
                                         .then(if (isSyncingCheese) Modifier.rotate(angle) else Modifier)
                                         .clickable(enabled = !isSyncingCheese) {
                                             roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = true)
                                         }
-                                        .padding(2.dp) // Minimal padding
+                                        .padding(2.dp)
                                 )
                             }
                         }
                     }
                 }
             )
+
         },
 
         bottomBar = {
@@ -366,7 +379,11 @@ fun MainScreen(
                     onWhitelistClick = onNavigateToWhitelist,
                     onCreditsClick = onNavigateToCredits,
                     onNavigateToSettings = onNavigateToSettings,
+                    onNavigateToGuide = onNavigateToGuide,
+                    onShowWhatsNew = onShowWhatsNew,
                     onNavigateToArchived = onNavigateToArchived
+
+
                 )
             }
         }

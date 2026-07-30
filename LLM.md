@@ -12,10 +12,13 @@ The system consists of two main parts:
 
 ## Directory Structure
 
+*   `CHANGELOG.md`: Project changelog following Keep a Changelog standard with copyable Discord announcement markdown snippets.
 *   `architecture.md`: **[Detailed Architecture Document](architecture.md)** — Explains system design, Mermaid diagrams, Redis event queues, service engines, PostgreSQL composite indexes, and Docker container topology.
+*   `scripts/`: Contains developer helper scripts including `sync_changelog.py`.
 *   `backend/`: Contains the Python backend code.
     *   `app/`: Main application package.
-        *   `routes/`: Domain-driven REST API blueprint modules (`auth_routes.py`, `user_routes.py`, `rooms_routes.py`, `slots_routes.py`, `thresholds_routes.py`, `history_routes.py`, `game_routes.py`).
+        *   `routes/`: Domain-driven REST API blueprint modules (`auth_routes.py`, `user_routes.py`, `rooms_routes.py`, `slots_routes.py`, `thresholds_routes.py`, `history_routes.py`, `game_routes.py`, `whats_new_routes.py`).
+        *   `data/`: Static app resources including `changelog.json` for serving `GET /api/whats_new`.
         *   `services/`: Background service modules (`poller_service.py`, `redis_service.py`, `datapackage_service.py`, `threshold_service.py`, `notification_service.py`, `cheese_service.py`, `retention_service.py`).
         *   `api.py`: Composite entry router maintaining 100% backward compatibility.
         *   `auth.py`: Authentication logic (Discord OAuth2, JWT).
@@ -65,7 +68,7 @@ The system consists of two main parts:
 *   **Data Retention:** Historical events (`notified_items` and `notified_hints`) are maintained with a default 90-day retention policy to support long-running async multiworlds.
 *   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering, and slot collisions immediately trigger local untracking and FCM push notifications.
 
-### Database Schema (Key Models)
+## Database Schema (Key Models)
 
 *   `User`: Stores Discord ID, preferences, and encryption keys.
 *   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
@@ -93,6 +96,8 @@ The system consists of two main parts:
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
 *   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
 *   **Cheese Tracker Claim Checking:** Unauthenticated claims on Cheese Tracker leave `claimed_by_ct_user_id` as `None` but populate `discord_username` (which shows as `effective_discord_username` on GET requests). Checking for claim conflicts requires checking both for authenticated ID mismatches and unauthenticated Discord username mismatches.
+*   **Changelog Formatting & Sync:** Author new releases directly in `CHANGELOG.md` (no emojis, standard Keep a Changelog format). Run `python scripts/sync_changelog.py` to automatically update `backend/app/data/changelog.json` for the web and mobile API.
+*   **APK Distribution:** APK files are not hosted directly on the web app/backend. APK downloads are provided exclusively via **GitHub Releases** (alongside Google Play Store).
 
 ## LLM Maintenance Directive
 
