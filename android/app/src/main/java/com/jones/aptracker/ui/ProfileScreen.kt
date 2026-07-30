@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -67,10 +68,15 @@ fun ProfileScreen(
     onLogoutClick: () -> Unit,
     onGuestUpgradeClick: () -> Unit,
     onIgnoreListClick: () -> Unit,
+    onWhitelistClick: () -> Unit,
     onCreditsClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToGuide: () -> Unit = {},
+    onShowWhatsNew: () -> Unit = {},
     onNavigateToArchived: () -> Unit
 ) {
+
+
     val userProfile by userViewModel.userProfile.collectAsState()
     val isAutoSyncEnabled by userViewModel.isAutoSyncEnabled.collectAsState()
 
@@ -87,6 +93,24 @@ fun ProfileScreen(
         while (true) {
             delay(60_000L)
             now = Instant.now()
+        }
+    }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val integrationMessage by userViewModel.integrationMessage.collectAsState()
+    val errorMessage by userViewModel.errorMessage.collectAsState()
+
+    LaunchedEffect(integrationMessage) {
+        integrationMessage?.let {
+            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
+            userViewModel.clearIntegrationMessage()
+        }
+    }
+
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_LONG).show()
+            userViewModel.clearErrorMessage()
         }
     }
 
@@ -173,6 +197,27 @@ fun ProfileScreen(
             // --- Menu Options ---
 
             ProfileMenuItem(
+                icon = Icons.Default.Info,
+                title = "Guide & FAQ",
+                subtitle = "Learn room tracking, mutes, whitelists, and milestones",
+                onClick = onNavigateToGuide
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.Info,
+                title = "What's New in v${com.jones.aptracker.BuildConfig.VERSION_NAME}",
+                subtitle = "View recent patch highlights and feature updates",
+                onClick = onShowWhatsNew
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.Settings,
+                title = "Notification Settings",
+                subtitle = "Global defaults for new rooms",
+                onClick = onNavigateToSettings
+            )
+
+            ProfileMenuItem(
                 icon = Icons.Default.NotificationsPaused,
                 title = "Snooze All Notifications",
                 subtitle = if (isGlobalSnoozeActive) {
@@ -184,24 +229,25 @@ fun ProfileScreen(
             )
 
             ProfileMenuItem(
-                icon = Icons.Default.Settings,
-                title = "Notification Settings",
-                subtitle = "Global defaults for new rooms",
-                onClick = onNavigateToSettings
-            )
-
-            ProfileMenuItem(
                 icon = Icons.Default.Inventory2,
                 title = "Archived Rooms",
                 subtitle = "View finished or inactive games",
                 onClick = onNavigateToArchived
             )
 
+
             ProfileMenuItem(
                 icon = Icons.Default.VisibilityOff,
                 title = "Ignore List",
-                subtitle = "Manage muted items",
+                subtitle = "Mute notifications for specific items",
                 onClick = onIgnoreListClick
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.Visibility,
+                title = "Whitelist",
+                subtitle = "Always deliver notifications for specific items",
+                onClick = onWhitelistClick
             )
 
             HorizontalDivider(Modifier.padding(vertical = 16.dp))

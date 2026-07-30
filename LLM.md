@@ -12,12 +12,18 @@ The system consists of two main parts:
 
 ## Directory Structure
 
+*   `CHANGELOG.md`: Project changelog following Keep a Changelog standard with copyable Discord announcement markdown snippets.
+*   `architecture.md`: **[Detailed Architecture Document](architecture.md)** — Explains system design, Mermaid diagrams, Redis event queues, service engines, PostgreSQL composite indexes, and Docker container topology.
+*   `scripts/`: Contains developer helper scripts including `sync_changelog.py`.
 *   `backend/`: Contains the Python backend code.
     *   `app/`: Main application package.
-        *   `api.py`: Core REST API endpoints (Rooms, Slots, History).
+        *   `routes/`: Domain-driven REST API blueprint modules (`auth_routes.py`, `user_routes.py`, `rooms_routes.py`, `slots_routes.py`, `thresholds_routes.py`, `history_routes.py`, `game_routes.py`, `whats_new_routes.py`).
+        *   `data/`: Static app resources including `changelog.json` for serving `GET /api/whats_new`.
+        *   `services/`: Background service modules (`poller_service.py`, `redis_service.py`, `datapackage_service.py`, `threshold_service.py`, `notification_service.py`, `cheese_service.py`, `retention_service.py`).
+        *   `api.py`: Composite entry router maintaining 100% backward compatibility.
         *   `auth.py`: Authentication logic (Discord OAuth2, JWT).
-        *   `poller.py`: The background worker that polls Archipelago servers and Cheese Tracker.
-        *   `models.py`: SQLAlchemy database models.
+        *   `poller.py`: Background poller supervisor and room setup engine.
+        *   `models.py`: SQLAlchemy database models & composite performance indexes.
         *   `api_cheese.py`: Integration logic for "Cheese Tracker".
         *   `templates/`: HTML templates for simple web pages (Privacy Policy, Delete Account).
     *   `alembic/`: Database migration scripts.
@@ -45,19 +51,24 @@ The system consists of two main parts:
     *   `EncryptedSharedPreferences` for securely storing JWT authentication tokens (`TokenManager.kt`).
 *   **Authentication:** Integrates with Discord OAuth2 using the `net.openid.appauth` library via deep-linking schemes.
 
-### Backend
+### Backend & Production Infrastructure
 
-*   **Framework:** Flask with Gunicorn/Waitress.
-*   **Database:** SQLAlchemy ORM. Supports SQLite (local) and PostgreSQL (production).
-*   **Asynchronous Processing:** The `poller.py` script uses `asyncio` and `aiohttp` for high-concurrency polling of multiple Archipelago rooms.
+*   **Hosting & Topology:** Deployed on a Google Cloud Platform (GCP) Virtual Machine using PostgreSQL for UAT and Production environments (SQLite is strictly for local dev). Redis is deployed alongside PostgreSQL for caching and background task queue management.
+*   **Framework:** Flask WSGI / ASGI app managed by Gunicorn.
+*   **Database:** SQLAlchemy ORM over PostgreSQL in Production (MVCC concurrent writes enabled).
+*   **Polling & Networking Architecture:**
+    *   **Stateless HTTP Polling:** Room tracking uses HTTP GET requests to `/api/room_status/<room_uuid>` and `/api/tracker/<tracker_id>`. This stateless design accommodates Archipelago server timeouts (rooms sleep/close after 2 hours of inactivity) without maintaining fragile persistent WebSocket streams.
+    *   **Adaptive Polling:** Active rooms are polled at normal intervals, while idle or stale rooms back off to save bandwidth and CPU.
+    *   **WebSocket DataPackage Caching:** WebSockets are used *exclusively* during room setup to fetch `DataStorage` group keys (`_read_item_name_groups_{game}`). Once fetched, group mapping data is cached in Redis / DB.
 *   **Authentication:**
     *   **Discord OAuth2:** Users log in via Discord.
     *   **JWT:** The backend issues JWTs for API access after Discord auth.
     *   **Guest Mode:** Supports anonymous guest accounts.
 *   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
+*   **Data Retention:** Historical events (`notified_items` and `notified_hints`) are maintained with a default 90-day retention policy to support long-running async multiworlds.
 *   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering, and slot collisions immediately trigger local untracking and FCM push notifications.
 
-### Database Schema (Key Models)
+## Database Schema (Key Models)
 
 *   `User`: Stores Discord ID, preferences, and encryption keys.
 *   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
@@ -65,6 +76,8 @@ The system consists of two main parts:
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
 *   `Device`: Stores FCM tokens for push notifications.
 *   `ThresholdGroup` / `ThresholdGroupItem`: Replaced the old single-item `SlotItemThreshold`. Allows users to define named milestone groups of multiple items (or item groups), triggering a notification only when all conditions are satisfied (AND logic).
+*   `UserIgnoreItem`: Muted items/groups (global or per-game) suppressed during polling and feed display.
+*   `UserWhitelistItem`: Whitelisted items/groups (global or per-game) that always trigger push notifications and bypass ignore rules and category preference mutes (e.g., filler item mutes).
 *   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
 *   `DatapackageCache`: Caches game data (Item/Location names, group memberships) to reduce API calls.
 
@@ -83,6 +96,8 @@ The system consists of two main parts:
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
 *   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
 *   **Cheese Tracker Claim Checking:** Unauthenticated claims on Cheese Tracker leave `claimed_by_ct_user_id` as `None` but populate `discord_username` (which shows as `effective_discord_username` on GET requests). Checking for claim conflicts requires checking both for authenticated ID mismatches and unauthenticated Discord username mismatches.
+*   **Changelog Formatting & Sync:** Author new releases directly in `CHANGELOG.md` (no emojis, standard Keep a Changelog format). Run `python scripts/sync_changelog.py` to automatically update `backend/app/data/changelog.json` for the web and mobile API.
+*   **APK Distribution:** APK files are not hosted directly on the web app/backend. APK downloads are provided exclusively via **GitHub Releases** (alongside Google Play Store).
 
 ## LLM Maintenance Directive
 

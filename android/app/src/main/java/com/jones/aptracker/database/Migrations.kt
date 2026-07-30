@@ -205,4 +205,45 @@ val MIGRATION_17_18 = object : Migration(17, 18) {
         db.execSQL("ALTER TABLE rooms ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
         db.execSQL("ALTER TABLE rooms ADD COLUMN web_url TEXT")
     }
+}
+
+val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `cached_datapackages` (
+                `cacheKey` TEXT NOT NULL,
+                `game` TEXT,
+                `roomDbId` INTEGER,
+                `slotId` INTEGER,
+                `itemsJson` TEXT NOT NULL,
+                `locationsJson` TEXT NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`cacheKey`)
+            )
+        """.trimIndent())
+    }
+}
+
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("DROP TABLE IF EXISTS `cached_datapackages`")
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `cached_datapackages` (
+                `cacheKey` TEXT NOT NULL,
+                `game` TEXT,
+                `roomDbId` INTEGER,
+                `slotId` INTEGER,
+                `itemsJson` TEXT NOT NULL,
+                `locationsJson` TEXT NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`cacheKey`)
+            )
+        """.trimIndent())
+    }
+}
+
+val MIGRATION_20_21 = object : Migration(20, 21) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Schema structure is unchanged; migration triggers reset of SharedPreferences watermarks for sequence sync
+    }
 }

@@ -1,0 +1,17 @@
+# Ignore virtual environments, cache, and database files
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.db
+*.db-shm
+*.db-wal
+.git/
+.gitignore
+.env
+.env.*
+service-account-key*.json

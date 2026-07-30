@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.network.CheeseAuthRequest
 import com.jones.aptracker.network.IgnoreItem
+import com.jones.aptracker.network.WhitelistItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.UpdateSlotPrefsRequest
@@ -18,6 +19,9 @@ import com.jones.aptracker.network.ThresholdGroup
 import com.jones.aptracker.network.CreateThresholdGroupRequest
 import com.jones.aptracker.network.ThresholdGroupItemRequest
 import com.jones.aptracker.database.AppDatabase
+import com.jones.aptracker.database.CachedDatapackageEntity
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.UserRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +54,38 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     // --- User Profile State ---
     private val _userProfile = MutableStateFlow<UserProfile?>(null)
     val userProfile = _userProfile.asStateFlow()
+
+    // --- Persistent Slots View Preferences ---
+    val slotsShowFinished: StateFlow<Boolean> = settingsManager.slotsShowFinished
+        .stateIn(viewModelScope, SharingStarted.Lazily, false)
+
+    val expandedRoomIds: StateFlow<Set<Int>> = settingsManager.expandedRoomIds
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptySet())
+
+    fun setSlotsShowFinished(show: Boolean) {
+        viewModelScope.launch {
+            settingsManager.setSlotsShowFinished(show)
+        }
+    }
+
+    fun setRoomExpanded(roomDbId: Int, isExpanded: Boolean) {
+        viewModelScope.launch {
+            val current = expandedRoomIds.value.toMutableSet()
+            if (isExpanded) {
+                current.add(roomDbId)
+            } else {
+                current.remove(roomDbId)
+            }
+            settingsManager.setExpandedRoomIds(current)
+        }
+    }
+
+    fun setAllRoomsExpanded(roomDbIds: List<Int>, expand: Boolean) {
+        viewModelScope.launch {
+            val next = if (expand) roomDbIds.toSet() else emptySet()
+            settingsManager.setExpandedRoomIds(next)
+        }
+    }
 
     private val _trackedSlotsByRoom = MutableStateFlow<List<RoomWithTrackedSlots>>(emptyList())
     val trackedSlotsByRoom = _trackedSlotsByRoom.asStateFlow()
@@ -95,10 +131,18 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _ignoreSortOption = MutableStateFlow(IgnoreSortOption.NEWEST)
     val ignoreSortOption = _ignoreSortOption.asStateFlow()
 
+    // --- Whitelist & Sorting State ---
+    private val _whitelist = MutableStateFlow<List<WhitelistItem>>(emptyList())
+    val whitelist = _whitelist.asStateFlow()
+
+    private val _whitelistSortOption = MutableStateFlow(IgnoreSortOption.NEWEST)
+    val whitelistSortOption = _whitelistSortOption.asStateFlow()
+
     init {
         fetchUserProfile()
         fetchTrackedSlots()
         fetchIgnoreList()
+        fetchWhitelist()
         loadSortPreference()
     }
 
@@ -391,19 +435,48 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     fun fetchGameAvailableItems(gameName: String) {
         latestGameQuery = gameName
-        _gameAvailableItems.value = emptyList()
         fetchAvailableItemsJob?.cancel()
         fetchAvailableItemsJob = viewModelScope.launch {
+            // 1. Instantly load local Room DB cache if available (0ms wait time)
+            val localCache = try {
+                val db = AppDatabase.getInstance(getApplication())
+                db.datapackageDao().getDatapackageForGame(gameName)
+            } catch (e: Exception) {
+                null
+            }
+
+            if (localCache != null && latestGameQuery == gameName) {
+                try {
+                    val type = object : TypeToken<List<AutocompleteOption>>() {}.type
+                    val cachedItems: List<AutocompleteOption> = Gson().fromJson(localCache.itemsJson, type)
+                    if (cachedItems.isNotEmpty()) {
+                        _gameAvailableItems.value = cachedItems
+                    }
+                } catch (e: Exception) {
+                    Log.e("UserViewModel", "Failed to parse local datapackage cache", e)
+                }
+            }
+
+            // 2. Revalidate from API in background and update local Room DB cache
             try {
                 val items = RetrofitClient.instance.getGameAvailableItems(gameName)
                 if (latestGameQuery == gameName) {
                     _gameAvailableItems.value = items
+                    val gson = Gson()
+                    val itemsJson = gson.toJson(items)
+                    val db = AppDatabase.getInstance(getApplication())
+                    val existing = db.datapackageDao().getDatapackageForGame(gameName)
+                    val updated = CachedDatapackageEntity(
+                        cacheKey = "game:$gameName",
+                        game = gameName,
+                        itemsJson = itemsJson,
+                        locationsJson = existing?.locationsJson ?: "[]",
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    db.datapackageDao().insertDatapackage(updated)
                 }
             } catch (e: Exception) {
-                Log.e("UserViewModel", "Failed to fetch game available items", e)
-                if (latestGameQuery == gameName) {
-                    _gameAvailableItems.value = emptyList()
-                }
+                Log.e("UserViewModel", "Failed to fetch game available items from remote API", e)
             }
         }
     }
@@ -469,6 +542,70 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e("UserViewModel", "Failed to remove rule", e)
                 _errorMessage.value = "Failed to remove rule."
                 fetchIgnoreList() // Revert UI on failure
+            }
+        }
+    }
+
+    fun setWhitelistSortOption(option: IgnoreSortOption) {
+        _whitelistSortOption.value = option
+    }
+
+    fun fetchWhitelist() {
+        viewModelScope.launch {
+            try {
+                _whitelist.value = userRepository.getWhitelist()
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to fetch whitelist", e)
+                _errorMessage.value = "Failed to load whitelist. Check connection."
+            }
+        }
+    }
+
+    fun addWhitelistItem(itemName: String, gameName: String?, isGroup: Boolean = false) {
+        viewModelScope.launch {
+            try {
+                userRepository.addWhitelistItem(itemName, gameName, isGroup)
+                fetchWhitelist()
+                _integrationMessage.value = "Item whitelisted."
+            } catch (e: retrofit2.HttpException) {
+                if (e.code() == 409) {
+                    _errorMessage.value = "'$itemName' is already on your whitelist."
+                } else {
+                    Log.e("UserViewModel", "Failed to add whitelist rule (HTTP ${e.code()})", e)
+                    _errorMessage.value = "Failed to add whitelist rule (HTTP ${e.code()})."
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to add whitelist rule", e)
+                _errorMessage.value = "Failed to add whitelist rule. Check connection."
+            }
+        }
+    }
+
+    fun updateWhitelistItem(id: Int, itemName: String, gameName: String?, isGroup: Boolean = false) {
+        viewModelScope.launch {
+            try {
+                userRepository.updateWhitelistItem(id, itemName, gameName, isGroup)
+                fetchWhitelist()
+                _integrationMessage.value = "Rule updated."
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to update rule", e)
+                _errorMessage.value = "Failed to update rule. Check connection."
+            }
+        }
+    }
+
+    fun deleteWhitelistItem(itemId: Int) {
+        viewModelScope.launch {
+            try {
+                // Optimistic UI update
+                val currentList = _whitelist.value
+                _whitelist.value = currentList.filter { it.id != itemId }
+
+                userRepository.deleteWhitelistItem(itemId)
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to remove whitelist rule", e)
+                _errorMessage.value = "Failed to remove rule."
+                fetchWhitelist() // Revert UI on failure
             }
         }
     }
@@ -662,8 +799,10 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     fun fetchThresholdGroups(roomDbId: Int, slotId: Int) {
         val requestKey = roomDbId to slotId
+        if (latestThresholdGroupsKey != requestKey) {
+            _thresholdGroups.value = emptyList()
+        }
         latestThresholdGroupsKey = requestKey
-        _thresholdGroups.value = emptyList()
         viewModelScope.launch {
             try {
                 val groups = RetrofitClient.instance.getThresholdGroups(roomDbId, slotId)
@@ -672,10 +811,6 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to fetch threshold groups", e)
-                if (latestThresholdGroupsKey == requestKey) {
-                    _thresholdGroups.value = emptyList()
-                    _errorMessage.value = "Failed to load milestone groups."
-                }
             }
         }
     }
@@ -745,9 +880,61 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     fun fetchAvailableItems(roomDbId: Int, slotId: Int) {
         viewModelScope.launch {
+            val room = trackedSlotsByRoom.value.find { it.room_db_id == roomDbId }
+            val slot = room?.tracked_slots?.find { it.slot_id == slotId }
+            val gameName = slot?.game
+            val key = if (!gameName.isNullOrEmpty()) "game:$gameName" else "slot:$roomDbId:$slotId"
+
+            val localCache = try {
+                val db = AppDatabase.getInstance(getApplication())
+                db.datapackageDao().getDatapackage(key, roomDbId, slotId, gameName)
+            } catch (e: Exception) { null }
+
+            if (localCache != null) {
+                try {
+                    val type = object : TypeToken<List<AutocompleteOption>>() {}.type
+                    val cachedItems: List<AutocompleteOption> = Gson().fromJson(localCache.itemsJson, type)
+                    if (cachedItems.isNotEmpty()) {
+                        _availableItems.value = cachedItems
+                    }
+                } catch (e: Exception) {
+                    Log.e("UserViewModel", "Failed to parse local datapackage items", e)
+                }
+            }
+
             try {
                 val items = RetrofitClient.instance.getAvailableItems(roomDbId, slotId)
                 _availableItems.value = items
+                
+                val gson = Gson()
+                val itemsJson = gson.toJson(items)
+                val db = AppDatabase.getInstance(getApplication())
+
+                db.datapackageDao().insertDatapackage(
+                    CachedDatapackageEntity(
+                        cacheKey = "slot:$roomDbId:$slotId",
+                        game = gameName,
+                        roomDbId = roomDbId,
+                        slotId = slotId,
+                        itemsJson = itemsJson,
+                        locationsJson = localCache?.locationsJson ?: "[]",
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+
+                if (!gameName.isNullOrEmpty()) {
+                    db.datapackageDao().insertDatapackage(
+                        CachedDatapackageEntity(
+                            cacheKey = "game:$gameName",
+                            game = gameName,
+                            roomDbId = roomDbId,
+                            slotId = slotId,
+                            itemsJson = itemsJson,
+                            locationsJson = localCache?.locationsJson ?: "[]",
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
+                }
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to fetch available items", e)
             }

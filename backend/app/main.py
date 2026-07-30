@@ -5,23 +5,9 @@ from flask import Blueprint, render_template, session, url_for, redirect, reques
 from . import Session
 from .models import User
 
-bp = Blueprint('main', __name__)
+from .utils import get_app_version
 
-def get_app_version():
-    gradle_path = os.path.join(os.path.dirname(__file__), '../../android/app/build.gradle.kts')
-    
-    try:
-        with open(gradle_path, 'r') as f:
-            content = f.read()
-            # Regex to find: versionName = "1.0.4"
-            match = re.search(r'versionName\s*=\s*"([^"]+)"', content)
-            if match:
-                return f"v{match.group(1)}"
-    except FileNotFoundError:
-        print("Could not find build.gradle.kts")
-        pass
-    
-    return "v1.0.0" # Fallback
+bp = Blueprint('main', __name__)
 
 @bp.route('/privacy')
 def privacy_policy():
@@ -30,7 +16,7 @@ def privacy_policy():
 
 @bp.route('/')
 def index():
-    current_version = get_app_version()
+    current_version = f"v{get_app_version()}"
     return render_template('index.html', version=current_version)
 
 

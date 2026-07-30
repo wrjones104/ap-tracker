@@ -23,8 +23,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -75,8 +77,60 @@ fun MainNavHost(
     onLogoutClick: () -> Unit,
     onGuestUpgradeClick: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val tokenManager = remember { com.jones.aptracker.network.TokenManager(context) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    var showWelcomeModal by remember { mutableStateOf(tokenManager.isFirstLaunch()) }
+    var showWhatsNewSheet by remember {
+        val lastSeen = tokenManager.getLastSeenVersionCode()
+        val currentCode = com.jones.aptracker.BuildConfig.VERSION_CODE
+        mutableStateOf(!tokenManager.isFirstLaunch() && currentCode > lastSeen)
+    }
+    var latestReleaseInfo by remember { mutableStateOf<com.jones.aptracker.network.ReleaseInfo?>(null) }
+
     val historyViewModel: HistoryViewModel = viewModel()
     val userViewModel: UserViewModel = viewModel()
+
+    // Fetch latest release info for What's New sheet if active
+    androidx.compose.runtime.LaunchedEffect(showWhatsNewSheet) {
+        if (showWhatsNewSheet) {
+            try {
+                val response = com.jones.aptracker.network.RetrofitClient.instance.getLatestRelease(com.jones.aptracker.BuildConfig.VERSION_NAME)
+                latestReleaseInfo = response.release
+            } catch (e: Exception) {
+                // Fallback to built-in defaults if network request fails
+            }
+        }
+    }
+
+    // --- ONBOARDING & WHAT'S NEW MODALS ---
+    if (showWelcomeModal) {
+        WelcomeModal(
+            onDismiss = {
+                tokenManager.setWelcomeModalSeen()
+                tokenManager.setLastSeenVersionCode(com.jones.aptracker.BuildConfig.VERSION_CODE)
+                showWelcomeModal = false
+            },
+            onOpenGuide = {
+                tokenManager.setWelcomeModalSeen()
+                tokenManager.setLastSeenVersionCode(com.jones.aptracker.BuildConfig.VERSION_CODE)
+                showWelcomeModal = false
+                navController.navigate("tutorial_guide")
+            }
+        )
+    }
+
+    if (showWhatsNewSheet && !showWelcomeModal) {
+        WhatsNewBottomSheet(
+            versionName = com.jones.aptracker.BuildConfig.VERSION_NAME,
+            releaseInfo = latestReleaseInfo,
+            onDismiss = {
+                tokenManager.setLastSeenVersionCode(com.jones.aptracker.BuildConfig.VERSION_CODE)
+                showWhatsNewSheet = false
+            }
+        )
+    }
 
     // Start destination is now 'home', which holds the Bottom Bar
     NavHost(navController = navController, startDestination = "home") {
@@ -92,11 +146,18 @@ fun MainNavHost(
                 onNavigateToIgnoreList = {
                     navController.navigate("ignore_list")
                 },
+                onNavigateToWhitelist = {
+                    navController.navigate("whitelist")
+                },
                 onNavigateToCredits = {
                     navController.navigate("credits")
                 },
                 onNavigateToSettings = { navController.navigate("settings") },
+                onNavigateToGuide = { navController.navigate("tutorial_guide") },
+                onShowWhatsNew = { showWhatsNewSheet = true },
                 onNavigateToArchived = { navController.navigate("archived_rooms") },
+
+
                 onNavigateToSlotDetail = { roomDbId, slotId ->
                     navController.navigate("slot_detail/$roomDbId/$slotId")
                 },
@@ -113,8 +174,20 @@ fun MainNavHost(
             )
         }
 
+        composable("whitelist") {
+            WhitelistScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+
         composable("credits") {
             CreditsScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+
+        composable("tutorial_guide") {
+            TutorialGuideScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }
@@ -141,7 +214,9 @@ fun MainNavHost(
         composable("settings") {
             SettingsScreen(
                 onBackClick = { navController.popBackStack() },
-                onNavigateToSlotOverrides = { navController.navigate("slot_overrides") }
+                onNavigateToSlotOverrides = { navController.navigate("slot_overrides") },
+                onNavigateToGuide = { navController.navigate("tutorial_guide") },
+                onShowWhatsNew = { showWhatsNewSheet = true }
             )
         }
 
@@ -156,6 +231,7 @@ fun MainNavHost(
                 onBackClick = { navController.popBackStack()}
             )
         }
+
 
         composable(
             route = "slot_detail/{roomDbId}/{slotId}",

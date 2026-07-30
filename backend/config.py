@@ -22,7 +22,7 @@ class ProductionConfig(Config):
 
 class UatConfig(Config):
     """UAT configuration."""
-    DEBUG = False
+    DEBUG = True
 
 config_by_name = {
     'development': DevelopmentConfig,
@@ -30,5 +30,5 @@ config_by_name = {
     'uat': UatConfig
 }
 
-env = os.getenv('FLASK_ENV', 'development')
-app_config = config_by_name[env]
+env = os.getenv('FLASK_ENV', 'development').lower().strip()
+app_config = config_by_name.get(env, DevelopmentConfig)

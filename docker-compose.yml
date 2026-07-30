@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ap_tracker_db
+    restart: always
+    env_file:
+      - backend/.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-ap_user} -d $${POSTGRES_DB:-ap_tracker}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ap_tracker_redis
+    restart: always
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ap_tracker_api
+    restart: always
+    command: python run_api_only.py
+    env_file:
+      - backend/.env
+    ports:
+      - "5000:5000"
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  poller:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ap_tracker_poller
+    restart: always
+    command: python run_poller_only.py
+    env_file:
+      - backend/.env
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:

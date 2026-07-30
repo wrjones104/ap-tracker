@@ -24,13 +24,17 @@ load_dotenv()
 # ==============================================================================
 
 FLASK_ENV = os.getenv('FLASK_ENV', 'production')
+LOG_LEVEL_ENV = os.getenv('LOG_LEVEL', '').upper()
 
-log_levels = {
-    'development': logging.DEBUG,
-    'uat': logging.INFO,
-    'production': logging.INFO, 
-}
-log_level = log_levels.get(FLASK_ENV, logging.INFO)
+if LOG_LEVEL_ENV and hasattr(logging, LOG_LEVEL_ENV):
+    log_level = getattr(logging, LOG_LEVEL_ENV)
+else:
+    log_levels = {
+        'development': logging.DEBUG,
+        'uat': logging.DEBUG,
+        'production': logging.INFO, 
+    }
+    log_level = log_levels.get(FLASK_ENV, logging.INFO)
 
 logging.basicConfig(
     level=log_level,
@@ -94,17 +98,52 @@ adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=retry_
 firebase_http_session = requests.Session()
 firebase_http_session.mount("https://", adapter)
 
-_firebase_app = None
-def get_firebase_app():
-    global _firebase_app
-    if _firebase_app is None:
-        try:
-            cred = credentials.Certificate(FIREBASE_KEY_FILE)
-            _firebase_app = firebase_admin.initialize_app(cred, {'http_client': firebase_http_session})
-            logging.info("[FIREBASE] Firebase initialized successfully.") # <-- MODIFIED
-        except Exception as e:
-            logging.critical(f"[FIREBASE] !!! FIREBASE ERROR: Could not initialize. Error: {e}") # <-- MODIFIED
-    return _firebase_app
+# Cache of initialized firebase app instances by platform
+import threading
+_firebase_apps = {}
+_firebase_lock = threading.Lock()
+
+def get_firebase_app(platform='android'):
+    global _firebase_apps
+    platform = (platform or 'android').lower().strip()
+    if platform not in ['android', 'ios']:
+        platform = 'android'
+        
+    if platform not in _firebase_apps:
+        with _firebase_lock:
+            if platform not in _firebase_apps:
+                try:
+                    if platform == 'android':
+                        key_file = os.environ.get('FIREBASE_KEY_FILE_ANDROID', 'service-account-key.json')
+                        if not os.path.exists(key_file):
+                            logging.error(f"[FIREBASE] Key file for {platform} not found: {key_file}")
+                            return None
+                        try:
+                            app = firebase_admin.get_app()
+                        except ValueError:
+                            cred = credentials.Certificate(key_file)
+                            app = firebase_admin.initialize_app(cred, {'http_client': firebase_http_session})
+                        _firebase_apps[platform] = app
+                        logging.info("[FIREBASE] Android Firebase app initialized successfully.")
+                    elif platform == 'ios':
+                        key_file = os.environ.get('FIREBASE_KEY_FILE_IOS', 'service-account-key-ios.json')
+                        if not os.path.exists(key_file):
+                            logging.warning(f"[FIREBASE] Key file for {platform} not found: {key_file}. iOS push notifications will be skipped.")
+                            return None
+                        try:
+                            app = firebase_admin.get_app(name='ios')
+                        except ValueError:
+                            cred = credentials.Certificate(key_file)
+                            app = firebase_admin.initialize_app(cred, {'http_client': firebase_http_session}, name='ios')
+                        _firebase_apps[platform] = app
+                        logging.info("[FIREBASE] iOS Firebase app initialized successfully.")
+                except Exception as e:
+                    if platform == 'ios':
+                        logging.warning(f"[FIREBASE] Could not initialize iOS Firebase app: {e}. iOS push notifications will be skipped.")
+                    else:
+                        logging.critical(f"[FIREBASE] !!! Android Firebase app error: Could not initialize. Error: {e}")
+            
+    return _firebase_apps.get(platform)
 
 # ==============================================================================
 # 4. APPLICATION FACTORY
@@ -129,12 +168,30 @@ def create_app():
 
     if is_sqlite:
         # For local dev, auto-create all tables on startup.
-        # This lets you just delete the .db file and restart.
         models.Base.metadata.create_all(engine)
         logging.info("[MAIN] SQLite DB detected. Tables verified/created.")
     else:
         # For prod (Postgres), we trust Alembic to handle the schema.
         logging.info("[MAIN] Production database engine initialized.")
+
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        if 'notified_items' in inspector.get_table_names():
+            columns = [c['name'] for c in inspector.get_columns('notified_items')]
+            if 'item_index' not in columns:
+                logging.info("[MAIN] Migrating notified_items schema: Adding 'item_index' column...")
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE notified_items ADD COLUMN item_index INTEGER;"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notifieditem_item_index ON notified_items (item_index);"))
+                    try:
+                        conn.execute(text("ALTER TABLE notified_items DROP CONSTRAINT IF EXISTS _item_event_uc;"))
+                    except Exception:
+                        pass
+                    conn.commit()
+                logging.info("[MAIN] Schema migration for notified_items complete.")
+    except Exception as e:
+        logging.warning(f"[MAIN] Automatic schema migration check skipped: {e}")
 
     @app.teardown_appcontext
     def shutdown_session(exception=None):
@@ -142,6 +199,7 @@ def create_app():
 
     from . import api
     app.register_blueprint(api.bp)
+    api.register_api_routes(app)
 
     from . import auth
     app.register_blueprint(auth.bp)

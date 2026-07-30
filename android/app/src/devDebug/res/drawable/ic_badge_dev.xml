@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Badge Pill Container -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M41,20 h26 a6,6 0 0 1 6,6 a6,6 0 0 1 -6,6 h-26 a6,6 0 0 1 -6,-6 a6,6 0 0 1 6,-6 z" />
+    <!-- Text DEV -->
+    <path
+        android:fillColor="#DC2626"
+        android:pathData="M45,22.5 h2.5 c1.2,0 2,0.8 2,1.8 v3.4 c0,1 -0.8,1.8 -2,1.8 h-2.5 z M46.4,23.9 v4.2 h1.1 c0.5,0 0.8,-0.3 0.8,-0.7 v-2.8 c0,-0.4 -0.3,-0.7 -0.8,-0.7 z M52,22.5 h4 v1.3 h-2.6 v1.4 h2.2 v1.3 h-2.2 v1.5 h2.6 v1.3 h-4 z M58.5,22.5 h1.5 l1,4.5 l1,-4.5 h1.5 l-1.8,7 h-1.4 z" />
+</vector>

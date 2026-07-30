@@ -44,10 +44,11 @@ class User(Base):
     ui_show_useful_default = Column(Boolean, default=True, nullable=False)
     notify_filler_default = Column(Boolean, default=False, nullable=False)
     notify_trap_default = Column(Boolean, default=False, nullable=False)
-    ui_show_filler_default = Column(Boolean, default=False, nullable=False)
-    ui_show_trap_default = Column(Boolean, default=False, nullable=False)
+    ui_show_filler_default = Column(Boolean, default=True, nullable=False)
+    ui_show_trap_default = Column(Boolean, default=True, nullable=False)
     global_snooze_until = Column(DateTime, nullable=True)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
+    whitelist_items = relationship("UserWhitelistItem", back_populates="user", cascade="all, delete-orphan")
 
 class Device(Base):
     __tablename__ = 'devices'
@@ -55,9 +56,10 @@ class Device(Base):
     fcm_token = Column(String, nullable=False, unique=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     android_id = Column(String, nullable=True, index=True)
+    platform = Column(String, nullable=False, default='android', server_default='android')
     user = relationship("User", back_populates="devices")
     __table_args__ = (
-        UniqueConstraint('user_id', 'android_id', name='_user_android_id_uc'),
+        UniqueConstraint('user_id', 'android_id', 'platform', name='_user_android_id_uc'),
     )
 
 class TrackedRoom(Base):
@@ -123,6 +125,7 @@ class UserTrackedSlot(Base):
     __table_args__ = (
         ForeignKeyConstraint(['user_id', 'room_id'], ['user_room_subscriptions.user_id', 'user_room_subscriptions.room_id']),
         UniqueConstraint('user_id', 'room_id', 'slot_id', name='_user_room_slot_uc'),
+        Index('ix_usertrackedslot_user_room', 'user_id', 'room_id'),
     )
     subscription = relationship("UserRoomSubscription", back_populates="tracked_slots")
     threshold_groups = relationship("ThresholdGroup", back_populates="tracked_slot", cascade="all, delete-orphan")
@@ -162,6 +165,21 @@ class UserIgnoreItem(Base):
         UniqueConstraint('user_id', 'item_name', 'game_name', name='_user_ignore_item_uc'),
     )
 
+class UserWhitelistItem(Base):
+    __tablename__ = 'user_whitelist_items'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    item_name = Column(String(255), nullable=False)
+    game_name = Column(String(255), nullable=True)
+    is_group = Column(Boolean, default=False, nullable=False, server_default='f')
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="whitelist_items")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'item_name', 'game_name', name='_user_whitelist_item_uc'),
+    )
+
 class DatapackageCache(Base):
     __tablename__ = 'datapackage_cache'
     id = Column(Integer, primary_key=True)
@@ -180,11 +198,13 @@ class NotifiedItem(Base):
     sending_slot_id = Column(Integer, nullable=True) 
     item_id = Column(BigInteger, nullable=False)
     location_id = Column(BigInteger, nullable=False)
+    item_index = Column(Integer, nullable=True, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     item_flags = Column(Integer, nullable=True)
     __table_args__ = (
-        UniqueConstraint('room_id', 'receiving_slot_id', 'item_id', 'location_id', name='_item_event_uc'),
+        UniqueConstraint('room_id', 'receiving_slot_id', 'item_index', name='_item_event_index_uc'),
         Index('ix_notifieditem_timestamp', 'timestamp'),
+        Index('ix_notifieditem_room_receiving_time', 'room_id', 'receiving_slot_id', 'timestamp'),
     )
 
 class NotifiedHint(Base):
@@ -202,6 +222,7 @@ class NotifiedHint(Base):
     __table_args__ = (
         UniqueConstraint('room_id', 'item_id', 'location_id', 'item_owner_id', 'location_owner_id', name='_hint_event_uc'),
         Index('ix_notifiedhint_timestamp', 'timestamp'), 
+        Index('ix_notifiedhint_room_owner_time', 'room_id', 'item_owner_id', 'timestamp'),
     )
 
 class JWTBlocklist(Base):

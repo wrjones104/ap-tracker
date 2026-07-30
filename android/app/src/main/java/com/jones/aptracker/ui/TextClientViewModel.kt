@@ -9,7 +9,10 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import com.jones.aptracker.database.AppDatabase
+import com.jones.aptracker.database.CachedDatapackageEntity
 
 class TextClientViewModel : ViewModel() {
 
@@ -107,24 +110,103 @@ class TextClientViewModel : ViewModel() {
         backgroundJob?.cancel()
     }
 
-    fun fetchAutocompleteData(roomDbId: Int, slotId: Int) {
-        if (_isAutocompleteLoading.value) return
-        _isAutocompleteLoading.value = true
+    private var lastAutocompleteKey: String? = null
+
+    fun fetchAutocompleteData(roomDbId: Int, slotId: Int, gameName: String? = null, application: Application? = null) {
+        val key = if (!gameName.isNullOrEmpty()) "game:$gameName" else "slot:$roomDbId:$slotId"
+
+        if (lastAutocompleteKey == key && _availableItems.value.isNotEmpty()) {
+            _isAutocompleteLoading.value = false
+            return
+        }
+
         viewModelScope.launch {
+            var hasCachedData = false
+
+            if (application != null) {
+                try {
+                    val db = AppDatabase.getInstance(application)
+                    val localCache = db.datapackageDao().getDatapackage(
+                        key = key,
+                        roomDbId = roomDbId,
+                        slotId = slotId,
+                        game = gameName
+                    )
+                    if (localCache != null) {
+                        val type = object : TypeToken<List<AutocompleteOption>>() {}.type
+                        val cachedItems: List<AutocompleteOption> = Gson().fromJson(localCache.itemsJson, type)
+                        val cachedLocs: List<AutocompleteOption> = Gson().fromJson(localCache.locationsJson, type)
+                        if (cachedItems.isNotEmpty()) {
+                            _availableItems.value = cachedItems
+                            hasCachedData = true
+                        }
+                        if (cachedLocs.isNotEmpty()) _availableLocations.value = cachedLocs
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed reading local datapackage cache", e)
+                }
+            }
+
+            if (hasCachedData) {
+                _isAutocompleteLoading.value = false
+                lastAutocompleteKey = key
+            } else {
+                if (_isAutocompleteLoading.value) return@launch
+                _isAutocompleteLoading.value = true
+            }
+
             try {
                 supervisorScope {
                     val itemsDeferred = async { RetrofitClient.instance.getAvailableItems(roomDbId, slotId) }
                     val locationsDeferred = async { RetrofitClient.instance.getAvailableLocations(roomDbId, slotId) }
                     val datapackageDeferred = async { RetrofitClient.instance.getRoomDatapackage(roomDbId) }
 
-                    _availableItems.value = try { itemsDeferred.await() } catch (e: Exception) { 
+                    val remoteItems = try { itemsDeferred.await() } catch (e: Exception) { 
                         Log.e(TAG, "Items fetch failed", e)
                         emptyList() 
                     }
-                    _availableLocations.value = try { locationsDeferred.await() } catch (e: Exception) { 
+                    val remoteLocations = try { locationsDeferred.await() } catch (e: Exception) { 
                         Log.e(TAG, "Locations fetch failed", e)
                         emptyList() 
                     }
+
+                    if (remoteItems.isNotEmpty()) _availableItems.value = remoteItems
+                    if (remoteLocations.isNotEmpty()) _availableLocations.value = remoteLocations
+                    lastAutocompleteKey = key
+
+                    if (application != null && (remoteItems.isNotEmpty() || remoteLocations.isNotEmpty())) {
+                        val gson = Gson()
+                        val itemsJson = gson.toJson(remoteItems)
+                        val locsJson = gson.toJson(remoteLocations)
+                        val db = AppDatabase.getInstance(application)
+
+                        db.datapackageDao().insertDatapackage(
+                            CachedDatapackageEntity(
+                                cacheKey = "slot:$roomDbId:$slotId",
+                                game = gameName,
+                                roomDbId = roomDbId,
+                                slotId = slotId,
+                                itemsJson = itemsJson,
+                                locationsJson = locsJson,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
+
+                        if (!gameName.isNullOrEmpty()) {
+                            db.datapackageDao().insertDatapackage(
+                                CachedDatapackageEntity(
+                                    cacheKey = "game:$gameName",
+                                    game = gameName,
+                                    roomDbId = roomDbId,
+                                    slotId = slotId,
+                                    itemsJson = itemsJson,
+                                    locationsJson = locsJson,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                        }
+                    }
+
                     _datapackage.value = try { 
                         val result = datapackageDeferred.await()
                         Log.d(TAG, "Datapackage fetched: ${result.players.size} players")

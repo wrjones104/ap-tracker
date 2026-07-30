@@ -77,6 +77,7 @@
                 <div class="hidden md:block">
                     <div class="ml-10 flex items-baseline space-x-8">
                         <a href="#features" class="hover:text-teal-400 transition-colors px-3 py-2 rounded-md text-sm font-medium">Features</a>
+                        <a href="#whats-new" class="hover:text-teal-400 transition-colors px-3 py-2 rounded-md text-sm font-medium">What's New</a>
                         <a href="#community" class="hover:text-teal-400 transition-colors px-3 py-2 rounded-md text-sm font-medium">Community</a>
                         <a href="https://play.google.com/store/apps/details?id=com.jones.aptracker" target="_blank" rel="noopener noreferrer" class="bg-teal-500 hover:bg-teal-400 text-slate-900 px-4 py-2 rounded-md text-sm font-bold transition-all transform hover:scale-105 shadow-lg shadow-teal-500/20">
                             Download Now
@@ -97,10 +98,12 @@
         <div id="mobile-menu" class="hidden md:hidden bg-slate-800 border-b border-slate-700 shadow-xl">
             <div class="px-2 pt-2 pb-3 space-y-1 sm:px-3">
                 <a href="#features" class="block px-3 py-2 rounded-md text-base font-medium hover:bg-slate-700 hover:text-teal-400">Features</a>
+                <a href="#whats-new" class="block px-3 py-2 rounded-md text-base font-medium hover:bg-slate-700 hover:text-teal-400">What's New</a>
                 <a href="#community" class="block px-3 py-2 rounded-md text-base font-medium hover:bg-slate-700 hover:text-teal-400">Community</a>
                 <a href="https://play.google.com/store/apps/details?id=com.jones.aptracker" target="_blank" rel="noopener noreferrer" class="block px-3 py-2 rounded-md text-base font-bold text-teal-400 hover:bg-slate-700">Download App</a>
             </div>
         </div>
+
     </nav>
 
     <!-- Hero Section -->
@@ -250,11 +253,36 @@
         </div>
     </section>
 
-    <!-- Footer -->
-    <footer id="community" class="bg-slate-950 pt-20 pb-10 border-t border-slate-800">
+    <!-- What's New Section -->
+    <section id="whats-new" class="py-20 bg-slate-950 border-t border-slate-800">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 mb-16">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl font-serif font-bold text-white tracking-wide">What's New</h2>
+                <p class="mt-4 text-lg text-slate-400 max-w-2xl mx-auto">
+                    Recent feature updates, performance overhauls, and bug fixes for Archipelago Alerts.
+                </p>
+            </div>
+
+            <div id="whats-new-container" class="max-w-4xl mx-auto space-y-8">
+                <!-- Dynamically populated via /api/whats_new -->
+                <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 animate-pulse">
+                    <div class="h-6 bg-slate-800 rounded w-1/3 mb-4"></div>
+                    <div class="h-4 bg-slate-800 rounded w-2/3"></div>
+                </div>
+            </div>
+
+            <div class="mt-12 text-center">
+                <a href="https://github.com/wrjones104/ap-tracker/releases" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-teal-400 border border-slate-700 px-5 py-3 rounded-lg text-sm font-semibold transition-all">
+                    <i data-lucide="download" class="w-4 h-4"></i> Get Latest APK on GitHub Releases
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer id="community" class="bg-slate-900 border-t border-slate-800 pt-16 pb-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
                 
                 <!-- Link Block: Archipelago -->
                 <div class="space-y-4">
@@ -262,8 +290,9 @@
                         <img src="/static/color-icon.png" alt="Archipelago" class="w-6 h-6 object-contain">
                         Archipelago
                     </h4>
+
                     <p class="text-slate-400 text-sm">
-                        The multi-game randomizer engine that makes this all possible.
+                        Learn more about multiworld randomizers at the official home.
                     </p>
                     <a href="https://archipelago.gg" target="_blank" rel="noopener noreferrer" class="text-teal-400 hover:text-teal-300 text-sm font-medium flex items-center gap-1">
                         Visit Site <i data-lucide="chevron-right" class="w-4 h-4"></i>
@@ -277,7 +306,7 @@
                         Google Play
                     </h4>
                     <p class="text-slate-400 text-sm">
-                        Download the latest stable release for your Android device.
+                        Download the latest release on the Google Play Store.
                     </p>
                     <a href="https://play.google.com/store/apps/details?id=com.jones.aptracker" target="_blank" rel="noopener noreferrer" class="text-green-400 hover:text-green-300 text-sm font-medium flex items-center gap-1">
                         Download <i data-lucide="chevron-right" class="w-4 h-4"></i>
@@ -291,7 +320,7 @@
                         GitHub
                     </h4>
                     <p class="text-slate-400 text-sm">
-                        Check out the source code, report issues, or contribute.
+                        Source code and APK downloads on GitHub Releases.
                     </p>
                     <a href="https://github.com/wrjones104/ap-tracker" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-white text-sm font-medium flex items-center gap-1">
                         View Repo <i data-lucide="chevron-right" class="w-4 h-4"></i>
@@ -324,7 +353,8 @@
         </div>
     </footer>
 
-    <!-- JavaScript for Mobile Menu and Scroll Effect -->
+
+    <!-- JavaScript for Mobile Menu, Whats New, and Scroll Effect -->
     <script>
         // Initialize Lucide Icons
         lucide.createIcons();
@@ -349,6 +379,64 @@
             menu.classList.toggle('hidden');
         });
 
+        // Fetch What's New Releases
+        fetch('/api/whats_new')
+            .then(res => res.json())
+            .then(data => {
+                const container = document.getElementById('whats-new-container');
+                if (!data.releases || data.releases.length === 0) {
+                    container.innerHTML = `<p class="text-slate-400 text-center">No release notes available.</p>`;
+                    return;
+                }
+                
+                container.innerHTML = data.releases.map(rel => {
+                    const renderItem = (item) => {
+                        if (typeof item === 'string') {
+                            const parts = item.split(':', 2);
+                            if (parts.length === 2) {
+                                return `<strong class="text-teal-300 font-semibold">${parts[0].trim()}:</strong> ${parts[1].trim()}`;
+                            }
+                            return item;
+                        }
+                        if (item && item.title) {
+                            if (item.description && item.description !== item.title) {
+                                return `<strong class="text-teal-300 font-semibold">${item.title}:</strong> ${item.description}`;
+                            }
+                            return `<strong class="text-teal-300 font-semibold">${item.title}</strong>`;
+                        }
+                        return '';
+                    };
+
+                    const itemsList = (rel.highlights || []).map(h => `
+                        <li class="flex items-start gap-2 text-slate-300 text-sm leading-relaxed">
+                            <span class="text-teal-400 font-bold mt-0.5">•</span>
+                            <div>${renderItem(h)}</div>
+                        </li>
+                    `).join('');
+
+                    return `
+                        <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-xl space-y-4">
+                            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                                <div class="flex items-center gap-3">
+                                    <span class="bg-teal-500/20 text-teal-400 text-xs font-bold px-3 py-1 rounded-full border border-teal-500/30 font-mono">v${rel.version}</span>
+                                    <h3 class="text-xl font-bold text-white">${rel.title || 'Release Updates'}</h3>
+                                </div>
+                                <span class="text-slate-500 text-xs font-mono">${rel.release_date || ''}</span>
+                            </div>
+                            <ul class="space-y-3">
+                                ${itemsList}
+                            </ul>
+                        </div>
+                    `;
+                }).join('');
+                
+                lucide.createIcons();
+            })
+            .catch(err => {
+                console.log('Failed to fetch whats new releases', err);
+            });
+
+
         // Fetch Live Stats
         fetch('/api/public/stats')
             .then(response => {
@@ -356,7 +444,6 @@
                 return response.json();
             })
             .then(data => {
-                // Helper to format numbers (e.g. 1,200)
                 const fmt = (num) => new Intl.NumberFormat().format(num);
 
                 document.getElementById('stat-users').innerText = fmt(data.total_users);
@@ -366,8 +453,6 @@
             })
             .catch(err => {
                 console.log('Stats currently unavailable', err);
-                // Optional: Hide the stats container if fetch fails
-                // document.getElementById('stats-container').style.display = 'none';
             });
     </script>
 </body>

@@ -28,6 +28,7 @@ from .models import (
     DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
 from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id
+from app.services.redis_service import get_redis_client, publish_event
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -127,8 +128,11 @@ def _extract_ap_room_id(url_string):
     return None
 
 
-async def send_push_notifications(notifications, device_tokens, loop):
-    firebase_app = get_firebase_app()
+async def send_push_notifications(notifications, device_tokens, loop, platform='android'):
+    platform = (platform or 'android').lower().strip()
+    if platform not in ['android', 'ios']:
+        platform = 'android'
+    firebase_app = get_firebase_app(platform=platform)
     if not firebase_app or not notifications or not device_tokens: return
 
     from firebase_admin import messaging
@@ -136,7 +140,7 @@ async def send_push_notifications(notifications, device_tokens, loop):
     messages = []
     for content in notifications:
         try:
-            logging.info(f"[NOTIFIER] Preparing notification for {len(device_tokens)} devices. Title: {content['title']} | Body: {content['body']}")
+            logging.info(f"[NOTIFIER] Preparing {platform} notification for {len(device_tokens)} devices. Title: {content['title']} | Body: {content['body']}")
         except Exception as e:
             logging.error(f"[NOTIFIER] Error creating log message: {e}")
             
@@ -149,12 +153,32 @@ async def send_push_notifications(notifications, device_tokens, loop):
                 data_payload['bundle_type'] = content['type']
 
         for token in device_tokens:
-            android_config = messaging.AndroidConfig(priority='high')
-            
+            android_config = None
+            apns_config = None
+
+            if platform == 'android':
+                android_config = messaging.AndroidConfig(priority='high')
+            elif platform == 'ios':
+                apns_config = messaging.APNSConfig(
+                    headers={'apns-priority': '10'},
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            alert=messaging.ApsAlert(
+                                title=content['title'],
+                                body=content['body']
+                            ),
+                            sound='default',
+                            badge=1,
+                            content_available=True
+                        )
+                    )
+                )
+
             messages.append(messaging.Message(
                 notification=messaging.Notification(title=content['title'], body=content['body']),
                 token=token,
                 android=android_config,
+                apns=apns_config,
                 data=data_payload if data_payload else None
             ))
 
@@ -163,8 +187,8 @@ async def send_push_notifications(notifications, device_tokens, loop):
     for i in range(0, len(messages), 10):
         chunk = messages[i:i + 10]
         try:
-            logging.info(f"[FCM] Sending a chunk of {len(chunk)} messages...")
-            response = await loop.run_in_executor(None, lambda: messaging.send_each(chunk))
+            logging.info(f"[FCM] Sending a chunk of {len(chunk)} messages for {platform}...")
+            response = await loop.run_in_executor(None, lambda: messaging.send_each(chunk, app=firebase_app))
             
             unregistered_tokens = []
             for idx, res in enumerate(response.responses):
@@ -340,6 +364,16 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
     items_skipped_backfill = 0
     added_items_details = []
 
+    existing_items_by_index = set()
+    if isinstance(existing_items_in_db, set):
+        for entry in existing_items_in_db:
+            if len(entry) == 2:
+                existing_items_by_index.add(entry)
+            elif len(entry) == 4:
+                r_id, idx, i_id, l_id = entry
+                if idx is not None:
+                    existing_items_by_index.add((r_id, idx))
+
     for p_items in tracker_data.get('player_items_received', []):
         rid = p_items.get('player')
         if not isinstance(rid, int): continue
@@ -352,7 +386,7 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
         if not is_tracked_by_anyone:
             continue
 
-        for item_tuple_data in p_items.get('items', []):
+        for item_index, item_tuple_data in enumerate(p_items.get('items', [])):
             items_processed_count += 1
             try:
                 if len(item_tuple_data) < 4: continue
@@ -361,10 +395,11 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
             except (ValueError, TypeError, IndexError) as e:
                 continue 
 
-            item_key_db = (rid, item_id, loc_id)
-            item_key_batch = (room_uuid, rid, item_id, loc_id) 
+            item_key_db_index = (rid, item_index)
+            item_key_batch = (room_uuid, rid, item_index) 
 
-            if (item_key_db in existing_items_in_db) or (item_key_batch in items_in_this_batch):
+            is_in_db = (item_key_db_index in existing_items_by_index)
+            if is_in_db or (item_key_batch in items_in_this_batch):
                 items_skipped_duplicate += 1
                 continue
 
@@ -374,12 +409,13 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
                 sending_slot_id=send_id,
                 item_id=item_id,
                 location_id=loc_id,
+                item_index=item_index,
                 item_flags=flags,
                 timestamp=datetime.now(timezone.utc)
             ))
             items_in_this_batch.add(item_key_batch)
             items_added_count += 1
-            added_items_details.append(f"(Slot:{rid}, Item:{item_id}, Loc:{loc_id})")
+            added_items_details.append(f"(Slot:{rid}, Index:{item_index}, Item:{item_id})")
 
             if has_item_history: 
                 receiver_game = game_map.get(rid, "Unknown")
@@ -671,8 +707,33 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                 receiver_alias = short_name_map.get(rid, f"Slot {rid}")
                 receiver_original = full_name_map.get(rid, f"Slot {rid}")
 
+                # --- WHITELIST CHECK ---
+                is_whitelisted = False
+                if getattr(user_prefs, 'whitelist_items', None):
+                    for whitelist_rule in user_prefs.whitelist_items:
+                        rule_pattern = whitelist_rule.item_name.lower().strip()
+                        if getattr(whitelist_rule, 'is_group', False):
+                            # Group whitelist: Only supports game-specific level
+                            if whitelist_rule.game_name and whitelist_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                lookup_key = (item_data['game_checksum'], (rule_pattern, normalized_item_name))
+                                if lookup_key in group_members_lookup:
+                                    is_whitelisted = True
+                                    break
+                        else:
+                            # Single item whitelist (supports wildcard matching)
+                            if fnmatch.fnmatch(normalized_item_name, rule_pattern):
+                                if not whitelist_rule.game_name:
+                                    is_whitelisted = True
+                                    break
+                                elif whitelist_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
+                                    is_whitelisted = True
+                                    break
+
+                if is_whitelisted:
+                    logging.info(f"[NOTIFY_WHITELISTED] User {user_id} whitelisted item '{item_name}' for game '{item_data['receiver_game']}'.")
+
                 # --- IGNORE LIST CHECK ---
-                if True:
+                if not is_whitelisted:
                     should_ignore = False
                     if user_prefs.ignore_items:
                         for ignore_rule in user_prefs.ignore_items:
@@ -733,22 +794,22 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                     title_prefix = f"{icon_prog}{item_name}"
                     item_type = "item_progression"
                     notify_override = slot_prefs.notify_progression
-                    should_notify = notify_override if notify_override is not None else user_prefs.notify_progression_default
+                    should_notify = is_whitelisted or (notify_override if notify_override is not None else user_prefs.notify_progression_default)
                 elif is_useful:
                     title_prefix = f"{icon_useful}{item_name}"
                     item_type = "item_useful"
                     notify_override = slot_prefs.notify_useful
-                    should_notify = notify_override if notify_override is not None else user_prefs.notify_useful_default
+                    should_notify = is_whitelisted or (notify_override if notify_override is not None else user_prefs.notify_useful_default)
                 elif is_trap:
                     title_prefix = f"{icon_trap}{item_name}"
                     item_type = "item_trap"
                     notify_override = slot_prefs.notify_trap
-                    should_notify = notify_override if notify_override is not None else user_prefs.notify_trap_default
+                    should_notify = is_whitelisted or (notify_override if notify_override is not None else user_prefs.notify_trap_default)
                 else:
                     title_prefix = f"{icon_filler}{item_name}"
                     item_type = "item_filler"
                     notify_override = slot_prefs.notify_filler
-                    should_notify = notify_override if notify_override is not None else user_prefs.notify_filler_default
+                    should_notify = is_whitelisted or (notify_override if notify_override is not None else user_prefs.notify_filler_default)
                 
                 if is_a_found_hint:
                     title_prefix = icon_bulb + title_prefix
@@ -1169,10 +1230,19 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
 
         game_map = {p['slot_id']: p['game'] for p in players}
 
+        # Purge legacy un-indexed items for this room so items 0..N backfill cleanly with exact sequence indices
+        try:
+            legacy_count = session.query(NotifiedItem).filter(NotifiedItem.room_id == room_uuid, NotifiedItem.item_index == None).delete(synchronize_session=False)
+            if legacy_count > 0:
+                session.commit()
+                logging.info(f"[POLLER_MIGRATION][RoomDBID:{db_id}] Purged {legacy_count} legacy un-indexed items to allow full sequence backfill.")
+        except Exception as e:
+            session.rollback()
+
         has_item_history = session.query(NotifiedItem.id).filter_by(room_id=room_uuid).limit(1).scalar() is not None
         has_hint_history = session.query(NotifiedHint.id).filter_by(room_id=room_uuid).limit(1).scalar() is not None
 
-        existing_items_in_db = set(session.query(NotifiedItem.receiving_slot_id, NotifiedItem.item_id, NotifiedItem.location_id).filter_by(room_id=room_uuid))
+        existing_items_in_db = set(session.query(NotifiedItem.receiving_slot_id, NotifiedItem.item_index, NotifiedItem.item_id, NotifiedItem.location_id).filter_by(room_id=room_uuid).all())
         existing_hints_map = {
             (h.item_owner_id, h.location_owner_id, h.item_id, h.location_id): h
             for h in session.query(NotifiedHint).filter_by(room_id=room_uuid)
@@ -1203,7 +1273,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
 
         users_by_id = {
             u.id: u for u in session.query(User)
-            .options(selectinload(User.ignore_items))
+            .options(selectinload(User.ignore_items), selectinload(User.whitelist_items))
             .filter(User.id.in_(all_user_ids_in_room))
         }
         
@@ -1351,12 +1421,15 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         if notifications_to_send:
             devices_to_notify = session.query(Device).filter(Device.user_id.in_(notifications_to_send.keys())).all()
             tokens_by_user = {}
-            for device in devices_to_notify: 
-                tokens_by_user.setdefault(device.user_id, []).append(device.fcm_token)
+            for device in devices_to_notify:
+                platform = (device.platform or 'android').lower().strip()
+                if platform not in ['android', 'ios']:
+                    platform = 'android'
+                tokens_by_user.setdefault(device.user_id, {}).setdefault(platform, []).append(device.fcm_token)
 
             for user_id, raw_notifs in notifications_to_send.items():
                 user_tokens = tokens_by_user.get(user_id)
-                if user_tokens:
+                if user_tokens and any(user_tokens.values()):
                     user_prefs = users_by_id.get(user_id)
                     
                     # Dedupe first
@@ -1712,7 +1785,13 @@ async def run_room_poll(room_info, loop):
         if notifications_to_send:
             for user_id, data in notifications_to_send.items():
                 logging.info(f"[NOTIFY] Sending {len(data['notifications'])} notification(s) to user {user_id}")
-                await send_push_notifications(data['notifications'], data['tokens'], loop)
+                tokens_data = data['tokens']
+                if isinstance(tokens_data, dict):
+                    for platform, tokens in tokens_data.items():
+                        if tokens:
+                            await send_push_notifications(data['notifications'], tokens, loop, platform=platform)
+                else:
+                    await send_push_notifications(data['notifications'], tokens_data, loop, platform='android')
 
     except Exception as e:
         logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Error in run_room_poll!", exc_info=True)
@@ -1762,7 +1841,13 @@ async def run_cheese_poll(room_info, loop):
     if notifications_payload:
         for user_id, data in notifications_payload.items():
             logging.info(f"[CHEESE_NOTIFY] Sending {len(data['notifications'])} to user {user_id}")
-            await send_push_notifications(data['notifications'], data['tokens'], loop)
+            tokens_data = data['tokens']
+            if isinstance(tokens_data, dict):
+                for platform, tokens in tokens_data.items():
+                    if tokens:
+                        await send_push_notifications(data['notifications'], tokens, loop, platform=platform)
+            else:
+                await send_push_notifications(data['notifications'], tokens_data, loop, platform='android')
 
 def db_read_room_poll_state(db_id):
     session = Session()
@@ -2453,6 +2538,8 @@ async def setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop):
                 except (ValueError, RuntimeError):
                     pass # Loop might be closing
 
+_global_setup_cooldowns = {}
+
 async def poller_supervisor(app, loop):
     logging.info("[POLLER] Background polling service starting...")
     running_tasks = {}
@@ -2468,7 +2555,6 @@ async def poller_supervisor(app, loop):
     last_cache_check = datetime.utcnow() - timedelta(minutes=15)
     last_revive_check = datetime.utcnow() - timedelta(hours=2)
     missing_checksums = set()
-    setup_cooldowns = {}
     
     while True:
         try:
@@ -2536,15 +2622,18 @@ async def poller_supervisor(app, loop):
                     needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations) or is_missing_players or is_missing_cache
 
                     if needs_setup:
-                        # Cooldown check: Don't spam setup/repair attempts
-                        cooldown_until = setup_cooldowns.get(room.id)
+                        # Exponential backoff based on failed_poll_count instead of hardcoded 10-minute delay
+                        backfill_failures = getattr(room, 'failed_poll_count', 0) or 0
+                        delay_seconds = min(10 * (2 ** backfill_failures), 300)
+                        
+                        cooldown_until = _global_setup_cooldowns.get(room.id)
                         if cooldown_until and now < cooldown_until:
                             continue
 
                         if room.id not in running_tasks and room.id not in rooms_in_setup:
-                            logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup (Missing Cache: {is_missing_cache}).")
+                            logging.info(f"[SUPERVISOR] Queuing room {room.id} for setup (Failures: {backfill_failures}, Retry in {delay_seconds}s).")
                             rooms_in_setup.add(room.id)
-                            setup_cooldowns[room.id] = now + timedelta(minutes=10)
+                            _global_setup_cooldowns[room.id] = now + timedelta(seconds=delay_seconds)
                             await setup_queue.put(room_info)
                             # THROTTLE: Stagger setup queuing
                             await asyncio.sleep(0.02)
@@ -2552,7 +2641,7 @@ async def poller_supervisor(app, loop):
                         elif room.id in running_tasks and room.id not in rooms_in_setup:
                             logging.info(f"[SUPERVISOR] Re-queuing running room {room.id} for metadata repair.")
                             rooms_in_setup.add(room.id)
-                            setup_cooldowns[room.id] = now + timedelta(minutes=10)
+                            _global_setup_cooldowns[room.id] = now + timedelta(seconds=delay_seconds)
                             await setup_queue.put(room_info)
                             # THROTTLE: Stagger setup repair
                             await asyncio.sleep(0.02)
@@ -2654,10 +2743,19 @@ def db_run_cleanup():
     finally:
         Session.remove()
 
-def trigger_immediate_room_poll(room_db_id):
+def trigger_immediate_room_poll(room_db_id, publish_to_redis=True):
     """
-    Submits a one-shot background job to the global thread pool to immediately poll a room and backfill its slots.
+    Submits an immediate room poll event via Redis Pub/Sub if connected,
+    or falls back to the in-process worker thread pool.
     """
+    _global_setup_cooldowns.pop(room_db_id, None)
+
+    # 1. Try publishing event to Redis queue if requested
+    if publish_to_redis and publish_event('immediate_poll', {'room_db_id': room_db_id}):
+        logging.info(f"[POLLER_TRIGGER] Published immediate_poll event to Redis for Room {room_db_id}.")
+        return
+
+    # 2. Fallback to in-process worker thread pool if Redis is unavailable or processing Redis event
     with _active_immediate_polls_lock:
         if room_db_id in _active_immediate_polls:
             logging.info(f"[POLLER_TRIGGER] Immediate poll already in progress for Room {room_db_id}. Skipping submit.")
@@ -2704,9 +2802,32 @@ def trigger_immediate_room_poll(room_db_id):
 
 async def immediate_poll_checker(app, loop):
     """
-    Periodically checks the database for rooms requiring an immediate poll.
-    Resets needs_immediate_poll to False and triggers the poll inside the poller process.
+    Subscribes to Redis 'immediate_poll' channel for instant event handling.
+    Falls back to periodic database check if Redis is disabled.
     """
+    redis_client = get_redis_client()
+    if redis_client:
+        try:
+            pubsub = redis_client.pubsub()
+            pubsub.subscribe('immediate_poll')
+            logging.info("[POLLER] Subscribed to Redis 'immediate_poll' channel.")
+            
+            while True:
+                message = await loop.run_in_executor(None, pubsub.get_message, True, 1.0)
+                if message and message['type'] == 'message':
+                    try:
+                        data = json.loads(message['data'])
+                        room_db_id = data.get('room_db_id')
+                        if room_db_id:
+                            logging.info(f"[POLLER_EVENT] Received immediate_poll event from Redis for Room {room_db_id}.")
+                            trigger_immediate_room_poll(room_db_id, publish_to_redis=False)
+                    except Exception as ex:
+                        logging.error(f"[POLLER_EVENT_ERROR] Failed parsing Redis message: {ex}")
+                await asyncio.sleep(0.1)
+        except Exception as e:
+            logging.error(f"[POLLER_REDIS_ERROR] Redis pubsub loop error: {e}. Falling back to DB poll mode.")
+
+    # Fallback to periodic DB check (10-second interval to eliminate DB load)
     while True:
         try:
             def check_and_get_rooms():
@@ -2723,7 +2844,7 @@ async def immediate_poll_checker(app, loop):
                         session.commit()
                     return room_ids
                 except Exception as e:
-                    logging.error(f"[IMMEDIATE_POLL_CHECKER_DB_ERROR] Failed to query/update needs_immediate_poll: {e}", exc_info=True)
+                    logging.error(f"[IMMEDIATE_POLL_CHECKER_DB_ERROR] Failed to query needs_immediate_poll: {e}", exc_info=True)
                     session.rollback()
                     return []
                 finally:
@@ -2736,7 +2857,7 @@ async def immediate_poll_checker(app, loop):
         except Exception as e:
             logging.error(f"[IMMEDIATE_POLL_CHECKER_ERROR] Exception in loop: {e}", exc_info=True)
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(10)
 
 def run_poller(app):
     loop = asyncio.new_event_loop()

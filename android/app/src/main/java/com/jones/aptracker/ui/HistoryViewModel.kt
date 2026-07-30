@@ -286,6 +286,21 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         refreshAllHistory()
     }
 
+    fun clearAllHistory() {
+        viewModelScope.launch {
+            isLoading.value = true
+            try {
+                repository.clearAllHistory()
+                _itemHistory.value = emptyList()
+                refreshAllHistory()
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to clear local history", e)
+            } finally {
+                isLoading.value = false
+            }
+        }
+    }
+
     fun setHistoryFilter(filter: HistoryFilter) {
         _historyFilter.value = filter
         _selectedPlayerFilter.value = null
@@ -413,9 +428,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private var refreshJob: kotlinx.coroutines.Job? = null
+
     fun refreshAllHistory() {
         Log.d("HistoryViewModel", "Triggering refresh for Room ID: ${currentRoomId ?: "Global"}")
-        viewModelScope.launch {
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             isLoading.value = true
             errorMessage.value = null
 
@@ -502,22 +520,36 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                // --- STEP 2: Instantly load cached history and unblock UI ---
+                // --- STEP 2: Load cached history and manage loading state ---
                 reloadHistory()
-                isLoading.value = false
+                val hasLocalItems = itemHistory.value.isNotEmpty()
+                if (hasLocalItems) {
+                    isLoading.value = false
+                }
 
-                // --- STEP 3: Silent background delta sync ---
+                // --- STEP 3: Background server feed fetch & delta sync ---
                 try {
-                    repository.syncHistoryBatch(trackedRooms)
+                    val initialFeed = repository.fetchItemHistoryFeed(currentRoomId, PAGE_SIZE, 0)
+                    if (initialFeed.isNotEmpty()) {
+                        reloadHistory(showSpinner = false)
+                    }
+                    repository.refreshHintHistory(currentRoomId)
+
+                    repository.syncHistoryBatch(trackedRooms, priorityRoomId = currentRoomId) {
+                        reloadHistory(showSpinner = false)
+                    }
                     reloadHistory(showSpinner = false)
                 } catch (e: Exception) {
-                    Log.e("HistoryViewModel", "Background sync failed", e)
+                    Log.e("HistoryViewModel", "Background sync/feed fetch failed", e)
+                } finally {
+                    isLoading.value = false
                 }
 
             } catch (e: Exception) {
                 errorMessage.value = "History Refresh failed: ${e.message}"
                 Log.e("HistoryViewModel", "Error during full history refresh", e)
-                isLoading.value = false // Ensure loading stops on error
+            } finally {
+                isLoading.value = false
             }
         }
     }
@@ -529,12 +561,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             _isNextPageLoading.value = true
             try {
                 Log.d("HistoryViewModel", "Loading next page of history at offset $currentPageOffset for room: $currentRoomId")
-                val nextEntities = if (currentRoomId != null) {
+                var nextEntities = if (currentRoomId != null) {
                     repository.getHistoryForRoomPaged(currentRoomId!!, PAGE_SIZE, currentPageOffset)
                 } else {
                     repository.getGlobalHistoryPaged(PAGE_SIZE, currentPageOffset)
                 }
                 
+                if (nextEntities.isEmpty()) {
+                    // Fetch next page directly from server feed
+                    nextEntities = repository.fetchItemHistoryFeed(currentRoomId, PAGE_SIZE, currentPageOffset)
+                }
+
                 if (nextEntities.isEmpty()) {
                     isAllDataLoaded = true
                 } else {
@@ -616,11 +653,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun ignoreItem(itemName: String, gameName: String?) {
+    fun ignoreItem(itemName: String, gameName: String?, onComplete: (() -> Unit)? = null) {
         viewModelScope.launch {
             try {
                 userRepository.addIgnoreItem(itemName, gameName)
                 _actionMessage.value = "Ignored '$itemName'"
+                onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
                     errorMessage.value = "'$itemName' is already on your ignore list."
@@ -675,7 +713,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         _isFetchingGroups.value = false
     }
 
-    fun ignoreItemGroup(groupName: String, gameName: String) {
+    fun ignoreItemGroup(groupName: String, gameName: String, onComplete: (() -> Unit)? = null) {
         viewModelScope.launch {
             try {
                 val request = com.jones.aptracker.network.AddIgnoreItemRequest(
@@ -685,6 +723,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 )
                 RetrofitClient.instance.addIgnoreItem(request)
                 _actionMessage.value = "Ignored group '$groupName'"
+                onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
                     errorMessage.value = "Group '$groupName' is already ignored for this game."
@@ -695,6 +734,51 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to ignore item group", e)
                 errorMessage.value = "Failed to ignore item group. Check connection."
+            }
+        }
+    }
+
+    fun whitelistItem(itemName: String, gameName: String?, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                userRepository.addWhitelistItem(itemName, gameName)
+                _actionMessage.value = "Whitelisted '$itemName'"
+                onComplete?.invoke()
+            } catch (e: HttpException) {
+                if (e.code() == 409) {
+                    errorMessage.value = "'$itemName' is already on your whitelist."
+                } else {
+                    Log.e("HistoryViewModel", "Failed to whitelist item (HTTP ${e.code()})", e)
+                    errorMessage.value = "Failed to whitelist item."
+                }
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to whitelist item", e)
+                errorMessage.value = "Failed to whitelist item. Check connection."
+            }
+        }
+    }
+
+    fun whitelistItemGroup(groupName: String, gameName: String, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                val request = com.jones.aptracker.network.AddWhitelistItemRequest(
+                    itemName = groupName,
+                    gameName = gameName,
+                    isGroup = true
+                )
+                RetrofitClient.instance.addWhitelistItem(request)
+                _actionMessage.value = "Whitelisted group '$groupName'"
+                onComplete?.invoke()
+            } catch (e: HttpException) {
+                if (e.code() == 409) {
+                    errorMessage.value = "Group '$groupName' is already whitelisted for this game."
+                } else {
+                    Log.e("HistoryViewModel", "Failed to whitelist item group (HTTP ${e.code()})", e)
+                    errorMessage.value = "Failed to whitelist item group."
+                }
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to whitelist item group", e)
+                errorMessage.value = "Failed to whitelist item group. Check connection."
             }
         }
     }

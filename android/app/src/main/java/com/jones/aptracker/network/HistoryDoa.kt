@@ -27,6 +27,9 @@ interface HistoryDao {
     @Query("SELECT MAX(timestamp) FROM history_items")
     suspend fun getLatestGlobalTimestamp(): String?
 
+    @Query("SELECT MAX(id) FROM history_items WHERE roomId = :roomId AND slot_id = :slotId")
+    suspend fun getMaxIdForSlot(roomId: Int, slotId: Int): Int?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHistoryItems(items: List<HistoryItemEntity>)
 

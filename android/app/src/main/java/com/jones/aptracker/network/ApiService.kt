@@ -35,11 +35,16 @@ interface ApiService {
     suspend fun updateTrackedSlots(@Path("id") roomId: Int, @Body request: UpdateSlotsRequest): Response<Unit>
 
     @GET("rooms/{id}/history/items")
-    suspend fun getItemHistory(@Path("id") roomId: Int, @Query("since") since: String?): List<HistoryItem>
+    suspend fun getItemHistory(
+        @Path("id") roomId: Int,
+        @Query("since") since: String? = null,
+        @Query("limit") limit: Int? = null,
+        @Query("offset") offset: Int? = null
+    ): List<HistoryItem>
 
     @GET("history/items")
     suspend fun getGlobalItemHistory(
-        @Query("since") since: String?,
+        @Query("since") since: String? = null,
         @Query("limit") limit: Int? = null,
         @Query("offset") offset: Int? = null
     ): List<HistoryItem>
@@ -176,6 +181,21 @@ interface ApiService {
         @Body request: AddIgnoreItemRequest
     ): Response<Unit>
 
+    @GET("users/me/whitelist")
+    suspend fun getWhitelist(): List<WhitelistItem>
+
+    @POST("users/me/whitelist")
+    suspend fun addWhitelistItem(@Body request: AddWhitelistItemRequest): AddWhitelistItemResponse
+
+    @PUT("users/me/whitelist/{id}")
+    suspend fun updateWhitelistItem(
+        @Path("id") itemId: Int,
+        @Body request: AddWhitelistItemRequest
+    ): Response<Unit>
+
+    @DELETE("users/me/whitelist/{id}")
+    suspend fun deleteWhitelistItem(@Path("id") itemId: Int): Response<Unit>
+
     @POST("users/me/snooze")
     suspend fun setGlobalSnooze(@Body request: SnoozeRequest): SnoozeResponse
 
@@ -188,6 +208,15 @@ interface ApiService {
 
     @POST("users/me/test-notification")
     suspend fun sendTestNotification(): Response<Unit>
+
+    @GET("whats_new")
+    suspend fun getWhatsNew(): WhatsNewResponse
+
+    @GET("whats_new/latest")
+    suspend fun getLatestRelease(
+        @Query("version") version: String? = null
+    ): LatestReleaseResponse
+
 
     @POST("history/sync")
     suspend fun syncHistory(@Body request: HistorySyncRequest): HistorySyncResponse
@@ -459,7 +488,8 @@ data class HistorySyncRequest(
 data class SlotSyncWatermark(
     val room_db_id: Int,
     val slot_id: Int,
-    val last_timestamp: String?
+    val last_timestamp: String? = null,
+    val last_id: Int? = null
 )
 
 data class RoomSyncWatermark(
@@ -470,6 +500,6 @@ data class RoomSyncWatermark(
 data class HistorySyncResponse(
     val new_items: List<HistoryItem>,
     val updated_hints: List<HintDetail>,
-    val item_watermarks: Map<String, String>,
-    val hint_watermarks: Map<String, String>
+    val item_watermarks: Map<String, Any> = emptyMap(),
+    val hint_watermarks: Map<String, String?> = emptyMap()
 )

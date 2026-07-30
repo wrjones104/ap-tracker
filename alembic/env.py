@@ -8,11 +8,18 @@ from sqlalchemy import pool
 
 from alembic import context
 
-# --- This path setup is correct ---
-backend_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', 'backend'))
-sys.path.insert(0, backend_dir)
+# --- Robust path setup for both host and container environments ---
+root_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
+backend_dir = os.path.join(root_dir, 'backend')
+if os.path.exists(backend_dir):
+    sys.path.insert(0, backend_dir)
+sys.path.insert(0, root_dir)
+sys.path.insert(0, os.getcwd())
 
-from backend.app.models import Base
+try:
+    from app.models import Base
+except ModuleNotFoundError:
+    from backend.app.models import Base
 # -----------------------------------
 
 # this is the Alembic Config object, which provides

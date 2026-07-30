@@ -11,6 +11,8 @@ import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.RoomEntity
 import kotlinx.coroutines.flow.Flow
 import androidx.core.content.edit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class HistoryRepository(
     private val apiService: ApiService,
@@ -19,6 +21,7 @@ class HistoryRepository(
     private val context: android.content.Context
 ) {
     private val prefs = context.getSharedPreferences("ap_tracker_sync_watermarks", android.content.Context.MODE_PRIVATE)
+    private val syncMutex = Mutex()
     suspend fun getHistoryForRoom(roomId: Int): List<HistoryItemEntity> {
         return historyDao.getHistoryForRoom(roomId)
     }
@@ -88,117 +91,172 @@ class HistoryRepository(
         }
     }
 
-    suspend fun syncHistoryBatch(trackedRooms: List<com.jones.aptracker.network.RoomWithTrackedSlots>) {
-        Log.d("HISTORY_DEBUG", "Starting batch history sync...")
+    suspend fun syncHistoryBatch(
+        trackedRooms: List<com.jones.aptracker.network.RoomWithTrackedSlots>,
+        priorityRoomId: Int? = null,
+        onBatchReceived: (suspend () -> Unit)? = null
+    ) {
+        Log.d("HISTORY_DEBUG", "Starting batch history sync (priority room: ${priorityRoomId ?: "None"})...")
         
-        try {
-            realignRoomIdsIfMismatched(trackedRooms)
-        } catch (e: Exception) {
-            Log.e("HISTORY_DEBUG", "Failed to align room IDs: ${e.message}", e)
-        }
-
-        var hasMoreData = true
-        var loopCount = 0
-        val maxLoops = 25 // Safeguard limit against infinite loops
-        
-        while (hasMoreData && loopCount < maxLoops) {
-            val itemWatermarks = mutableListOf<com.jones.aptracker.network.SlotSyncWatermark>()
-            val hintWatermarks = mutableListOf<com.jones.aptracker.network.RoomSyncWatermark>()
-
-            trackedRooms.forEach { room ->
-                val roomId = room.room_db_id
-
-                val hintKey = "hint_watermark_$roomId"
-                val lastHintUpd = prefs.getString(hintKey, null)
-                hintWatermarks.add(com.jones.aptracker.network.RoomSyncWatermark(roomId, lastHintUpd))
-
-                room.tracked_slots.forEach { slot ->
-                    val slotId = slot.slot_id
-                    val itemKey = "item_watermark_${roomId}_$slotId"
-                    val lastItemTs = prefs.getString(itemKey, null)
-                    itemWatermarks.add(com.jones.aptracker.network.SlotSyncWatermark(roomId, slotId, lastItemTs))
-                }
+        syncMutex.withLock {
+            try {
+                realignRoomIdsIfMismatched(trackedRooms)
+            } catch (e: Exception) {
+                Log.e("HISTORY_DEBUG", "Failed to align room IDs: ${e.message}", e)
             }
 
-            try {
-                val request = com.jones.aptracker.network.HistorySyncRequest(itemWatermarks, hintWatermarks)
-                val response = apiService.syncHistory(request)
+            val sortedRooms = if (priorityRoomId != null) {
+                trackedRooms.sortedByDescending { it.room_db_id == priorityRoomId }
+            } else {
+                trackedRooms
+            }
 
-                Log.d("HISTORY_DEBUG", "Sync Loop $loopCount: ${response.new_items.size} new items, ${response.updated_hints.size} updated hints.")
+            var hasMoreData = true
+            var loopCount = 0
+            val maxLoops = 100 // Allow up to 100 loops (20,000 items) to fully catch up
+            
+            while (hasMoreData && loopCount < maxLoops) {
+                val itemWatermarks = mutableListOf<com.jones.aptracker.network.SlotSyncWatermark>()
+                val hintWatermarks = mutableListOf<com.jones.aptracker.network.RoomSyncWatermark>()
 
-                if (response.new_items.isEmpty() && response.updated_hints.isEmpty()) {
-                    hasMoreData = false
-                    break
+                sortedRooms.forEach { room ->
+                    val roomId = room.room_db_id
+
+                    val hintKey = "hint_watermark_$roomId"
+                    val lastHintUpd = prefs.getString(hintKey, null)
+                    hintWatermarks.add(com.jones.aptracker.network.RoomSyncWatermark(roomId, lastHintUpd))
+
+                    room.tracked_slots.forEach { slot ->
+                        val slotId = slot.slot_id
+                        val maxLocalId = historyDao.getMaxIdForSlot(roomId, slotId)
+                        itemWatermarks.add(com.jones.aptracker.network.SlotSyncWatermark(roomId, slotId, last_id = maxLocalId))
+                    }
                 }
 
-                if (response.new_items.isNotEmpty()) {
-                    val entities = response.new_items.mapNotNull { item ->
-                        try {
-                            HistoryItemEntity(
-                                id = item.id,
-                                roomId = item.room_db_id,
-                                playerName = item.playerName,
-                                playerAlias = item.playerAlias,
-                                receivingGame = item.receivingGame,
-                                itemName = item.itemName,
-                                senderName = item.senderName,
-                                senderAlias = item.senderAlias,
-                                senderGame = item.senderGame,
-                                locationName = item.locationName,
-                                isPlayerFinished = item.isPlayerFinished,
-                                itemFlags = item.itemFlags,
-                                timestamp = normalizeTimestamp(item.timestamp),
-                                tracker_id = item.tracker_id,
-                                slot_id = item.slot_id,
-                                icon_name = item.icon_name,
-                                host = item.host,
-                                receivedCount = item.receivedCount
-                            )
-                        } catch (e: Exception) {
-                            Log.e("HISTORY_DEBUG", "!!! FAILED to process sync item: ${e.message}")
-                            null
+                try {
+                    val request = com.jones.aptracker.network.HistorySyncRequest(itemWatermarks, hintWatermarks)
+                    val response = apiService.syncHistory(request)
+
+                    Log.d("HISTORY_DEBUG", "Sync Loop $loopCount: ${response.new_items.size} new items, ${response.updated_hints.size} updated hints.")
+
+                    if (response.new_items.isEmpty() && response.updated_hints.isEmpty()) {
+                        hasMoreData = false
+                        break
+                    }
+
+                    if (response.new_items.isNotEmpty()) {
+                        val entities = response.new_items.mapNotNull { item ->
+                            try {
+                                HistoryItemEntity(
+                                    id = item.id,
+                                    roomId = item.room_db_id,
+                                    playerName = item.playerName,
+                                    playerAlias = item.playerAlias,
+                                    receivingGame = item.receivingGame,
+                                    itemName = item.itemName,
+                                    senderName = item.senderName,
+                                    senderAlias = item.senderAlias,
+                                    senderGame = item.senderGame,
+                                    locationName = item.locationName,
+                                    isPlayerFinished = item.isPlayerFinished,
+                                    itemFlags = item.itemFlags,
+                                    timestamp = normalizeTimestamp(item.timestamp),
+                                    tracker_id = item.tracker_id,
+                                    slot_id = item.slot_id,
+                                    icon_name = item.icon_name,
+                                    host = item.host,
+                                    receivedCount = item.receivedCount
+                                )
+                            } catch (e: Exception) {
+                                Log.e("HISTORY_DEBUG", "!!! FAILED to process sync item: ${e.message}")
+                                null
+                            }
+                        }
+                        if (entities.isNotEmpty()) {
+                            historyDao.insertHistoryItems(entities)
                         }
                     }
-                    if (entities.isNotEmpty()) {
-                        historyDao.insertHistoryItems(entities)
-                    }
-                }
 
-                if (response.updated_hints.isNotEmpty()) {
-                    val trackedSlotIds = itemWatermarks.map { it.slot_id }.toSet()
-                    val entities = response.updated_hints.map { detail ->
-                        val type = if (detail.item_owner_id in trackedSlotIds) "for_you" else "by_you"
-                        mapHintDetailToEntity(detail, type)
+                    if (response.updated_hints.isNotEmpty()) {
+                        val trackedSlotIds = itemWatermarks.map { it.slot_id }.toSet()
+                        val entities = response.updated_hints.map { detail ->
+                            val type = if (detail.item_owner_id in trackedSlotIds) "for_you" else "by_you"
+                            mapHintDetailToEntity(detail, type)
+                        }
+                        if (entities.isNotEmpty()) {
+                            hintDao.insertHints(entities)
+                        }
                     }
-                    if (entities.isNotEmpty()) {
-                        hintDao.insertHints(entities)
-                    }
-                }
 
-                // Persist new watermarks immediately to allow the next loop to fetch next batch
-                prefs.edit {
-                    response.item_watermarks.forEach { (key, timestamp) ->
-                        putString("item_watermark_$key", timestamp)
+                    // Persist new watermarks immediately to allow the next loop to fetch next batch
+                    prefs.edit {
+                        response.item_watermarks.forEach { (key, value) ->
+                            putString("item_watermark_$key", value.toString())
+                        }
+                        response.hint_watermarks.forEach { (key, timestamp) ->
+                            putString("hint_watermark_$key", timestamp)
+                        }
                     }
-                    response.hint_watermarks.forEach { (key, timestamp) ->
-                        putString("hint_watermark_$key", timestamp)
+
+                    // Stream batch to UI immediately!
+                    onBatchReceived?.invoke()
+
+                    // If both lists are below limits, it means we fully caught up
+                    if (response.new_items.size < 200 && response.updated_hints.size < 100) {
+                        hasMoreData = false
                     }
-                }
 
-                // If both lists are below limits, it means we fully caught up
-                if (response.new_items.size < 200 && response.updated_hints.size < 100) {
-                    hasMoreData = false
+                } catch (e: Exception) {
+                    Log.e("HISTORY_DEBUG", "!!! FAILED sync loop $loopCount: ${e.message}", e)
+                    throw e
                 }
-
-            } catch (e: Exception) {
-                Log.e("HISTORY_DEBUG", "!!! FAILED sync loop $loopCount: ${e.message}", e)
-                throw e
+                
+                loopCount++
             }
             
-            loopCount++
+            Log.d("HISTORY_DEBUG", "Batch sync successfully completed in $loopCount loops and all history is complete.")
+        } // syncMutex.withLock
+    }
+
+    suspend fun fetchItemHistoryFeed(roomId: Int?, limit: Int = 50, offset: Int = 0): List<HistoryItemEntity> {
+        Log.d("HISTORY_DEBUG", "Fetching item history feed for room ${roomId ?: "Global"} (limit: $limit, offset: $offset)...")
+        val items = if (roomId != null) {
+            apiService.getItemHistory(roomId = roomId, limit = limit, offset = offset)
+        } else {
+            apiService.getGlobalItemHistory(limit = limit, offset = offset)
         }
-        
-        Log.d("HISTORY_DEBUG", "Batch sync successfully completed in $loopCount loops and all history is complete.")
+
+        val entities = items.mapNotNull { item ->
+            try {
+                HistoryItemEntity(
+                    id = item.id,
+                    roomId = item.room_db_id ?: roomId,
+                    playerName = item.playerName,
+                    playerAlias = item.playerAlias,
+                    receivingGame = item.receivingGame,
+                    itemName = item.itemName,
+                    senderName = item.senderName,
+                    senderAlias = item.senderAlias,
+                    senderGame = item.senderGame,
+                    locationName = item.locationName,
+                    isPlayerFinished = item.isPlayerFinished,
+                    itemFlags = item.itemFlags,
+                    timestamp = normalizeTimestamp(item.timestamp),
+                    tracker_id = item.tracker_id,
+                    slot_id = item.slot_id,
+                    icon_name = item.icon_name,
+                    host = item.host,
+                    receivedCount = item.receivedCount
+                )
+            } catch (e: Exception) {
+                Log.e("HISTORY_DEBUG", "!!! FAILED to process history feed item: ${e.message}")
+                null
+            }
+        }
+        if (entities.isNotEmpty()) {
+            historyDao.insertHistoryItems(entities)
+        }
+        return entities
     }
 
     // --- ITEM HISTORY (Safe to use 'since' optimization) ---
@@ -329,8 +387,8 @@ class HistoryRepository(
             historyDao.deleteAllHistory()
             hintDao.deleteAllHints()
             
-            // Clear all watermarks from SharedPreferences but preserve v17 cleared flag
-            prefs.edit().clear().putBoolean("watermarks_cleared_v17", true).apply()
+            // Clear all watermarks from SharedPreferences but preserve v21 cleared flag
+            prefs.edit().clear().putBoolean("watermarks_cleared_v21", true).apply()
             Log.d("PRUNING", "Cleared all SharedPreferences watermarks.")
         } catch (e: Exception) {
             Log.e("PRUNING", "Failed to clear all history: ${e.message}", e)
