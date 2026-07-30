@@ -14,7 +14,11 @@ import json
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 CHANGELOG_MD_PATH = os.path.join(ROOT_DIR, 'CHANGELOG.md')
-CHANGELOG_JSON_PATH = os.path.join(ROOT_DIR, 'backend', 'app', 'data', 'changelog.json')
+
+if os.path.exists(os.path.join(ROOT_DIR, 'backend', 'app', 'data')):
+    CHANGELOG_JSON_PATH = os.path.join(ROOT_DIR, 'backend', 'app', 'data', 'changelog.json')
+else:
+    CHANGELOG_JSON_PATH = os.path.join(ROOT_DIR, 'app', 'data', 'changelog.json')
 
 def clean_markdown_inline(text):
     """Cleans inline markdown formatting for JSON descriptions while preserving text."""
