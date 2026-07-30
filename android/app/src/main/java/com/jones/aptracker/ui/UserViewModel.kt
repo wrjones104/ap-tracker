@@ -394,6 +394,18 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         _integrationMessage.value = null
     }
 
+    fun clearLocalHistory() {
+        viewModelScope.launch {
+            try {
+                historyRepository.clearAllHistory()
+                _integrationMessage.value = "Local history cleared."
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to clear local history", e)
+                _errorMessage.value = "Failed to clear local history."
+            }
+        }
+    }
+
     // ============================================================================================
     // IGNORE LIST LOGIC
     // ============================================================================================

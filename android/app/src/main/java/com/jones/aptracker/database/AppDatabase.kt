@@ -11,7 +11,7 @@ import com.jones.aptracker.network.HistoryItemEntity
 import com.jones.aptracker.network.RoomDao
 import com.jones.aptracker.network.RoomEntity
 
-@Database(entities = [RoomEntity::class, HistoryItemEntity::class, HintEntity::class, CachedDatapackageEntity::class], version = 20)
+@Database(entities = [RoomEntity::class, HistoryItemEntity::class, HintEntity::class, CachedDatapackageEntity::class], version = 21)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun roomDao(): RoomDao
@@ -38,10 +38,10 @@ abstract class AppDatabase : RoomDatabase() {
                     .fallbackToDestructiveMigration()
                     .build()
                 
-                // On first database creation/upgrade to v17, clean all history watermarks in SharedPreferences
+                // On first database creation/upgrade to v21, clean all history watermarks in SharedPreferences
                 val prefs = context.applicationContext.getSharedPreferences("ap_tracker_sync_watermarks", Context.MODE_PRIVATE)
-                if (!prefs.getBoolean("watermarks_cleared_v17", false)) {
-                    prefs.edit().clear().putBoolean("watermarks_cleared_v17", true).apply()
+                if (!prefs.getBoolean("watermarks_cleared_v21", false)) {
+                    prefs.edit().clear().putBoolean("watermarks_cleared_v21", true).apply()
                 }
 
                 INSTANCE = instance

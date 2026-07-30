@@ -44,8 +44,8 @@ class User(Base):
     ui_show_useful_default = Column(Boolean, default=True, nullable=False)
     notify_filler_default = Column(Boolean, default=False, nullable=False)
     notify_trap_default = Column(Boolean, default=False, nullable=False)
-    ui_show_filler_default = Column(Boolean, default=False, nullable=False)
-    ui_show_trap_default = Column(Boolean, default=False, nullable=False)
+    ui_show_filler_default = Column(Boolean, default=True, nullable=False)
+    ui_show_trap_default = Column(Boolean, default=True, nullable=False)
     global_snooze_until = Column(DateTime, nullable=True)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
 

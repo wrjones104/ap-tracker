@@ -286,6 +286,21 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         refreshAllHistory()
     }
 
+    fun clearAllHistory() {
+        viewModelScope.launch {
+            isLoading.value = true
+            try {
+                repository.clearAllHistory()
+                _itemHistory.value = emptyList()
+                refreshAllHistory()
+            } catch (e: Exception) {
+                Log.e("HistoryViewModel", "Failed to clear local history", e)
+            } finally {
+                isLoading.value = false
+            }
+        }
+    }
+
     fun setHistoryFilter(filter: HistoryFilter) {
         _historyFilter.value = filter
         _selectedPlayerFilter.value = null
