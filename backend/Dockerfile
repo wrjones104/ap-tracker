@@ -20,6 +20,15 @@ COPY alembic/ /app/alembic/
 COPY alembic.ini /app/alembic.ini
 COPY VERSION /app/VERSION
 
+# Generate changelog.json from CHANGELOG.md at build time
+COPY CHANGELOG.md /app/CHANGELOG.md
+COPY scripts/sync_changelog.py /app/scripts/sync_changelog.py
+RUN python /app/scripts/sync_changelog.py && rm -f /app/CHANGELOG.md /app/scripts/sync_changelog.py
+
+# Run as non-root user for security
+RUN adduser --disabled-password --gecos '' appuser && chown -R appuser:appuser /app
+USER appuser
+
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 5000

@@ -60,3 +60,6 @@ Thumbs.db
 # --- RELEASE ARTIFACTS ---
 *.apk
 *.aab
+
+# --- GENERATED FILES ---
+backend/app/data/changelog.json

@@ -31,7 +31,7 @@ def parse_changelog_md(md_content):
     releases = []
     
     # Split content into version blocks (e.g. ## [1.6.18] - 2026-07-30)
-    version_blocks = re.split(r'\n##\s+\[([\d\.]+)\](?:\s*-\s*([^\n]+))?', md_content)
+    version_blocks = re.split(r'\n##\s+\[([\d\.]+(?:-[\w\.]+)?)\](?:\s*-\s*([^\n]+))?', md_content)
     
     idx = 1
     while idx < len(version_blocks):

@@ -548,7 +548,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: Exception) {
                 errorMessage.value = "History Refresh failed: ${e.message}"
                 Log.e("HistoryViewModel", "Error during full history refresh", e)
-                isLoading.value = false // Ensure loading stops on error
+            } finally {
+                isLoading.value = false
             }
         }
     }

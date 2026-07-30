@@ -4,15 +4,13 @@ services:
     container_name: ap_tracker_db
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-ap_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ap_password}
-      POSTGRES_DB: ${POSTGRES_DB:-ap_tracker}
-    ports:
-      - "5433:5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ap_user} -d ${POSTGRES_DB:-ap_tracker}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,8 +19,6 @@ services:
     image: redis:7-alpine
     container_name: ap_tracker_redis
     restart: always
-    ports:
-      - "6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
