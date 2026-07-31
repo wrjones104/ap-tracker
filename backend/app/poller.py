@@ -52,6 +52,10 @@ cheese_semaphore = asyncio.Semaphore(CHEESE_POLL_SEMAPHORE_LIMIT)
 AP_POLL_SEMAPHORE_LIMIT = 5 
 ap_poll_semaphore = asyncio.Semaphore(AP_POLL_SEMAPHORE_LIMIT)
 
+# Limit concurrent DB processing to prevent CPU saturation waves
+DB_PROCESS_SEMAPHORE_LIMIT = 3
+db_process_semaphore = asyncio.Semaphore(DB_PROCESS_SEMAPHORE_LIMIT)
+
 import threading
 _active_immediate_polls = set()
 _active_immediate_polls_lock = threading.Lock()
@@ -1770,17 +1774,18 @@ async def run_room_poll(room_info, loop):
 
     # 4. PASS TO DB PROCESSOR
     try:
-        notifications_to_send = await loop.run_in_executor(
-            None, 
-            db_process_poll_data, 
-            db_id, 
-            room_uuid, 
-            tracker_data, 
-            room_data, 
-            current_remote_activity,
-            new_full_address,
-            list(connected_slots) 
-        )
+        async with db_process_semaphore:
+            notifications_to_send = await loop.run_in_executor(
+                None, 
+                db_process_poll_data, 
+                db_id, 
+                room_uuid, 
+                tracker_data, 
+                room_data, 
+                current_remote_activity,
+                new_full_address,
+                list(connected_slots) 
+            )
         
         if notifications_to_send:
             for user_id, data in notifications_to_send.items():
@@ -2483,7 +2488,7 @@ def db_handle_setup_failure(db_id, last_remote_activity=None):
 # =============================================================================
 
 async def poll_room_with_interval(room_info, loop):
-    await asyncio.sleep(random.uniform(1, 45))
+    await asyncio.sleep(random.uniform(1, 60))
     while True:
         try:
             await run_room_poll(room_info, loop)
@@ -2493,7 +2498,9 @@ async def poll_room_with_interval(room_info, loop):
             logging.error(f"[POLLER_ERROR] Interval error: {e}", exc_info=True)
         
         try:
-            await asyncio.sleep(POLLING_INTERVAL_SECONDS)
+            # Add per-cycle jitter to prevent rooms from re-synchronizing into waves
+            jitter = random.uniform(-30, 30)
+            await asyncio.sleep(POLLING_INTERVAL_SECONDS + jitter)
         except asyncio.CancelledError:
             break
 
