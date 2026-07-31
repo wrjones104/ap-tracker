@@ -227,7 +227,7 @@ def db_remove_invalid_tokens(tokens_to_remove):
 async def fetch_json(url, headers=None):
     session = get_aiohttp_session()
     try:
-        async with session.get(url, timeout=15) as response:
+        async with session.get(url, timeout=30) as response:
             if response.status == 429:
                 retry_after = response.headers.get("Retry-After", "unknown")
                 logging.warning(f"[HTTP_429] Rate limited on {url}. Retry-After: {retry_after}")
