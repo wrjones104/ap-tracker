@@ -246,6 +246,7 @@ fun MainNavHost(
             SlotDetailScreen(
                 roomDbId = roomDbId,
                 slotId = slotId,
+                userViewModel = userViewModel,
                 textClientViewModel = textClientViewModel,
                 onBackClick = { navController.popBackStack() },
                 onNavigateToHistory = { roomId, _, query, player ->

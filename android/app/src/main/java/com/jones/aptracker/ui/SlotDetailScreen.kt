@@ -177,8 +177,13 @@ fun SlotDetailScreen(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
+                        val displayName = if (slot.player_alias.isNullOrBlank()) {
+                            slot.player_name
+                        } else {
+                            "${slot.player_alias} (${slot.player_name})"
+                        }
                         Text(
-                            text = slot.player_name,
+                            text = displayName,
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
