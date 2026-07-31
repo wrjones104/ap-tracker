@@ -5,7 +5,7 @@ from flask import Blueprint, render_template, session, url_for, redirect, reques
 from . import Session
 from .models import User
 
-from .utils import get_app_version
+from .utils import get_app_version, get_server_version, get_android_version
 
 bp = Blueprint('main', __name__)
 
@@ -16,8 +16,14 @@ def privacy_policy():
 
 @bp.route('/')
 def index():
-    current_version = f"v{get_app_version()}"
-    return render_template('index.html', version=current_version)
+    server_version = f"v{get_server_version()}"
+    app_version = f"v{get_android_version()}"
+    return render_template(
+        'index.html',
+        version=server_version,
+        server_version=server_version,
+        app_version=app_version
+    )
 
 
 # =========================================

@@ -210,11 +210,14 @@ interface ApiService {
     suspend fun sendTestNotification(): Response<Unit>
 
     @GET("whats_new")
-    suspend fun getWhatsNew(): WhatsNewResponse
+    suspend fun getWhatsNew(
+        @Query("target") target: String = "app"
+    ): WhatsNewResponse
 
     @GET("whats_new/latest")
     suspend fun getLatestRelease(
-        @Query("version") version: String? = null
+        @Query("version") version: String? = null,
+        @Query("target") target: String = "app"
     ): LatestReleaseResponse
 
 

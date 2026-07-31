@@ -2,7 +2,8 @@
 """
 sync_changelog.py
 -----------------
-Parses root CHANGELOG.md and updates backend/app/data/changelog.json automatically.
+Parses android/CHANGELOG.md and backend/CHANGELOG.md (or root CHANGELOG.md)
+and updates backend/app/data/changelog.json automatically.
 
 Usage:
     python scripts/sync_changelog.py
@@ -12,25 +13,31 @@ import os
 import re
 import json
 
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-CHANGELOG_MD_PATH = os.path.join(ROOT_DIR, 'CHANGELOG.md')
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..'))
+
+ANDROID_CHANGELOG_MD = os.path.join(ROOT_DIR, 'android', 'CHANGELOG.md')
+BACKEND_CHANGELOG_MD = os.path.join(ROOT_DIR, 'backend', 'CHANGELOG.md')
+ROOT_CHANGELOG_MD = os.path.join(ROOT_DIR, 'CHANGELOG.md')
 
 if os.path.exists(os.path.join(ROOT_DIR, 'backend', 'app', 'data')):
     CHANGELOG_JSON_PATH = os.path.join(ROOT_DIR, 'backend', 'app', 'data', 'changelog.json')
 else:
     CHANGELOG_JSON_PATH = os.path.join(ROOT_DIR, 'app', 'data', 'changelog.json')
 
+
 def clean_markdown_inline(text):
     """Cleans inline markdown formatting for JSON descriptions while preserving text."""
     if not text:
         return ""
-    # Strip out markdown backticks and bold tags if needed
     text = re.sub(r'`([^`]+)`', r'\1', text)
     return text.strip()
 
-def parse_changelog_md(md_content):
+
+def parse_changelog_md(md_content, component="all"):
     """
-    Parses CHANGELOG.md sections into structured release objects.
+    Parses a CHANGELOG.md section into structured release objects.
+    component: 'app', 'server', or 'all'
     """
     releases = []
     
@@ -91,6 +98,8 @@ def parse_changelog_md(md_content):
             elif "fix" in cat_name:
                 fixes.extend(items)
 
+        comp_label = "App" if component == "app" else ("Server" if component == "server" else "")
+
         # Title heuristic
         title = ""
         if features:
@@ -100,10 +109,12 @@ def parse_changelog_md(md_content):
         elif improvements:
             title = improvements[0]['title']
         else:
-            title = f"Release v{version}"
+            title = f"{comp_label} Release v{version}".strip()
 
         release_entry = {
             "version": version,
+            "component": component,
+            "component_label": comp_label,
             "release_date": release_date,
             "title": title,
             "highlights": highlights,
@@ -116,28 +127,53 @@ def parse_changelog_md(md_content):
         }
         releases.append(release_entry)
 
-    latest_version = releases[0]["version"] if releases else "1.0.0"
-    return {
-        "latest_version": latest_version,
-        "releases": releases
-    }
+    return releases
+
 
 def main():
-    if not os.path.exists(CHANGELOG_MD_PATH):
-        print(f"Error: CHANGELOG.md not found at {CHANGELOG_MD_PATH}")
-        return
+    app_releases = []
+    server_releases = []
 
-    with open(CHANGELOG_MD_PATH, 'r', encoding='utf-8') as f:
-        content = f.read()
+    if os.path.exists(ANDROID_CHANGELOG_MD):
+        with open(ANDROID_CHANGELOG_MD, 'r', encoding='utf-8') as f:
+            app_releases = parse_changelog_md(f.read(), component="app")
 
-    data = parse_changelog_md(content)
+    if os.path.exists(BACKEND_CHANGELOG_MD):
+        with open(BACKEND_CHANGELOG_MD, 'r', encoding='utf-8') as f:
+            server_releases = parse_changelog_md(f.read(), component="server")
+
+    # Fallback to root CHANGELOG.md if neither specific changelog exists
+    if not app_releases and not server_releases and os.path.exists(ROOT_CHANGELOG_MD):
+        with open(ROOT_CHANGELOG_MD, 'r', encoding='utf-8') as f:
+            combined = parse_changelog_md(f.read(), component="all")
+            app_releases = combined
+            server_releases = combined
+
+    app_latest = app_releases[0]["version"] if app_releases else "1.0.0"
+    server_latest = server_releases[0]["version"] if server_releases else "1.0.0"
+
+    # Merge all releases sorted by release_date descending
+    all_releases = app_releases + server_releases
+    all_releases.sort(key=lambda r: (r.get("release_date", ""), r.get("version", "")), reverse=True)
+
+    data = {
+        "latest_version": server_latest,
+        "app_latest_version": app_latest,
+        "server_latest_version": server_latest,
+        "app_releases": app_releases,
+        "server_releases": server_releases,
+        "releases": all_releases
+    }
 
     os.makedirs(os.path.dirname(CHANGELOG_JSON_PATH), exist_ok=True)
     with open(CHANGELOG_JSON_PATH, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
 
-    print(f"Successfully synced CHANGELOG.md -> {CHANGELOG_JSON_PATH}")
-    print(f"Latest Version: {data['latest_version']} ({len(data['releases'])} releases processed)")
+    print(f"Successfully synced changelogs -> {CHANGELOG_JSON_PATH}")
+    print(f"App Latest Version: v{app_latest} ({len(app_releases)} releases)")
+    print(f"Server Latest Version: v{server_latest} ({len(server_releases)} releases)")
+    print(f"Total Combined Releases: {len(all_releases)}")
+
 
 if __name__ == '__main__':
     main()
