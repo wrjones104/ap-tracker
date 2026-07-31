@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.19] - 2026-07-31
+
+> **Discord Copy-Paste Format:**
+> ```markdown
+> **Archipelago Alerts Android App v1.6.19 Released!**
+> 
+> **Improvements & Fixes**
+> • **Instant Slot Detail Navigation**: Zero-latency screen transitions when opening slot details with dynamic player alias support.
+> • **On-Demand Autocomplete**: Lazy loading for item and location autocomplete options to accelerate screen loads.
+> • **Preferences UI Cleanup**: Streamlined notification preference screens.
+> 
+> Update now on Google Play or download the latest APK from GitHub Releases!
+> ```
+
+### Changed
+- **Instant Slot Detail Navigation**: Shared `UserViewModel` across navigation routes for immediate transition into slot details and player alias rendering.
+- **On-Demand Autocomplete Loading**: Deferred item/location autocomplete fetching until user interacts with dropdowns to eliminate initial screen load lag.
+- **Preferences UI Cleanup**: Removed duplicate help section from notification preferences screen.
+
+---
+
 ## [1.6.18] - 2026-07-30
 
 > **Discord Copy-Paste Format:**

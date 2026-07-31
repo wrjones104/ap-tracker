@@ -9,12 +9,13 @@ Archipelago Alerts uses decoupled versioning for the Android application and the
 
 ## Recent Release Summary
 
+### Android App (`v1.6.19`) - 2026-07-31
+- **Instant Slot Detail Navigation**: Shared `UserViewModel` across navigation routes for immediate transition into slot details and player alias rendering.
+- **On-Demand Autocomplete Loading**: Deferred item/location autocomplete fetching until user interacts with dropdowns to eliminate initial screen load lag.
+- **Preferences UI Cleanup**: Streamlined notification preference screens.
+
 ### Backend Server (`v1.6.19`) - 2026-07-31
 - **Poller CPU & Resource Throttling**: Throttled concurrent room processing cycles to smooth CPU spikes.
 - **Cycle Jitter & Staggering**: Added random jitter to poller sleep intervals to prevent wave synchronization.
 - **SQLAlchemy Pool Tuning**: Optimized PostgreSQL connection pool size and recycling for high concurrency.
-
-### Android App (`v1.6.18`) - 2026-07-30
-- **Push Notification Whitelist**: Per-game and global item/item group whitelisting for push notifications.
-- **Instant History Sync**: Refactored item history synchronization using cursor watermarks for faster load times.
-- **Item Index Tracking**: Received item ordering now tracks Archipelago's native item index for 100% item fidelity.
+- **Datapackage Cache Lock**: Prevented redundant parallel datapackage fetches during autocomplete queries.

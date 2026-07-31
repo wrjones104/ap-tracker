@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > • **Poller CPU & Resource Throttling**: Throttled concurrent room processing cycles to smooth CPU spikes.
 > • **Cycle Jitter & Staggering**: Added random jitter to poller sleep intervals to prevent wave synchronization.
 > • **SQLAlchemy Pool Tuning**: Optimized PostgreSQL connection pool size and recycling for high concurrency.
+> • **Datapackage Cache Locking**: Prevented concurrent autocomplete requests from redundant datapackage fetches.
 > ```
 
 ### Changed
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cycle Jitter & Staggering**: Added per-cycle ±30s random jitter to the 5-minute poller sleep interval and expanded initial room stagger (1–60s) to prevent room polling tasks from re-synchronizing into waves over time.
 - **SQLAlchemy Connection Pool Tuning**: Configured pool settings (`pool_size=10`, `max_overflow=5`, `pool_recycle=1800`, `pool_pre_ping=True`) for PostgreSQL in production to avoid connection pool exhaustion under load.
 - **Docker Compose CPU & Memory Limits**: Defined resource limits and reservations for `api` and `poller` containers to guarantee API CPU availability (0.4 vCPU reserved for API, poller capped at 1.0 vCPU) on 2 vCPU VMs.
+- **Per-Game Datapackage Cache Lock**: Added an in-memory per-game asyncio lock in `game_routes.py` to prevent concurrent autocomplete queries from redundantly fetching game datapackages.
 
 ### Fixed
 - **Database Healthcheck Environment Escaping**: Escaped PostgreSQL env vars (`$$POSTGRES_USER` and `$$POSTGRES_DB`) in `docker-compose.yml` healthcheck so credentials resolve from the container's environment dynamically across dev, UAT, and prod.
