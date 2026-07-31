@@ -1239,8 +1239,9 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         try:
             legacy_count = session.query(NotifiedItem).filter(NotifiedItem.room_id == room_uuid, NotifiedItem.item_index == None).delete(synchronize_session=False)
             if legacy_count > 0:
+                session.query(SlotItemCount).filter(SlotItemCount.room_id == room_uuid).delete(synchronize_session=False)
                 session.commit()
-                logging.info(f"[POLLER_MIGRATION][RoomDBID:{db_id}] Purged {legacy_count} legacy un-indexed items to allow full sequence backfill.")
+                logging.info(f"[POLLER_MIGRATION][RoomDBID:{db_id}] Purged {legacy_count} legacy un-indexed items and reset item counts to allow full sequence backfill.")
         except Exception as e:
             session.rollback()
 
@@ -1364,8 +1365,8 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                     else:
                         count_updates[key] = 0
                 count_updates[key] += 1
-                # Map the specific count to this item instance (including location to disambiguate within batch)
-                notif_counts[(item.room_id, item.receiving_slot_id, item.item_id, item.location_id)] = count_updates[key]
+                # Map the specific count to this item instance (by item_index)
+                notif_counts[(item.room_id, item.receiving_slot_id, item.item_index)] = count_updates[key]
             
             # Attach the specific count to the notification data for threshold checks
             for notif in new_items_notif:
