@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import selectinload
-from sqlalchemy import or_, desc, tuple_
+from sqlalchemy import or_, desc, tuple_, func
 
 from app import Session
 from app.models import (
@@ -440,6 +440,24 @@ def sync_history(current_user):
         if (r_id, s_id) not in item_watermarks_map:
             item_watermarks_map[(r_id, s_id)] = {'last_id': None, 'last_ts': None}
 
+    # Pre-fetch max item IDs in DB for tracked rooms/slots to protect against out-of-bounds client cursors
+    server_max_ids = {}
+    if tracked_set:
+        room_uuids_tracked = list(set(room_db_id_to_uuid.get(r_id) for (r_id, s_id) in tracked_set if room_db_id_to_uuid.get(r_id)))
+        if room_uuids_tracked:
+            max_id_query = session.query(
+                NotifiedItem.room_id,
+                NotifiedItem.receiving_slot_id,
+                func.max(NotifiedItem.id).label('max_id')
+            ).filter(
+                NotifiedItem.room_id.in_(room_uuids_tracked)
+            ).group_by(
+                NotifiedItem.room_id,
+                NotifiedItem.receiving_slot_id
+            ).all()
+            for ruuid, slot_id, max_id in max_id_query:
+                server_max_ids[(ruuid, slot_id)] = max_id
+
     items = []
     if tracked_set:
         slot_filters = []
@@ -450,6 +468,16 @@ def sync_history(current_user):
             
             last_id = w_info.get('last_id')
             last_ts = w_info.get('last_ts')
+
+            # Guard against stale client watermarks (client max_id > server max_id)
+            server_max = server_max_ids.get((room_uuid, s_id))
+            if last_id is not None and last_id > 0:
+                if server_max is not None and last_id > server_max:
+                    logging.warning(
+                        f"[HISTORY_SYNC] Client watermark last_id={last_id} for RoomDBID:{r_id} Slot:{s_id} "
+                        f"exceeds server max_id={server_max}. Resetting cursor for resync."
+                    )
+                    last_id = None
 
             if last_id is not None and last_id > 0:
                 slot_filters.append(
@@ -736,6 +764,12 @@ def sync_history(current_user):
         else:
             w_info = item_watermarks_map.get((r_id, s_id))
             last_id = w_info.get('last_id') if isinstance(w_info, dict) else None
+            room_uuid = room_db_id_to_uuid.get(r_id)
+            server_max = server_max_ids.get((room_uuid, s_id)) if room_uuid else None
+            # Clamp rather than reset here: the query phase already reset to None and fetched all items,
+            # so the response watermark should reflect the true server max rather than echoing back 0.
+            if last_id is not None and server_max is not None and last_id > server_max:
+                last_id = server_max
             new_item_watermarks[key] = last_id if last_id is not None else 0
 
     max_hint_dts = {}

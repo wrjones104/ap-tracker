@@ -174,6 +174,19 @@ class HistoryRepository(
                         }
                         if (entities.isNotEmpty()) {
                             historyDao.insertHistoryItems(entities)
+
+                            // Prune stale pre-purge records for affected slots if local max ID far exceeds server's returned IDs
+                            entities.groupBy { (it.roomId ?: 0) to (it.slot_id ?: 0) }.forEach { (key, slotEntities) ->
+                                val (rId, sId) = key
+                                if (rId > 0 && sId > 0) {
+                                    val maxNewServerId = slotEntities.maxOfOrNull { it.id } ?: 0L
+                                    val localMaxId = historyDao.getMaxIdForSlot(rId, sId)?.toLong()
+                                    if (localMaxId != null && localMaxId > maxNewServerId + 1000) {
+                                        Log.w("HISTORY_DEBUG", "Stale local history detected for room $rId, slot $sId (localMax=$localMaxId, newMax=$maxNewServerId). Pruning stale items...")
+                                        historyDao.deleteHistoryForSlotAboveId(rId, sId, maxNewServerId)
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -201,8 +214,8 @@ class HistoryRepository(
                     // Stream batch to UI immediately!
                     onBatchReceived?.invoke()
 
-                    // If both lists are below limits, it means we fully caught up
-                    if (response.new_items.size < 200 && response.updated_hints.size < 100) {
+                    // Exit loop only when no new items or hints are returned
+                    if (response.new_items.isEmpty() && response.updated_hints.isEmpty()) {
                         hasMoreData = false
                     }
 

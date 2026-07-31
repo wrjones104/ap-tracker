@@ -2565,16 +2565,15 @@ async def poller_supervisor(app, loop):
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
 
-    # Run one-off database item count reconciliation in background thread
-    async def _bg_reconciliation():
-        try:
-            from app.services.threshold_service import reconcile_slot_item_counts
-            await loop.run_in_executor(None, reconcile_slot_item_counts)
-        except Exception as e:
-            logging.error(f"[POLLER] Background reconciliation failed: {e}")
+    # Run one-off database item count reconciliation synchronously before polling starts.
+    # Runs in executor thread to avoid blocking the event loop, but we await completion
+    # before entering the polling loop to prevent race conditions with concurrent item processing.
+    try:
+        from app.services.threshold_service import reconcile_slot_item_counts
+        await loop.run_in_executor(None, reconcile_slot_item_counts)
+    except Exception as e:
+        logging.error(f"[POLLER] Startup reconciliation failed: {e}", exc_info=True)
 
-    asyncio.create_task(_bg_reconciliation())
-    
     last_cache_check = datetime.utcnow() - timedelta(minutes=15)
     last_revive_check = datetime.utcnow() - timedelta(hours=2)
     missing_checksums = set()
