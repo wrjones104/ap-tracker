@@ -55,8 +55,11 @@ sudo systemctl restart postgresql
 
 Ensure `backend/.env` contains all required credentials:
 ```ini
-# Database Connection String (Host PostgreSQL)
-DATABASE_URL=postgresql://ap_user:ap_password@host.docker.internal:5432/ap_tracker_prod
+# Database Credentials & Connection String (Host/Container PostgreSQL)
+POSTGRES_USER=ap_tracker_prod_user
+POSTGRES_PASSWORD=ap_password
+POSTGRES_DB=ap_tracker_prod
+DATABASE_URL=postgresql://ap_tracker_prod_user:ap_password@host.docker.internal:5432/ap_tracker_prod
 
 # Redis Connection String (Containerized Redis)
 REDIS_URL=redis://redis:6379/0
