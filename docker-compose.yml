@@ -1,22 +1,4 @@
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: ap_tracker_db
-    restart: always
-    env_file:
-      - backend/.env
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-ap_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ap_password}
-      - POSTGRES_DB=${POSTGRES_DB:-ap_tracker}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   redis:
     image: redis:7-alpine
     container_name: ap_tracker_redis
@@ -56,8 +38,6 @@ services:
           cpus: '0.40'
           memory: 256M
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -83,11 +63,8 @@ services:
           cpus: '0.25'
           memory: 256M
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
 volumes:
-  pgdata:
   redisdata:
