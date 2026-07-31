@@ -266,25 +266,6 @@ fun SettingsScreen(
                                 }
                             }
                         }
-
-                        // 4. HELP & INFORMATION SECTION
-                        SectionHeader("Help & Information")
-
-                        SettingsNavigationItem(
-                            title = "Guide & FAQ",
-                            description = "Learn room tracking, mutes, whitelists, and thresholds",
-                            onClick = onNavigateToGuide
-                        )
-                        HorizontalDivider()
-
-                        SettingsNavigationItem(
-                            title = "What's New in v${com.jones.aptracker.BuildConfig.VERSION_NAME}",
-                            description = "View recent patch highlights and feature updates",
-                            onClick = onShowWhatsNew
-                        )
-
-                        // Bottom padding
-                        Box(Modifier.padding(bottom = 32.dp))
                     }
 
                 } ?: Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
