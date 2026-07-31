@@ -185,12 +185,6 @@ def create_app():
         # For prod (Postgres), we trust Alembic to handle the schema.
         logging.info("[MAIN] Production database engine initialized.")
 
-    try:
-        from .services.threshold_service import reconcile_slot_item_counts
-        reconcile_slot_item_counts()
-    except Exception as e:
-        logging.warning(f"[MAIN] Startup slot item count reconciliation skipped: {e}")
-
 
     @app.teardown_appcontext
     def shutdown_session(exception=None):

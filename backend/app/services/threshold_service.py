@@ -170,9 +170,9 @@ def evaluate_threshold_groups(session, room_db_id, room_uuid, game_checksums, gr
 
 def reconcile_slot_item_counts(session=None):
     """
-    Recalculates SlotItemCount table directly from NotifiedItem table.
-    Also audits all triggered ThresholdGroups and resets is_triggered=False if the actual count no longer satisfies the group requirements.
-    This heals any count inflation caused by legacy item purges or duplicate increments.
+    Recalculates SlotItemCount table directly from NotifiedItem table room by room.
+    Also audits triggered ThresholdGroups for each room and resets is_triggered=False if the actual count no longer satisfies requirements.
+    Runs asynchronously/in background to avoid blocking API startup or causing OOM memory spikes.
     """
     close_session = False
     if session is None:
@@ -185,159 +185,148 @@ def reconcile_slot_item_counts(session=None):
         from sqlalchemy import func
         import json
 
-        # 1. Fetch actual counts from NotifiedItem
-        actual_counts_query = session.query(
-            NotifiedItem.room_id,
-            NotifiedItem.receiving_slot_id,
-            NotifiedItem.item_id,
-            func.count(NotifiedItem.id).label('actual_count')
-        ).group_by(
-            NotifiedItem.room_id,
-            NotifiedItem.receiving_slot_id,
-            NotifiedItem.item_id
-        ).all()
+        logging.info("[RECONCILE] Starting background SlotItemCount reconciliation...")
 
-        actual_map = {(r_id, s_id, i_id): cnt for r_id, s_id, i_id, cnt in actual_counts_query}
+        # Process room by room to keep memory footprint O(1) per room
+        active_rooms = session.query(TrackedRoom.id, TrackedRoom.room_id, TrackedRoom.game_checksums_json, TrackedRoom.cached_players_json).all()
 
-        # 2. Compare against current SlotItemCount table
-        existing_counts = session.query(SlotItemCount).all()
-        existing_map = {(c.room_id, c.slot_id, c.item_id): c for c in existing_counts}
+        total_updated = 0
+        total_reset_groups = 0
 
-        updated_or_created = 0
-        deleted = 0
+        for room_db_id, room_uuid, chk_json, p_json in active_rooms:
+            # 1. Fetch actual counts for this room
+            actual_counts = session.query(
+                NotifiedItem.receiving_slot_id,
+                NotifiedItem.item_id,
+                func.count(NotifiedItem.id).label('actual_count')
+            ).filter(
+                NotifiedItem.room_id == room_uuid
+            ).group_by(
+                NotifiedItem.receiving_slot_id,
+                NotifiedItem.item_id
+            ).all()
 
-        # Update or insert accurate counts
-        for (r_id, s_id, i_id), actual_cnt in actual_map.items():
-            if (r_id, s_id, i_id) in existing_map:
-                obj = existing_map[(r_id, s_id, i_id)]
-                if obj.count != actual_cnt:
-                    obj.count = actual_cnt
-                    updated_or_created += 1
-            else:
-                session.add(SlotItemCount(
-                    room_id=r_id,
-                    slot_id=s_id,
-                    item_id=i_id,
-                    count=actual_cnt
-                ))
-                updated_or_created += 1
+            actual_map = {(s_id, i_id): cnt for s_id, i_id, cnt in actual_counts}
 
-        # Delete orphan SlotItemCount entries that no longer exist in NotifiedItem
-        for key, obj in existing_map.items():
-            if key not in actual_map:
-                session.delete(obj)
-                deleted += 1
+            # 2. Fetch existing counts for this room
+            existing_counts = session.query(SlotItemCount).filter(
+                SlotItemCount.room_id == room_uuid
+            ).all()
+            existing_map = {(c.slot_id, c.item_id): c for c in existing_counts}
 
-        session.flush()
+            # Update or insert accurate counts
+            for (s_id, i_id), actual_cnt in actual_map.items():
+                if (s_id, i_id) in existing_map:
+                    obj = existing_map[(s_id, i_id)]
+                    if obj.count != actual_cnt:
+                        obj.count = actual_cnt
+                        total_updated += 1
+                else:
+                    session.add(SlotItemCount(
+                        room_id=room_uuid,
+                        slot_id=s_id,
+                        item_id=i_id,
+                        count=actual_cnt
+                    ))
+                    total_updated += 1
 
-        # 3. Audit triggered ThresholdGroups
-        triggered_groups = session.query(ThresholdGroup).filter(ThresholdGroup.is_triggered == True).all()
-        reset_groups_count = 0
+            # Delete orphan SlotItemCount entries for this room
+            for key, obj in existing_map.items():
+                if key not in actual_map:
+                    session.delete(obj)
+                    total_updated += 1
 
-        if triggered_groups:
-            slot_db_ids = list(set(g.user_tracked_slot_id for g in triggered_groups if g.user_tracked_slot_id))
-            slot_lookup = {}
-            if slot_db_ids:
-                slots = session.query(UserTrackedSlot).filter(UserTrackedSlot.id.in_(slot_db_ids)).all()
-                for s in slots:
-                    slot_lookup[s.id] = (s.room_id, s.slot_id)
+            # 3. Check triggered ThresholdGroups for slots in this room
+            slots_in_room = session.query(UserTrackedSlot).filter(UserTrackedSlot.room_id == room_db_id).all()
+            if slots_in_room:
+                slot_id_to_num = {s.id: s.slot_id for s in slots_in_room}
+                slot_db_ids = list(slot_id_to_num.keys())
 
-            room_db_to_uuid = {}
-            room_db_ids = list(set(s[0] for s in slot_lookup.values()))
-            if room_db_ids:
-                rooms = session.query(TrackedRoom).filter(TrackedRoom.id.in_(room_db_ids)).all()
-                for r in rooms:
-                    room_db_to_uuid[r.id] = r.room_id
+                triggered_groups = session.query(ThresholdGroup).filter(
+                    ThresholdGroup.user_tracked_slot_id.in_(slot_db_ids),
+                    ThresholdGroup.is_triggered == True
+                ).all()
 
-            checksums_by_room = {}
-            if room_db_ids:
-                rooms_data = session.query(TrackedRoom.id, TrackedRoom.game_checksums_json, TrackedRoom.cached_players_json).filter(TrackedRoom.id.in_(room_db_ids)).all()
-                for r_id, chk_json, p_json in rooms_data:
+                if triggered_groups:
                     try:
                         c_map = json.loads(chk_json or '{}')
                         p_list = json.loads(p_json or '[]')
                         game_map = {p['slot_id']: p.get('game') for p in p_list if isinstance(p, dict)}
-                        checksums_by_room[r_id] = (c_map, game_map)
                     except Exception:
-                        pass
+                        c_map, game_map = {}, {}
 
-            cache_data_by_checksum = {}
+                    cache_by_checksum = {}
 
-            for group in triggered_groups:
-                s_info = slot_lookup.get(group.user_tracked_slot_id)
-                if not s_info:
-                    continue
-                room_db_id, slot_id = s_info
-                room_uuid = room_db_to_uuid.get(room_db_id)
-                if not room_uuid:
-                    continue
+                    for group in triggered_groups:
+                        num_slot_id = slot_id_to_num.get(group.user_tracked_slot_id)
+                        if num_slot_id is None:
+                            continue
 
-                c_map, game_map = checksums_by_room.get(room_db_id, ({}, {}))
-                game_name = game_map.get(slot_id)
-                game_checksum = c_map.get(game_name) if game_name else None
+                        game_name = game_map.get(num_slot_id)
+                        game_checksum = c_map.get(game_name) if game_name else None
+                        if not game_checksum:
+                            continue
 
-                if not game_checksum:
-                    continue
+                        if game_checksum not in cache_by_checksum:
+                            name_to_id = {}
+                            group_expansions = {}
+                            name_results = session.query(
+                                DatapackageCache.entity_name, DatapackageCache.entity_id
+                            ).filter(
+                                DatapackageCache.checksum == game_checksum,
+                                DatapackageCache.entity_type == 'item'
+                            ).all()
+                            for name, eid in name_results:
+                                name_to_id[name.lower().strip()] = eid
 
-                if game_checksum not in cache_data_by_checksum:
-                    name_to_id = {}
-                    group_expansions = {}
-                    name_results = session.query(
-                        DatapackageCache.entity_name, DatapackageCache.entity_id
-                    ).filter(
-                        DatapackageCache.checksum == game_checksum,
-                        DatapackageCache.entity_type == 'item'
-                    ).all()
-                    for name, eid in name_results:
-                        name_to_id[name.lower().strip()] = eid
+                            member_results = session.query(
+                                DatapackageCache.entity_name
+                            ).filter(
+                                DatapackageCache.checksum == game_checksum,
+                                DatapackageCache.entity_type == 'item_name_groups_json'
+                            ).all()
+                            for name_groups_str, in member_results:
+                                try:
+                                    parsed_data = json.loads(name_groups_str)
+                                    if isinstance(parsed_data, dict):
+                                        for g_name, items in parsed_data.items():
+                                            if isinstance(items, list):
+                                                group_expansions.setdefault(g_name.lower().strip(), set()).update(
+                                                    item.lower().strip() for item in items
+                                                )
+                                except Exception:
+                                    pass
+                            cache_by_checksum[game_checksum] = (name_to_id, group_expansions)
 
-                    member_results = session.query(
-                        DatapackageCache.entity_name
-                    ).filter(
-                        DatapackageCache.checksum == game_checksum,
-                        DatapackageCache.entity_type == 'item_name_groups_json'
-                    ).all()
-                    for name_groups_str, in member_results:
-                        try:
-                            parsed_data = json.loads(name_groups_str)
-                            if isinstance(parsed_data, dict):
-                                for g_name, items in parsed_data.items():
-                                    if isinstance(items, list):
-                                        group_expansions.setdefault(g_name.lower().strip(), set()).update(
-                                            item.lower().strip() for item in items
-                                        )
-                        except Exception:
-                            pass
-                    cache_data_by_checksum[game_checksum] = (name_to_id, group_expansions)
+                        name_to_id, group_expansions = cache_by_checksum[game_checksum]
 
-                name_to_id, group_expansions = cache_data_by_checksum[game_checksum]
+                        all_met = True
+                        for item_req in group.items:
+                            if item_req.is_group:
+                                members = group_expansions.get(item_req.item_name.lower().strip(), set())
+                                total = 0
+                                for member_name in members:
+                                    m_id = name_to_id.get(member_name)
+                                    if m_id is not None:
+                                        total += actual_map.get((num_slot_id, m_id), 0)
+                                if total < item_req.quantity:
+                                    all_met = False
+                                    break
+                            else:
+                                m_id = name_to_id.get(item_req.item_name.lower().strip())
+                                if m_id is None or actual_map.get((num_slot_id, m_id), 0) < item_req.quantity:
+                                    all_met = False
+                                    break
 
-                all_met = True
-                for item_req in group.items:
-                    if item_req.is_group:
-                        members = group_expansions.get(item_req.item_name.lower().strip(), set())
-                        total = 0
-                        for member_name in members:
-                            m_id = name_to_id.get(member_name)
-                            if m_id is not None:
-                                total += actual_map.get((room_uuid, slot_id, m_id), 0)
-                        if total < item_req.quantity:
-                            all_met = False
-                            break
-                    else:
-                        m_id = name_to_id.get(item_req.item_name.lower().strip())
-                        if m_id is None or actual_map.get((room_uuid, slot_id, m_id), 0) < item_req.quantity:
-                            all_met = False
-                            break
+                        if not all_met:
+                            group.is_triggered = False
+                            total_reset_groups += 1
+                            logging.info(f"[RECONCILE] Reset premature triggered milestone group '{group.name or 'unnamed'}' (ID={group.id})")
 
-                if not all_met:
-                    group.is_triggered = False
-                    reset_groups_count += 1
-                    logging.info(f"[RECONCILE] Reset premature triggered milestone group '{group.name or 'unnamed'}' (ID={group.id})")
+            # Commit per room to keep transaction size minimal
+            session.commit()
 
-        session.commit()
-        if updated_or_created > 0 or deleted > 0 or reset_groups_count > 0:
-            logging.info(f"[RECONCILE] SlotItemCount reconciliation complete: Updated/Created={updated_or_created}, Deleted={deleted}, Reset Groups={reset_groups_count}")
+        logging.info(f"[RECONCILE] SlotItemCount background reconciliation complete: Reconciled counts={total_updated}, Reset premature groups={total_reset_groups}")
     except Exception as e:
         session.rollback()
         logging.error(f"[RECONCILE_ERROR] Failed during slot item count reconciliation: {e}", exc_info=True)
