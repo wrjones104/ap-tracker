@@ -68,9 +68,20 @@ if is_sqlite:
 else:
     connect_args = {"connect_timeout": 10}
 
+pool_kwargs = {}
+if not is_sqlite:
+    pool_kwargs = {
+        'pool_size': 10,         # Base persistent connections
+        'max_overflow': 5,       # Burst capacity above pool_size
+        'pool_timeout': 30,      # Seconds to wait for a connection
+        'pool_recycle': 1800,    # Recycle connections every 30 min
+        'pool_pre_ping': True,   # Verify connections are alive before use
+    }
+
 engine = create_engine(
     DATABASE_URL,
-    connect_args=connect_args
+    connect_args=connect_args,
+    **pool_kwargs
 )
 
 if is_sqlite:
