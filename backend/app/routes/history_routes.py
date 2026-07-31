@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import selectinload
-from sqlalchemy import or_, desc, tuple_
+from sqlalchemy import or_, desc, tuple_, func
 
 from app import Session
 from app.models import (
@@ -445,7 +445,6 @@ def sync_history(current_user):
     if tracked_set:
         room_uuids_tracked = list(set(room_db_id_to_uuid.get(r_id) for (r_id, s_id) in tracked_set if room_db_id_to_uuid.get(r_id)))
         if room_uuids_tracked:
-            from sqlalchemy import func
             max_id_query = session.query(
                 NotifiedItem.room_id,
                 NotifiedItem.receiving_slot_id,
@@ -509,7 +508,6 @@ def sync_history(current_user):
 
         if slot_filters:
             items = session.query(NotifiedItem).filter(or_(*slot_filters)).order_by(NotifiedItem.id.asc()).limit(200).all()
-
 
     hint_watermarks_map = {}
     for hint in data.get('hints', []):
@@ -768,10 +766,11 @@ def sync_history(current_user):
             last_id = w_info.get('last_id') if isinstance(w_info, dict) else None
             room_uuid = room_db_id_to_uuid.get(r_id)
             server_max = server_max_ids.get((room_uuid, s_id)) if room_uuid else None
+            # Clamp rather than reset here: the query phase already reset to None and fetched all items,
+            # so the response watermark should reflect the true server max rather than echoing back 0.
             if last_id is not None and server_max is not None and last_id > server_max:
                 last_id = server_max
             new_item_watermarks[key] = last_id if last_id is not None else 0
-
 
     max_hint_dts = {}
     for hint in hints:

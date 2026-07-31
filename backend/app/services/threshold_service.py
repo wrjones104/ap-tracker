@@ -206,6 +206,8 @@ def reconcile_slot_item_counts(session=None):
                 NotifiedItem.item_id
             ).all()
 
+            # actual_map is intentionally scoped per room iteration — keys are (slot_id, item_id)
+            # without room_uuid since we rebuild it fresh each loop pass.
             actual_map = {(s_id, i_id): cnt for s_id, i_id, cnt in actual_counts}
 
             # 2. Fetch existing counts for this room
