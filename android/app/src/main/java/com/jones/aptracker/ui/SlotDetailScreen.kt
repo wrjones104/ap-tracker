@@ -121,9 +121,8 @@ fun SlotDetailScreen(
         }
     }
 
-    LaunchedEffect(roomDbId, slotId, slot?.game) {
+    LaunchedEffect(roomDbId, slotId) {
         userViewModel.fetchThresholdGroups(roomDbId, slotId)
-        textClientViewModel.fetchAutocompleteData(roomDbId, slotId, slot?.game, context.applicationContext as? android.app.Application)
     }
 
     val thresholdGroups by userViewModel.thresholdGroups.collectAsState()
