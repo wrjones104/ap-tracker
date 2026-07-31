@@ -12,7 +12,10 @@ The system consists of two main parts:
 
 ## Directory Structure
 
-*   `CHANGELOG.md`: Project changelog following Keep a Changelog standard with copyable Discord announcement markdown snippets.
+*   `CHANGELOG.md`: Root project changelog overview pointing to component changelogs.
+*   `android/CHANGELOG.md`: Dedicated Android application changelog following Keep a Changelog standard.
+*   `backend/CHANGELOG.md`: Dedicated Backend server & API changelog following Keep a Changelog standard.
+*   `backend/VERSION`: Backend server version string file (e.g. `1.6.19`).
 *   `architecture.md`: **[Detailed Architecture Document](architecture.md)** — Explains system design, Mermaid diagrams, Redis event queues, service engines, PostgreSQL composite indexes, and Docker container topology.
 *   `scripts/`: Contains developer helper scripts including `sync_changelog.py`.
 *   `backend/`: Contains the Python backend code.
@@ -96,7 +99,7 @@ The system consists of two main parts:
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
 *   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
 *   **Cheese Tracker Claim Checking:** Unauthenticated claims on Cheese Tracker leave `claimed_by_ct_user_id` as `None` but populate `discord_username` (which shows as `effective_discord_username` on GET requests). Checking for claim conflicts requires checking both for authenticated ID mismatches and unauthenticated Discord username mismatches.
-*   **Changelog Formatting & Sync:** Author new releases directly in `CHANGELOG.md` (no emojis, standard Keep a Changelog format). Run `python scripts/sync_changelog.py` to automatically update `backend/app/data/changelog.json` for the web and mobile API.
+*   **Changelog Formatting & Sync:** Author Android release notes in `android/CHANGELOG.md` and server release notes in `backend/CHANGELOG.md`. Run `python scripts/sync_changelog.py` to automatically compile both into `backend/app/data/changelog.json` for the web landing page and `/api/whats_new` endpoints.
 *   **APK Distribution:** APK files are not hosted directly on the web app/backend. APK downloads are provided exclusively via **GitHub Releases** (alongside Google Play Store).
 
 ## LLM Maintenance Directive
