@@ -1,6 +1,7 @@
 import logging
 import json
 import asyncio
+import threading
 from flask import Blueprint, request, jsonify
 from sqlalchemy import func
 
@@ -10,6 +11,9 @@ from app.utils import generate_negative_id
 from app.routes.common import log_api_call, token_required, handle_db_errors
 
 game_bp = Blueprint('game_routes', __name__)
+
+_heal_locks = {}
+_heal_global_lock = threading.Lock()
 
 def rebuild_game_cache_synchronously(session, game_name):
     rooms = session.query(TrackedRoom).filter(
@@ -281,44 +285,52 @@ def rebuild_game_cache_synchronously(session, game_name):
 def heal_datapackage_cache_if_outdated(session, game_name):
     if not game_name:
         return
-    try:
-        old_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
-            func.lower(DatapackageCache.game) == game_name.lower(),
-            DatapackageCache.entity_type == '_metadata',
-            DatapackageCache.entity_name == '_completed'
-        ).all() if c and c[0]]
 
-        if old_checksums:
-            session.query(DatapackageCache).filter(
-                DatapackageCache.checksum.in_(old_checksums),
+    game_key = game_name.lower()
+    with _heal_global_lock:
+        if game_key not in _heal_locks:
+            _heal_locks[game_key] = threading.Lock()
+        game_lock = _heal_locks[game_key]
+
+    with game_lock:
+        try:
+            old_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+                func.lower(DatapackageCache.game) == game_key,
                 DatapackageCache.entity_type == '_metadata',
                 DatapackageCache.entity_name == '_completed'
-            ).delete(synchronize_session=False)
-            session.commit()
-            rebuild_game_cache_synchronously(session, game_name)
-            return
+            ).all() if c and c[0]]
+
+            if old_checksums:
+                session.query(DatapackageCache).filter(
+                    DatapackageCache.checksum.in_(old_checksums),
+                    DatapackageCache.entity_type == '_metadata',
+                    DatapackageCache.entity_name == '_completed'
+                ).delete(synchronize_session=False)
+                session.commit()
+                rebuild_game_cache_synchronously(session, game_name)
+                return
+                
+            json_query = session.query(DatapackageCache.checksum).filter(
+                func.lower(DatapackageCache.game) == game_key,
+                DatapackageCache.entity_type == 'item_name_groups_json'
+            )
             
-        json_query = session.query(DatapackageCache.checksum).filter(
-            func.lower(DatapackageCache.game) == game_name.lower(),
-            DatapackageCache.entity_type == 'item_name_groups_json'
-        )
-        
-        bad_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
-            func.lower(DatapackageCache.game) == game_name.lower(),
-            DatapackageCache.entity_type == 'item_group',
-            ~DatapackageCache.checksum.in_(json_query)
-        ).distinct().all() if c and c[0]]
-        
-        if bad_checksums:
-            session.query(DatapackageCache).filter(
-                DatapackageCache.checksum.in_(bad_checksums),
-                DatapackageCache.entity_type == 'item_group'
-            ).delete(synchronize_session=False)
-            session.commit()
-            rebuild_game_cache_synchronously(session, game_name)
-    except Exception as e:
-        session.rollback()
-        logging.error(f"[SELF_HEALING] Error during cache healing check: {e}", exc_info=True)
+            bad_checksums = [c[0] for c in session.query(DatapackageCache.checksum).filter(
+                func.lower(DatapackageCache.game) == game_key,
+                DatapackageCache.entity_type == 'item_group',
+                ~DatapackageCache.checksum.in_(json_query)
+            ).distinct().all() if c and c[0]]
+            
+            if bad_checksums:
+                session.query(DatapackageCache).filter(
+                    DatapackageCache.checksum.in_(bad_checksums),
+                    DatapackageCache.entity_type == 'item_group'
+                ).delete(synchronize_session=False)
+                session.commit()
+                rebuild_game_cache_synchronously(session, game_name)
+        except Exception as e:
+            session.rollback()
+            logging.error(f"[SELF_HEALING] Error during cache healing check: {e}", exc_info=True)
 
 @game_bp.route('/games', methods=['GET'])
 @log_api_call
