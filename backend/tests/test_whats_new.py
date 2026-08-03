@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 import json
+from unittest.mock import patch
 
 TEST_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test_whats_new.db'))
 os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
@@ -12,11 +13,39 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app import create_app
 
+# The whats_new routes read backend/app/data/changelog.json, which is a
+# gitignored generated artifact and therefore absent on fresh checkouts (e.g.
+# CI). These tests provide their own known changelog data so they don't depend
+# on that deploy-time file.
+FIXTURE_CHANGELOG = {
+    "latest_version": "1.6.18",
+    "app_latest_version": "1.6.18",
+    "server_latest_version": "1.6.18",
+    "app_releases": [
+        {"version": "1.6.18", "component": "app", "title": "App Release", "highlights": [], "categories": {}}
+    ],
+    "server_releases": [
+        {"version": "1.6.18", "component": "server", "title": "Server Release", "highlights": [], "categories": {}}
+    ],
+    "releases": [
+        {"version": "1.6.18", "component": "app", "title": "App Release"},
+        {"version": "1.6.18", "component": "server", "title": "Server Release"},
+    ],
+}
+
 
 class TestWhatsNewRoutes(unittest.TestCase):
     def setUp(self):
         self.app = create_app()
         self.client = self.app.test_client()
+        # Inject known changelog data so the tests are hermetic and don't depend
+        # on the gitignored changelog.json being present on disk.
+        self._changelog_patcher = patch(
+            'app.routes.whats_new_routes._load_changelog_data',
+            return_value=FIXTURE_CHANGELOG,
+        )
+        self._changelog_patcher.start()
+        self.addCleanup(self._changelog_patcher.stop)
 
     def tearDown(self):
         if os.path.exists(TEST_DB_PATH):
