@@ -5,6 +5,21 @@ All notable changes to the **Archipelago Alerts Backend Server & API** will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.21] - 2026-08-03
+
+> **Discord Copy-Paste Format:**
+> ```markdown
+> **Archipelago Alerts Backend v1.6.21 Released!**
+> 
+> **Improvements & Fixes**
+> • **Tracked Slot Item Count Payload**: Surfaced total item counts per slot in `GET /api/user/tracked_slots` to drive client-side progress calculation.
+> • **Landing Page Version Syncing**: Fixed landing page version badges to resolve from `changelog.json` in production containers.
+> ```
+
+### Changed
+- **Tracked Slot Item Count Aggregation**: Updated `get_user_tracked_slots` query in `slots_routes.py` to aggregate `item_count` per slot in the JSON response payload.
+- **Website Version Display Alignment**: Updated `get_android_version()` in `utils.py` to check `changelog.json` so the landing page version badges stay aligned with release notes across all environments.
+
 ---
 
 ## [1.6.19] - 2026-07-31

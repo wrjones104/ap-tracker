@@ -33,7 +33,7 @@ def get_server_version():
     return "1.6.19"
 
 def get_android_version():
-    """Extracts Android app version from build.gradle.kts."""
+    """Extracts Android app version from build.gradle.kts, changelog.json, or backend VERSION."""
     try:
         gradle_path = os.path.join(os.path.dirname(__file__), '../../android/app/build.gradle.kts')
         if os.path.exists(gradle_path):
@@ -45,7 +45,18 @@ def get_android_version():
     except Exception as e:
         logging.warning(f"[VERSION] Could not read version from gradle: {e}")
     
-    return "1.6.18"
+    try:
+        import json
+        changelog_path = os.path.join(os.path.dirname(__file__), 'data/changelog.json')
+        if os.path.exists(changelog_path):
+            with open(changelog_path, 'r') as f:
+                data = json.load(f)
+                if 'app_latest_version' in data and data['app_latest_version']:
+                    return data['app_latest_version']
+    except Exception as e:
+        logging.warning(f"[VERSION] Could not read app version from changelog.json: {e}")
+
+    return get_server_version()
 
 def get_app_version():
     """Alias for server version used in Cheese User-Agent header."""
