@@ -233,7 +233,7 @@ fun HistoryContent(
                 }
 
                 // --- SYNC PROGRESS BANNER ---
-                val syncProgress = historyViewModel.syncProgress.collectAsState().value
+                val syncProgress by historyViewModel.syncProgress.collectAsState(initial = SyncProgressState())
                 SyncProgressBanner(syncProgress = syncProgress)
 
                 // --- TABS ---
