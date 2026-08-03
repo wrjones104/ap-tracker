@@ -224,6 +224,10 @@ fun HistoryContent(
                     }
                 }
 
+                // --- SYNC PROGRESS BANNER ---
+                val syncProgress by historyViewModel.syncProgress.collectAsState()
+                SyncProgressBanner(syncProgress = syncProgress)
+
                 // --- TABS ---
                 TabRow(selectedTabIndex = pagerState.currentPage) {
                     listOf("Items", "Hints").forEachIndexed { index, title ->
@@ -1082,6 +1086,8 @@ fun ItemHistoryTab(
             }
         }
 
+        val syncProgress by historyViewModel.syncProgress.collectAsState()
+
         if (itemsToShow.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
             val selectedPlayerInfo = availablePlayers.find { it.originalName == selectedPlayer }
             val isBackfilling = if (selectedPlayer != null) {
@@ -1089,6 +1095,7 @@ fun ItemHistoryTab(
             } else {
                 availablePlayers.any { it.needsBackfill }
             }
+            val isStillSyncing = syncProgress.isSyncing || syncProgress.hasPendingBackfill || isBackfilling
 
             Box(
                 modifier = Modifier
@@ -1097,7 +1104,7 @@ fun ItemHistoryTab(
                     .verticalScroll(rememberScrollState()),
                 contentAlignment = Alignment.Center
             ) {
-                if (isBackfilling) {
+                if (isStillSyncing) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
@@ -1110,12 +1117,19 @@ fun ItemHistoryTab(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = "Retrieving initial history from Archipelago...",
+                            text = "Retrieving history from Archipelago...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        val progressSubtext = if (syncProgress.totalDeltaToFetch > 0) {
+                            "Loaded ${syncProgress.itemsFetchedInSync} / ${syncProgress.totalDeltaToFetch} items (${syncProgress.progressPercentage}%)..."
+                        } else if (syncProgress.itemsFetchedInSync > 0) {
+                            "Loaded ${syncProgress.itemsFetchedInSync} items so far. Populating..."
+                        } else {
+                            "This may take a moment for large multiworlds."
+                        }
                         Text(
-                            text = "This may take a moment to populate.",
+                            text = progressSubtext,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outline
                         )
@@ -1441,6 +1455,8 @@ fun HintHistoryTab(
             }
         }
 
+        val syncProgress by historyViewModel.syncProgress.collectAsState()
+
         if (filteredHintsForYou.isEmpty() && filteredHintsByYou.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
             Box(
                 modifier = Modifier
@@ -1449,7 +1465,32 @@ fun HintHistoryTab(
                     .verticalScroll(rememberScrollState()),
                 contentAlignment = Alignment.Center
             ) {
-                Text("No hint history found.")
+                if (syncProgress.isSyncing || syncProgress.hasPendingBackfill) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(36.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 3.dp
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Retrieving hint history from Archipelago...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "This may take a moment to populate.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                } else {
+                    Text("No hint history found.")
+                }
             }
         } else {
             LazyColumn(
@@ -1823,5 +1864,89 @@ private fun formatTimestamp(isoString: String, formatter: DateTimeFormatter): St
     } catch (e: Exception) {
         Log.e("TimestampFormat", "Failed to parse timestamp: '$isoString'", e)
         "Invalid date"
+    }
+}
+
+@Composable
+fun SyncProgressBanner(
+    syncProgress: SyncProgressState,
+    modifier: Modifier = Modifier
+) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = syncProgress.isSyncing || syncProgress.isJustCompleted,
+        enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+        exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
+    ) {
+        val isCompleted = syncProgress.isJustCompleted && !syncProgress.isSyncing
+        val containerColor = if (isCompleted) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primaryContainer
+        val contentColor = if (isCompleted) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimaryContainer
+        val iconColor = if (isCompleted) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
+
+        androidx.compose.material3.Surface(
+            color = containerColor,
+            contentColor = contentColor,
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+            tonalElevation = 2.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isCompleted) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = iconColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = if (syncProgress.itemsFetchedInSync > 0)
+                                "History sync complete (${syncProgress.itemsFetchedInSync} new items synced)"
+                            else
+                                "History is up to date",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    } else {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = iconColor
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        val statusText = if (syncProgress.totalDeltaToFetch > 0 && syncProgress.itemsFetchedInSync > 0) {
+                            "Syncing history... ${syncProgress.progressPercentage}% (${syncProgress.itemsFetchedInSync} / ${syncProgress.totalDeltaToFetch} items)"
+                        } else if (syncProgress.itemsFetchedInSync > 0) {
+                            "Syncing history... (${syncProgress.itemsFetchedInSync} items)"
+                        } else {
+                            "Checking for updates..."
+                        }
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                if (!isCompleted && syncProgress.totalDeltaToFetch > 0 && syncProgress.itemsFetchedInSync > 0) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { syncProgress.progressPercentage / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp),
+                        color = iconColor,
+                        trackColor = iconColor.copy(alpha = 0.2f)
+                    )
+                }
+            }
+        }
     }
 }
