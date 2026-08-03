@@ -3,6 +3,7 @@ package com.jones.aptracker.ui
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +32,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -262,10 +265,12 @@ fun ProfileScreen(
             CheeseIntegrationCard(
                 isConnected = userProfile?.is_cheese_connected ?: false,
                 isAutoSyncEnabled = isAutoSyncEnabled,
+                defaultPing = userProfile?.cheese_default_ping,
                 onAutoSyncChanged = { userViewModel.setAutoSync(it) },
                 onConnect = { key -> userViewModel.connectCheeseTracker(key) },
                 onSync = { userViewModel.manualSyncCheese() },
-                onDisconnect = { userViewModel.disconnectCheese() }
+                onDisconnect = { userViewModel.disconnectCheese() },
+                onDefaultPingChange = { userViewModel.updateCheeseDefaultPing(it) }
             )
 
             HorizontalDivider(Modifier.padding(vertical = 16.dp))
@@ -428,15 +433,66 @@ fun ProfileMenuItem(
     }
 }
 
+@Composable
+fun CheeseDefaultPingSelector(
+    defaultPing: String?,
+    onDefaultPingChange: (String?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val currentLabel = CHEESE_PING_OPTIONS.find { it.id == defaultPing }?.label ?: "Not set"
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "Default ping for new claims",
+            style = MaterialTheme.typography.bodyLarge
+        )
+        Text(
+            "Applied when you claim a new slot. Existing claims are left as-is.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        Box {
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(currentLabel, modifier = Modifier.weight(1f))
+                Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("Not set") },
+                    onClick = {
+                        expanded = false
+                        onDefaultPingChange(null)
+                    }
+                )
+                CHEESE_PING_OPTIONS.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.label) },
+                        onClick = {
+                            expanded = false
+                            onDefaultPingChange(option.id)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CheeseIntegrationCard(
     isConnected: Boolean,
     isAutoSyncEnabled: Boolean,
+    defaultPing: String?,
     onAutoSyncChanged: (Boolean) -> Unit,
     onConnect: (String) -> Unit,
     onSync: () -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    onDefaultPingChange: (String?) -> Unit
 ) {
     var apiKey by remember { mutableStateOf("") }
     var guestDiscordName by remember { mutableStateOf("") }
@@ -534,6 +590,16 @@ fun CheeseIntegrationCard(
                         modifier = Modifier.padding(start = 16.dp)
                     )
                 }
+
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+
+                // Default ping preference (applied to newly claimed slots only)
+                CheeseDefaultPingSelector(
+                    defaultPing = defaultPing,
+                    onDefaultPingChange = onDefaultPingChange
+                )
 
                 Spacer(Modifier.height(8.dp))
 

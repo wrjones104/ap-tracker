@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.network.CheeseAuthRequest
+import com.jones.aptracker.network.CheeseSlotState
+import com.jones.aptracker.network.UpdateCheesePingRequest
 import com.jones.aptracker.network.IgnoreItem
 import com.jones.aptracker.network.WhitelistItem
 import com.jones.aptracker.network.RetrofitClient
@@ -198,14 +200,17 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun fetchTrackedSlots() {
-        viewModelScope.launch {
-            try {
-                _trackedSlotsByRoom.value = RetrofitClient.instance.getUserTrackedSlots()
-            } catch (e: Exception) {
-                _errorMessage.value = "Failed to load tracked slots."
-                e.printStackTrace()
-                _trackedSlotsByRoom.value = emptyList()
-            }
+        viewModelScope.launch { loadTrackedSlots() }
+    }
+
+    /** Awaitable tracked-slots load, so callers (e.g. refresh) can sequence work. */
+    private suspend fun loadTrackedSlots() {
+        try {
+            _trackedSlotsByRoom.value = RetrofitClient.instance.getUserTrackedSlots()
+        } catch (e: Exception) {
+            _errorMessage.value = "Failed to load tracked slots."
+            e.printStackTrace()
+            _trackedSlotsByRoom.value = emptyList()
         }
     }
 
@@ -401,6 +406,161 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearIntegrationMessage() {
         _integrationMessage.value = null
+    }
+
+    // --- Cheese slot state (notes / status / ping) editing ---
+
+    /** True while a Cheese slot write is in flight, to disable controls. */
+    private val _isSavingCheeseSlot = MutableStateFlow(false)
+    val isSavingCheeseSlot: StateFlow<Boolean> = _isSavingCheeseSlot.asStateFlow()
+
+    /** True while an on-demand Cheese Tracker refresh is in flight. */
+    private val _isRefreshingCheese = MutableStateFlow(false)
+    val isRefreshingCheese: StateFlow<Boolean> = _isRefreshingCheese.asStateFlow()
+
+    /**
+     * Applies an optimistic change to a slot's Cheese state, sends the partial
+     * update to the backend, then reconciles the local state against the
+     * server's authoritative response (Cheese may force-upgrade completion).
+     * Rolls back and surfaces an error on failure.
+     */
+    private fun submitCheeseSlotUpdate(
+        roomId: Int,
+        slotId: Int,
+        updates: Map<String, Any>,
+        optimistic: (CheeseSlotState) -> CheeseSlotState
+    ) {
+        viewModelScope.launch {
+            val previousRooms = _trackedSlotsByRoom.value
+            val currentRoom = previousRooms.find { it.room_db_id == roomId }
+            val currentSlot = currentRoom?.tracked_slots?.find { it.slot_id == slotId }
+            val currentCheese = currentSlot?.cheese ?: return@launch
+
+            // 1. Optimistic local update.
+            _trackedSlotsByRoom.value = replaceSlotCheese(previousRooms, roomId, slotId, optimistic(currentCheese))
+            _isSavingCheeseSlot.value = true
+
+            try {
+                val response = RetrofitClient.instance.updateSlotCheese(roomId, slotId, updates)
+                val body = response.body()
+                if (response.isSuccessful && body?.cheese != null) {
+                    // 2. Reconcile with the authoritative server state.
+                    _trackedSlotsByRoom.value = replaceSlotCheese(
+                        _trackedSlotsByRoom.value, roomId, slotId, body.cheese
+                    )
+                } else {
+                    _trackedSlotsByRoom.value = previousRooms
+                    _errorMessage.value = when (response.code()) {
+                        403 -> "This slot is claimed by someone else on Cheese Tracker."
+                        409 -> "This slot changed on Cheese Tracker. Pull to refresh and try again."
+                        429 -> "Too many updates. Please slow down."
+                        502 -> "Could not reach Cheese Tracker. Please try again."
+                        else -> "Failed to update Cheese Tracker."
+                    }
+                }
+            } catch (e: Exception) {
+                _trackedSlotsByRoom.value = previousRooms
+                _errorMessage.value = "Failed to update Cheese Tracker."
+                e.printStackTrace()
+            } finally {
+                _isSavingCheeseSlot.value = false
+            }
+        }
+    }
+
+    private fun replaceSlotCheese(
+        rooms: List<RoomWithTrackedSlots>,
+        roomId: Int,
+        slotId: Int,
+        newCheese: CheeseSlotState
+    ): List<RoomWithTrackedSlots> {
+        return rooms.map { room ->
+            if (room.room_db_id == roomId) {
+                room.copy(
+                    tracked_slots = room.tracked_slots.map { slot ->
+                        if (slot.slot_id == slotId) slot.copy(cheese = newCheese) else slot
+                    }
+                )
+            } else {
+                room
+            }
+        }
+    }
+
+    fun updateCheeseNotes(roomId: Int, slotId: Int, notes: String) {
+        submitCheeseSlotUpdate(roomId, slotId, mapOf("notes" to notes)) { it.copy(notes = notes) }
+    }
+
+    fun updateCheeseProgression(roomId: Int, slotId: Int, status: String) {
+        submitCheeseSlotUpdate(
+            roomId, slotId, mapOf("progression_status" to status)
+        ) { it.copy(progression_status = status) }
+    }
+
+    fun updateCheeseCompletion(roomId: Int, slotId: Int, status: String) {
+        submitCheeseSlotUpdate(
+            roomId, slotId, mapOf("completion_status" to status)
+        ) { it.copy(completion_status = status) }
+    }
+
+    fun updateCheesePing(roomId: Int, slotId: Int, ping: String) {
+        submitCheeseSlotUpdate(
+            roomId, slotId, mapOf("discord_ping" to ping)
+        ) { it.copy(discord_ping = ping) }
+    }
+
+    /** "Still BK": refresh last_checked without changing status. */
+    fun stillBk(roomId: Int, slotId: Int) {
+        submitCheeseSlotUpdate(roomId, slotId, mapOf("touch_last_checked" to true)) { it }
+    }
+
+    /**
+     * Forces the backend to pull this room's current state from Cheese Tracker
+     * (bypassing the ~5 min poll), then reloads tracked slots so the UI shows it.
+     */
+    fun refreshCheeseFromServer(roomId: Int, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isRefreshingCheese.value = true
+            try {
+                val response = RetrofitClient.instance.refreshRoomCheese(roomId)
+                if (response.isSuccessful) {
+                    loadTrackedSlots()
+                } else {
+                    _errorMessage.value = when (response.code()) {
+                        429 -> "Refreshing too fast. Please wait a moment."
+                        502 -> "Could not reach Cheese Tracker. Please try again."
+                        else -> "Failed to refresh from Cheese Tracker."
+                    }
+                }
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to refresh from Cheese Tracker."
+                e.printStackTrace()
+            } finally {
+                _isRefreshingCheese.value = false
+                onComplete()
+            }
+        }
+    }
+
+    /** Sets (or clears, when null) the user's default Cheese ping preference. */
+    fun updateCheeseDefaultPing(ping: String?) {
+        viewModelScope.launch {
+            val previousProfile = _userProfile.value
+            _userProfile.value = previousProfile?.copy(cheese_default_ping = ping)
+            try {
+                val response = RetrofitClient.instance.updateCheeseDefaultPing(
+                    UpdateCheesePingRequest(ping)
+                )
+                if (!response.isSuccessful) {
+                    _userProfile.value = previousProfile
+                    _errorMessage.value = "Failed to save default ping."
+                }
+            } catch (e: Exception) {
+                _userProfile.value = previousProfile
+                _errorMessage.value = "Failed to save default ping."
+                e.printStackTrace()
+            }
+        }
     }
 
     // ============================================================================================

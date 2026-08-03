@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from . import Session
 from .models import User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
@@ -811,10 +811,19 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
             payload['claimed_by_ct_user_id'] = my_ct_id
             payload['discord_username'] = None if my_ct_id is not None else my_discord
             payload['availability_status'] = "claimed"
+            # Apply the user's default ping preference at claim time (mirrors CT's
+            # web UI, which seeds discord_ping from the user's default on claim).
+            # Null default leaves whatever the slot already had.
+            default_ping = getattr(user, 'cheese_default_ping', None)
+            if default_ping:
+                payload['discord_ping'] = default_ping
         else:
             payload['claimed_by_ct_user_id'] = None
             payload['discord_username'] = None
-            payload['availability_status'] = "unknown"
+            # Align with CT's web UI on unclaim: availability returns to "open"
+            # and the ping preference resets to "never".
+            payload['availability_status'] = "open"
+            payload['discord_ping'] = "never"
         
         # 5. Prepare final headers
         put_headers = base_headers.copy()
@@ -844,6 +853,249 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
 
     except Exception as e:
         logging.error(f"[CHEESE_DEBUG] Error pushing pos {ap_position}: {e}", exc_info=True)
+
+# Progression statuses that, when set, should also stamp last_checked (mirrors
+# CT's web UI: setting BK/Soft BK updates "last checked").
+_CHEESE_BK_STATUSES = {'bk', 'soft_bk'}
+
+
+def apply_cheese_slot_update(app, user_id, room_db_id, slot_id, updates):
+    """
+    Synchronously applies a partial update to a single game (slot) on Cheese
+    Tracker and splices the result back into the local cache.
+
+    `updates` is a dict that may contain any of:
+        notes (str), progression_status (str), completion_status (str),
+        discord_ping (str), touch_last_checked (bool)
+
+    Returns a result dict:
+        {'status': 'ok', 'game': <updated game dict>, 'global_ping_policy': ...}
+        {'status': 'not_connected' | 'no_tracker' | 'not_tracked' |
+                   'not_found' | 'forbidden' | 'conflict' | 'error'}
+    """
+    # === 1. PRE-FLIGHT (DB) ===
+    api_key = None
+    tracker_id = None
+    my_ct_id = None
+    my_discord_clean = None
+    with app.app_context():
+        session = Session()
+        try:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user or not user.cheese_api_key:
+                return {'status': 'not_connected'}
+
+            room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+            if not room or not room.cheese_tracker_id:
+                return {'status': 'no_tracker'}
+
+            local_slot = session.query(UserTrackedSlot).filter_by(
+                user_id=user_id, room_id=room_db_id, slot_id=slot_id
+            ).first()
+            if not local_slot:
+                return {'status': 'not_tracked'}
+
+            api_key = decrypt_api_key(user.cheese_api_key)
+            if not api_key:
+                logging.error(f"[CHEESE_SLOT] Failed to decrypt key for user {user_id}.")
+                return {'status': 'error'}
+
+            tracker_id = room.cheese_tracker_id
+            my_ct_id = user.cheese_user_id
+            my_discord_clean = user.discord_username.strip().lower() if user.discord_username else None
+        finally:
+            Session.remove()
+
+    # === 2. NETWORK PHASE (no DB session held) ===
+    base_headers = get_cheese_headers()
+    base_headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        detail_resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=base_headers, timeout=10)
+        if not detail_resp.ok:
+            logging.warning(f"[CHEESE_SLOT] Failed to fetch tracker {tracker_id}: {detail_resp.status_code}")
+            return {'status': 'error'}
+
+        details = detail_resp.json()
+        games = details.get('games', [])
+
+        game_object = None
+        for game in games:
+            if game.get('position') == slot_id:
+                game_object = game
+                break
+
+        if not game_object:
+            return {'status': 'not_found'}
+
+        # Ownership check (mirrors send_state): the current user must own the slot.
+        remote_owner_id = game_object.get('claimed_by_ct_user_id')
+        if remote_owner_id is not None:
+            is_mine = (my_ct_id is not None and remote_owner_id == my_ct_id)
+        else:
+            claim_discord = game_object.get('effective_discord_username') or game_object.get('discord_username')
+            claim_discord_clean = claim_discord.strip().lower() if claim_discord else None
+            is_mine = (claim_discord_clean is not None and my_discord_clean is not None
+                       and claim_discord_clean == my_discord_clean)
+
+        if not is_mine:
+            logging.warning(f"[CHEESE_SLOT] User {user_id} attempted to edit unowned slot {slot_id} in {tracker_id}.")
+            return {'status': 'forbidden'}
+
+        cheese_game_id = game_object.get('id')
+        if not cheese_game_id:
+            logging.error(f"[CHEESE_SLOT] Game object for pos {slot_id} has no id.")
+            return {'status': 'error'}
+
+        # Build the PUT payload from the current object, applying only the deltas.
+        payload = game_object.copy()
+        now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+        if 'notes' in updates:
+            payload['notes'] = updates['notes'] or ''
+        if 'discord_ping' in updates:
+            payload['discord_ping'] = updates['discord_ping']
+        if 'completion_status' in updates:
+            payload['completion_status'] = updates['completion_status']
+        if 'progression_status' in updates:
+            payload['progression_status'] = updates['progression_status']
+            # Setting a BK status also refreshes last_checked, matching CT's UI.
+            if updates['progression_status'] in _CHEESE_BK_STATUSES:
+                payload['last_checked'] = now_iso
+        # "Still BK": explicit request to refresh last_checked without other changes.
+        if updates.get('touch_last_checked'):
+            payload['last_checked'] = now_iso
+
+        # x-if-owner-is guard: fail (412) if the claim changed under us.
+        put_headers = base_headers.copy()
+        put_headers['x-if-owner-is'] = json.dumps({
+            "claimed_by_ct_user_id": game_object.get('claimed_by_ct_user_id'),
+            "discord_username": game_object.get('discord_username')
+        })
+
+        url = f"{CHEESE_BASE_URL}/tracker/{tracker_id}/game/{cheese_game_id}"
+        put_resp = requests.put(url, json=payload, headers=put_headers, timeout=10)
+
+        if put_resp.status_code == 412:
+            return {'status': 'conflict'}
+        if put_resp.status_code not in (200, 204):
+            logging.warning(f"[CHEESE_SLOT] PUT failed for game {cheese_game_id}: {put_resp.status_code} {put_resp.text}")
+            return {'status': 'error'}
+
+        # The response body is the authoritative updated game (CT may force-upgrade
+        # completion_status). Fall back to our payload if the body is empty (204).
+        updated_game = payload
+        try:
+            if put_resp.content:
+                body = put_resp.json()
+                if isinstance(body, dict):
+                    updated_game = body
+        except Exception:
+            updated_game = payload
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"[CHEESE_SLOT] Network error updating slot {slot_id}: {e}")
+        return {'status': 'error'}
+    except Exception as e:
+        logging.error(f"[CHEESE_SLOT] Unexpected error updating slot {slot_id}: {e}", exc_info=True)
+        return {'status': 'error'}
+
+    # === 3. DB PHASE: splice updated game into cached_cheese_json ===
+    with app.app_context():
+        session = Session()
+        try:
+            room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+            if room and room.cached_cheese_json:
+                try:
+                    cached = json.loads(room.cached_cheese_json)
+                    if isinstance(cached, dict) and isinstance(cached.get('games'), list):
+                        for idx, g in enumerate(cached['games']):
+                            if g.get('position') == slot_id:
+                                # Preserve computed fields from the cache that the
+                                # game PUT response may not include.
+                                merged = g.copy()
+                                merged.update(updated_game)
+                                cached['games'][idx] = merged
+                                updated_game = merged
+                                break
+                        room.cached_cheese_json = json.dumps(cached)
+                        session.commit()
+                except (json.JSONDecodeError, TypeError) as e:
+                    logging.warning(f"[CHEESE_SLOT] Could not splice cache for room {room_db_id}: {e}")
+                    session.rollback()
+        except Exception as e:
+            session.rollback()
+            logging.error(f"[CHEESE_SLOT] DB splice failed: {e}", exc_info=True)
+        finally:
+            Session.remove()
+
+    return {
+        'status': 'ok',
+        'game': updated_game,
+        'global_ping_policy': details.get('global_ping_policy')
+    }
+
+
+def refresh_tracker_cache(app, user_id, room_db_id):
+    """
+    On-demand refresh of a single room's Cheese Tracker cache. Performs an
+    authenticated GET of the tracker and runs the same processing the background
+    poller uses, so the local cache reflects Cheese Tracker's current state
+    immediately instead of waiting for the next ~5 minute poll cycle.
+
+    Returns {'status': 'ok'} or {'status': 'not_connected'|'no_tracker'|'error'}.
+    """
+    api_key = None
+    tracker_id = None
+    with app.app_context():
+        session = Session()
+        try:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user or not user.cheese_api_key:
+                return {'status': 'not_connected'}
+            room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+            if not room or not room.cheese_tracker_id:
+                return {'status': 'no_tracker'}
+            api_key = decrypt_api_key(user.cheese_api_key)
+            if not api_key:
+                logging.error(f"[CHEESE_REFRESH] Failed to decrypt key for user {user_id}.")
+                return {'status': 'error'}
+            tracker_id = room.cheese_tracker_id
+        finally:
+            Session.remove()
+
+    headers = get_cheese_headers()
+    headers['Authorization'] = f"Bearer {api_key}"
+    try:
+        resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=headers, timeout=10)
+        if not resp.ok:
+            logging.warning(f"[CHEESE_REFRESH] Fetch failed for {tracker_id}: {resp.status_code}")
+            return {'status': 'error'}
+        data = resp.json()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"[CHEESE_REFRESH] Network error for {tracker_id}: {e}")
+        return {'status': 'error'}
+    except Exception as e:
+        logging.error(f"[CHEESE_REFRESH] Unexpected error for {tracker_id}: {e}", exc_info=True)
+        return {'status': 'error'}
+
+    remote_updated_at = data.get('updated_at')
+    if not remote_updated_at:
+        logging.warning(f"[CHEESE_REFRESH] Tracker {tracker_id} returned no updated_at.")
+        return {'status': 'error'}
+
+    try:
+        # Reuse the poller's processing so a manual refresh behaves identically
+        # to a poll cycle (cache update + claim reconciliation).
+        from app.poller import process_cheese_update
+        with app.app_context():
+            process_cheese_update(room_db_id, data, remote_updated_at)
+    except Exception as e:
+        logging.error(f"[CHEESE_REFRESH] Processing failed for room {room_db_id}: {e}", exc_info=True)
+        return {'status': 'error'}
+
+    return {'status': 'ok'}
+
 
 def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):
     """
