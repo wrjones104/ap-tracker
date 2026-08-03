@@ -13,6 +13,7 @@ import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.HistorySyncManager
+import com.jones.aptracker.repository.SyncProgressState
 import com.jones.aptracker.repository.UserRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
