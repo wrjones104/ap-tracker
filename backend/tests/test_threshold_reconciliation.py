@@ -12,12 +12,16 @@ os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app import create_app, Session, engine
-from app.models import NotifiedItem, SlotItemCount, ThresholdGroup, ThresholdGroupItem, UserTrackedSlot, TrackedRoom, DatapackageCache, User, UserRoomSubscription
+from app.models import Base, NotifiedItem, SlotItemCount, ThresholdGroup, ThresholdGroupItem, UserTrackedSlot, TrackedRoom, DatapackageCache, User, UserRoomSubscription
 
 
 class TestThresholdReconciliation(unittest.TestCase):
     def setUp(self):
         self.app = create_app()
+        # Start from a clean schema so a leftover DB file from an interrupted
+        # prior run can't collide (e.g. UNIQUE constraint on tracked_rooms.room_id).
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
         self.session = Session()
 
     def tearDown(self):
