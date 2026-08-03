@@ -43,7 +43,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.google.accompanist.swiperefresh.SwipeRefresh
+import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.network.ChatMessage
+import com.jones.aptracker.network.CheeseSlotState
 import com.jones.aptracker.network.ConnectionStatus
 import com.jones.aptracker.network.RoomDatapackage
 import com.jones.aptracker.network.TrackedSlotDetail
@@ -123,7 +126,12 @@ fun SlotDetailScreen(
 
     LaunchedEffect(roomDbId, slotId) {
         userViewModel.fetchThresholdGroups(roomDbId, slotId)
+        // Pull the latest tracked-slot data (incl. Cheese state) whenever this
+        // screen opens, so it isn't stale from the last time the Slots list loaded.
+        userViewModel.fetchTrackedSlots()
     }
+
+    val isRefreshingCheese by userViewModel.isRefreshingCheese.collectAsState()
 
     val thresholdGroups by userViewModel.thresholdGroups.collectAsState()
 
@@ -162,10 +170,19 @@ fun SlotDetailScreen(
             },
             containerColor = MaterialTheme.colorScheme.background
         ) { padding ->
+            SwipeRefresh(
+                state = rememberSwipeRefreshState(isRefreshing = isRefreshingCheese),
+                onRefresh = {
+                    // If this slot is synced with Cheese Tracker, pull its live state;
+                    // otherwise just reload tracked-slot data.
+                    if (slot.cheese != null) userViewModel.refreshCheeseFromServer(roomDbId)
+                    else userViewModel.fetchTrackedSlots()
+                },
+                modifier = Modifier.padding(padding)
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
                     .imePadding()
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp)
@@ -222,6 +239,24 @@ fun SlotDetailScreen(
                         title = "Notification Settings",
                         subtitle = "Customize how you are notified for this slot",
                         onClick = { showSettingsSheet = true }
+                    )
+                }
+
+                // 2b. CHEESE TRACKER SECTION (only when synced with Cheese Tracker)
+                val cheeseState = slot.cheese
+                if (cheeseState != null) {
+                    val isSavingCheese by userViewModel.isSavingCheeseSlot.collectAsState()
+                    Spacer(Modifier.height(24.dp))
+                    CheeseSlotCard(
+                        cheese = cheeseState,
+                        isSaving = isSavingCheese,
+                        isRefreshing = isRefreshingCheese,
+                        onRefresh = { userViewModel.refreshCheeseFromServer(roomDbId) },
+                        onProgressionChange = { userViewModel.updateCheeseProgression(roomDbId, slotId, it) },
+                        onCompletionChange = { userViewModel.updateCheeseCompletion(roomDbId, slotId, it) },
+                        onPingChange = { userViewModel.updateCheesePing(roomDbId, slotId, it) },
+                        onStillBk = { userViewModel.stillBk(roomDbId, slotId) },
+                        onSaveNotes = { userViewModel.updateCheeseNotes(roomDbId, slotId, it) }
                     )
                 }
 
@@ -480,6 +515,7 @@ fun SlotDetailScreen(
                 }
                 Spacer(Modifier.height(40.dp))
             }
+            }
         }
     }
 
@@ -633,6 +669,319 @@ fun ActionCard(icon: ImageVector, title: String, subtitle: String, onClick: () -
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
             Icon(Icons.Default.ChevronRight, null, tint = Color.Gray)
+        }
+    }
+}
+
+// --- Cheese Tracker slot editing ---
+
+data class CheeseStatusOption(val id: String, val label: String, val color: Color)
+
+val CHEESE_PROGRESSION_OPTIONS = listOf(
+    CheeseStatusOption("unknown", "Unknown", Color.Gray),
+    CheeseStatusOption("unblocked", "Unblocked", Color(0xFF90CAF9)),
+    CheeseStatusOption("bk", "BK", Color(0xFFCF6679)),
+    CheeseStatusOption("soft_bk", "Soft BK", Color(0xFFFFB74D)),
+    CheeseStatusOption("go", "Go Mode", Color(0xFF4CAF50))
+)
+
+val CHEESE_COMPLETION_OPTIONS = listOf(
+    CheeseStatusOption("incomplete", "Incomplete", Color.Gray),
+    CheeseStatusOption("all_checks", "All Checks", Color(0xFF4FC3F7)),
+    CheeseStatusOption("goal", "Goal", Color(0xFF4FC3F7)),
+    CheeseStatusOption("done", "Done", Color(0xFF4CAF50)),
+    CheeseStatusOption("released", "Forfeit", Color.Gray)
+)
+
+val CHEESE_PING_OPTIONS = listOf(
+    CheeseStatusOption("liberally", "Liberally", Color(0xFF4CAF50)),
+    CheeseStatusOption("sparingly", "Sparingly", Color(0xFFFFB74D)),
+    CheeseStatusOption("hints", "Hints", Color(0xFFFFB74D)),
+    CheeseStatusOption("see_notes", "See Notes", Color(0xFF4FC3F7)),
+    CheeseStatusOption("never", "Never", Color(0xFFCF6679))
+)
+
+private fun cheeseOptionLabel(options: List<CheeseStatusOption>, id: String?): String =
+    options.find { it.id == id }?.label ?: (id ?: "—")
+
+private val CHEESE_BK_IDS = setOf("bk", "soft_bk")
+private val CHEESE_COMPLETE_IDS = setOf("done", "released")
+
+@Composable
+fun CheeseSlotCard(
+    cheese: CheeseSlotState,
+    isSaving: Boolean,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    onProgressionChange: (String) -> Unit,
+    onCompletionChange: (String) -> Unit,
+    onPingChange: (String) -> Unit,
+    onStillBk: () -> Unit,
+    onSaveNotes: (String) -> Unit
+) {
+    val canEdit = cheese.is_mine
+    var showForfeitConfirm by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            // Card header: title + refresh-this-card control
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Cheese Tracker",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                IconButton(onClick = onRefresh, enabled = !isRefreshing && !isSaving) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Refresh from Cheese Tracker",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            if (!canEdit) {
+                Text(
+                    "This slot is claimed by someone else on Cheese Tracker, so it's view-only here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+
+            // --- Status selectors ---
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                CheeseDropdownField(
+                    modifier = Modifier.weight(1f),
+                    label = "STATUS",
+                    selectedId = cheese.progression_status,
+                    options = CHEESE_PROGRESSION_OPTIONS,
+                    enabled = canEdit && !isSaving,
+                    onSelect = { onProgressionChange(it) }
+                )
+                CheeseDropdownField(
+                    modifier = Modifier.weight(1f),
+                    label = "COMPLETION",
+                    selectedId = cheese.completion_status,
+                    options = CHEESE_COMPLETION_OPTIONS,
+                    enabled = canEdit && !isSaving,
+                    onSelect = { selected ->
+                        if (selected == "released") showForfeitConfirm = true
+                        else onCompletionChange(selected)
+                    }
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // --- Last checked + Still BK ---
+            val isBk = cheese.progression_status in CHEESE_BK_IDS
+            val isCompleted = cheese.completion_status in CHEESE_COMPLETE_IDS
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("LAST CHECKED", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+                    Text(
+                        formatTimestamp(cheese.last_checked ?: cheese.last_activity),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                if (canEdit && isBk && !isCompleted) {
+                    OutlinedButton(
+                        onClick = onStillBk,
+                        enabled = !isSaving,
+                        shape = RoundedCornerShape(24.dp)
+                    ) {
+                        Text("Still BK")
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // --- Ping preference ---
+            if (cheese.global_ping_policy != null) {
+                Text("PING PREFERENCE", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+                Text(
+                    cheeseOptionLabel(CHEESE_PING_OPTIONS, cheese.discord_ping),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    "This tracker uses a global ping policy, so per-slot ping is set by the tracker owner.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            } else {
+                CheeseDropdownField(
+                    modifier = Modifier.fillMaxWidth(),
+                    label = "PING PREFERENCE",
+                    selectedId = cheese.discord_ping,
+                    options = CHEESE_PING_OPTIONS,
+                    enabled = canEdit && !isSaving,
+                    onSelect = { onPingChange(it) }
+                )
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // --- Notes ---
+            Text("NOTES", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            var notesDraft by remember(cheese.notes) { mutableStateOf(cheese.notes) }
+            val notesChanged = notesDraft != cheese.notes
+            OutlinedTextField(
+                value = notesDraft,
+                onValueChange = { if (it.length <= 5000) notesDraft = it },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = canEdit && !isSaving,
+                placeholder = { Text("Add notes for this slot...") },
+                minLines = 3,
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            )
+            if (canEdit && notesChanged) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { notesDraft = cheese.notes }, enabled = !isSaving) {
+                        Text("Cancel")
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = { onSaveNotes(notesDraft) }, enabled = !isSaving) {
+                        Text("Save Notes")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showForfeitConfirm) {
+        AlertDialog(
+            onDismissRequest = { showForfeitConfirm = false },
+            title = { Text("Mark as Forfeit?") },
+            text = {
+                Text(
+                    "Forfeit is permanent on Cheese Tracker — once set, it cannot be changed back through the app or the website. Continue?"
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showForfeitConfirm = false
+                        onCompletionChange("released")
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Forfeit")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showForfeitConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CheeseDropdownField(
+    modifier: Modifier = Modifier,
+    label: String,
+    selectedId: String?,
+    options: List<CheeseStatusOption>,
+    enabled: Boolean,
+    onSelect: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = options.find { it.id == selectedId }
+
+    Column(modifier = modifier) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Box {
+            Surface(
+                onClick = { if (enabled) expanded = true },
+                enabled = enabled,
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(selected?.color ?: Color.Gray)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        selected?.label ?: (selectedId ?: "—"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        null,
+                        tint = Color.Gray,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(option.color)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(option.label)
+                            }
+                        },
+                        onClick = {
+                            expanded = false
+                            if (option.id != selectedId) onSelect(option.id)
+                        }
+                    )
+                }
+            }
         }
     }
 }

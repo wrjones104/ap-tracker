@@ -13,6 +13,10 @@ from app.routes.common import log_api_call, token_required, handle_db_errors, fo
 
 user_bp = Blueprint('user_routes', __name__)
 
+# Valid Cheese Tracker per-user ping preferences (wire values from CT's
+# ping_preference enum). Used to validate cheese_default_ping updates.
+VALID_CHEESE_PING_PREFERENCES = {'liberally', 'sparingly', 'hints', 'see_notes', 'never'}
+
 @user_bp.route('/devices', methods=['POST'])
 @handle_db_errors
 @log_api_call
@@ -129,6 +133,7 @@ def get_current_user(current_user):
             'suppress_self_found_default': current_user.suppress_self_found_default,
             'suppress_connected_default': current_user.suppress_connected_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
+            'cheese_default_ping': current_user.cheese_default_ping,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
             'ui_show_progression_default': current_user.ui_show_progression_default,
@@ -169,6 +174,7 @@ def get_current_user(current_user):
             'suppress_self_found_default': current_user.suppress_self_found_default,
             'suppress_connected_default': current_user.suppress_connected_default,
             'is_cheese_connected': current_user.cheese_api_key is not None,
+            'cheese_default_ping': current_user.cheese_default_ping,
             'ui_show_finished_default': current_user.ui_show_finished_default,
             'ui_show_found_hints_default': current_user.ui_show_found_hints_default,
             'ui_show_progression_default': current_user.ui_show_progression_default,
@@ -230,6 +236,15 @@ def update_user_preferences(current_user):
             setattr(user, 'suppress_self_found_default', bool(data['suppress_self_found']))
         if 'suppress_connected' in data:
             setattr(user, 'suppress_connected_default', bool(data['suppress_connected']))
+        if 'cheese_default_ping' in data:
+            raw = data['cheese_default_ping']
+            # Empty string / null clears the default (revert to leaving CT's value alone).
+            if raw is None or (isinstance(raw, str) and raw.strip() == ''):
+                user.cheese_default_ping = None
+            elif isinstance(raw, str) and raw.strip().lower() in VALID_CHEESE_PING_PREFERENCES:
+                user.cheese_default_ping = raw.strip().lower()
+            else:
+                return jsonify({'error': 'Invalid cheese_default_ping value.'}), 400
         session.commit()
         return jsonify({'message': 'Preferences updated successfully'}), 200
     except Exception as e:

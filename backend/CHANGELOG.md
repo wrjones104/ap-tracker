@@ -5,6 +5,31 @@ All notable changes to the **Archipelago Alerts Backend Server & API** will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.22] - 2026-08-03
+
+> **Discord Copy-Paste Format:**
+> ```markdown
+> **Archipelago Alerts Backend v1.6.22 Released!**
+> 
+> **New: Cheese Tracker Notes & Statuses**
+> • **Per-Slot State API**: `GET /api/user/tracked_slots` now includes a `cheese` object per slot (notes, progression/completion status, ping, last checked, ownership).
+> • **Slot Editing**: New `PUT /rooms/<room_db_id>/slots/<slot_id>/cheese` to edit notes/status/ping and refresh "Last Checked" ("Still BK"), with ownership checks and optimistic-conflict handling.
+> • **Default Ping Preference**: `cheese_default_ping` is now applied at claim time, fixing the ping preference always defaulting to "Never".
+> ```
+
+### Added
+- **Cheese Slot State (read)**: `get_user_tracked_slots` in `slots_routes.py` parses the room's cached Cheese Tracker data and attaches a per-slot `cheese` object (`game_id`, `notes`, `progression_status`, `completion_status`, `discord_ping`, `last_checked`, `is_mine`, `global_ping_policy`) for Cheese-connected users.
+- **Cheese Slot State (write)**: New synchronous `PUT /rooms/<room_db_id>/slots/<slot_id>/cheese` endpoint. Validates enum values, re-fetches the tracker, enforces ownership, applies partial updates, stamps `last_checked` for BK/Soft BK and "Still BK", sends `x-if-owner-is` as a conflict guard, and splices the authoritative response back into the room cache.
+- **`User.cheese_default_ping`**: New nullable column (Alembic `a1c7e9f4b2d0`) exposed on the user profile and settable via `PUT /users/me/preferences`.
+
+### Changed
+- **Claim-Time Ping Default**: `send_state` in `api_cheese.py` now applies the user's `cheese_default_ping` when claiming a slot, and aligns unclaim behavior with Cheese Tracker's web UI (availability → `open`, ping → `never`).
+
+### Fixed
+- **Ping Preference Stuck on "Never"**: Newly claimed slots now honor the user's chosen default ping preference instead of always defaulting to "Never".
+
+---
+
 ## [1.6.21] - 2026-08-03
 
 > **Discord Copy-Paste Format:**

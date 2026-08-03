@@ -71,6 +71,19 @@ interface ApiService {
     @GET("users/me/tracked-slots")
     suspend fun getUserTrackedSlots(): List<RoomWithTrackedSlots>
 
+    @PUT("rooms/{id}/slots/{slot_id}/cheese")
+    suspend fun updateSlotCheese(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int,
+        @Body request: Map<String, @JvmSuppressWildcards Any>
+    ): Response<UpdateCheeseSlotResponse>
+
+    @POST("rooms/{id}/cheese/refresh")
+    suspend fun refreshRoomCheese(@Path("id") roomId: Int): Response<Unit>
+
+    @PUT("users/me/preferences")
+    suspend fun updateCheeseDefaultPing(@Body request: UpdateCheesePingRequest): Response<Unit>
+
     @GET("rooms/{id}/slots/{slot_id}/threshold-groups")
     suspend fun getThresholdGroups(
         @Path("id") roomId: Int,
@@ -332,6 +345,7 @@ data class UserProfile(
     val ui_show_filler_default: Boolean = false,
     val ui_show_trap_default: Boolean = false,
     val is_cheese_connected: Boolean = false,
+    val cheese_default_ping: String? = null,
     val global_snooze_until: String? = null,
     val is_syncing_cheese: Boolean = false
 )
@@ -404,7 +418,34 @@ data class TrackedSlotDetail(
     val notify_finished: Boolean?,
     val use_condensed_messages: Boolean?,
     val snooze_until: String? = null,
-    val suppress_connected: Boolean?
+    val suppress_connected: Boolean?,
+    val cheese: CheeseSlotState? = null
+)
+
+/**
+ * Per-slot Cheese Tracker state. Present only when the user is connected to
+ * Cheese Tracker and the room is linked to a CT tracker. Null otherwise, which
+ * the UI uses to decide whether to show the Cheese Tracker section at all.
+ */
+data class CheeseSlotState(
+    val game_id: Int?,
+    val notes: String = "",
+    val progression_status: String? = null,
+    val completion_status: String? = null,
+    val discord_ping: String? = null,
+    val last_checked: String? = null,
+    val last_activity: String? = null,
+    val is_mine: Boolean = false,
+    val global_ping_policy: String? = null
+)
+
+data class UpdateCheeseSlotResponse(
+    val message: String? = null,
+    val cheese: CheeseSlotState? = null
+)
+
+data class UpdateCheesePingRequest(
+    val cheese_default_ping: String?
 )
 
 data class HintHistoryResponse(

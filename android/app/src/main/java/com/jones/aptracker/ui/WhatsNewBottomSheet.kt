@@ -66,9 +66,9 @@ fun WhatsNewBottomSheet(
 
 
             val highlights = releaseInfo?.highlights ?: listOf(
-                "Real-Time History Sync Progress: Track history sync status live with a dynamic percentage bar (X% / 100%) and clear progress indicators.",
-                "Background History Syncing: History syncing now continues seamlessly via WorkManager and ApplicationScope when screen is locked or app is minimized.",
-                "Instant Ignore & Whitelist Updates: Mute rules and whitelists update instantly when returning to the history screen without needing an app restart."
+                "Cheese Tracker Notes & Status: View and edit your Cheese Tracker notes and status (Unknown, Unblocked, BK, Soft BK, Go Mode) right from a slot's detail screen.",
+                "\"Still BK\" Button: Keep your BK/Soft BK status while refreshing your Last Checked time, matching the Cheese Tracker web feature.",
+                "Ping Preferences: Set per-slot ping preferences, plus a default ping applied to newly claimed slots from the Profile screen."
             )
 
             // Highlights

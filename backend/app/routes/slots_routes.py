@@ -15,6 +15,47 @@ from app.routes.common import log_api_call, token_required, handle_db_errors, fo
 
 slots_bp = Blueprint('slots_routes', __name__)
 
+# Valid Cheese Tracker enum wire values (from CT's db/model.rs). Used to build
+# and validate the per-slot Cheese state.
+VALID_CHEESE_PROGRESSION = {'unknown', 'unblocked', 'bk', 'soft_bk', 'go'}
+VALID_CHEESE_COMPLETION = {'incomplete', 'all_checks', 'goal', 'done', 'released'}
+VALID_CHEESE_PING = {'liberally', 'sparingly', 'hints', 'see_notes', 'never'}
+# Progression statuses that represent "beatable but blocked" and, per CT's web
+# UI, stamp last_checked when set (enabling the "Still BK" behavior).
+CHEESE_BK_STATUSES = {'bk', 'soft_bk'}
+
+
+def game_is_owned_by(game, cheese_user_id, discord_username_clean):
+    """
+    Determines whether a Cheese game object is claimed by the given user.
+    Mirrors the ownership logic in api_cheese.send_state: prefer the
+    authenticated ct_user_id, fall back to an unauthenticated discord-name match.
+    """
+    remote_owner_id = game.get('claimed_by_ct_user_id')
+    if remote_owner_id is not None:
+        return cheese_user_id is not None and remote_owner_id == cheese_user_id
+
+    claim_discord = game.get('effective_discord_username') or game.get('discord_username')
+    claim_discord_clean = claim_discord.strip().lower() if claim_discord else None
+    if claim_discord_clean is None:
+        return False
+    return discord_username_clean is not None and claim_discord_clean == discord_username_clean
+
+
+def build_cheese_slot_state(game, global_ping_policy, cheese_user_id, discord_username_clean):
+    """Builds the per-slot Cheese sub-object attached to a tracked slot."""
+    return {
+        'game_id': game.get('id'),
+        'notes': game.get('notes') or '',
+        'progression_status': game.get('progression_status'),
+        'completion_status': game.get('completion_status'),
+        'discord_ping': game.get('discord_ping'),
+        'last_checked': game.get('last_checked'),
+        'last_activity': game.get('last_activity'),
+        'is_mine': game_is_owned_by(game, cheese_user_id, discord_username_clean),
+        'global_ping_policy': global_ping_policy,
+    }
+
 @slots_bp.route('/rooms/<int:room_db_id>/slots', methods=['PUT'])
 @handle_db_errors
 @log_api_call
@@ -129,6 +170,140 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
     finally:
         Session.remove()
 
+# Simple in-process per-user throttle for Cheese slot writes. Each write costs a
+# GET + PUT against Cheese Tracker, so we cap how often a user can fire them.
+_cheese_write_last = {}
+_CHEESE_WRITE_MIN_INTERVAL = timedelta(seconds=2)
+
+# Separate throttle for on-demand tracker refreshes (one CT GET each).
+_cheese_refresh_last = {}
+_CHEESE_REFRESH_MIN_INTERVAL = timedelta(seconds=3)
+
+
+@slots_bp.route('/rooms/<int:room_db_id>/cheese/refresh', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def refresh_room_cheese(current_user, room_db_id):
+    """
+    On-demand refresh of a room's Cheese Tracker cache, bypassing the ~5 minute
+    background poll so a user can pull the current state immediately.
+    """
+    if not current_user.cheese_api_key:
+        return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
+
+    session = Session()
+    sub = session.query(UserRoomSubscription).filter_by(
+        user_id=current_user.id, room_id=room_db_id
+    ).first()
+    if not sub:
+        return jsonify({'error': 'You are not subscribed to this room.'}), 403
+
+    now = datetime.utcnow()
+    last = _cheese_refresh_last.get(current_user.id)
+    if last is not None and (now - last) < _CHEESE_REFRESH_MIN_INTERVAL:
+        return jsonify({'error': 'Refreshing too fast. Please wait a moment.'}), 429
+    _cheese_refresh_last[current_user.id] = now
+
+    from app.api_cheese import refresh_tracker_cache
+    app_context = current_app._get_current_object()
+    result = refresh_tracker_cache(app_context, current_user.id, room_db_id)
+
+    status = result.get('status')
+    if status == 'ok':
+        return jsonify({'message': 'Refreshed from Cheese Tracker.'}), 200
+
+    error_map = {
+        'not_connected': ('Not connected to Cheese Tracker.', 400),
+        'no_tracker': ('This room is not linked to Cheese Tracker.', 400),
+        'error': ('Could not reach Cheese Tracker. Please try again.', 502),
+    }
+    message, code = error_map.get(status, ('Could not refresh.', 500))
+    return jsonify({'error': message}), code
+
+
+@slots_bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/cheese', methods=['PUT'])
+@handle_db_errors
+@log_api_call
+@token_required
+def update_slot_cheese(current_user, room_db_id, slot_id):
+    """
+    Updates a single slot's Cheese Tracker state (notes / status / ping) and,
+    optionally, refreshes its "last checked" timestamp ("Still BK").
+    Runs synchronously because the user is waiting on the result.
+    """
+    if not current_user.cheese_api_key:
+        return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
+
+    data = request.json or {}
+
+    # Build a validated partial-update dict. Only include keys the client sent.
+    updates = {}
+    if 'notes' in data:
+        notes = data['notes']
+        if notes is None:
+            notes = ''
+        if not isinstance(notes, str):
+            return jsonify({'error': 'notes must be a string.'}), 400
+        if len(notes) > 5000:
+            return jsonify({'error': 'notes too long (max 5000 characters).'}), 400
+        updates['notes'] = notes
+    if 'progression_status' in data:
+        val = data['progression_status']
+        if val not in VALID_CHEESE_PROGRESSION:
+            return jsonify({'error': 'Invalid progression_status.'}), 400
+        updates['progression_status'] = val
+    if 'completion_status' in data:
+        val = data['completion_status']
+        if val not in VALID_CHEESE_COMPLETION:
+            return jsonify({'error': 'Invalid completion_status.'}), 400
+        updates['completion_status'] = val
+    if 'discord_ping' in data:
+        val = data['discord_ping']
+        if val not in VALID_CHEESE_PING:
+            return jsonify({'error': 'Invalid discord_ping.'}), 400
+        updates['discord_ping'] = val
+    if data.get('touch_last_checked'):
+        updates['touch_last_checked'] = True
+
+    if not updates:
+        return jsonify({'error': 'No valid fields to update.'}), 400
+
+    # Throttle.
+    now = datetime.utcnow()
+    last = _cheese_write_last.get(current_user.id)
+    if last is not None and (now - last) < _CHEESE_WRITE_MIN_INTERVAL:
+        return jsonify({'error': 'Too many updates. Please slow down.'}), 429
+    _cheese_write_last[current_user.id] = now
+
+    from app.api_cheese import apply_cheese_slot_update
+    app_context = current_app._get_current_object()
+    result = apply_cheese_slot_update(app_context, current_user.id, room_db_id, slot_id, updates)
+
+    status = result.get('status')
+    if status == 'ok':
+        my_discord_clean = current_user.discord_username.strip().lower() if current_user.discord_username else None
+        cheese_state = build_cheese_slot_state(
+            result['game'],
+            result.get('global_ping_policy'),
+            current_user.cheese_user_id,
+            my_discord_clean
+        )
+        return jsonify({'message': 'Slot updated.', 'cheese': cheese_state}), 200
+
+    error_map = {
+        'not_connected': ('Not connected to Cheese Tracker.', 400),
+        'no_tracker': ('This room is not linked to Cheese Tracker.', 400),
+        'not_tracked': ('You are not tracking this slot.', 403),
+        'not_found': ('Slot not found on Cheese Tracker.', 404),
+        'forbidden': ('This slot is claimed by someone else on Cheese Tracker.', 403),
+        'conflict': ('This slot changed on Cheese Tracker. Please refresh and try again.', 409),
+        'error': ('Could not reach Cheese Tracker. Please try again.', 502),
+    }
+    message, code = error_map.get(status, ('Could not update slot.', 500))
+    return jsonify({'error': message}), code
+
+
 @slots_bp.route('/users/me/tracked-slots', methods=['GET'])
 @handle_db_errors
 @log_api_call
@@ -184,6 +359,27 @@ def get_user_tracked_slots(current_user):
 
             players_map = {p['slot_id']: p for p in players_json}
 
+            # Parse the room's cached Cheese Tracker data (if any) once per room,
+            # indexed by slot position, so we can attach per-slot Cheese state.
+            # Only build this for users who have connected a Cheese API key.
+            cheese_games_map = {}
+            cheese_global_ping_policy = None
+            room_has_cheese = bool(current_user.cheese_api_key) and bool(room_data.cheese_tracker_id)
+            if room_has_cheese and room_data.cached_cheese_json:
+                try:
+                    cheese_data = json.loads(room_data.cached_cheese_json)
+                    if isinstance(cheese_data, dict):
+                        cheese_global_ping_policy = cheese_data.get('global_ping_policy')
+                        for g in cheese_data.get('games', []):
+                            pos = g.get('position')
+                            if pos is not None:
+                                cheese_games_map[pos] = g
+                except (json.JSONDecodeError, TypeError):
+                    cheese_games_map = {}
+
+            my_cheese_user_id = current_user.cheese_user_id
+            my_discord_clean = current_user.discord_username.strip().lower() if current_user.discord_username else None
+
             tracked_slots_list = []
             for slot in sorted(sub.tracked_slots, key=lambda s: s.slot_id):
                 p_obj = players_map.get(slot.slot_id)
@@ -194,6 +390,16 @@ def get_user_tracked_slots(current_user):
 
                 slot_last_activity = last_activity_map.get((room_data.room_id, slot.slot_id))
                 slot_item_count = item_count_map.get((room_data.room_id, slot.slot_id), 0)
+
+                cheese_state = None
+                cheese_game = cheese_games_map.get(slot.slot_id)
+                if cheese_game is not None:
+                    cheese_state = build_cheese_slot_state(
+                        cheese_game,
+                        cheese_global_ping_policy,
+                        my_cheese_user_id,
+                        my_discord_clean
+                    )
 
                 tracked_slots_list.append({
                     'slot_id': slot.slot_id,
@@ -217,7 +423,8 @@ def get_user_tracked_slots(current_user):
                     'remove_emojis': slot.remove_emojis,
                     'suppress_self_found': slot.suppress_self_found,
                     'suppress_connected': slot.suppress_connected,
-                    'snooze_until': format_iso_z(slot.snooze_until)
+                    'snooze_until': format_iso_z(slot.snooze_until),
+                    'cheese': cheese_state
                 })
 
             response_data.append({

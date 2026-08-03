@@ -23,6 +23,10 @@ class User(Base):
     cheese_last_sync = Column(DateTime, nullable=True)
     is_syncing_cheese = Column(Boolean, nullable=False, default=False, server_default='f')
     cheese_sync_started_at = Column(DateTime, nullable=True)
+    # Default Cheese Tracker ping preference applied at claim time. Null = leave
+    # whatever value the game already has on Cheese untouched. One of:
+    # liberally | sparingly | hints | see_notes | never
+    cheese_default_ping = Column(String, nullable=True)
     is_guest = Column(Boolean, nullable=False, default=True, server_default='t')
     guest_uuid = Column(String, nullable=True, unique=True, index=True)
     subscriptions = relationship("UserRoomSubscription", back_populates="user", cascade="all, delete-orphan")
