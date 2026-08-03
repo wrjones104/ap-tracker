@@ -5,6 +5,28 @@ All notable changes to the **Archipelago Alerts Android Application** will be do
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.21] - 2026-08-03
+
+> **Discord Copy-Paste Format:**
+> ```markdown
+> **Archipelago Alerts Android App v1.6.21 Released!**
+> 
+> **New Features & Enhancements**
+> • **Real-Time History Progress**: Track history sync status live with a dynamic percentage bar (`X% / 100%`) and clear progress indicators.
+> • **Background History Syncing**: History syncing now continues seamlessly via WorkManager and ApplicationScope when screen is locked or app is minimized.
+> • **Instant Ignore & Whitelist Updates**: Mute rules and whitelists update instantly when returning to the history screen without needing an app restart.
+> 
+> Update now on Google Play or download the latest APK from GitHub Releases!
+> ```
+
+### Added
+- **Real-Time History Sync Progress**: Added percentage calculation and `LinearProgressIndicator` banner showing exact item counts (`Syncing history... 45% (1,200 / 2,668 items)`).
+- **WorkManager & ApplicationScope Execution**: Delegated sync execution to `HistorySyncManager` and Android `WorkManager` so sync jobs complete cleanly even when phone screen locks or app is backgrounded.
+
+### Changed
+- **Pure Delta Synchronization**: Removed full-feed re-downloads on pull-to-refresh; sync relies strictly on slot watermarks for fast ~100ms updates.
+- **Shared Ignore/Whitelist State**: Shared `UserViewModel` across `IgnoreListScreen` and `WhitelistScreen` navigation routes to update rules instantly on history screen re-entry.
+
 ---
 
 ## [1.6.19] - 2026-07-31
