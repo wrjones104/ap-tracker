@@ -104,4 +104,6 @@ The system consists of two main parts:
 
 ## LLM Maintenance Directive
 
-**Any material change to the codebase must be reflected in this file.** If you add, remove, or significantly modify models, API endpoints, notification logic, architectural patterns, or "gotchas," update the relevant section(s) of `LLM.md` accordingly. This file is the primary onboarding context for all future LLM sessions and must stay accurate.
+1. **Keep LLM.md Updated:** Any material change to the codebase must be reflected in this file. If you add, remove, or significantly modify models, API endpoints, notification logic, architectural patterns, or "gotchas," update the relevant section(s) of `LLM.md` accordingly. This file is the primary onboarding context for all future LLM sessions and must stay accurate.
+2. **Backwards Compatibility Warnings:** Always verify and explicitly notify the user whenever any proposed backend, API schema, or database change is NOT 100% backwards-compatible with previous Android app versions.
+
