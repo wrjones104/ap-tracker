@@ -187,6 +187,10 @@ fun HistoryContent(
         if (historyViewModel.itemHistory.value.isEmpty()) {
             historyViewModel.refreshAllHistory()
         }
+        // Re-fetch ignore/whitelist on every entry so changes from IgnoreListScreen
+        // and WhitelistScreen are immediately reflected without needing an app restart.
+        userViewModel.fetchIgnoreList()
+        userViewModel.fetchWhitelist()
     }
 
     LaunchedEffect(selectedItem) {
