@@ -66,9 +66,9 @@ fun WhatsNewBottomSheet(
 
 
             val highlights = releaseInfo?.highlights ?: listOf(
-                "Push Notification Whitelist: Always get alerts for items you choose, regardless of default settings",
-                "Instant History Sync: Cursor-based history watermarks for fast, seamless history refresh",
-                "Archipelago Item Index Tracking: Guarantees 100% item accuracy for received items"
+                "Real-Time History Sync Progress: Track history sync status live with a dynamic percentage bar (X% / 100%) and clear progress indicators.",
+                "Background History Syncing: History syncing now continues seamlessly via WorkManager and ApplicationScope when screen is locked or app is minimized.",
+                "Instant Ignore & Whitelist Updates: Mute rules and whitelists update instantly when returning to the history screen without needing an app restart."
             )
 
             // Highlights
