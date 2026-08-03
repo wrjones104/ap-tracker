@@ -152,11 +152,13 @@ def get_user_tracked_slots(current_user):
                 room_db_to_uuid[sub.room_id] = sub.room.room_id
 
         last_activity_map = {}
+        item_count_map = {}
         if all_room_uuids:
             activity_rows = session.query(
                 NotifiedItem.room_id,
                 NotifiedItem.receiving_slot_id,
-                sa_func.max(NotifiedItem.timestamp).label('last_ts')
+                sa_func.max(NotifiedItem.timestamp).label('last_ts'),
+                sa_func.count(NotifiedItem.id).label('item_count')
             ).filter(
                 NotifiedItem.room_id.in_(all_room_uuids)
             ).group_by(
@@ -165,6 +167,7 @@ def get_user_tracked_slots(current_user):
             ).all()
             for row in activity_rows:
                 last_activity_map[(row.room_id, row.receiving_slot_id)] = row.last_ts
+                item_count_map[(row.room_id, row.receiving_slot_id)] = row.item_count
 
         response_data = []
         for sub in subscriptions:
@@ -190,6 +193,7 @@ def get_user_tracked_slots(current_user):
                 p_game = p_obj.get('game') if p_obj else None
 
                 slot_last_activity = last_activity_map.get((room_data.room_id, slot.slot_id))
+                slot_item_count = item_count_map.get((room_data.room_id, slot.slot_id), 0)
 
                 tracked_slots_list.append({
                     'slot_id': slot.slot_id,
@@ -198,6 +202,7 @@ def get_user_tracked_slots(current_user):
                     'is_finished': p_finished,
                     'game': p_game,
                     'last_activity': format_iso_z(slot_last_activity),
+                    'item_count': slot_item_count,
                     'needs_backfill': slot.needs_backfill,
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,

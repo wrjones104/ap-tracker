@@ -170,12 +170,14 @@ fun MainNavHost(
 
         composable("ignore_list") {
             IgnoreListScreen(
+                userViewModel = userViewModel,
                 onBackClick = { navController.popBackStack() }
             )
         }
 
         composable("whitelist") {
             WhitelistScreen(
+                userViewModel = userViewModel,
                 onBackClick = { navController.popBackStack() }
             )
         }

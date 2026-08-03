@@ -12,6 +12,8 @@ import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.repository.HistoryRepository
+import com.jones.aptracker.repository.HistorySyncManager
+import com.jones.aptracker.repository.SyncProgressState
 import com.jones.aptracker.repository.UserRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -41,6 +43,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
     val itemHistory: StateFlow<List<HistoryItem>> = _itemHistory
+
+    val syncProgress: StateFlow<SyncProgressState> = HistorySyncManager.syncProgress
 
     private val _trackedPlayers = MutableStateFlow<List<TrackedPlayer>>(emptyList())
 
@@ -257,12 +261,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     init {
-        val db = AppDatabase.getInstance(application)
-        val historyDao = db.historyDao()
-        val hintDao = db.hintDao()
-
         val apiService = RetrofitClient.instance
-        repository = HistoryRepository(apiService, historyDao, hintDao, application)
+        repository = HistoryRepository.getInstance(application)
         userRepository = UserRepository(apiService)
         fetchUserPreferences()
     }
@@ -527,22 +527,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     isLoading.value = false
                 }
 
-                // --- STEP 3: Background server feed fetch & delta sync ---
-                try {
-                    val initialFeed = repository.fetchItemHistoryFeed(currentRoomId, PAGE_SIZE, 0)
-                    if (initialFeed.isNotEmpty()) {
-                        reloadHistory(showSpinner = false)
-                    }
-                    repository.refreshHintHistory(currentRoomId)
-
-                    repository.syncHistoryBatch(trackedRooms, priorityRoomId = currentRoomId) {
-                        reloadHistory(showSpinner = false)
-                    }
+                // --- STEP 3: Delegate sync execution to HistorySyncManager (ApplicationScope & WorkManager) ---
+                HistorySyncManager.triggerSync(getApplication(), currentRoomId) {
                     reloadHistory(showSpinner = false)
-                } catch (e: Exception) {
-                    Log.e("HistoryViewModel", "Background sync/feed fetch failed", e)
-                } finally {
-                    isLoading.value = false
                 }
 
             } catch (e: Exception) {

@@ -94,7 +94,7 @@ class HistoryRepository(
     suspend fun syncHistoryBatch(
         trackedRooms: List<com.jones.aptracker.network.RoomWithTrackedSlots>,
         priorityRoomId: Int? = null,
-        onBatchReceived: (suspend () -> Unit)? = null
+        onBatchReceived: (suspend (itemsFetchedThisBatch: Int, loopCount: Int, hasMore: Boolean) -> Unit)? = null
     ) {
         Log.d("HISTORY_DEBUG", "Starting batch history sync (priority room: ${priorityRoomId ?: "None"})...")
         
@@ -139,9 +139,9 @@ class HistoryRepository(
 
                     Log.d("HISTORY_DEBUG", "Sync Loop $loopCount: ${response.new_items.size} new items, ${response.updated_hints.size} updated hints.")
 
-                    if (response.new_items.isEmpty() && response.updated_hints.isEmpty()) {
+                    val isBatchEmpty = response.new_items.isEmpty() && response.updated_hints.isEmpty()
+                    if (isBatchEmpty) {
                         hasMoreData = false
-                        break
                     }
 
                     if (response.new_items.isNotEmpty()) {
@@ -212,11 +212,10 @@ class HistoryRepository(
                     }
 
                     // Stream batch to UI immediately!
-                    onBatchReceived?.invoke()
+                    onBatchReceived?.invoke(response.new_items.size, loopCount + 1, hasMoreData && !isBatchEmpty)
 
-                    // Exit loop only when no new items or hints are returned
-                    if (response.new_items.isEmpty() && response.updated_hints.isEmpty()) {
-                        hasMoreData = false
+                    if (isBatchEmpty) {
+                        break
                     }
 
                 } catch (e: Exception) {
@@ -409,6 +408,14 @@ class HistoryRepository(
         }
     }
 
+    suspend fun getLocalItemCount(roomId: Int?): Int {
+        return if (roomId != null) {
+            historyDao.getItemCountForRoom(roomId)
+        } else {
+            historyDao.getTotalItemCount()
+        }
+    }
+
     suspend fun pruneSlotData(roomId: Int, slotIds: Set<Int>) {
         if (slotIds.isEmpty()) return
         Log.d("PRUNING", "Pruning data for room $roomId, slots: $slotIds")
@@ -425,6 +432,23 @@ class HistoryRepository(
             Log.d("PRUNING", "Cleared SharedPreferences watermarks for pruned slots in room $roomId.")
         } catch (e: Exception) {
             Log.e("PRUNING", "Failed to prune slot data: ${e.message}", e)
+        }
+    }
+
+    companion object {
+        @Volatile
+        private var INSTANCE: HistoryRepository? = null
+
+        fun getInstance(context: android.content.Context): HistoryRepository {
+            return INSTANCE ?: synchronized(this) {
+                val instance = INSTANCE ?: run {
+                    val appContext = context.applicationContext
+                    val db = com.jones.aptracker.database.AppDatabase.getInstance(appContext)
+                    val apiService = com.jones.aptracker.network.RetrofitClient.instance
+                    HistoryRepository(apiService, db.historyDao(), db.hintDao(), appContext)
+                }.also { INSTANCE = it }
+                instance
+            }
         }
     }
 }
