@@ -507,7 +507,7 @@ def sync_history(current_user):
                 )
 
         if slot_filters:
-            items = session.query(NotifiedItem).filter(or_(*slot_filters)).order_by(NotifiedItem.id.asc()).limit(200).all()
+            items = session.query(NotifiedItem).filter(or_(*slot_filters)).order_by(NotifiedItem.id.asc()).limit(500).all()
 
     hint_watermarks_map = {}
     for hint in data.get('hints', []):
