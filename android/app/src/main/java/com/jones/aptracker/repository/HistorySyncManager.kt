@@ -46,6 +46,12 @@ object HistorySyncManager {
         val appContext = context.applicationContext
         Log.d("HistorySyncManager", "Triggering sync for room: ${roomId ?: "Global"} in application scope...")
 
+        // Mark sync active synchronously FIRST to prevent WorkManager from racing and acquiring the syncMutex
+        _syncProgress.value = _syncProgress.value.copy(
+            isSyncing = true,
+            isJustCompleted = false
+        )
+
         // 1. Enqueue WorkManager job as background fallback (runs if process dies / phone locks)
         try {
             val constraints = Constraints.Builder()
@@ -62,7 +68,7 @@ object HistorySyncManager {
 
             WorkManager.getInstance(appContext).enqueueUniqueWork(
                 "history_sync_work_${roomId ?: "global"}",
-                ExistingWorkPolicy.REPLACE,
+                ExistingWorkPolicy.KEEP,
                 syncWorkRequest
             )
             Log.d("HistorySyncManager", "Enqueued HistorySyncWorker with WorkManager.")

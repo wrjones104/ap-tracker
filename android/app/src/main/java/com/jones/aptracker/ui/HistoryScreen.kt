@@ -1932,7 +1932,7 @@ fun SyncProgressBanner(
                             color = iconColor
                         )
                         Spacer(modifier = Modifier.width(10.dp))
-                        val statusText = if (syncProgress.totalDeltaToFetch > 0 && syncProgress.itemsFetchedInSync > 0) {
+                        val statusText = if (syncProgress.totalDeltaToFetch > 0) {
                             "Syncing history... ${syncProgress.progressPercentage}% (${syncProgress.itemsFetchedInSync} / ${syncProgress.totalDeltaToFetch} items)"
                         } else if (syncProgress.itemsFetchedInSync > 0) {
                             "Syncing history... (${syncProgress.itemsFetchedInSync} items)"
@@ -1947,7 +1947,7 @@ fun SyncProgressBanner(
                         )
                     }
                 }
-                if (!isCompleted && syncProgress.totalDeltaToFetch > 0 && syncProgress.itemsFetchedInSync > 0) {
+                if (!isCompleted && syncProgress.totalDeltaToFetch > 0) {
                     Spacer(modifier = Modifier.height(6.dp))
                     androidx.compose.material3.LinearProgressIndicator(
                         progress = { syncProgress.progressPercentage / 100f },
