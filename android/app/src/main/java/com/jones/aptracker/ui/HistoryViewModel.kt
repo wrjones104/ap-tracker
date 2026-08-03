@@ -54,8 +54,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
     val itemHistory: StateFlow<List<HistoryItem>> = _itemHistory
 
-    private val _syncProgress = MutableStateFlow(SyncProgressState())
-    val syncProgress: StateFlow<SyncProgressState> = _syncProgress
+    val syncProgress: StateFlow<SyncProgressState> = HistorySyncManager.syncProgress
 
     private val _trackedPlayers = MutableStateFlow<List<TrackedPlayer>>(emptyList())
 
@@ -535,29 +534,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                // --- STEP 1.8: Initialize sync progress state ---
-                val relevantRooms = if (currentRoomId != null) {
-                    trackedRooms.filter { it.room_db_id == currentRoomId }
-                } else {
-                    trackedRooms.filter { !it.is_archived }
-                }
-                val totalServerItems = relevantRooms.sumOf { room -> room.tracked_slots.sumOf { slot -> slot.item_count } }
-                val localItemCount = repository.getLocalItemCount(currentRoomId)
-                val totalDelta = maxOf(0, totalServerItems - localItemCount)
-                val hasPendingBackfill = relevantRooms.any { room -> room.tracked_slots.any { slot -> slot.needs_backfill } }
-
-                _syncProgress.value = SyncProgressState(
-                    isSyncing = true,
-                    loopsCompleted = 0,
-                    itemsFetchedInSync = 0,
-                    totalDeltaToFetch = totalDelta,
-                    progressPercentage = if (totalDelta == 0) 100 else 0,
-                    serverReportedTotalItems = totalServerItems,
-                    localItemCount = localItemCount,
-                    hasPendingBackfill = hasPendingBackfill,
-                    isJustCompleted = false
-                )
-
                 // --- STEP 2: Load cached history and manage loading state ---
                 reloadHistory()
                 val hasLocalItems = itemHistory.value.isNotEmpty()
@@ -565,54 +541,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     isLoading.value = false
                 }
 
-                // --- STEP 3: Pure Delta Sync ---
-                var itemsFetchedTotal = 0
-                try {
-                    repository.refreshHintHistory(currentRoomId)
-
-                    repository.syncHistoryBatch(trackedRooms, priorityRoomId = currentRoomId) { itemsFetchedThisBatch, loopCount, hasMore ->
-                        itemsFetchedTotal += itemsFetchedThisBatch
-                        val delta = _syncProgress.value.totalDeltaToFetch
-                        val pct = if (delta > 0) minOf(100, (itemsFetchedTotal * 100) / delta) else 100
-                        _syncProgress.value = _syncProgress.value.copy(
-                            loopsCompleted = loopCount,
-                            itemsFetchedInSync = itemsFetchedTotal,
-                            progressPercentage = pct,
-                            hasPendingBackfill = hasMore || hasPendingBackfill
-                        )
-                        reloadHistory(showSpinner = false)
-                    }
+                // --- STEP 3: Delegate sync execution to HistorySyncManager (ApplicationScope & WorkManager) ---
+                HistorySyncManager.triggerSync(getApplication(), currentRoomId) {
                     reloadHistory(showSpinner = false)
-
-                    val finalItemsTotal = itemsFetchedTotal
-                    val finalPct = if (totalDelta > 0) minOf(100, (finalItemsTotal * 100) / totalDelta) else 100
-                    _syncProgress.value = _syncProgress.value.copy(
-                        isSyncing = false,
-                        isJustCompleted = true,
-                        itemsFetchedInSync = finalItemsTotal,
-                        progressPercentage = finalPct,
-                        hasPendingBackfill = false
-                    )
-
-                    // Schedule auto-dismiss of completion state
-                    viewModelScope.launch {
-                        kotlinx.coroutines.delay(4000)
-                        if (_syncProgress.value.isJustCompleted) {
-                            _syncProgress.value = _syncProgress.value.copy(isJustCompleted = false)
-                        }
-                    }
-
-                } catch (e: Exception) {
-                    Log.e("HistoryViewModel", "Background sync/feed fetch failed", e)
-                    _syncProgress.value = _syncProgress.value.copy(isSyncing = false)
-                } finally {
-                    isLoading.value = false
                 }
 
             } catch (e: Exception) {
                 errorMessage.value = "History Refresh failed: ${e.message}"
                 Log.e("HistoryViewModel", "Error during full history refresh", e)
-                _syncProgress.value = _syncProgress.value.copy(isSyncing = false)
             } finally {
                 isLoading.value = false
             }
