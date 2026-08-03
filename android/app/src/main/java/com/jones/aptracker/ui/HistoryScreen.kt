@@ -8,6 +8,14 @@ import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Surface
+import com.jones.aptracker.repository.SyncProgressState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -250,6 +258,7 @@ fun HistoryContent(
                     when (page) {
                         0 -> ItemHistoryTab(
                             historyViewModel = historyViewModel,
+                            syncProgress = syncProgress,
                             searchQuery = searchQuery,
                             dateFormatPreset = dateFormatPreset,
                             onItemClick = { selectedItem = it },
@@ -260,6 +269,7 @@ fun HistoryContent(
                         )
                         1 -> HintHistoryTab(
                             historyViewModel = historyViewModel,
+                            syncProgress = syncProgress,
                             searchQuery = searchQuery,
                             dateFormatPreset = dateFormatPreset,
                             onHintClick = { selectedHint = it },
@@ -864,6 +874,7 @@ fun CompactDetailItem(label: String, value: String) {
 @Composable
 fun ItemHistoryTab(
     historyViewModel: HistoryViewModel,
+    syncProgress: SyncProgressState,
     searchQuery: String,
     dateFormatPreset: DateFormatPreset,
     onItemClick: (HistoryItem) -> Unit,
@@ -1085,8 +1096,6 @@ fun ItemHistoryTab(
                 }
             }
         }
-
-        val syncProgress by historyViewModel.syncProgress.collectAsState()
 
         if (itemsToShow.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
             val selectedPlayerInfo = availablePlayers.find { it.originalName == selectedPlayer }
@@ -1335,6 +1344,7 @@ fun RoomFilterChip(
 @Composable
 fun HintHistoryTab(
     historyViewModel: HistoryViewModel,
+    syncProgress: SyncProgressState,
     searchQuery: String,
     dateFormatPreset: DateFormatPreset,
     onHintClick: (HintEntity) -> Unit,
@@ -1454,8 +1464,6 @@ fun HintHistoryTab(
                 }
             }
         }
-
-        val syncProgress by historyViewModel.syncProgress.collectAsState()
 
         if (filteredHintsForYou.isEmpty() && filteredHintsByYou.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
             Box(

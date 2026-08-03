@@ -434,6 +434,23 @@ class HistoryRepository(
             Log.e("PRUNING", "Failed to prune slot data: ${e.message}", e)
         }
     }
+
+    companion object {
+        @Volatile
+        private var INSTANCE: HistoryRepository? = null
+
+        fun getInstance(context: android.content.Context): HistoryRepository {
+            return INSTANCE ?: synchronized(this) {
+                val instance = INSTANCE ?: run {
+                    val appContext = context.applicationContext
+                    val db = com.jones.aptracker.database.AppDatabase.getInstance(appContext)
+                    val apiService = com.jones.aptracker.network.RetrofitClient.instance
+                    HistoryRepository(apiService, db.historyDao(), db.hintDao(), appContext)
+                }.also { INSTANCE = it }
+                instance
+            }
+        }
+    }
 }
 
 private fun normalizeTimestamp(rawTime: String): String {

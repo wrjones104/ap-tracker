@@ -32,18 +32,6 @@ sealed interface HistoryFilter {
     data class Specific(val roomId: Int) : HistoryFilter
 }
 
-data class SyncProgressState(
-    val isSyncing: Boolean = false,
-    val loopsCompleted: Int = 0,
-    val itemsFetchedInSync: Int = 0,
-    val totalDeltaToFetch: Int = 0,
-    val progressPercentage: Int = 0,
-    val serverReportedTotalItems: Int = 0,
-    val localItemCount: Int = 0,
-    val hasPendingBackfill: Boolean = false,
-    val isJustCompleted: Boolean = false
-)
-
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: HistoryRepository
@@ -272,12 +260,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     init {
-        val db = AppDatabase.getInstance(application)
-        val historyDao = db.historyDao()
-        val hintDao = db.hintDao()
-
         val apiService = RetrofitClient.instance
-        repository = HistoryRepository(apiService, historyDao, hintDao, application)
+        repository = HistoryRepository.getInstance(application)
         userRepository = UserRepository(apiService)
         fetchUserPreferences()
     }
