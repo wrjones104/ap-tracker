@@ -568,11 +568,18 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
         except Exception as e:
             logging.error(f"[POLLER_THRESHOLD_ERROR] Failed to fetch threshold groups: {e}")
 
-    # 0.5. Pre-fetch group memberships for the checksums involved in this poll batch
-    group_members_lookup = set()
-    if new_items_for_notify:
-        checksums = {item['game_checksum'] for item in new_items_for_notify if item.get('game_checksum')}
-        group_members_lookup = fetch_group_members_lookup(session, checksums)
+    # 0.5. Pre-fetch group memberships for the checksums involved in this poll batch.
+    # Include both item checksums and hint item-owner checksums, so group-based
+    # ignore/whitelist rules resolve for hint notifications too (item groups are
+    # version-specific, keyed by datapackage checksum).
+    filter_checksums = set()
+    for item in new_items_for_notify:
+        if item.get('game_checksum'):
+            filter_checksums.add(item['game_checksum'])
+    for h in new_hints_for_notify:
+        if h.get('io_checksum'):
+            filter_checksums.add(h['io_checksum'])
+    group_members_lookup = fetch_group_members_lookup(session, filter_checksums)
 
     # 1. Fetch Names from DatapackageCache
     if cache_keys_to_fetch:
@@ -804,7 +811,24 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                 if relevant_slot in finished_player_ids and not wants_finished_notifs:
                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed hint for Slot {relevant_slot} (Slot Finished).")
                     continue
-                
+
+                # --- IGNORE CHECK ---
+                # A hint is about the item owner's item, so evaluate against the item
+                # owner's game/checksum (mirrors process_hints_for_user in history_routes).
+                # This keeps hint notifications consistent with the hint history view,
+                # which already hides ignored items.
+                hint_ignored, _, matched_hint_rule, _ = evaluate_item_filter_status(
+                    item_name=item_name,
+                    game_name=hint_data.get('io_game'),
+                    game_checksum=hint_data.get('io_checksum'),
+                    ignore_items=user_prefs.ignore_items,
+                    whitelist_items=user_prefs.whitelist_items,
+                    group_members_lookup=group_members_lookup
+                )
+                if hint_ignored:
+                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored hint for item '{item_name}' (matched rule '{matched_hint_rule.item_name}' is_group={getattr(matched_hint_rule, 'is_group', False)}) for game '{hint_data.get('io_game')}'.")
+                    continue
+
                 # Check Notification Rules
                 should_send_notification = False
 
@@ -2496,12 +2520,15 @@ async def poller_supervisor(app, loop):
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
 
-    # Run one-off database item count reconciliation synchronously before polling starts.
-    # Runs in executor thread to avoid blocking the event loop, but we await completion
-    # before entering the polling loop to prevent race conditions with concurrent item processing.
+    # Reconciliation only fixes drift caused by the legacy item_index backfill (see
+    # poller.py purge/backfill logic above). Once no un-indexed items remain, it's a
+    # no-op full-table scan, so skip it and avoid delaying startup.
     try:
-        from app.services.threshold_service import reconcile_slot_item_counts
-        await loop.run_in_executor(None, reconcile_slot_item_counts)
+        if await loop.run_in_executor(None, db_has_unindexed_items):
+            from app.services.threshold_service import reconcile_slot_item_counts
+            await loop.run_in_executor(None, reconcile_slot_item_counts)
+        else:
+            logging.info("[RECONCILE] No legacy un-indexed items found; skipping startup reconciliation.")
     except Exception as e:
         logging.error(f"[POLLER] Startup reconciliation failed: {e}", exc_info=True)
 
@@ -2659,6 +2686,16 @@ def db_get_active_rooms():
         logging.error(f"[SUPERVISOR_DB_ERROR] Failed to get active rooms: {e}", exc_info=True)
         session.rollback()
         return None
+    finally:
+        Session.remove()
+
+def db_has_unindexed_items():
+    session = Session()
+    try:
+        return session.query(NotifiedItem.id).filter(NotifiedItem.item_index == None).first() is not None
+    except Exception as e:
+        logging.error(f"[SUPERVISOR_DB_ERROR] Failed to check for unindexed items: {e}", exc_info=True)
+        return True  # fail safe: assume reconciliation is still needed
     finally:
         Session.remove()
 
