@@ -27,5 +27,7 @@ data class HistoryItemEntity(
     val slot_id: Int?,
     val icon_name: String?,
     val host: String?,
-    val receivedCount: Int? = null
+    val receivedCount: Int? = null,
+    val isIgnored: Boolean = false,
+    val isWhitelisted: Boolean = false
 )

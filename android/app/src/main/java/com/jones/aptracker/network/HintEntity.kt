@@ -20,5 +20,7 @@ data class HintEntity(
     val locationName: String,
     val isFound: Boolean,
     val timestamp: String,
-    val itemFlags: Int = 0
+    val itemFlags: Int = 0,
+    val isIgnored: Boolean = false,
+    val isWhitelisted: Boolean = false
 )

@@ -246,4 +246,24 @@ val MIGRATION_20_21 = object : Migration(20, 21) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // Schema structure is unchanged; migration triggers reset of SharedPreferences watermarks for sequence sync
     }
+}
+
+/**
+ * Adds server-computed isIgnored/isWhitelisted flags to history_items and hints.
+ * These used to be derived entirely on-device by matching item names against the
+ * ignore/whitelist lists, which couldn't resolve item-group rules (group membership
+ * isn't known to the client). The server now evaluates this using the same logic
+ * as notification filtering and sends the result down directly.
+ *
+ * Existing locally-cached rows default to false until they're next re-synced from
+ * the server; this only affects the ignore/whitelist display state of already-synced
+ * history, not new items.
+ */
+val MIGRATION_21_22 = object : Migration(21, 22) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE history_items ADD COLUMN isIgnored INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE history_items ADD COLUMN isWhitelisted INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE hints ADD COLUMN isIgnored INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE hints ADD COLUMN isWhitelisted INTEGER NOT NULL DEFAULT 0")
+    }
 }

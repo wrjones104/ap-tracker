@@ -110,8 +110,6 @@ import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
-import com.jones.aptracker.network.IgnoreItem
-import com.jones.aptracker.network.WhitelistItem
 import com.jones.aptracker.ui.theme.APTheme
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -145,10 +143,8 @@ fun HistoryContent(
     val showFiller by historyViewModel.showFiller.collectAsState()
     val showTrap by historyViewModel.showTrap.collectAsState()
 
-    // Ignored Items filter
+    // Ignored Items filter (isIgnored/isWhitelisted are computed server-side per item)
     val showIgnoredItems by historyViewModel.showIgnoredItems.collectAsState()
-    val ignoreList by userViewModel.ignoreList.collectAsState()
-    val whitelist by userViewModel.whitelist.collectAsState()
 
     val roomNames by historyViewModel.roomNames.collectAsState()
     val selectedItemGroups by historyViewModel.selectedItemGroups.collectAsState()
@@ -187,10 +183,6 @@ fun HistoryContent(
         if (historyViewModel.itemHistory.value.isEmpty()) {
             historyViewModel.refreshAllHistory()
         }
-        // Re-fetch ignore/whitelist on every entry so changes from IgnoreListScreen
-        // and WhitelistScreen are immediately reflected without needing an app restart.
-        userViewModel.fetchIgnoreList()
-        userViewModel.fetchWhitelist()
     }
 
     LaunchedEffect(selectedItem) {
@@ -267,9 +259,7 @@ fun HistoryContent(
                             dateFormatPreset = dateFormatPreset,
                             onItemClick = { selectedItem = it },
                             showRoomFilter = showRoomFilter,
-                            showIgnoredItems = showIgnoredItems,
-                            ignoreList = ignoreList,
-                            whitelist = whitelist
+                            showIgnoredItems = showIgnoredItems
                         )
                         1 -> HintHistoryTab(
                             historyViewModel = historyViewModel,
@@ -278,9 +268,7 @@ fun HistoryContent(
                             dateFormatPreset = dateFormatPreset,
                             onHintClick = { selectedHint = it },
                             showRoomFilter = showRoomFilter,
-                            showIgnoredItems = showIgnoredItems,
-                            ignoreList = ignoreList,
-                            whitelist = whitelist
+                            showIgnoredItems = showIgnoredItems
                         )
                     }
                 }
@@ -883,9 +871,7 @@ fun ItemHistoryTab(
     dateFormatPreset: DateFormatPreset,
     onItemClick: (HistoryItem) -> Unit,
     showRoomFilter: Boolean,
-    showIgnoredItems: Boolean,
-    ignoreList: List<IgnoreItem>,
-    whitelist: List<WhitelistItem> = emptyList()
+    showIgnoredItems: Boolean
 ) {
     val fullHistory by historyViewModel.itemHistory.collectAsState()
     val availablePlayers by historyViewModel.availablePlayers.collectAsState()
@@ -915,66 +901,8 @@ fun ItemHistoryTab(
     // Filter Logic
     val itemsToShow = remember(
         fullHistory, searchQuery, selectedPlayer, showFinished, finishedKeys, historyFilter,
-        activeRoomIds, archivedRoomIds, showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList, whitelist
+        activeRoomIds, archivedRoomIds, showProgression, showUseful, showFiller, showTrap, showIgnoredItems
     ) {
-        fun String.toWildcardRegex(): Regex {
-            val parts = this.split("*")
-            val sb = StringBuilder()
-            for (i in parts.indices) {
-                if (i > 0) sb.append(".*")
-                val subParts = parts[i].split("?")
-                for (j in subParts.indices) {
-                    if (j > 0) sb.append(".")
-                    if (subParts[j].isNotEmpty()) {
-                        sb.append(Regex.escape(subParts[j]))
-                    }
-                }
-            }
-            return Regex("^${sb.toString()}$", RegexOption.IGNORE_CASE)
-        }
-
-        val globalExact = mutableSetOf<String>()
-        val globalPatterns = mutableListOf<Regex>()
-        val gameExact = mutableMapOf<String, MutableSet<String>>()
-        val gamePatterns = mutableMapOf<String, MutableList<Regex>>()
-
-        ignoreList.forEach { rule ->
-            val cleanItem = rule.itemName.trim()
-            val isWildcard = cleanItem.contains("*") || cleanItem.contains("?")
-            if (rule.gameName.isNullOrBlank()) {
-                if (isWildcard) globalPatterns.add(cleanItem.toWildcardRegex())
-                else globalExact.add(cleanItem.lowercase())
-            } else {
-                val gameLower = rule.gameName.trim().lowercase()
-                if (isWildcard) {
-                    gamePatterns.getOrPut(gameLower) { mutableListOf() }.add(cleanItem.toWildcardRegex())
-                } else {
-                    gameExact.getOrPut(gameLower) { mutableSetOf() }.add(cleanItem.lowercase())
-                }
-            }
-        }
-
-        val wlGlobalExact = mutableSetOf<String>()
-        val wlGlobalPatterns = mutableListOf<Regex>()
-        val wlGameExact = mutableMapOf<String, MutableSet<String>>()
-        val wlGamePatterns = mutableMapOf<String, MutableList<Regex>>()
-
-        whitelist.forEach { rule ->
-            val cleanItem = rule.itemName.trim()
-            val isWildcard = cleanItem.contains("*") || cleanItem.contains("?")
-            if (rule.gameName.isNullOrBlank()) {
-                if (isWildcard) wlGlobalPatterns.add(cleanItem.toWildcardRegex())
-                else wlGlobalExact.add(cleanItem.lowercase())
-            } else {
-                val gameLower = rule.gameName.trim().lowercase()
-                if (isWildcard) {
-                    wlGamePatterns.getOrPut(gameLower) { mutableListOf() }.add(cleanItem.toWildcardRegex())
-                } else {
-                    wlGameExact.getOrPut(gameLower) { mutableSetOf() }.add(cleanItem.lowercase())
-                }
-            }
-        }
-
         fullHistory.filter { item ->
             val matchesSearch = searchQuery.isBlank() ||
                     item.playerName.contains(searchQuery, ignoreCase = true) ||
@@ -996,19 +924,6 @@ fun ItemHistoryTab(
             }
             val matchesFinished = showFinished || !isFinished
 
-            val cleanItemName = item.itemName.trim()
-            val lowerCaseItemName = cleanItemName.lowercase()
-            val lowerCaseGameName = item.receivingGame?.trim()?.lowercase()
-
-            var isWhitelisted = lowerCaseItemName in wlGlobalExact || wlGlobalPatterns.any { it.matches(cleanItemName) }
-            if (!isWhitelisted && lowerCaseGameName != null) {
-                if (wlGameExact[lowerCaseGameName]?.contains(lowerCaseItemName) == true) {
-                    isWhitelisted = true
-                } else if (wlGamePatterns[lowerCaseGameName]?.any { it.matches(cleanItemName) } == true) {
-                    isWhitelisted = true
-                }
-            }
-
             // --- TYPE CHECK (Prioritized to match visual colors) ---
             val isProgression = (item.itemFlags and 1) != 0
             val isUseful = (item.itemFlags and 2) != 0
@@ -1024,18 +939,10 @@ fun ItemHistoryTab(
                 showFiller
             }
 
-            var isIgnored = lowerCaseItemName in globalExact || globalPatterns.any { it.matches(cleanItemName) }
-
-            if (!isIgnored && lowerCaseGameName != null) {
-                if (gameExact[lowerCaseGameName]?.contains(lowerCaseItemName) == true) {
-                    isIgnored = true
-                } else if (gamePatterns[lowerCaseGameName]?.any { it.matches(cleanItemName) } == true) {
-                    isIgnored = true
-                }
-            }
-
-            val matchesCategoryOrWhitelist = isWhitelisted || matchesType
-            val matchesIgnoredOrWhitelist = isWhitelisted || (showIgnoredItems || !isIgnored)
+            // isIgnored/isWhitelisted are computed server-side (see history_routes.py),
+            // since item-group membership isn't known to the client.
+            val matchesCategoryOrWhitelist = item.isWhitelisted || matchesType
+            val matchesIgnoredOrWhitelist = item.isWhitelisted || (showIgnoredItems || !item.isIgnored)
 
             matchesSearch && matchesRoom && matchesPlayer && matchesFinished && matchesCategoryOrWhitelist && matchesIgnoredOrWhitelist
         }
@@ -1353,9 +1260,7 @@ fun HintHistoryTab(
     dateFormatPreset: DateFormatPreset,
     onHintClick: (HintEntity) -> Unit,
     showRoomFilter: Boolean,
-    showIgnoredItems: Boolean,
-    ignoreList: List<IgnoreItem>,
-    whitelist: List<WhitelistItem> = emptyList()
+    showIgnoredItems: Boolean
 ) {
     val hintsForYou by historyViewModel.hintsForYou.collectAsState()
     val hintsByYou by historyViewModel.hintsByYou.collectAsState()
@@ -1387,23 +1292,23 @@ fun HintHistoryTab(
     val filteredHintsForYou = remember(
         hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
         historyFilter, activeRoomIds, archivedRoomIds,
-        showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList, whitelist
+        showProgression, showUseful, showFiller, showTrap, showIgnoredItems
     ) {
         filterHints(
             hintsForYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
             historyFilter, activeRoomIds, archivedRoomIds,
-            showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList, whitelist
+            showProgression, showUseful, showFiller, showTrap, showIgnoredItems
         )
     }
     val filteredHintsByYou = remember(
         hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
         historyFilter, activeRoomIds, archivedRoomIds,
-        showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList, whitelist
+        showProgression, showUseful, showFiller, showTrap, showIgnoredItems
     ) {
         filterHints(
             hintsByYou, searchQuery, showFinished, finishedKeys, selectedPlayer,
             historyFilter, activeRoomIds, archivedRoomIds,
-            showProgression, showUseful, showFiller, showTrap, showIgnoredItems, ignoreList, whitelist
+            showProgression, showUseful, showFiller, showTrap, showIgnoredItems
         )
     }
 
@@ -1737,44 +1642,8 @@ private fun filterHints(
     showUseful: Boolean,
     showFiller: Boolean,
     showTrap: Boolean,
-    showIgnoredItems: Boolean,
-    ignoreList: List<IgnoreItem>,
-    whitelist: List<WhitelistItem> = emptyList()
+    showIgnoredItems: Boolean
 ): List<HintEntity> {
-    fun String.toWildcardRegex(): Regex {
-        val parts = this.split("*")
-        val sb = StringBuilder()
-        for (i in parts.indices) {
-            if (i > 0) sb.append(".*")
-            val subParts = parts[i].split("?")
-            for (j in subParts.indices) {
-                if (j > 0) sb.append(".")
-                if (subParts[j].isNotEmpty()) {
-                    sb.append(Regex.escape(subParts[j]))
-                }
-            }
-        }
-        return Regex("^${sb.toString()}$", RegexOption.IGNORE_CASE)
-    }
-
-    val exactNames = mutableSetOf<String>()
-    val patternNames = mutableListOf<Regex>()
-
-    ignoreList.forEach { rule ->
-        val isWildcard = rule.itemName.contains("*") || rule.itemName.contains("?")
-        if (isWildcard) patternNames.add(rule.itemName.toWildcardRegex())
-        else exactNames.add(rule.itemName.lowercase())
-    }
-
-    val wlExactNames = mutableSetOf<String>()
-    val wlPatternNames = mutableListOf<Regex>()
-
-    whitelist.forEach { rule ->
-        val isWildcard = rule.itemName.contains("*") || rule.itemName.contains("?")
-        if (isWildcard) wlPatternNames.add(rule.itemName.toWildcardRegex())
-        else wlExactNames.add(rule.itemName.lowercase())
-    }
-
     return hints.filter { hint ->
         // 1. Room Check
         val matchesRoom = when (val f = historyFilter) {
@@ -1803,9 +1672,6 @@ private fun filterHints(
             }
         }
 
-        val lowerCaseItemName = hint.itemName.lowercase()
-        val isWhitelisted = lowerCaseItemName in wlExactNames || wlPatternNames.any { it.matches(hint.itemName) }
-
         // --- TYPE CHECK (Prioritized to match visual colors) ---
         val isProgression = (hint.itemFlags and 1) != 0
         val isUseful = (hint.itemFlags and 2) != 0
@@ -1821,10 +1687,10 @@ private fun filterHints(
             showFiller
         }
 
-        // Note: HintEntity does not have receivingGame, so we just match on itemName
-        val isIgnored = lowerCaseItemName in exactNames || patternNames.any { it.matches(hint.itemName) }
-        val matchesCategoryOrWhitelist = isWhitelisted || matchesType
-        val matchesIgnoredOrWhitelist = isWhitelisted || (showIgnoredItems || !isIgnored)
+        // isIgnored/isWhitelisted are computed server-side (see history_routes.py),
+        // since item-group membership isn't known to the client.
+        val matchesCategoryOrWhitelist = hint.isWhitelisted || matchesType
+        val matchesIgnoredOrWhitelist = hint.isWhitelisted || (showIgnoredItems || !hint.isIgnored)
 
         matchesRoom && matchesQuery && matchesFinished && matchesPlayer && matchesCategoryOrWhitelist && matchesIgnoredOrWhitelist
     }
