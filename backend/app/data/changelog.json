@@ -18,6 +18,10 @@
         {
           "title": "Cleaner Whitelist & Ignore Menu",
           "description": "The whitelist and ignore options on an item's detail screen are now two simple buttons that expand into the full set of choices, instead of a long wall of buttons."
+        },
+        {
+          "title": "Faster Activity Feed Loads",
+          "description": "The Activity feed now shows your synced history right away instead of waiting on a network call first, so switching to it feels instant."
         }
       ],
       "categories": {
@@ -36,13 +40,17 @@
           {
             "title": "Hint Filtering Respects Per-Game Rules",
             "description": "Hints now correctly honor game-specific ignore/whitelist rules instead of applying them across all your games."
+          },
+          {
+            "title": "Faster Activity Feed Loads",
+            "description": "The Activity feed now shows your synced history right away instead of waiting on a network call first, so switching to it feels instant."
           }
         ]
       },
       "release_notes": {
-        "discord": "**Archipelago Alerts Android App v1.6.23 Released!**\n\n**Fixes**\n• **Item Group Filtering**: Ignoring or whitelisting an item *group* now actually hides/shows those items in your History — previously these rules were silently ignored there.\n• **Hint Filtering**: Hints now correctly respect per-game ignore/whitelist rules instead of applying them across every game.\n\n**Improvements**\n• **Cleaner Ignore/Whitelist Menu**: The item detail sheet now uses two simple \"Whitelist...\" / \"Ignore...\" buttons that expand into the full options, instead of a wall of buttons.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
-        "play_store": "Fixed: ignoring or whitelisting an item group now actually hides/shows those items in History and hints (previously had no effect there). Hint filtering also now respects per-game rules instead of applying across every game.\n\nImproved: the whitelist/ignore menu on item details is now two simple buttons instead of a long list.",
-        "github": "### Fixed\n- **Item Group Ignore/Whitelist Filtering**: Item-group ignore/whitelist rules are now computed server-side (`filtering_service.py`) and returned per item/hint via `isIgnored`/`isWhitelisted` fields, fixing group rules having no effect in the History \"Show ignored items\" filter.\n- **Hint Filtering Game Scope**: Hint filtering now correctly respects the game-specific scope of ignore/whitelist rules instead of applying them across all games.\n\n### Changed\n- **Consolidated Ignore/Whitelist Menu**: The History item detail sheet's 6+ whitelist/ignore action buttons are now collapsed into two entry buttons that expand in-place to the scoped options."
+        "discord": "**Archipelago Alerts Android App v1.6.23 Released!**\n\n**Fixes**\n• **Item Group Filtering**: Ignoring or whitelisting an item *group* now actually hides/shows those items in your History — previously these rules were silently ignored there.\n• **Hint Filtering**: Hints now correctly respect per-game ignore/whitelist rules instead of applying them across every game.\n• **Faster Activity Feed**: The Activity feed now loads instantly from your synced history instead of waiting on a network call first.\n\n**Improvements**\n• **Cleaner Ignore/Whitelist Menu**: The item detail sheet now uses two simple \"Whitelist...\" / \"Ignore...\" buttons that expand into the full options, instead of a wall of buttons.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "Fixed: ignoring or whitelisting an item group now actually hides/shows those items in History and hints (previously had no effect there). Hint filtering also now respects per-game rules instead of applying across every game.\n\nImproved: the whitelist/ignore menu on item details is now two simple buttons instead of a long list.\n\nFixed: the Activity feed now loads your synced history instantly instead of waiting on a network call first.",
+        "github": "### Fixed\n- **Item Group Ignore/Whitelist Filtering**: Item-group ignore/whitelist rules are now computed server-side (`filtering_service.py`) and returned per item/hint via `isIgnored`/`isWhitelisted` fields, fixing group rules having no effect in the History \"Show ignored items\" filter.\n- **Hint Filtering Game Scope**: Hint filtering now correctly respects the game-specific scope of ignore/whitelist rules instead of applying them across all games.\n- **Activity Feed Warm-Load Stall**: `HistoryViewModel.refreshAllHistory()` now paints from the local DB immediately when tracked-slot metadata from a prior load is already in memory, instead of blocking on `getUserTrackedSlots()` first — removing a 1-2s stall on every tab/room transition. First load in a session is unaffected since there's no warm metadata yet.\n\n### Changed\n- **Consolidated Ignore/Whitelist Menu**: The History item detail sheet's 6+ whitelist/ignore action buttons are now collapsed into two entry buttons that expand in-place to the scoped options."
       }
     },
     {

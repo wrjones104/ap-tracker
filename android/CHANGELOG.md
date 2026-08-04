@@ -21,6 +21,7 @@ _Item Group Filtering Fixes & Cleaner Ignore Menu_
 > **Fixes**
 > • **Item Group Filtering**: Ignoring or whitelisting an item *group* now actually hides/shows those items in your History — previously these rules were silently ignored there.
 > • **Hint Filtering**: Hints now correctly respect per-game ignore/whitelist rules instead of applying them across every game.
+> • **Faster Activity Feed**: The Activity feed now loads instantly from your synced history instead of waiting on a network call first.
 >
 > **Improvements**
 > • **Cleaner Ignore/Whitelist Menu**: The item detail sheet now uses two simple "Whitelist..." / "Ignore..." buttons that expand into the full options, instead of a wall of buttons.
@@ -34,6 +35,8 @@ _Item Group Filtering Fixes & Cleaner Ignore Menu_
 > Fixed: ignoring or whitelisting an item group now actually hides/shows those items in History and hints (previously had no effect there). Hint filtering also now respects per-game rules instead of applying across every game.
 >
 > Improved: the whitelist/ignore menu on item details is now two simple buttons instead of a long list.
+>
+> Fixed: the Activity feed now loads your synced history instantly instead of waiting on a network call first.
 > ```
 
 > **GitHub Release Copy-Paste:**
@@ -41,6 +44,7 @@ _Item Group Filtering Fixes & Cleaner Ignore Menu_
 > ### Fixed
 > - **Item Group Ignore/Whitelist Filtering**: Item-group ignore/whitelist rules are now computed server-side (`filtering_service.py`) and returned per item/hint via `isIgnored`/`isWhitelisted` fields, fixing group rules having no effect in the History "Show ignored items" filter.
 > - **Hint Filtering Game Scope**: Hint filtering now correctly respects the game-specific scope of ignore/whitelist rules instead of applying them across all games.
+> - **Activity Feed Warm-Load Stall**: `HistoryViewModel.refreshAllHistory()` now paints from the local DB immediately when tracked-slot metadata from a prior load is already in memory, instead of blocking on `getUserTrackedSlots()` first — removing a 1-2s stall on every tab/room transition. First load in a session is unaffected since there's no warm metadata yet.
 >
 > ### Changed
 > - **Consolidated Ignore/Whitelist Menu**: The History item detail sheet's 6+ whitelist/ignore action buttons are now collapsed into two entry buttons that expand in-place to the scoped options.
@@ -52,6 +56,7 @@ _Item Group Filtering Fixes & Cleaner Ignore Menu_
 ### Fixed
 - **Item Group Ignore/Whitelist Now Applies in History**: Ignoring or whitelisting an item group now correctly hides or shows those items in your History; previously group-based rules had no effect there.
 - **Hint Filtering Respects Per-Game Rules**: Hints now correctly honor game-specific ignore/whitelist rules instead of applying them across all your games.
+- **Faster Activity Feed Loads**: The Activity feed now shows your synced history right away instead of waiting on a network call first, so switching to it feels instant.
 
 ---
 
