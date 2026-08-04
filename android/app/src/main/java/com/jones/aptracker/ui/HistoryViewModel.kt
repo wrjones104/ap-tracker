@@ -268,10 +268,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
 
         Log.d("HistoryViewModel", "Loading history for Room ID: ${roomId ?: "Global"}")
-        
-        // Clear current items while loading new context
-        _itemHistory.value = emptyList()
-        
+
         refreshAllHistory()
     }
 
@@ -423,8 +420,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         Log.d("HistoryViewModel", "Triggering refresh for Room ID: ${currentRoomId ?: "Global"}")
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
-            isLoading.value = true
             errorMessage.value = null
+
+            // Warm start: if we already have tracked-slot metadata from earlier this
+            // session, paint the local cache immediately instead of blocking the
+            // transition on the network round-trip below. STEP 1 reconciles shortly
+            // after with the authoritative server response.
+            if (_validTrackedSlots.value.isNotEmpty()) {
+                reloadHistory(showSpinner = false)
+            }
+            isLoading.value = itemHistory.value.isEmpty()
 
             try {
                 // --- STEP 1: Metadata & Room Setup (Fast) ---
@@ -509,12 +514,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                // --- STEP 2: Load cached history and manage loading state ---
-                reloadHistory()
-                val hasLocalItems = itemHistory.value.isNotEmpty()
-                if (hasLocalItems) {
-                    isLoading.value = false
-                }
+                // --- STEP 2: Refresh with authoritative metadata ---
+                reloadHistory(showSpinner = false)
+                isLoading.value = false
 
                 // --- STEP 3: Delegate sync execution to HistorySyncManager (ApplicationScope & WorkManager) ---
                 HistorySyncManager.triggerSync(getApplication(), currentRoomId) {
