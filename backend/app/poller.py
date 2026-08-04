@@ -29,6 +29,7 @@ from .models import (
 )
 from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id
 from app.services.redis_service import get_redis_client, publish_event
+from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -585,25 +586,7 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
     group_members_lookup = set()
     if new_items_for_notify:
         checksums = {item['game_checksum'] for item in new_items_for_notify if item.get('game_checksum')}
-        if checksums:
-            try:
-                member_results = session.query(DatapackageCache.checksum, DatapackageCache.entity_name).filter(
-                    DatapackageCache.checksum.in_(checksums),
-                    DatapackageCache.entity_type == 'item_name_groups_json'
-                ).all()
-                for chk, name_groups_str in member_results:
-                    try:
-                        parsed_data = json.loads(name_groups_str)
-                        if isinstance(parsed_data, dict):
-                            for g_name, items in parsed_data.items():
-                                if isinstance(items, list):
-                                    g_name_lower = g_name.lower().strip()
-                                    for item in items:
-                                        group_members_lookup.add((chk, (g_name_lower, item.lower().strip())))
-                    except Exception:
-                        pass
-            except Exception as e:
-                logging.error(f"[POLLER_DB_ERROR] Failed to fetch group members: {e}")
+        group_members_lookup = fetch_group_members_lookup(session, checksums)
 
     # 1. Fetch Names from DatapackageCache
     if cache_keys_to_fetch:
@@ -678,8 +661,6 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                     logging.debug(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {rid} is backfilling. Suppressing item {item_data['item_id']}.")
                     continue
 
-                normalized_item_name = item_name.lower().strip()
-
                 # --- PREFERENCE-BASED SUPPRESSION ---
                 if True:
                     suppress_own = get_pref('suppress_own_events', 'suppress_own_events_default')
@@ -712,58 +693,22 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                 receiver_alias = short_name_map.get(rid, f"Slot {rid}")
                 receiver_original = full_name_map.get(rid, f"Slot {rid}")
 
-                # --- WHITELIST CHECK ---
-                is_whitelisted = False
-                if getattr(user_prefs, 'whitelist_items', None):
-                    for whitelist_rule in user_prefs.whitelist_items:
-                        rule_pattern = whitelist_rule.item_name.lower().strip()
-                        if getattr(whitelist_rule, 'is_group', False):
-                            # Group whitelist: Only supports game-specific level
-                            if whitelist_rule.game_name and whitelist_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
-                                lookup_key = (item_data['game_checksum'], (rule_pattern, normalized_item_name))
-                                if lookup_key in group_members_lookup:
-                                    is_whitelisted = True
-                                    break
-                        else:
-                            # Single item whitelist (supports wildcard matching)
-                            if fnmatch.fnmatch(normalized_item_name, rule_pattern):
-                                if not whitelist_rule.game_name:
-                                    is_whitelisted = True
-                                    break
-                                elif whitelist_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
-                                    is_whitelisted = True
-                                    break
+                # --- WHITELIST / IGNORE CHECK ---
+                should_ignore, is_whitelisted, matched_ignore_rule, _ = evaluate_item_filter_status(
+                    item_name=item_name,
+                    game_name=item_data['receiver_game'],
+                    game_checksum=item_data['game_checksum'],
+                    ignore_items=user_prefs.ignore_items,
+                    whitelist_items=user_prefs.whitelist_items,
+                    group_members_lookup=group_members_lookup
+                )
 
                 if is_whitelisted:
                     logging.info(f"[NOTIFY_WHITELISTED] User {user_id} whitelisted item '{item_name}' for game '{item_data['receiver_game']}'.")
 
-                # --- IGNORE LIST CHECK ---
-                if not is_whitelisted:
-                    should_ignore = False
-                    if user_prefs.ignore_items:
-                        for ignore_rule in user_prefs.ignore_items:
-                            rule_pattern = ignore_rule.item_name.lower().strip()
-                            if getattr(ignore_rule, 'is_group', False):
-                                # Group ignore: Only supports game-specific level
-                                if ignore_rule.game_name and ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
-                                    # Check if the item belongs to this group
-                                    lookup_key = (item_data['game_checksum'], (rule_pattern, normalized_item_name))
-                                    if lookup_key in group_members_lookup:
-                                        should_ignore = True
-                                        break
-                            else:
-                                # Single item ignore (supports wildcard matching)
-                                if fnmatch.fnmatch(normalized_item_name, rule_pattern):
-                                    if not ignore_rule.game_name:
-                                        should_ignore = True
-                                        break
-                                    elif ignore_rule.game_name.lower().strip() == item_data['receiver_game'].lower().strip():
-                                        should_ignore = True
-                                        break
-                    
-                    if should_ignore:
-                        logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{rule_pattern}' is_group={getattr(ignore_rule, 'is_group', False)}) for game '{item_data['receiver_game']}'.")
-                        continue
+                if should_ignore:
+                    logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} ignored item '{item_name}' (matched rule '{matched_ignore_rule.item_name}' is_group={getattr(matched_ignore_rule, 'is_group', False)}) for game '{item_data['receiver_game']}'.")
+                    continue
 
                 # --- CONDENSED MESSAGING CHECK ---
                 use_condensed = user_prefs.use_condensed_messages_default

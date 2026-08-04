@@ -622,7 +622,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 senderAlias = entity.senderAlias,
                 senderGame = entity.senderGame,
                 locationName = entity.locationName,
-                receivedCount = entity.receivedCount
+                receivedCount = entity.receivedCount,
+                isIgnored = entity.isIgnored,
+                isWhitelisted = entity.isWhitelisted
             )
         }
         return result

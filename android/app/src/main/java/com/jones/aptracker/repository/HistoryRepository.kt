@@ -165,7 +165,9 @@ class HistoryRepository(
                                     slot_id = item.slot_id,
                                     icon_name = item.icon_name,
                                     host = item.host,
-                                    receivedCount = item.receivedCount
+                                    receivedCount = item.receivedCount,
+                                    isIgnored = item.isIgnored,
+                                    isWhitelisted = item.isWhitelisted
                                 )
                             } catch (e: Exception) {
                                 Log.e("HISTORY_DEBUG", "!!! FAILED to process sync item: ${e.message}")
@@ -258,7 +260,9 @@ class HistoryRepository(
                     slot_id = item.slot_id,
                     icon_name = item.icon_name,
                     host = item.host,
-                    receivedCount = item.receivedCount
+                    receivedCount = item.receivedCount,
+                    isIgnored = item.isIgnored,
+                    isWhitelisted = item.isWhitelisted
                 )
             } catch (e: Exception) {
                 Log.e("HISTORY_DEBUG", "!!! FAILED to process history feed item: ${e.message}")
@@ -306,7 +310,9 @@ class HistoryRepository(
                                 slot_id = item.slot_id,
                                 icon_name = item.icon_name,
                                 host = item.host,
-                                receivedCount = item.receivedCount
+                                receivedCount = item.receivedCount,
+                                isIgnored = item.isIgnored,
+                                isWhitelisted = item.isWhitelisted
                             )
                         } catch (e: Exception) {
                             Log.e("HISTORY_DEBUG", "!!! FAILED to process history item: ${e.message}")
@@ -389,7 +395,9 @@ class HistoryRepository(
             locationName = detail.location_name,
             isFound = detail.is_found,
             timestamp = normalizeTimestamp(detail.timestamp),
-            itemFlags = detail.item_flags
+            itemFlags = detail.item_flags,
+            isIgnored = detail.isIgnored,
+            isWhitelisted = detail.isWhitelisted
         )
     }
 

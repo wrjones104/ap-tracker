@@ -299,7 +299,9 @@ data class HistoryItem(
     val icon_name: String?,
     val room_db_id: Int?,
     val host: String?,
-    val receivedCount: Int? = null
+    val receivedCount: Int? = null,
+    val isIgnored: Boolean = false,
+    val isWhitelisted: Boolean = false
 )
 
 data class RegisterDeviceRequest(
@@ -467,7 +469,9 @@ data class HintDetail(
     val location_name: String,
     val is_found: Boolean,
     val timestamp: String,
-    val item_flags: Int = 0
+    val item_flags: Int = 0,
+    val isIgnored: Boolean = false,
+    val isWhitelisted: Boolean = false
 )
 
 data class ConfigResponse(

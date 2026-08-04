@@ -8,10 +8,11 @@ from sqlalchemy import or_, desc, tuple_, func
 
 from app import Session
 from app.models import (
-    TrackedRoom, UserRoomSubscription, UserTrackedSlot,
+    User, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, SlotItemCount
 )
 from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z
+from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 
 history_bp = Blueprint('history_routes', __name__)
 
@@ -23,6 +24,12 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
     user_tracked_tuples = {(ts.room_id, ts.slot_id) for ts in tracked_slots_query.all()}
     if not user_tracked_tuples:
         return {"hints_for_you": [], "hints_by_you": []}
+
+    user_obj = session.query(User).options(
+        selectinload(User.ignore_items), selectinload(User.whitelist_items)
+    ).filter_by(id=user_id).first()
+    ignore_items = user_obj.ignore_items if user_obj else []
+    whitelist_items = user_obj.whitelist_items if user_obj else []
 
     room_map_query = session.query(TrackedRoom.id, TrackedRoom.room_id)
     if room_db_id:
@@ -135,7 +142,9 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             "item_owner_name": item_owner_name,
             "location_owner_name": location_owner_name,
             "item_name_key": item_name_key,
-            "location_name_key": location_name_key
+            "location_name_key": location_name_key,
+            "item_owner_game": item_owner_game,
+            "item_checksum": item_checksum
         })
 
     name_cache_map = {}
@@ -157,12 +166,25 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             for c in cache_query.all()
         }
 
+    group_members_lookup = fetch_group_members_lookup(
+        session, (t["item_checksum"] for t in temp_hint_data if t.get("item_checksum"))
+    )
+
     for temp_data in temp_hint_data:
         hint = temp_data["hint_obj"]
         current_room_db_id = temp_data["room_db_id"]
         player_map = player_map_by_room.get(current_room_db_id, {})
         item_name = name_cache_map.get(temp_data["item_name_key"]) or f"Item ID {hint.item_id}"
         location_name = name_cache_map.get(temp_data["location_name_key"]) or f"Location ID {hint.location_id}"
+
+        is_ignored, is_whitelisted, _, _ = evaluate_item_filter_status(
+            item_name=item_name,
+            game_name=temp_data["item_owner_game"],
+            game_checksum=temp_data["item_checksum"],
+            ignore_items=ignore_items,
+            whitelist_items=whitelist_items,
+            group_members_lookup=group_members_lookup
+        )
         io_obj = player_map.get(hint.item_owner_id)
         lo_obj = player_map.get(hint.location_owner_id)
 
@@ -192,9 +214,11 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             "location_name": location_name,
             "is_found": getattr(hint, 'is_found', False),
             "timestamp": ts_val,
-            "item_flags": getattr(hint, 'item_flags', 0)
+            "item_flags": getattr(hint, 'item_flags', 0),
+            "isIgnored": is_ignored,
+            "isWhitelisted": is_whitelisted
         }
-        
+
         if temp_data["is_item_owner_tracked"]:
             hints_for_you.append(hint_data)
         else:
@@ -317,10 +341,10 @@ def get_item_history(current_user, room_db_id):
             "id": item.id,
             "playerName": receiver_name,
             "playerAlias": receiver_alias,
-            "receivingGame": receiver_game, 
-            "senderName": sender_name,    
+            "receivingGame": receiver_game,
+            "senderName": sender_name,
             "senderAlias": sender_alias,
-            "senderGame": sender_game,   
+            "senderGame": sender_game,
             "timestamp": format_iso_z(item.timestamp),
             "tracker_id": room.tracker_id,
             "slot_id": receiver_id,
@@ -331,6 +355,7 @@ def get_item_history(current_user, room_db_id):
             "_loc_name_key": location_name_key,
             "_raw_item_id": item.item_id,
             "_raw_loc_id": item.location_id,
+            "_game_checksum": rec_checksum,
             "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
         })
 
@@ -353,21 +378,40 @@ def get_item_history(current_user, room_db_id):
             for c in cache_query.all()
         }
 
+    group_members_lookup = fetch_group_members_lookup(
+        session, (t["_game_checksum"] for t in history_pre_cache if t.get("_game_checksum"))
+    )
+    # current_user is detached (expunged in token_required), so relationships must be re-queried.
+    prefs_user = session.query(User).options(
+        selectinload(User.ignore_items), selectinload(User.whitelist_items)
+    ).filter_by(id=current_user.id).first()
+    ignore_items = prefs_user.ignore_items if prefs_user else []
+    whitelist_items = prefs_user.whitelist_items if prefs_user else []
+
     history = []
     for temp_item in history_pre_cache:
         item_name = name_cache_map.get(temp_item["_item_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
         location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
-        
+
+        is_ignored, is_whitelisted, _, _ = evaluate_item_filter_status(
+            item_name=item_name,
+            game_name=temp_item["receivingGame"],
+            game_checksum=temp_item["_game_checksum"],
+            ignore_items=ignore_items,
+            whitelist_items=whitelist_items,
+            group_members_lookup=group_members_lookup
+        )
+
         history.append({
             "id": temp_item["id"],
             "playerName": temp_item["playerName"],
             "playerAlias": temp_item["playerAlias"],
-            "receivingGame": temp_item["receivingGame"], 
+            "receivingGame": temp_item["receivingGame"],
             "itemName": item_name,
-            "senderName": temp_item["senderName"],       
+            "senderName": temp_item["senderName"],
             "senderAlias": temp_item["senderAlias"],
-            "senderGame": temp_item["senderGame"],       
-            "locationName": location_name,               
+            "senderGame": temp_item["senderGame"],
+            "locationName": location_name,
             "isPlayerFinished": temp_item["isPlayerFinished"],
             "itemFlags": temp_item["itemFlags"],
             "timestamp": temp_item["timestamp"],
@@ -375,7 +419,9 @@ def get_item_history(current_user, room_db_id):
             "tracker_id": temp_item["tracker_id"],
             "slot_id": temp_item["slot_id"],
             "host": temp_item["host"],
-            "receivedCount": temp_item["receivedCount"]
+            "receivedCount": temp_item["receivedCount"],
+            "isIgnored": is_ignored,
+            "isWhitelisted": is_whitelisted
         })
 
     return jsonify(history)
@@ -638,6 +684,28 @@ def sync_history(current_user):
             for c in cache_query.all()
         }
 
+    filter_checksums = set()
+    for item in items:
+        meta = parsed_room_metadata.get(item.room_id, {})
+        receiver_game = meta.get('game_map', {}).get(item.receiving_slot_id, "Unknown")
+        rec_checksum = meta.get('game_checksums', {}).get(receiver_game)
+        if rec_checksum:
+            filter_checksums.add(rec_checksum)
+    for hint in hints:
+        meta = parsed_room_metadata.get(hint.room_id, {})
+        io_game = meta.get('game_map', {}).get(hint.item_owner_id, "Unknown")
+        io_checksum = meta.get('game_checksums', {}).get(io_game)
+        if io_checksum:
+            filter_checksums.add(io_checksum)
+
+    group_members_lookup = fetch_group_members_lookup(session, filter_checksums)
+    # current_user is detached (expunged in token_required), so relationships must be re-queried.
+    prefs_user = session.query(User).options(
+        selectinload(User.ignore_items), selectinload(User.whitelist_items)
+    ).filter_by(id=current_user.id).first()
+    ignore_items = prefs_user.ignore_items if prefs_user else []
+    whitelist_items = prefs_user.whitelist_items if prefs_user else []
+
     response_items = []
     for item in items:
         room_data = room_map_by_uuid.get(item.room_id)
@@ -672,7 +740,16 @@ def sync_history(current_user):
         
         item_name = name_cache_map.get((rec_checksum, 'item', item.item_id)) or f"Item ID {item.item_id}"
         location_name = name_cache_map.get((snd_checksum, 'location', item.location_id)) or f"Location ID {item.location_id}"
-        
+
+        is_ignored, is_whitelisted, _, _ = evaluate_item_filter_status(
+            item_name=item_name,
+            game_name=receiver_game,
+            game_checksum=rec_checksum,
+            ignore_items=ignore_items,
+            whitelist_items=whitelist_items,
+            group_members_lookup=group_members_lookup
+        )
+
         response_items.append({
             "id": item.id,
             "room_db_id": room_data.id,
@@ -692,7 +769,9 @@ def sync_history(current_user):
             "tracker_id": room_data.tracker_id,
             "slot_id": receiver_id,
             "host": room_data.hostname,
-            "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
+            "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0),
+            "isIgnored": is_ignored,
+            "isWhitelisted": is_whitelisted
         })
 
     response_hints = []
@@ -727,7 +806,16 @@ def sync_history(current_user):
         
         item_name = name_cache_map.get((io_checksum, 'item', hint.item_id)) or f"Item ID {hint.item_id}"
         location_name = name_cache_map.get((lo_checksum, 'location', hint.location_id)) or f"Location ID {hint.location_id}"
-        
+
+        is_ignored, is_whitelisted, _, _ = evaluate_item_filter_status(
+            item_name=item_name,
+            game_name=io_game,
+            game_checksum=io_checksum,
+            ignore_items=ignore_items,
+            whitelist_items=whitelist_items,
+            group_members_lookup=group_members_lookup
+        )
+
         response_hints.append({
             "id": hint.id,
             "room_db_id": room_data.id,
@@ -743,7 +831,9 @@ def sync_history(current_user):
             "is_found": hint.is_found,
             "timestamp": format_iso_z(hint.timestamp),
             "updated_at": format_iso_z(hint.updated_at),
-            "item_flags": hint.item_flags or 0
+            "item_flags": hint.item_flags or 0,
+            "isIgnored": is_ignored,
+            "isWhitelisted": is_whitelisted
         })
 
     max_item_ids = {}
@@ -994,6 +1084,7 @@ def get_global_item_history(current_user):
             "_loc_name_key": location_name_key,
             "_raw_item_id": item.item_id,
             "_raw_loc_id": item.location_id,
+            "_game_checksum": rec_checksum,
             "isPlayerFinished": is_finished,
             "itemFlags": item.item_flags or 0,
             "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
@@ -1019,30 +1110,51 @@ def get_global_item_history(current_user):
             for c in cache_query.all()
         }
 
+    group_members_lookup = fetch_group_members_lookup(
+        session, (t["_game_checksum"] for t in history_pre_cache if t.get("_game_checksum"))
+    )
+    # current_user is detached (expunged in token_required), so relationships must be re-queried.
+    prefs_user = session.query(User).options(
+        selectinload(User.ignore_items), selectinload(User.whitelist_items)
+    ).filter_by(id=current_user.id).first()
+    ignore_items = prefs_user.ignore_items if prefs_user else []
+    whitelist_items = prefs_user.whitelist_items if prefs_user else []
+
     for temp_item in history_pre_cache:
         item_name = name_cache_map.get(temp_item["_item_name_key"]) or f"Item ID {temp_item['_raw_item_id']}"
         location_name = name_cache_map.get(temp_item["_loc_name_key"]) or f"Location ID {temp_item['_raw_loc_id']}"
 
+        is_ignored, is_whitelisted, _, _ = evaluate_item_filter_status(
+            item_name=item_name,
+            game_name=temp_item["receivingGame"],
+            game_checksum=temp_item["_game_checksum"],
+            ignore_items=ignore_items,
+            whitelist_items=whitelist_items,
+            group_members_lookup=group_members_lookup
+        )
+
         final_history_dicts.append({
             "id": temp_item["id"],
-            "room_db_id": temp_item["room_db_id"], 
-            "alias": temp_item["room_alias"], 
+            "room_db_id": temp_item["room_db_id"],
+            "alias": temp_item["room_alias"],
             "icon_name": temp_item["icon_name"],
             "playerName": temp_item['playerName'],
             "playerAlias": temp_item['playerAlias'],
             "receivingGame": temp_item['receivingGame'],
             "itemName": item_name,
-            "senderName": temp_item['senderName'],     
+            "senderName": temp_item['senderName'],
             "senderAlias": temp_item['senderAlias'],
-            "senderGame": temp_item['senderGame'],      
-            "locationName": location_name,              
+            "senderGame": temp_item['senderGame'],
+            "locationName": location_name,
             "isPlayerFinished": temp_item['isPlayerFinished'],
             "itemFlags": temp_item['itemFlags'],
             "timestamp": temp_item["timestamp"],
             "tracker_id": temp_item["tracker_id"],
             "slot_id": temp_item["slot_id"],
             "host": temp_item["host"],
-            "receivedCount": temp_item["receivedCount"]
+            "receivedCount": temp_item["receivedCount"],
+            "isIgnored": is_ignored,
+            "isWhitelisted": is_whitelisted
         })
 
     return jsonify(final_history_dicts)
