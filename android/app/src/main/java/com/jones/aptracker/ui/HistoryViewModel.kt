@@ -249,17 +249,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage
 
-    private val _pendingNavigateToActivity = MutableStateFlow(false)
-    val pendingNavigateToActivity: StateFlow<Boolean> = _pendingNavigateToActivity
-
-    fun triggerNavigateToActivity() {
-        _pendingNavigateToActivity.value = true
-    }
-
-    fun clearPendingNavigateToActivity() {
-        _pendingNavigateToActivity.value = false
-    }
-
     init {
         val apiService = RetrofitClient.instance
         repository = HistoryRepository.getInstance(application)
