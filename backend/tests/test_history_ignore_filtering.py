@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app import create_app, Session, engine
 from app.models import (
-    Base, NotifiedItem, UserTrackedSlot, TrackedRoom, DatapackageCache,
+    Base, NotifiedItem, NotifiedHint, UserTrackedSlot, TrackedRoom, DatapackageCache,
     User, UserRoomSubscription, UserIgnoreItem, UserWhitelistItem
 )
 
@@ -202,6 +202,61 @@ class TestHistoryIgnoreFiltering(unittest.TestCase):
         history = self._get_item_history(user, room.id)
         self.assertEqual(len(history), 1)
         self.assertFalse(history[0]['isIgnored'])
+
+    def test_group_ignore_is_reflected_in_hint_history(self):
+        """
+        Hints for group-ignored items must be flagged isIgnored, matching the
+        notification path. A hint is evaluated against the item owner's
+        game/checksum (the hinted item belongs to the item owner).
+        """
+        room = TrackedRoom(
+            room_id="ignore-filter-hint-room-uuid",
+            tracker_id="test_tracker",
+            hostname="archipelago.gg",
+            game_checksums_json=json.dumps({"Zelda": "checksumA"}),
+            cached_players_json=json.dumps([
+                {"slot_id": 1, "name": "Player1", "game": "Zelda"},
+                {"slot_id": 2, "name": "Player2", "game": "Zelda"},
+            ])
+        )
+        self.session.add(room)
+        self.session.flush()
+
+        user = User(discord_id="77777", discord_username="hintignoretestuser")
+        self.session.add(user)
+        self.session.flush()
+
+        self.session.add(UserRoomSubscription(user_id=user.id, room_id=room.id, alias="Hint Room"))
+        # Track slot 1 (the item owner) so the hint lands in hints_for_you.
+        self.session.add(UserTrackedSlot(user_id=user.id, room_id=room.id, slot_id=1))
+        self.session.commit()
+
+        self._add_item_datapackage("checksumA", item_id=601, item_name="Boo Buddy", group_name="Boos")
+
+        self.session.add(NotifiedHint(
+            room_id=room.room_id,
+            item_owner_id=1,
+            location_owner_id=2,
+            item_id=601,
+            location_id=9001,
+            is_found=False,
+        ))
+        self.session.add(UserIgnoreItem(
+            user_id=user.id, item_name="Boos", game_name="Zelda", is_group=True
+        ))
+        self.session.commit()
+
+        token = self._generate_token(user.id)
+        headers = {'Authorization': f'Bearer {token}'}
+        res = self.client.get(f'/rooms/{room.id}/history/hints?include_found=true', headers=headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+
+        self.assertEqual(len(data['hints_for_you']), 1)
+        hint = data['hints_for_you'][0]
+        self.assertEqual(hint['item_name'], "Boo Buddy")
+        self.assertTrue(hint['isIgnored'], "Group-ignored hinted item should be flagged isIgnored")
+        self.assertFalse(hint['isWhitelisted'])
 
 
 if __name__ == '__main__':
