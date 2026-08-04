@@ -17,7 +17,7 @@ data class ReleaseInfo(
     val version: String,
     @SerializedName("release_date") val releaseDate: String? = null,
     val title: String? = null,
-    val highlights: List<String>? = null,
+    val highlights: List<CategoryItem>? = null,
     val categories: ReleaseCategories? = null,
     @SerializedName("discord_md") val discordMd: String? = null
 )
