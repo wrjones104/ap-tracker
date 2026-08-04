@@ -16,10 +16,13 @@ def _load_changelog_data():
 @whats_new_bp.route('/api/whats_new', methods=['GET'])
 def get_whats_new():
     """
-    GET /api/whats_new?target=app|server|all
+    GET /api/whats_new?target=app|server|all&limit=N
     Returns release notes and version info filtered by target (defaults to 'all').
+    Optional `limit` caps the number of releases returned (newest first); omitted
+    or non-positive values return the full list.
     """
     target = request.args.get('target', 'all').lower()
+    limit = request.args.get('limit', type=int)
     data = _load_changelog_data()
 
     if target == 'app':
@@ -31,6 +34,9 @@ def get_whats_new():
     else:
         releases = data.get("releases", [])
         latest_version = data.get("latest_version")
+
+    if limit is not None and limit > 0:
+        releases = releases[:limit]
 
     return jsonify({
         "status": "success",

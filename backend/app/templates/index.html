@@ -279,9 +279,12 @@
                 </div>
             </div>
 
-            <div class="mt-12 text-center">
+            <div class="mt-12 flex flex-col items-center gap-4">
                 <a href="https://github.com/wrjones104/ap-tracker/releases" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-teal-400 border border-slate-700 px-5 py-3 rounded-lg text-sm font-semibold transition-all">
                     <i data-lucide="download" class="w-4 h-4"></i> Get Latest APK on GitHub Releases
+                </a>
+                <a href="https://github.com/wrjones104/ap-tracker/releases" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-slate-500 hover:text-teal-400 text-sm font-medium transition-colors">
+                    View full changelog <i data-lucide="chevron-right" class="w-4 h-4"></i>
                 </a>
             </div>
         </div>
@@ -387,8 +390,8 @@
             menu.classList.toggle('hidden');
         });
 
-        // Fetch What's New Releases
-        fetch('/api/whats_new')
+        // Fetch What's New Releases (capped; older releases live on GitHub Releases)
+        fetch('/api/whats_new?limit=5')
             .then(res => res.json())
             .then(data => {
                 const container = document.getElementById('whats-new-container');

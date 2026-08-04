@@ -65,6 +65,12 @@ class TestWhatsNewRoutes(unittest.TestCase):
         self.assertIn('releases', data)
         self.assertTrue(len(data['releases']) > 0)
 
+    def test_get_whats_new_limit(self):
+        response = self.client.get('/api/whats_new?limit=1')
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(len(data['releases']), 1)
+
     def test_get_whats_new_app_target(self):
         response = self.client.get('/api/whats_new?target=app')
         self.assertEqual(response.status_code, 200)
