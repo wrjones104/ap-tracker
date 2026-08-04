@@ -10,6 +10,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.6.23] - 2026-08-03
+
+_Server-Side Ignore/Whitelist Filtering_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - **Server-Side Ignore/Whitelist Computation**: Extracted ignore/whitelist matching (including checksum-scoped item-group resolution) into a shared `backend/app/services/filtering_service.py`, used by both the poller and the history/hint endpoints. History and hint endpoints now return `isIgnored`/`isWhitelisted` per item and hint, fixing item-group rules having no client-visible effect and hint filtering ignoring the game-specific scope of rules.
+> ```
+
+### Fixed
+- **Item Group Filtering Computed Server-Side**: Item-group ignore/whitelist rules are now evaluated on the server and sent to the app directly, fixing group rules that previously had no effect in History.
+- **Per-Game Hint Filtering Fix**: Hint filtering now correctly respects each rule's game scope instead of applying it across all your games.
+
+---
+
 ## [1.6.22] - 2026-08-03
 
 _Cheese Tracker Notes & Statuses API_

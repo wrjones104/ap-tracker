@@ -293,6 +293,42 @@
   ],
   "server_releases": [
     {
+      "version": "1.6.23",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-03",
+      "title": "Server-Side Ignore/Whitelist Filtering",
+      "highlights": [
+        {
+          "title": "Item Group Filtering Computed Server-Side",
+          "description": "Item-group ignore/whitelist rules are now evaluated on the server and sent to the app directly, fixing group rules that previously had no effect in History."
+        },
+        {
+          "title": "Per-Game Hint Filtering Fix",
+          "description": "Hint filtering now correctly respects each rule's game scope instead of applying it across all your games."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Item Group Filtering Computed Server-Side",
+            "description": "Item-group ignore/whitelist rules are now evaluated on the server and sent to the app directly, fixing group rules that previously had no effect in History."
+          },
+          {
+            "title": "Per-Game Hint Filtering Fix",
+            "description": "Hint filtering now correctly respects each rule's game scope instead of applying it across all your games."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Fixed\n- **Server-Side Ignore/Whitelist Computation**: Extracted ignore/whitelist matching (including checksum-scoped item-group resolution) into a shared `backend/app/services/filtering_service.py`, used by both the poller and the history/hint endpoints. History and hint endpoints now return `isIgnored`/`isWhitelisted` per item and hint, fixing item-group rules having no client-visible effect and hint filtering ignoring the game-specific scope of rules."
+      }
+    },
+    {
       "version": "1.6.22",
       "component": "server",
       "component_label": "Server",
