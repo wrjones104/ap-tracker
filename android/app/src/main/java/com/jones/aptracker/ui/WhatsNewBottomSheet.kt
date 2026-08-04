@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.jones.aptracker.network.CategoryItem
 import com.jones.aptracker.network.ReleaseInfo
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,9 +67,18 @@ fun WhatsNewBottomSheet(
 
 
             val highlights = releaseInfo?.highlights ?: listOf(
-                "Cheese Tracker Notes & Status: View and edit your Cheese Tracker notes and status (Unknown, Unblocked, BK, Soft BK, Go Mode) right from a slot's detail screen.",
-                "\"Still BK\" Button: Keep your BK/Soft BK status while refreshing your Last Checked time, matching the Cheese Tracker web feature.",
-                "Ping Preferences: Set per-slot ping preferences, plus a default ping applied to newly claimed slots from the Profile screen."
+                CategoryItem(
+                    "Cheese Tracker Notes & Status",
+                    "View and edit your Cheese Tracker notes and status (Unknown, Unblocked, BK, Soft BK, Go Mode) right from a slot's detail screen."
+                ),
+                CategoryItem(
+                    "\"Still BK\" Button",
+                    "Keep your BK/Soft BK status while refreshing your Last Checked time, matching the Cheese Tracker web feature."
+                ),
+                CategoryItem(
+                    "Ping Preferences",
+                    "Set per-slot ping preferences, plus a default ping applied to newly claimed slots from the Profile screen."
+                )
             )
 
             // Highlights
@@ -104,11 +114,19 @@ fun WhatsNewBottomSheet(
                                 modifier = Modifier.size(14.dp)
                             )
                         }
-                        Text(
-                            text = highlight,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Column {
+                            Text(
+                                text = highlight.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = highlight.description,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
