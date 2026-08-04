@@ -12,12 +12,10 @@ The system consists of two main parts:
 
 ## Directory Structure
 
-*   `CHANGELOG.md`: Root project changelog overview pointing to component changelogs.
-*   `android/CHANGELOG.md`: Dedicated Android application changelog following Keep a Changelog standard.
-*   `backend/CHANGELOG.md`: Dedicated Backend server & API changelog following Keep a Changelog standard.
-*   `backend/VERSION`: Backend server version string file (e.g. `1.6.19`).
+*   `backend/app/data/changelog.json`: **Single source of truth** for all release notes and versions (hand-edited). Two newest-first arrays: `app_releases` (Android) and `server_releases` (Backend). Everything else — the two `CHANGELOG.md` files, the landing-page version badges, and `/api/whats_new` — is derived from it.
+*   `android/CHANGELOG.md` / `backend/CHANGELOG.md`: **Generated** (do not hand-edit) from `changelog.json` by `scripts/generate_changelog.py`.
 *   `architecture.md`: **[Detailed Architecture Document](architecture.md)** — Explains system design, Mermaid diagrams, Redis event queues, service engines, PostgreSQL composite indexes, and Docker container topology.
-*   `scripts/`: Contains developer helper scripts including `sync_changelog.py`.
+*   `scripts/`: Contains developer helper scripts including `generate_changelog.py`.
 *   `backend/`: Contains the Python backend code.
     *   `app/`: Main application package.
         *   `routes/`: Domain-driven REST API blueprint modules (`auth_routes.py`, `user_routes.py`, `rooms_routes.py`, `slots_routes.py`, `thresholds_routes.py`, `history_routes.py`, `game_routes.py`, `whats_new_routes.py`).
@@ -99,7 +97,7 @@ The system consists of two main parts:
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
 *   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
 *   **Cheese Tracker Claim Checking:** Unauthenticated claims on Cheese Tracker leave `claimed_by_ct_user_id` as `None` but populate `discord_username` (which shows as `effective_discord_username` on GET requests). Checking for claim conflicts requires checking both for authenticated ID mismatches and unauthenticated Discord username mismatches.
-*   **Changelog Formatting & Sync:** Author Android release notes in `android/CHANGELOG.md` and server release notes in `backend/CHANGELOG.md`. Run `python scripts/sync_changelog.py` to automatically compile both into `backend/app/data/changelog.json` for the web landing page and `/api/whats_new` endpoints.
+*   **Changelog & Versioning (single source of truth):** All release notes and versions live in `backend/app/data/changelog.json` — a hand-edited file with two newest-first arrays, `app_releases` (Android) and `server_releases` (Backend), which are versioned independently. To cut a release: (1) prepend an entry to the relevant array; (2) for an Android release, bump `versionName`/`versionCode` in `android/app/build.gradle.kts` to match the new `app_releases` version; (3) run `python scripts/generate_changelog.py` to regenerate `android/CHANGELOG.md` and `backend/CHANGELOG.md`; (4) commit. The landing-page version badges, `/api/whats_new`, and `get_server_version()`/`get_android_version()` all read `changelog.json` directly. `scripts/generate_changelog.py --check` (run in CI) fails if the markdown is stale or if the gradle `versionName` disagrees with the newest `app_releases` entry. Do **not** hand-edit the `CHANGELOG.md` files — they are generated.
 *   **APK Distribution:** APK files are not hosted directly on the web app/backend. APK downloads are provided exclusively via **GitHub Releases** (alongside Google Play Store).
 
 ## LLM Maintenance Directive

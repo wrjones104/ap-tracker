@@ -1,38 +1,17 @@
-import os
-import json
-import logging
 from flask import Blueprint, jsonify, request
+
+from app import changelog
 
 whats_new_bp = Blueprint('whats_new_routes', __name__)
 
-DATA_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'changelog.json')
 
 def _load_changelog_data():
-    """Loads release notes from changelog.json file."""
-    if not os.path.exists(DATA_FILE_PATH):
-        logging.warning(f"[WHATS_NEW] Changelog data file not found at {DATA_FILE_PATH}")
-        return {
-            "latest_version": "1.0.0",
-            "app_latest_version": "1.0.0",
-            "server_latest_version": "1.0.0",
-            "app_releases": [],
-            "server_releases": [],
-            "releases": []
-        }
-    
-    try:
-        with open(DATA_FILE_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        logging.error(f"[WHATS_NEW] Failed to read changelog data: {e}")
-        return {
-            "latest_version": "1.0.0",
-            "app_latest_version": "1.0.0",
-            "server_latest_version": "1.0.0",
-            "app_releases": [],
-            "server_releases": [],
-            "releases": []
-        }
+    """
+    Returns the full What's New payload derived from changelog.json:
+    the two component arrays plus the computed merged `releases` list and the
+    `*_latest_version` fields.
+    """
+    return changelog.enrich()
 
 @whats_new_bp.route('/api/whats_new', methods=['GET'])
 def get_whats_new():
