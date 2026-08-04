@@ -253,9 +253,19 @@ fun MainNavHost(
                 onBackClick = { navController.popBackStack() },
                 onNavigateToHistory = { roomId, _, query, player ->
                     historyViewModel.loadHistoryFor(roomId, query, player)
-                    historyViewModel.triggerNavigateToActivity()
-                    navController.popBackStack("home", inclusive = false)
+                    navController.navigate("slot_history")
                 }
+            )
+        }
+
+        composable("slot_history") {
+            ActivityFeedScreen(
+                historyViewModel = historyViewModel,
+                userViewModel = userViewModel,
+                onNavigateToSlotDetail = { roomDbId, slotId ->
+                    navController.navigate("slot_detail/$roomDbId/$slotId")
+                },
+                onBackClick = { navController.popBackStack() }
             )
         }
     }

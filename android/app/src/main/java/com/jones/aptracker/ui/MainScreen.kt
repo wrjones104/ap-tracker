@@ -87,18 +87,6 @@ fun MainScreen(
 
     val historyFilter by historyViewModel.historyFilter.collectAsState()
     val roomNames by historyViewModel.roomNames.collectAsState()
-    val pendingNavigateToActivity by historyViewModel.pendingNavigateToActivity.collectAsState()
-
-    LaunchedEffect(pendingNavigateToActivity) {
-        if (pendingNavigateToActivity) {
-            bottomNavController.navigate(BottomNavItem.Activity.route) {
-                popUpTo(bottomNavController.graph.findStartDestination().id) { saveState = true }
-                launchSingleTop = true
-                restoreState = true
-            }
-            historyViewModel.clearPendingNavigateToActivity()
-        }
-    }
 
     // --- 1. Get URI Handler for links ---
     val uriHandler = LocalUriHandler.current
