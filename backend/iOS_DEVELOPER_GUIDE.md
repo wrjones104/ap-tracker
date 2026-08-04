@@ -87,18 +87,41 @@ Creates a guest user account and returns a long-lived JWT.
 
 ---
 
-## 3. App Configuration Check
+## 3. App Configuration Check (Minimum App Version)
 
-Before loading the app, verify if the client needs to warn about a minimum app version.
+Before letting the user into the app, check whether the client build is new enough to talk to the backend.
+
 - **Endpoint**: `GET /config`
-- **Query Parameters**:
-  - `platform`: `ios` (Required to check the iOS version constraints rather than Android defaults)
+- **Query Parameters**: None. (The endpoint takes no parameters — there is **no** `platform` argument. `min_app_version` is a single global value shared by every client, iOS and Android alike.)
 - **Response (200 OK)**:
   ```json
   {
-    "min_app_version": 1
+    "min_app_version": 9
   }
   ```
+
+### What `min_app_version` actually means
+
+This is the single most common point of confusion, so read this carefully:
+
+- `min_app_version` is an **integer**, not a semantic version string. It is **not** `1.2.0` or `"9.0"` — it is a plain build number that only ever increments (currently `9`).
+- You compare it against your app's own **integer build number** — the monotonically increasing value you bump on every release (the equivalent of Android's `versionCode`, or iOS's `CFBundleVersion` / build number). Do **not** compare it against your marketing/display version (`CFBundleShortVersionString`, e.g. `"2.3.1"`).
+- The rule is simply: **if `yourBuildNumber < min_app_version`, the client is too old** and must show an "Update Required" prompt. If `yourBuildNumber >= min_app_version`, the client is fine.
+
+  ```swift
+  // Example
+  let minVersion = config.minAppVersion            // e.g. 9  (from GET /config)
+  let currentVersion = Int(Bundle.main.buildNumber) // your integer build number
+  if currentVersion < minVersion {
+      // Block the app and show "Update Required"
+  }
+  ```
+
+> **Heads-up for third-party clients:** `min_app_version` is defined server-side against the *official* app's build numbering. If your client uses its own, unrelated build numbers, a low build number will trip this check and you will see the **"Update Required"** dialog even though nothing is wrong with your integration. Choose a build-number scheme at or above the current `min_app_version`, or gate the check on your own versioning, so you don't lock your users out unnecessarily.
+
+### Recommended behavior: fail open
+
+The version check should **never** hard-block a user because of a network hiccup. If the `GET /config` call fails (timeout, offline, 5xx), treat the client as up to date and let the user in rather than trapping them behind an update wall. Only show the "Update Required" prompt when you have a successful response **and** the comparison shows the build is too old.
 
 ---
 
@@ -145,6 +168,8 @@ Once your iOS app retrieves the FCM token and the IDFV, send them to the backend
 
 ### Step 2: Get Subscribed Rooms
 - **Endpoint**: `GET /rooms`
+- **Query Parameters** (optional):
+  - `archived`: `true` to return archived subscriptions instead of active ones (default `false`).
 - **Response (200 OK)**:
   ```json
   [
@@ -152,15 +177,21 @@ Once your iOS app retrieves the FCM token and the IDFV, send them to the backend
       "id": 14,
       "room_id": "YOUR_ROOM_UUID",
       "alias": "My AP Co-op Game",
+      "icon_name": "person",
+      "is_archived": false,
       "host": "archipelago.gg:38291",
       "status": "active",
       "is_complete": false,
       "is_suspended": false,
       "total_slots_count": 5,
-      "tracked_slots_count": 0
+      "tracked_slots_count": 0,
+      "web_url": "https://archipelago.gg/room/YOUR_ROOM_UUID"
     }
   ]
   ```
+  - **`id`**: the Room/Subscription ID (`room_db_id`) used in all `/rooms/<id>/...` paths.
+  - **`status`**: one of `active`, `completed`, `suspended_error`, or `suspended_stale`.
+  - **`web_url`**: a direct link to the room on the hosting site.
 
 ---
 
@@ -174,19 +205,34 @@ Once your iOS app retrieves the FCM token and the IDFV, send them to the backend
     {
       "slot_id": 1,
       "name": "HeroLink",
+      "alias": null,
       "game": "The Legend of Zelda",
       "is_finished": false,
-      "is_tracked": false
+      "is_tracked": false,
+      "needs_backfill": false,
+      "notify_progression": null,
+      "notify_useful": null,
+      "notify_filler": null,
+      "notify_trap": null,
+      "notify_hints": null
     },
     {
       "slot_id": 2,
       "name": "SamusAran",
+      "alias": null,
       "game": "Super Metroid",
       "is_finished": false,
-      "is_tracked": true
+      "is_tracked": true,
+      "needs_backfill": false,
+      "notify_progression": true,
+      "notify_useful": false,
+      "notify_filler": null,
+      "notify_trap": null,
+      "notify_hints": true
     }
   ]
   ```
+  The `notify_*` fields reflect the per-slot preference overrides. A value of `null` means "not overridden — inherit the user's account-level default" (see [Section 7](#7-configuring-notification-preferences)). They are `null` for slots you aren't tracking.
 
 ### Step 2: Update Tracked Slots
 - **Endpoint**: `PUT /rooms/<subscription_id>/slots`
@@ -205,11 +251,15 @@ Users can customize notification settings on a per-slot basis (e.g. disable usef
 
 ### Step 1: Update Slot Preferences
 - **Endpoint**: `PUT /rooms/<subscription_id>/slots/<slot_id>/preferences`
+- **Response (200 OK)**: `{ "message": "Slot preferences updated successfully" }`
+- **Inheritance model**: Each per-slot preference is tri-state. Send `true`/`false` to override, or `null` to clear the override and fall back to the user's account-level default. The "default" values listed below are those account-level defaults, applied whenever a slot's value is `null`.
 - **Request Body Options (Send only the fields you wish to change)**:
   ```json
   {
     "notify_progression": true,
     "notify_useful": false,
+    "notify_filler": false,
+    "notify_trap": false,
     "notify_hints": true,
     "notify_hints_remote_items": true,
     "notify_finished": true,
@@ -225,6 +275,8 @@ Users can customize notification settings on a per-slot basis (e.g. disable usef
 ### Option Field Reference Guide
 - **`notify_progression`** (Boolean, default `true`): Toggles notifications for progression-related items (critical path items like weapons, keys, progressive upgrades).
 - **`notify_useful`** (Boolean, default `true`): Toggles notifications for useful but non-critical items (e.g., heart containers, capacity upgrades).
+- **`notify_filler`** (Boolean, default `false`): Toggles notifications for filler items (minor/common items). Off by default to avoid notification spam.
+- **`notify_trap`** (Boolean, default `false`): Toggles notifications for trap items.
 - **`notify_hints`** (Boolean, default `true`): Toggles notifications when a slot is mentioned in an Archipelago server hint.
 - **`notify_hints_remote_items`** (Boolean, default `true`): If `true`, you will be notified when a hint reveals an item on someone else's slot that belongs to you.
 - **`notify_finished`** (Boolean, default `false`): If `true`, triggers a notification when a player completes their seed goal.
@@ -235,22 +287,31 @@ Users can customize notification settings on a per-slot basis (e.g. disable usef
 - **`suppress_self_found`** (Boolean, default `true`): If `true`, blocks notifications for items you found for *yourself* in your own world.
 - **`suppress_connected`** (Boolean, default `false`): If `true`, suppresses push notifications entirely if your slot's client is currently connected online to the Archipelago room.
 
-### Step 2: Adding Item Count Thresholds (Milestones)
-You can register milestone rules to notify only when a certain quantity of items is reached for a slot.
-- **Endpoint**: `POST /rooms/<subscription_id>/slots/<slot_id>/thresholds`
+### Step 2: Adding Item Count Thresholds (Threshold Groups)
+You can register milestone rules to notify only when a certain quantity of one or more items is reached for a slot. Thresholds are organized into **groups** — a group fires once all of its item quantities are met.
+- **Endpoint**: `POST /rooms/<subscription_id>/slots/<slot_id>/threshold-groups`
 - **Request Body**:
   ```json
   {
-    "item_name": "Rupee",
-    "threshold": 10
+    "name": "Rupee Milestone",
+    "items": [
+      { "item_name": "Rupee", "quantity": 10, "is_group": false }
+    ]
   }
   ```
+  - **`name`** (String, optional): A display label for the group. May be omitted or `null`.
+  - **`items`** (Array, required): One or more item rules. Each requires `item_name` (String) and `quantity` (Integer ≥ 1). `is_group` (Boolean, default `false`) marks the rule as matching an Archipelago item *group* rather than a single item name.
 - **Response (201 Created)**:
   ```json
   {
-    "message": "Item count threshold milestone added."
+    "message": "Threshold group created",
+    "id": 42
   }
   ```
+- **Related endpoints**:
+  - `GET /rooms/<subscription_id>/slots/<slot_id>/threshold-groups` — list existing groups.
+  - `PUT /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/<group_id>` — update a group.
+  - `DELETE /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/<group_id>` — remove a group.
 
 ---
 
