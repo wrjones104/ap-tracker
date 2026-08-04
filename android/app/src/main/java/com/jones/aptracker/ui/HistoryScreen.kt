@@ -7,11 +7,15 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
@@ -82,6 +86,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -603,6 +608,8 @@ fun HistoryFilterSheet(
     }
 }
 
+private enum class ItemActionMode { MENU, WHITELIST, IGNORE }
+
 @Composable
 fun HistoryDetailSheet(
     item: HistoryItem,
@@ -745,7 +752,7 @@ fun HistoryDetailSheet(
             Spacer(Modifier.height(8.dp))
         }
 
-        // Ignore Group Actions
+        // Group fetch loading indicator
         if (isFetchingGroups) {
             Row(
                 modifier = Modifier
@@ -767,79 +774,142 @@ fun HistoryDetailSheet(
                 )
             }
             Spacer(Modifier.height(8.dp))
-        } else if (!item.receivingGame.isNullOrBlank() && itemGroups.isNotEmpty()) {
-            itemGroups.forEach { groupName ->
-                OutlinedButton(
-                    onClick = { onWhitelistGroup(groupName) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
-                ) {
-                    Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Whitelist group '$groupName' in ${item.receivingGame}")
+        }
+        val hasGroups = !isFetchingGroups && !item.receivingGame.isNullOrBlank() && itemGroups.isNotEmpty()
+
+        var actionMode by remember { mutableStateOf(ItemActionMode.MENU) }
+
+        AnimatedContent(
+            targetState = actionMode,
+            transitionSpec = {
+                if (targetState == ItemActionMode.MENU) {
+                    (slideInHorizontally(initialOffsetX = { -it / 4 }) + fadeIn())
+                        .togetherWith(slideOutHorizontally(targetOffsetX = { it / 4 }) + fadeOut())
+                } else {
+                    (slideInHorizontally(initialOffsetX = { it / 4 }) + fadeIn())
+                        .togetherWith(slideOutHorizontally(targetOffsetX = { -it / 4 }) + fadeOut())
                 }
-                Spacer(Modifier.height(8.dp))
+            },
+            label = "item-action-mode"
+        ) { mode ->
+            when (mode) {
+                ItemActionMode.MENU -> Column {
+                    OutlinedButton(
+                        onClick = { actionMode = ItemActionMode.WHITELIST },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Whitelist...")
+                    }
+                    Spacer(Modifier.height(8.dp))
 
-                OutlinedButton(
-                    onClick = { onIgnoreGroup(groupName) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Ignore group '$groupName' in ${item.receivingGame}")
+                    OutlinedButton(
+                        onClick = { actionMode = ItemActionMode.IGNORE },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Ignore...")
+                    }
                 }
-                Spacer(Modifier.height(8.dp))
+
+                ItemActionMode.WHITELIST -> Column {
+                    TextButton(onClick = { actionMode = ItemActionMode.MENU }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Back")
+                    }
+                    Spacer(Modifier.height(4.dp))
+
+                    if (hasGroups) {
+                        itemGroups.forEach { groupName ->
+                            OutlinedButton(
+                                onClick = { onWhitelistGroup(groupName) },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+                            ) {
+                                Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Whitelist group '$groupName' in ${item.receivingGame}")
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
+
+                    if (!item.receivingGame.isNullOrBlank()) {
+                        OutlinedButton(
+                            onClick = { onWhitelistItem(item.receivingGame) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Whitelist in ${item.receivingGame}")
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    OutlinedButton(
+                        onClick = { onWhitelistItem(null) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Whitelist Globally")
+                    }
+                }
+
+                ItemActionMode.IGNORE -> Column {
+                    TextButton(onClick = { actionMode = ItemActionMode.MENU }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Back")
+                    }
+                    Spacer(Modifier.height(4.dp))
+
+                    if (hasGroups) {
+                        itemGroups.forEach { groupName ->
+                            OutlinedButton(
+                                onClick = { onIgnoreGroup(groupName) },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Ignore group '$groupName' in ${item.receivingGame}")
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
+
+                    if (!item.receivingGame.isNullOrBlank()) {
+                        OutlinedButton(
+                            onClick = { onIgnoreItem(item.receivingGame) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Ignore in ${item.receivingGame}")
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    OutlinedButton(
+                        onClick = { onIgnoreItem(null) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Ignore Globally")
+                    }
+                }
             }
-        }
-
-        // Whitelist Actions
-        if (!item.receivingGame.isNullOrBlank()) {
-            OutlinedButton(
-                onClick = { onWhitelistItem(item.receivingGame) },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
-            ) {
-                Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Whitelist in ${item.receivingGame}")
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-
-        OutlinedButton(
-            onClick = { onWhitelistItem(null) },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
-        ) {
-            Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Whitelist Globally")
-        }
-        Spacer(Modifier.height(8.dp))
-
-        // Ignore Actions
-        if (!item.receivingGame.isNullOrBlank()) {
-            OutlinedButton(
-                onClick = { onIgnoreItem(item.receivingGame) },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-            ) {
-                Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Ignore in ${item.receivingGame}")
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-
-        OutlinedButton(
-            onClick = { onIgnoreItem(null) },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-        ) {
-            Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Ignore Globally")
         }
     }
 }
