@@ -10,6 +10,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.6.23] - 2026-08-04
+
+_Item Group Filtering Fixes & Cleaner Ignore Menu_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts Android App v1.6.23 Released!**
+>
+> **Fixes**
+> • **Item Group Filtering**: Ignoring or whitelisting an item *group* now actually hides/shows those items in your History — previously these rules were silently ignored there.
+> • **Hint Filtering**: Hints now correctly respect per-game ignore/whitelist rules instead of applying them across every game.
+>
+> **Improvements**
+> • **Cleaner Ignore/Whitelist Menu**: The item detail sheet now uses two simple "Whitelist..." / "Ignore..." buttons that expand into the full options, instead of a wall of buttons.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> Fixed: ignoring or whitelisting an item group now actually hides/shows those items in History and hints (previously had no effect there). Hint filtering also now respects per-game rules instead of applying across every game.
+>
+> Improved: the whitelist/ignore menu on item details is now two simple buttons instead of a long list.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - **Item Group Ignore/Whitelist Filtering**: Item-group ignore/whitelist rules are now computed server-side (`filtering_service.py`) and returned per item/hint via `isIgnored`/`isWhitelisted` fields, fixing group rules having no effect in the History "Show ignored items" filter.
+> - **Hint Filtering Game Scope**: Hint filtering now correctly respects the game-specific scope of ignore/whitelist rules instead of applying them across all games.
+>
+> ### Changed
+> - **Consolidated Ignore/Whitelist Menu**: The History item detail sheet's 6+ whitelist/ignore action buttons are now collapsed into two entry buttons that expand in-place to the scoped options.
+> ```
+
+### Changed
+- **Cleaner Whitelist & Ignore Menu**: The whitelist and ignore options on an item's detail screen are now two simple buttons that expand into the full set of choices, instead of a long wall of buttons.
+
+### Fixed
+- **Item Group Ignore/Whitelist Now Applies in History**: Ignoring or whitelisting an item group now correctly hides or shows those items in your History; previously group-based rules had no effect there.
+- **Hint Filtering Respects Per-Game Rules**: Hints now correctly honor game-specific ignore/whitelist rules instead of applying them across all your games.
+
+---
+
 ## [1.6.22] - 2026-08-03
 
 _Cheese Tracker Notes, Statuses & Ping Preferences_

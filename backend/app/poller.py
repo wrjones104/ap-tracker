@@ -8,7 +8,6 @@ import random
 import fnmatch
 import itertools
 import time
-import re
 import ssl
 import certifi
 from dotenv import load_dotenv
@@ -75,19 +74,6 @@ datapackage_locks = {}
 # =============================================================================
 # CORE HELPERS & SETUP
 # =============================================================================
-
-def get_app_version():
-    try:
-        gradle_path = os.path.join(os.path.dirname(__file__), '../../android/app/build.gradle.kts')
-        if os.path.exists(gradle_path):
-            with open(gradle_path, 'r') as f:
-                content = f.read()
-                match = re.search(r'versionName\s*=\s*"([^"]+)"', content)
-                if match:
-                    return match.group(1)
-    except Exception as e:
-        logging.warning(f"[VERSION] Could not read version from gradle: {e}")
-    return "1.0.0"
 
 async def close_aiohttp_session():
     session = getattr(thread_local_data, "aiohttp_session", None)
