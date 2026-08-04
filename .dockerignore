@@ -15,5 +15,4 @@ __pycache__/
 .env
 .env.*
 android/
-!android/CHANGELOG.md
 service-account-key*.json

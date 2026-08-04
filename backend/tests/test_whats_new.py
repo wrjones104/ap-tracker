@@ -13,10 +13,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app import create_app
 
-# The whats_new routes read backend/app/data/changelog.json, which is a
-# gitignored generated artifact and therefore absent on fresh checkouts (e.g.
-# CI). These tests provide their own known changelog data so they don't depend
-# on that deploy-time file.
+# These tests provide their own known changelog data (by patching the route's
+# loader) so they exercise the endpoints against fixed content rather than the
+# real, evolving backend/app/data/changelog.json. The fixture mirrors the
+# enriched payload shape that app.changelog.enrich() produces at runtime.
 FIXTURE_CHANGELOG = {
     "latest_version": "1.6.18",
     "app_latest_version": "1.6.18",
@@ -64,6 +64,12 @@ class TestWhatsNewRoutes(unittest.TestCase):
         self.assertIn('server_latest_version', data)
         self.assertIn('releases', data)
         self.assertTrue(len(data['releases']) > 0)
+
+    def test_get_whats_new_limit(self):
+        response = self.client.get('/api/whats_new?limit=1')
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(len(data['releases']), 1)
 
     def test_get_whats_new_app_target(self):
         response = self.client.get('/api/whats_new?target=app')

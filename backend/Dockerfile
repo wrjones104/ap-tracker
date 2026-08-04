@@ -12,21 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend application source
+# Copy backend application source. This includes app/data/changelog.json, the
+# hand-authored single source of truth for release notes and versions served by
+# /api/whats_new and the landing page (no build-time generation step).
 COPY backend/ /app/
 
-# Copy Alembic database migrations, configuration, and VERSION files
+# Copy Alembic database migrations and configuration
 COPY alembic/ /app/alembic/
 COPY alembic.ini /app/alembic.ini
-COPY VERSION /app/VERSION
-COPY backend/VERSION /app/backend/VERSION
-
-# Generate changelog.json from CHANGELOG files at build time
-COPY CHANGELOG.md /app/CHANGELOG.md
-COPY android/CHANGELOG.md /app/android/CHANGELOG.md
-COPY backend/CHANGELOG.md /app/backend/CHANGELOG.md
-COPY scripts/sync_changelog.py /app/scripts/sync_changelog.py
-RUN python /app/scripts/sync_changelog.py && rm -rf /app/CHANGELOG.md /app/android/CHANGELOG.md /app/backend/CHANGELOG.md /app/scripts/sync_changelog.py
 
 # Run as non-root user for security
 RUN adduser --disabled-password --gecos '' appuser && chown -R appuser:appuser /app

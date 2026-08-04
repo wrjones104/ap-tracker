@@ -1,0 +1,572 @@
+{
+  "app_releases": [
+    {
+      "version": "1.6.23",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-08-04",
+      "title": "Item Group Filtering Fixes & Cleaner Ignore Menu",
+      "highlights": [
+        {
+          "title": "Item Group Ignore/Whitelist Now Applies in History",
+          "description": "Ignoring or whitelisting an item group now correctly hides or shows those items in your History; previously group-based rules had no effect there."
+        },
+        {
+          "title": "Hint Filtering Respects Per-Game Rules",
+          "description": "Hints now correctly honor game-specific ignore/whitelist rules instead of applying them across all your games."
+        },
+        {
+          "title": "Cleaner Whitelist & Ignore Menu",
+          "description": "The whitelist and ignore options on an item's detail screen are now two simple buttons that expand into the full set of choices, instead of a long wall of buttons."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Cleaner Whitelist & Ignore Menu",
+            "description": "The whitelist and ignore options on an item's detail screen are now two simple buttons that expand into the full set of choices, instead of a long wall of buttons."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Item Group Ignore/Whitelist Now Applies in History",
+            "description": "Ignoring or whitelisting an item group now correctly hides or shows those items in your History; previously group-based rules had no effect there."
+          },
+          {
+            "title": "Hint Filtering Respects Per-Game Rules",
+            "description": "Hints now correctly honor game-specific ignore/whitelist rules instead of applying them across all your games."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Android App v1.6.23 Released!**\n\n**Fixes**\n• **Item Group Filtering**: Ignoring or whitelisting an item *group* now actually hides/shows those items in your History — previously these rules were silently ignored there.\n• **Hint Filtering**: Hints now correctly respect per-game ignore/whitelist rules instead of applying them across every game.\n\n**Improvements**\n• **Cleaner Ignore/Whitelist Menu**: The item detail sheet now uses two simple \"Whitelist...\" / \"Ignore...\" buttons that expand into the full options, instead of a wall of buttons.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "Fixed: ignoring or whitelisting an item group now actually hides/shows those items in History and hints (previously had no effect there). Hint filtering also now respects per-game rules instead of applying across every game.\n\nImproved: the whitelist/ignore menu on item details is now two simple buttons instead of a long list.",
+        "github": "### Fixed\n- **Item Group Ignore/Whitelist Filtering**: Item-group ignore/whitelist rules are now computed server-side (`filtering_service.py`) and returned per item/hint via `isIgnored`/`isWhitelisted` fields, fixing group rules having no effect in the History \"Show ignored items\" filter.\n- **Hint Filtering Game Scope**: Hint filtering now correctly respects the game-specific scope of ignore/whitelist rules instead of applying them across all games.\n\n### Changed\n- **Consolidated Ignore/Whitelist Menu**: The History item detail sheet's 6+ whitelist/ignore action buttons are now collapsed into two entry buttons that expand in-place to the scoped options."
+      }
+    },
+    {
+      "version": "1.6.22",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-08-03",
+      "title": "Cheese Tracker Notes, Statuses & Ping Preferences",
+      "highlights": [
+        {
+          "title": "Cheese Tracker Notes & Status",
+          "description": "View and edit your Cheese Tracker notes, progression status (Unknown, Unblocked, BK, Soft BK, Go Mode) and completion status right from a slot's detail screen."
+        },
+        {
+          "title": "\"Still BK\" Button",
+          "description": "Keep your BK/Soft BK status while refreshing your Last Checked time, matching the popular Cheese Tracker web feature."
+        },
+        {
+          "title": "Per-Slot & Default Ping Preference",
+          "description": "Set your ping preference (Liberally, Sparingly, Hints, See Notes, Never) on individual slots, plus a default applied to newly claimed slots from the Profile screen."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Cheese Tracker Notes & Status",
+            "description": "View and edit your Cheese Tracker notes, progression status (Unknown, Unblocked, BK, Soft BK, Go Mode) and completion status right from a slot's detail screen."
+          },
+          {
+            "title": "\"Still BK\" Button",
+            "description": "Keep your BK/Soft BK status while refreshing your Last Checked time, matching the popular Cheese Tracker web feature."
+          },
+          {
+            "title": "Ping Preferences",
+            "description": "Edit per-slot ping preference on the slot detail screen and choose a default ping preference for newly claimed slots in the Cheese Tracker integration card."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Forfeit Safeguard",
+            "description": "Marking a slot as Forfeit now shows a confirmation, since Forfeit is permanent on Cheese Tracker and cannot be reversed."
+          },
+          {
+            "title": "Conflict Handling",
+            "description": "Edits that collide with concurrent changes on Cheese Tracker now surface a clear \"please refresh\" message instead of silently overwriting."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Ping Default No Longer Stuck on \"Never\"",
+            "description": "Claiming a slot now applies your chosen default ping preference instead of always defaulting to \"Never\"."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts v1.6.22 — Cheese Tracker Notes & Statuses**\n\n• View & edit Cheese Tracker notes and status (Unknown / Unblocked / BK / Soft BK / Go Mode) per slot\n• \"Still BK\" button to refresh your Last Checked time\n• Per-slot ping preference + a default ping for newly claimed slots\n• Default ping no longer stuck on \"Never\" when you claim a slot",
+        "play_store": "",
+        "github": ""
+      }
+    },
+    {
+      "version": "1.6.21",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-08-03",
+      "title": "Real-Time History Sync Progress & System Improvements",
+      "highlights": [
+        {
+          "title": "Real-Time History Sync Progress",
+          "description": "Added percentage calculation and LinearProgressIndicator banner showing exact item counts (Syncing history... 45% (1,200 / 2,668 items))."
+        },
+        {
+          "title": "WorkManager & ApplicationScope Execution",
+          "description": "Delegated sync execution to HistorySyncManager and Android WorkManager so sync jobs complete cleanly even when phone screen locks or app is backgrounded."
+        },
+        {
+          "title": "Pure Delta Synchronization",
+          "description": "Removed full-feed re-downloads on pull-to-refresh; sync relies strictly on slot watermarks for fast ~100ms updates."
+        },
+        {
+          "title": "Shared Ignore/Whitelist State",
+          "description": "Shared UserViewModel across IgnoreListScreen and WhitelistScreen navigation routes to update rules instantly on history screen re-entry."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Real-Time History Sync Progress",
+            "description": "Added percentage calculation and LinearProgressIndicator banner showing exact item counts (Syncing history... 45% (1,200 / 2,668 items))."
+          },
+          {
+            "title": "WorkManager & ApplicationScope Execution",
+            "description": "Delegated sync execution to HistorySyncManager and Android WorkManager so sync jobs complete cleanly even when phone screen locks or app is backgrounded."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Pure Delta Synchronization",
+            "description": "Removed full-feed re-downloads on pull-to-refresh; sync relies strictly on slot watermarks for fast ~100ms updates."
+          },
+          {
+            "title": "Shared Ignore/Whitelist State",
+            "description": "Shared UserViewModel across IgnoreListScreen and WhitelistScreen navigation routes to update rules instantly on history screen re-entry."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Android App v1.6.21 Released!**\n\n**New Features & Enhancements**\n• **Real-Time History Progress**: Track history sync status live with a dynamic percentage bar (`X% / 100%`) and clear progress indicators.\n• **Background History Syncing**: History syncing now continues seamlessly via WorkManager and ApplicationScope when screen is locked or app is minimized.\n• **Instant Ignore & Whitelist Updates**: Mute rules and whitelists update instantly when returning to the history screen without needing an app restart.\n\nUpdate now on Google Play or download the latest APK from GitHub Releases!",
+        "play_store": "",
+        "github": ""
+      }
+    },
+    {
+      "version": "1.6.19",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-07-31",
+      "title": "Instant Slot Detail Navigation",
+      "highlights": [
+        {
+          "title": "Instant Slot Detail Navigation",
+          "description": "Shared UserViewModel across navigation routes for immediate transition into slot details and player alias rendering."
+        },
+        {
+          "title": "On-Demand Autocomplete Loading",
+          "description": "Deferred item/location autocomplete fetching until user interacts with dropdowns to eliminate initial screen load lag."
+        },
+        {
+          "title": "Preferences UI Cleanup",
+          "description": "Removed duplicate help section from notification preferences screen."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Instant Slot Detail Navigation",
+            "description": "Shared UserViewModel across navigation routes for immediate transition into slot details and player alias rendering."
+          },
+          {
+            "title": "On-Demand Autocomplete Loading",
+            "description": "Deferred item/location autocomplete fetching until user interacts with dropdowns to eliminate initial screen load lag."
+          },
+          {
+            "title": "Preferences UI Cleanup",
+            "description": "Removed duplicate help section from notification preferences screen."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Android App v1.6.19 Released!**\n\n**Improvements & Fixes**\n• **Instant Slot Detail Navigation**: Zero-latency screen transitions when opening slot details with dynamic player alias support.\n• **On-Demand Autocomplete**: Lazy loading for item and location autocomplete options to accelerate screen loads.\n• **Preferences UI Cleanup**: Streamlined notification preference screens.\n\nUpdate now on Google Play or download the latest APK from GitHub Releases!",
+        "play_store": "",
+        "github": ""
+      }
+    },
+    {
+      "version": "1.6.18",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-07-30",
+      "title": "Push Notification Whitelist & System Improvements",
+      "highlights": [
+        {
+          "title": "Push Notification Whitelist",
+          "description": "Added WhitelistScreen UI allowing users to whitelist specific items or item groups to always receive notifications regardless of mute settings."
+        },
+        {
+          "title": "What's New Dialog",
+          "description": "Interactive bottom sheet displaying release highlights upon app update."
+        },
+        {
+          "title": "Cursor-Based History Sync",
+          "description": "Replaced timestamp-based history watermarks with integer cursors for faster sync and robust retry handling."
+        },
+        {
+          "title": "History Job Cancellation",
+          "description": "In-flight refresh coroutines in HistoryViewModel are properly cancelled on repeated pull-to-refresh."
+        },
+        {
+          "title": "Database Migration 20->21",
+          "description": "Automatically cleans up legacy timestamp watermarks upon Android app upgrade."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Push Notification Whitelist",
+            "description": "Added WhitelistScreen UI allowing users to whitelist specific items or item groups to always receive notifications regardless of mute settings."
+          },
+          {
+            "title": "What's New Dialog",
+            "description": "Interactive bottom sheet displaying release highlights upon app update."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Cursor-Based History Sync",
+            "description": "Replaced timestamp-based history watermarks with integer cursors for faster sync and robust retry handling."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "History Job Cancellation",
+            "description": "In-flight refresh coroutines in HistoryViewModel are properly cancelled on repeated pull-to-refresh."
+          },
+          {
+            "title": "Database Migration 20->21",
+            "description": "Automatically cleans up legacy timestamp watermarks upon Android app upgrade."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Android App v1.6.18 Released!**\n\n**New Features**\n• **Push Notification Whitelist**: Want notifications for specific items (e.g. Progressive Swords, Bombs) even if filler/category mutes are enabled? You can now whitelist individual items or item groups per-game or globally!\n\n**Improvements & Fixes**\n• **Instant History Sync**: Refactored item history synchronization using cursor watermarks for faster load times and zero missing items.\n• **Item Index Tracking**: Received item ordering now tracks Archipelago's native item index for 100% item fidelity.\n• **Cheese Tracker Sync**: Improved slot claim validation and conflict resolution.\n\nUpdate now on Google Play or download the latest APK from GitHub Releases!",
+        "play_store": "",
+        "github": ""
+      }
+    },
+    {
+      "version": "1.6.14",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-06-24",
+      "title": "App Release v1.6.14",
+      "highlights": [
+        {
+          "title": "Cheese Tracker Slot Claim",
+          "description": "Fixed slot claim UI state syncing for unauthenticated slots."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Cheese Tracker Slot Claim",
+            "description": "Fixed slot claim UI state syncing for unauthenticated slots."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": ""
+      }
+    }
+  ],
+  "server_releases": [
+    {
+      "version": "1.6.23",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-03",
+      "title": "Server-Side Ignore/Whitelist Filtering",
+      "highlights": [
+        {
+          "title": "Item Group Filtering Computed Server-Side",
+          "description": "Item-group ignore/whitelist rules are now evaluated on the server and sent to the app directly, fixing group rules that previously had no effect in History."
+        },
+        {
+          "title": "Per-Game Hint Filtering Fix",
+          "description": "Hint filtering now correctly respects each rule's game scope instead of applying it across all your games."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Item Group Filtering Computed Server-Side",
+            "description": "Item-group ignore/whitelist rules are now evaluated on the server and sent to the app directly, fixing group rules that previously had no effect in History."
+          },
+          {
+            "title": "Per-Game Hint Filtering Fix",
+            "description": "Hint filtering now correctly respects each rule's game scope instead of applying it across all your games."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Fixed\n- **Server-Side Ignore/Whitelist Computation**: Extracted ignore/whitelist matching (including checksum-scoped item-group resolution) into a shared `backend/app/services/filtering_service.py`, used by both the poller and the history/hint endpoints. History and hint endpoints now return `isIgnored`/`isWhitelisted` per item and hint, fixing item-group rules having no client-visible effect and hint filtering ignoring the game-specific scope of rules."
+      }
+    },
+    {
+      "version": "1.6.22",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-03",
+      "title": "Cheese Tracker Notes & Statuses API",
+      "highlights": [
+        {
+          "title": "Per-Slot Cheese State",
+          "description": "GET /api/user/tracked_slots now returns a cheese object per slot (notes, progression/completion status, ping, last checked, ownership)."
+        },
+        {
+          "title": "Slot Editing Endpoint",
+          "description": "New PUT /rooms/<room_db_id>/slots/<slot_id>/cheese to edit notes/status/ping and refresh Last Checked, with ownership checks and optimistic-conflict handling."
+        },
+        {
+          "title": "Default Ping Preference",
+          "description": "cheese_default_ping is now applied at claim time, fixing the ping preference always defaulting to Never."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Cheese Slot State (read)",
+            "description": "get_user_tracked_slots parses the room's cached Cheese Tracker data and attaches a per-slot cheese object (game_id, notes, progression_status, completion_status, discord_ping, last_checked, is_mine, global_ping_policy) for Cheese-connected users."
+          },
+          {
+            "title": "Cheese Slot State (write)",
+            "description": "New synchronous PUT /rooms/<room_db_id>/slots/<slot_id>/cheese endpoint. Validates enum values, re-fetches the tracker, enforces ownership, applies partial updates, stamps last_checked for BK/Soft BK and Still BK, sends x-if-owner-is as a conflict guard, and splices the authoritative response back into the room cache."
+          },
+          {
+            "title": "User.cheese_default_ping",
+            "description": "New nullable column (Alembic a1c7e9f4b2d0) exposed on the user profile and settable via PUT /users/me/preferences."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Claim-Time Ping Default",
+            "description": "send_state in api_cheese.py now applies the user's cheese_default_ping when claiming a slot, and aligns unclaim behavior with Cheese Tracker's web UI (availability to open, ping to never)."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Ping Preference Stuck on Never",
+            "description": "Newly claimed slots now honor the user's chosen default ping preference instead of always defaulting to Never."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Backend v1.6.22 Released!**\n\n**New: Cheese Tracker Notes & Statuses**\n• **Per-Slot State API**: `GET /api/user/tracked_slots` now includes a `cheese` object per slot (notes, progression/completion status, ping, last checked, ownership).\n• **Slot Editing**: New `PUT /rooms/<room_db_id>/slots/<slot_id>/cheese` to edit notes/status/ping and refresh \"Last Checked\" (\"Still BK\"), with ownership checks and optimistic-conflict handling.\n• **Default Ping Preference**: `cheese_default_ping` is now applied at claim time, fixing the ping preference always defaulting to \"Never\".",
+        "play_store": "",
+        "github": ""
+      }
+    },
+    {
+      "version": "1.6.21",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-03",
+      "title": "Tracked Slot Item Count Aggregation",
+      "highlights": [
+        {
+          "title": "Tracked Slot Item Count Aggregation",
+          "description": "Updated get_user_tracked_slots query in slots_routes.py to aggregate item_count per slot in the JSON response payload."
+        },
+        {
+          "title": "Website Version Display Alignment",
+          "description": "Updated get_android_version() in utils.py to check changelog.json so the landing page version badges stay aligned with release notes across all environments."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Tracked Slot Item Count Aggregation",
+            "description": "Updated get_user_tracked_slots query in slots_routes.py to aggregate item_count per slot in the JSON response payload."
+          },
+          {
+            "title": "Website Version Display Alignment",
+            "description": "Updated get_android_version() in utils.py to check changelog.json so the landing page version badges stay aligned with release notes across all environments."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Backend v1.6.21 Released!**\n\n**Improvements & Fixes**\n• **Tracked Slot Item Count Payload**: Surfaced total item counts per slot in `GET /api/user/tracked_slots` to drive client-side progress calculation.\n• **Landing Page Version Syncing**: Fixed landing page version badges to resolve from `changelog.json` in production containers.",
+        "play_store": "",
+        "github": ""
+      }
+    },
+    {
+      "version": "1.6.19",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-07-31",
+      "title": "Poller CPU & Resource Throttling",
+      "highlights": [
+        {
+          "title": "Poller CPU & Resource Throttling",
+          "description": "Introduced db_process_semaphore (limit=3) to throttle concurrent synchronous database processing during room poll cycles, smoothing CPU usage and eliminating high-load CPU spikes."
+        },
+        {
+          "title": "Cycle Jitter & Staggering",
+          "description": "Added per-cycle ±30s random jitter to the 5-minute poller sleep interval and expanded initial room stagger (1–60s) to prevent room polling tasks from re-synchronizing into waves over time."
+        },
+        {
+          "title": "SQLAlchemy Connection Pool Tuning",
+          "description": "Configured pool settings (pool_size=10, max_overflow=5, pool_recycle=1800, pool_pre_ping=True) for PostgreSQL in production to avoid connection pool exhaustion under load."
+        },
+        {
+          "title": "Docker Compose CPU & Memory Limits",
+          "description": "Defined resource limits and reservations for api and poller containers to guarantee API CPU availability (0.4 vCPU reserved for API, poller capped at 1.0 vCPU) on 2 vCPU VMs."
+        },
+        {
+          "title": "Per-Game Datapackage Cache Lock",
+          "description": "Added an in-memory per-game asyncio lock in game_routes.py to prevent concurrent autocomplete queries from redundantly fetching game datapackages."
+        },
+        {
+          "title": "Database Healthcheck Environment Escaping",
+          "description": "Escaped PostgreSQL env vars ($$POSTGRES_USER and $$POSTGRES_DB) in docker-compose.yml healthcheck so credentials resolve from the container's environment dynamically across dev, UAT, and prod."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Poller CPU & Resource Throttling",
+            "description": "Introduced db_process_semaphore (limit=3) to throttle concurrent synchronous database processing during room poll cycles, smoothing CPU usage and eliminating high-load CPU spikes."
+          },
+          {
+            "title": "Cycle Jitter & Staggering",
+            "description": "Added per-cycle ±30s random jitter to the 5-minute poller sleep interval and expanded initial room stagger (1–60s) to prevent room polling tasks from re-synchronizing into waves over time."
+          },
+          {
+            "title": "SQLAlchemy Connection Pool Tuning",
+            "description": "Configured pool settings (pool_size=10, max_overflow=5, pool_recycle=1800, pool_pre_ping=True) for PostgreSQL in production to avoid connection pool exhaustion under load."
+          },
+          {
+            "title": "Docker Compose CPU & Memory Limits",
+            "description": "Defined resource limits and reservations for api and poller containers to guarantee API CPU availability (0.4 vCPU reserved for API, poller capped at 1.0 vCPU) on 2 vCPU VMs."
+          },
+          {
+            "title": "Per-Game Datapackage Cache Lock",
+            "description": "Added an in-memory per-game asyncio lock in game_routes.py to prevent concurrent autocomplete queries from redundantly fetching game datapackages."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Database Healthcheck Environment Escaping",
+            "description": "Escaped PostgreSQL env vars ($$POSTGRES_USER and $$POSTGRES_DB) in docker-compose.yml healthcheck so credentials resolve from the container's environment dynamically across dev, UAT, and prod."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Backend v1.6.19 Released!**\n\n**Improvements & Fixes**\n• **Poller CPU & Resource Throttling**: Throttled concurrent room processing cycles to smooth CPU spikes.\n• **Cycle Jitter & Staggering**: Added random jitter to poller sleep intervals to prevent wave synchronization.\n• **SQLAlchemy Pool Tuning**: Optimized PostgreSQL connection pool size and recycling for high concurrency.\n• **Datapackage Cache Locking**: Prevented concurrent autocomplete requests from redundant datapackage fetches.",
+        "play_store": "",
+        "github": ""
+      }
+    },
+    {
+      "version": "1.6.18",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-07-30",
+      "title": "GET /api/whats_new Endpoint & System Improvements",
+      "highlights": [
+        {
+          "title": "GET /api/whats_new Endpoint",
+          "description": "Backend API to dynamically fetch release notes and patch highlights with target filtering (app, server, all)."
+        },
+        {
+          "title": "Item & Group Whitelist Schema",
+          "description": "Introduced UserWhitelistItem backend model and database migrations."
+        },
+        {
+          "title": "Native item_index Preservation",
+          "description": "Backend poller now logs and orders received items using Archipelago's native item_index sequence."
+        },
+        {
+          "title": "Database Performance",
+          "description": "Added composite performance indexes for history queries and room subscription polling."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "GET /api/whats_new Endpoint",
+            "description": "Backend API to dynamically fetch release notes and patch highlights with target filtering (app, server, all)."
+          },
+          {
+            "title": "Item & Group Whitelist Schema",
+            "description": "Introduced UserWhitelistItem backend model and database migrations."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Native item_index Preservation",
+            "description": "Backend poller now logs and orders received items using Archipelago's native item_index sequence."
+          },
+          {
+            "title": "Database Performance",
+            "description": "Added composite performance indexes for history queries and room subscription polling."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": ""
+      }
+    },
+    {
+      "version": "1.6.14",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-06-24",
+      "title": "Server Release v1.6.14",
+      "highlights": [
+        {
+          "title": "Milestone Groups Optimizations",
+          "description": "Improved the backend process that supplies items and item_groups for the Milestone Group builder."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Milestone Groups Optimizations",
+            "description": "Improved the backend process that supplies items and item_groups for the Milestone Group builder."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": ""
+      }
+    }
+  ]
+}

@@ -1,60 +1,34 @@
 import logging
 import aiohttp
 import os
-import re
 import ssl
 import certifi
 from urllib.parse import urlparse
 from datetime import timezone
 from app import Session
+from app import changelog
 from app.models import TrackedRoom
 
 CHEESE_USER_AGENT_BASE = 'ArchipelagoAlerts'
 CHEESE_CONTACT = 'github.com/wrjones104'
 
 def get_server_version():
-    """Extracts server version from APP_VERSION env var, backend/VERSION file, or VERSION file."""
+    """Server version: APP_VERSION env override, else newest server changelog entry."""
     env_version = os.environ.get("APP_VERSION")
     if env_version:
         return env_version.lstrip("v")
 
-    # Try backend/VERSION or root VERSION
-    for path in ['../VERSION', '../../backend/VERSION', '../../VERSION']:
-        version_file = os.path.join(os.path.dirname(__file__), path)
-        if os.path.exists(version_file):
-            try:
-                with open(version_file, 'r') as f:
-                    ver = f.read().strip()
-                    if ver:
-                        return ver.lstrip("v")
-            except Exception:
-                pass
+    version = changelog.latest_version("server")
+    if version:
+        return version.lstrip("v")
 
-    return "1.6.19"
+    return changelog.FALLBACK_VERSION
 
 def get_android_version():
-    """Extracts Android app version from build.gradle.kts, changelog.json, or backend VERSION."""
-    try:
-        gradle_path = os.path.join(os.path.dirname(__file__), '../../android/app/build.gradle.kts')
-        if os.path.exists(gradle_path):
-            with open(gradle_path, 'r') as f:
-                content = f.read()
-                match = re.search(r'versionName\s*=\s*"([^"]+)"', content)
-                if match:
-                    return match.group(1)
-    except Exception as e:
-        logging.warning(f"[VERSION] Could not read version from gradle: {e}")
-    
-    try:
-        import json
-        changelog_path = os.path.join(os.path.dirname(__file__), 'data/changelog.json')
-        if os.path.exists(changelog_path):
-            with open(changelog_path, 'r') as f:
-                data = json.load(f)
-                if 'app_latest_version' in data and data['app_latest_version']:
-                    return data['app_latest_version']
-    except Exception as e:
-        logging.warning(f"[VERSION] Could not read app version from changelog.json: {e}")
+    """Android app version: newest app changelog entry (single source of truth)."""
+    version = changelog.latest_version("app")
+    if version:
+        return version.lstrip("v")
 
     return get_server_version()
 

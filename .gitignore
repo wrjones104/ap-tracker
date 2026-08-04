@@ -61,8 +61,10 @@ Thumbs.db
 *.apk
 *.aab
 
-# --- GENERATED FILES ---
-backend/app/data/changelog.json
+# backend/app/data/changelog.json is the hand-authored single source of truth
+# for release notes and versions — it is tracked, not generated. The derived
+# android/CHANGELOG.md and backend/CHANGELOG.md are produced from it by
+# scripts/generate_changelog.py.
 
 # --- BACKEND TESTS ---
 # Track the project's backend test suite even if a contributor's global
