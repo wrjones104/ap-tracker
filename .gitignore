@@ -63,3 +63,12 @@ Thumbs.db
 
 # --- GENERATED FILES ---
 backend/app/data/changelog.json
+
+# --- BACKEND TESTS ---
+# Track the project's backend test suite even if a contributor's global
+# gitignore excludes `tests/`. Test artifacts (compiled code, scratch DBs)
+# stay ignored.
+!backend/tests/
+backend/tests/__pycache__/
+backend/tests/*.db
+backend/tests/*.db-*

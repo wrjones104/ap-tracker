@@ -1,0 +1,49 @@
+name: Backend Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'alembic/**'
+      - 'requirements.txt'
+      - '.github/workflows/backend-tests.yml'
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r backend/requirements.txt
+
+      - name: Run backend unit tests
+        env:
+          # Root (for `backend.app...` imports) plus `backend` (for `app...` imports),
+          # mirroring the local dev invocation.
+          PYTHONPATH: 'backend:.'
+        run: |
+          # Each test module manages its own module-level engine/DB, so they must
+          # run in separate processes to stay isolated. Fail if any module fails.
+          set -e
+          status=0
+          for f in backend/tests/test_*.py; do
+            module="backend.tests.$(basename "$f" .py)"
+            echo "::group::$module"
+            python -m unittest "$module" -v || status=1
+            echo "::endgroup::"
+          done
+          exit $status
