@@ -90,6 +90,8 @@ fun SlotDetailScreen(
     var showLocationHintDialog by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf<String?>(null) }
+    var savingAsTemplateGroup by remember { mutableStateOf<ThresholdGroup?>(null) }
+    var templateOverwriteConflict by remember { mutableStateOf<Pair<ThresholdGroup, String>?>(null) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val passwordManager = remember { com.jones.aptracker.network.PasswordManager(context) }
@@ -134,6 +136,7 @@ fun SlotDetailScreen(
     val isRefreshingCheese by userViewModel.isRefreshingCheese.collectAsState()
 
     val thresholdGroups by userViewModel.thresholdGroups.collectAsState()
+    val milestoneTemplates by userViewModel.milestoneTemplates.collectAsState()
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -299,6 +302,7 @@ fun SlotDetailScreen(
                                         editingThresholdGroup = group
                                         showEditThresholdDialog = true
                                     },
+                                    onSaveAsTemplate = { savingAsTemplateGroup = group },
                                     onDelete = { userViewModel.deleteThresholdGroup(roomDbId, slotId, group.id) }
                                 )
                                 if (index < thresholdGroups.size - 1) {
@@ -632,7 +636,89 @@ fun SlotDetailScreen(
                         passwordManager.deletePassword(host)
                     }
                 }
-                showPasswordDialog = false 
+                showPasswordDialog = false
+            }
+        )
+    }
+
+    val groupToSaveAsTemplate = savingAsTemplateGroup
+    if (groupToSaveAsTemplate != null) {
+        LaunchedEffect(groupToSaveAsTemplate) {
+            userViewModel.fetchMilestoneTemplates(slot?.game)
+        }
+        SaveAsTemplateDialog(
+            initialName = groupToSaveAsTemplate.name ?: "",
+            onDismiss = { savingAsTemplateGroup = null },
+            onConfirm = { templateName ->
+                val game = slot?.game
+                savingAsTemplateGroup = null
+                if (!game.isNullOrBlank()) {
+                    val items = groupToSaveAsTemplate.items.map {
+                        ThresholdGroupItemRequest(
+                            item_name = it.item_name,
+                            quantity = it.quantity,
+                            is_group = it.is_group
+                        )
+                    }
+                    userViewModel.createMilestoneTemplate(
+                        name = templateName,
+                        gameName = game,
+                        items = items,
+                        onConflict = { templateOverwriteConflict = groupToSaveAsTemplate to templateName }
+                    )
+                }
+            }
+        )
+    }
+
+    val conflict = templateOverwriteConflict
+    if (conflict != null) {
+        val (conflictGroup, conflictName) = conflict
+        val conflictGameName = slot?.game
+        LaunchedEffect(conflict) {
+            userViewModel.fetchMilestoneTemplates(conflictGameName)
+        }
+        val existingTemplate = milestoneTemplates.find {
+            it.game_name == conflictGameName && it.name == conflictName
+        }
+        AlertDialog(
+            onDismissRequest = { templateOverwriteConflict = null },
+            title = { Text("Template Already Exists") },
+            text = {
+                Text("A template named \"$conflictName\" already exists for $conflictGameName. Overwrite it?")
+            },
+            confirmButton = {
+                Button(
+                    enabled = existingTemplate != null,
+                    onClick = {
+                        val existing = existingTemplate
+                        if (existing != null && conflictGameName != null) {
+                            val items = conflictGroup.items.map {
+                                ThresholdGroupItemRequest(
+                                    item_name = it.item_name,
+                                    quantity = it.quantity,
+                                    is_group = it.is_group
+                                )
+                            }
+                            userViewModel.updateMilestoneTemplate(
+                                templateId = existing.id,
+                                name = conflictName,
+                                gameName = conflictGameName,
+                                items = items
+                            )
+                        }
+                        templateOverwriteConflict = null
+                    }
+                ) {
+                    if (existingTemplate == null) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Overwrite")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { templateOverwriteConflict = null }) { Text("Cancel") }
             }
         )
     }
@@ -990,6 +1076,7 @@ fun CheeseDropdownField(
 fun ThresholdGroupRow(
     group: ThresholdGroup,
     onEdit: (() -> Unit)? = null,
+    onSaveAsTemplate: (() -> Unit)? = null,
     onDelete: () -> Unit
 ) {
     Row(
@@ -1036,6 +1123,11 @@ fun ThresholdGroupRow(
         if (!group.is_triggered && onEdit != null) {
             IconButton(onClick = onEdit) {
                 Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            }
+        }
+        if (onSaveAsTemplate != null) {
+            IconButton(onClick = onSaveAsTemplate) {
+                Icon(Icons.Default.BookmarkAdd, contentDescription = "Save as Template", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
             }
         }
         IconButton(onClick = onDelete) {
@@ -1453,6 +1545,50 @@ fun PasswordInputDialog(
         confirmButton = {
             Button(onClick = { onConfirm(text, shouldSave) }) {
                 Text("Confirm")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun SaveAsTemplateDialog(
+    initialName: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember { mutableStateOf(initialName) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save as Template") },
+        text = {
+            Column {
+                Text(
+                    "Save this milestone group's items as a reusable template for this game.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Template Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(name.trim()) },
+                enabled = name.isNotBlank()
+            ) {
+                Text("Save")
             }
         },
         dismissButton = {

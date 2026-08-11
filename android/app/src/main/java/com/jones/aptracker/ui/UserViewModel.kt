@@ -20,6 +20,8 @@ import com.jones.aptracker.network.AutocompleteOption
 import com.jones.aptracker.network.ThresholdGroup
 import com.jones.aptracker.network.CreateThresholdGroupRequest
 import com.jones.aptracker.network.ThresholdGroupItemRequest
+import com.jones.aptracker.network.MilestoneTemplate
+import com.jones.aptracker.network.CreateMilestoneTemplateRequest
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.database.CachedDatapackageEntity
 import com.google.gson.Gson
@@ -95,6 +97,11 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _thresholdGroups = MutableStateFlow<List<ThresholdGroup>>(emptyList())
     val thresholdGroups = _thresholdGroups.asStateFlow()
     private var latestThresholdGroupsKey: Pair<Int, Int>? = null
+
+    private val _milestoneTemplates = MutableStateFlow<List<MilestoneTemplate>>(emptyList())
+    val milestoneTemplates = _milestoneTemplates.asStateFlow()
+    private var milestoneTemplatesRequestId = 0
+    private var latestMilestoneTemplatesGame: String? = null
 
     private val _availableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val availableItems = _availableItems.asStateFlow()
@@ -1034,6 +1041,95 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to delete threshold group", e)
                 _errorMessage.value = "Failed to delete milestone group. Check connection."
+            }
+        }
+    }
+
+    // ============================================================================================
+    // MILESTONE TEMPLATES
+    // ============================================================================================
+
+    fun fetchMilestoneTemplates(game: String? = null) {
+        val requestId = ++milestoneTemplatesRequestId
+        latestMilestoneTemplatesGame = game
+        viewModelScope.launch {
+            try {
+                val templates = RetrofitClient.instance.getMilestoneTemplates(game)
+                if (requestId == milestoneTemplatesRequestId) {
+                    _milestoneTemplates.value = templates
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to fetch milestone templates", e)
+            }
+        }
+    }
+
+    fun createMilestoneTemplate(
+        name: String,
+        gameName: String,
+        items: List<ThresholdGroupItemRequest>,
+        onConflict: (() -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            try {
+                val request = CreateMilestoneTemplateRequest(name, gameName, items)
+                val response = RetrofitClient.instance.createMilestoneTemplate(request)
+                if (response.isSuccessful) {
+                    fetchMilestoneTemplates(latestMilestoneTemplatesGame)
+                    _integrationMessage.value = "Template saved."
+                } else if (response.code() == 409) {
+                    if (onConflict != null) {
+                        onConflict()
+                    } else {
+                        _errorMessage.value = "A template named '$name' already exists for $gameName."
+                    }
+                } else {
+                    _errorMessage.value = "Failed to save template: ${response.code()}"
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to create milestone template", e)
+                _errorMessage.value = "Failed to save template. Check connection."
+            }
+        }
+    }
+
+    fun updateMilestoneTemplate(
+        templateId: Int,
+        name: String,
+        gameName: String,
+        items: List<ThresholdGroupItemRequest>
+    ) {
+        viewModelScope.launch {
+            try {
+                val request = CreateMilestoneTemplateRequest(name, gameName, items)
+                val response = RetrofitClient.instance.updateMilestoneTemplate(templateId, request)
+                if (response.isSuccessful) {
+                    fetchMilestoneTemplates(latestMilestoneTemplatesGame)
+                    _integrationMessage.value = "Template updated."
+                } else {
+                    _errorMessage.value = "Failed to update template: ${response.code()}"
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to update milestone template", e)
+                _errorMessage.value = "Failed to update template. Check connection."
+            }
+        }
+    }
+
+    fun deleteMilestoneTemplate(templateId: Int) {
+        viewModelScope.launch {
+            val currentList = _milestoneTemplates.value
+            _milestoneTemplates.value = currentList.filter { it.id != templateId }
+            try {
+                val response = RetrofitClient.instance.deleteMilestoneTemplate(templateId)
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Failed to delete template: ${response.code()}"
+                    _milestoneTemplates.value = currentList
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to delete milestone template", e)
+                _errorMessage.value = "Failed to delete template. Check connection."
+                _milestoneTemplates.value = currentList
             }
         }
     }

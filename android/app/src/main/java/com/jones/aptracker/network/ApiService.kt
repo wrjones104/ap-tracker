@@ -112,6 +112,27 @@ interface ApiService {
         @Body request: CreateThresholdGroupRequest
     ): Response<Unit>
 
+    @GET("milestone-templates")
+    suspend fun getMilestoneTemplates(
+        @Query("game") game: String? = null
+    ): List<MilestoneTemplate>
+
+    @POST("milestone-templates")
+    suspend fun createMilestoneTemplate(
+        @Body request: CreateMilestoneTemplateRequest
+    ): Response<Unit>
+
+    @PUT("milestone-templates/{id}")
+    suspend fun updateMilestoneTemplate(
+        @Path("id") templateId: Int,
+        @Body request: CreateMilestoneTemplateRequest
+    ): Response<Unit>
+
+    @DELETE("milestone-templates/{id}")
+    suspend fun deleteMilestoneTemplate(
+        @Path("id") templateId: Int
+    ): Response<Unit>
+
     @GET("rooms/{id}/slots/{slot_id}/items")
     suspend fun getAvailableItems(
         @Path("id") roomId: Int,
@@ -519,6 +540,19 @@ data class ThresholdGroupItemRequest(
     val item_name: String,
     val quantity: Int,
     val is_group: Boolean = false
+)
+
+data class MilestoneTemplate(
+    val id: Int,
+    val name: String,
+    val game_name: String,
+    val items: List<ThresholdGroupItem>
+)
+
+data class CreateMilestoneTemplateRequest(
+    val name: String,
+    val game_name: String,
+    val items: List<ThresholdGroupItemRequest>
 )
 
 data class RoomDatapackage(
