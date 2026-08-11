@@ -5,8 +5,8 @@ items + quantities as a named template, then start a new Milestone Group from it
 on any slot of the same game. Templates can also be exported as a portable string
 and shared with other users.
 
-> Status: **In progress — Phases 1–3 complete.** Branch: `feature/milestone-templates`.
-> Picking back up? Read §0 first, then jump straight to Phase 4 in §8.
+> Status: **In progress — Phases 1–6 complete.** Branch: `feature/milestone-templates`.
+> Picking back up? Read §0 first, then jump straight to Phase 7 (Batch Apply, post-MVP bonus) in §9 — or consider the MVP done and move to migration/tests/changelog polish in §7.
 
 ---
 
@@ -61,15 +61,103 @@ Nothing has been merged yet — this branch is the entire feature so far.
   `"C:\Program Files\Android\Android Studio\jbr"` since the system default was
   JDK 8). No new warnings introduced.
 
-**Not started — Phases 4–7:** see §8 for the up-to-date phase list. **Phase 4
-(Start-from-template picker + apply-time diff) is next.** Recall the two
-subtleties that phase has to get right (both are written up in §5b/§5c):
-1. The picker in `ThresholdGroupSheet` is a **chooser only** — no inline
-   delete/edit. Management lives on the Phase 5 dedicated screen.
-2. The diff reuses `availableItems` (already loaded in `SlotDetailScreen` via
-   `fetchAutocompleteData`) rather than a new endpoint — case-insensitive
-   name match, missing items dropped with a light note, and if
-   `availableItems` is empty, skip the diff entirely rather than blocking.
+**Done — Phase 4 (Start-from-template picker + apply-time diff):**
+- `ThresholdGroupSheet` in `SlotDetailScreen.kt` gained `milestoneTemplates` and
+  `allowTemplatePicker` params. When `allowTemplatePicker` is true and the user
+  has ≥1 template for the game, a "Start from a template" button appears above
+  the name field.
+- The "Create Milestone Group" call site (the `showAddThresholdDialog` block)
+  now fetches `fetchMilestoneTemplates(slot?.game)` alongside the existing
+  autocomplete fetch, and passes `allowTemplatePicker = true`. The Edit sheet
+  call site is unchanged (picker stays create-mode-only per §5b).
+- Tapping the button opens a chooser `AlertDialog` (name + item-summary list,
+  no inline edit/delete — management stays on the Phase 5 screen).
+- Picking a template runs `resolveTemplateItems(...)` (new top-level fun,
+  case-insensitive match against `availableItems`, `is_group`-aware) which
+  prefills `groupName` + `selectedItems` and sets a light gray note under
+  "Items & Quantities" if items were dropped or if `availableItems` was empty
+  (validation-skip fallback per §5c) — never blocks.
+- Verified with a real `compileDevDebugKotlin` build (same JBR JAVA_HOME
+  workaround as Phase 3). No new warnings.
+
+**Done — Phase 5 (Dedicated management screen):**
+- New `ui/MilestoneTemplatesScreen.kt` — fetches *all* the user's templates
+  (`fetchMilestoneTemplates()`, no game filter), groups them by `game_name`
+  (sorted, with templates alphabetized within each group), and renders each as
+  a card (name + item summary) with Edit/Delete icon actions.
+- Edit reuses `ThresholdGroupSheet` from `SlotDetailScreen.kt` (cross-game,
+  same-package, no import needed). Availability data comes from
+  `userViewModel.gameAvailableItems` / `fetchGameAvailableItems(gameName)` —
+  the existing full-autocomplete path (already used by `IgnoreRuleSheet`),
+  **not** slot-scoped `availableItems`, since there's no slot/checksum context
+  on this screen. Confirmed with `clearGameAvailableItems()` on dismiss/save.
+  No apply-time diff is run here — that's slot-context-only (§5c), correctly
+  N/A for cross-game authoring.
+- `ThresholdGroupSheet` gained a `nameRequired: Boolean = false` param (label
+  switches to "Template Name", confirm button gated on non-blank name) since
+  template names are NOT NULL server-side, unlike optional Milestone Group
+  names. Only the template-edit call site sets it true; the Milestone Group
+  create/edit call sites are unaffected (default false).
+- Delete goes through a confirm `AlertDialog` before calling
+  `deleteMilestoneTemplate` (which is already optimistic client-side).
+- Navigation: `onNavigateToMilestoneTemplates` threaded through
+  `AppNavigation.kt` → `MainScreen.kt` → `ProfileScreen.kt`, new
+  `composable("milestone_templates")` route, new "Milestone Templates"
+  `ProfileMenuItem` (Bookmarks icon) placed under Whitelist.
+- Verified with a real `compileDevDebugKotlin` build. No new warnings.
+
+**Done — Phase 6 (Export / import):**
+- New `network/MilestoneTemplateShare.kt` — the `APMT1:<base64url(json)>`
+  envelope codec described in §6. Wire DTOs (`TemplateShareItemDto` /
+  `TemplateShareEntryDto` / `TemplateShareEnvelopeDto`, all file-private) have
+  nullable fields on purpose — Gson can populate a Kotlin non-null property
+  with `null` on malformed/untrusted input, silently bypassing the type
+  system, so every field is validated and coerced into a non-null domain
+  model (`ParsedTemplate` / `ParsedTemplateItem`) before anything downstream
+  touches it. `parseMilestoneTemplateShareString(...)` returns a sealed
+  `TemplateImportResult` (`Success`/`Failure`); the whole parse is wrapped in
+  a `try/catch` since it's arbitrary pasted text. Accepts a bare (unprefixed)
+  JSON string as the lenient fallback per §6. `exportMilestoneTemplates(...)`
+  takes any `List<MilestoneTemplate>`, so it already supports a future
+  multi-select bundle export (§10), not just single-template.
+- **Export** — a Share icon on each `MilestoneTemplateCard` in
+  `MilestoneTemplatesScreen.kt` serializes that one template and hands the
+  string to the Android system share sheet (`Intent.ACTION_SEND`,
+  `text/plain`).
+- **Import** — an Upload icon in the screen's `TopAppBar` opens a paste-string
+  `AlertDialog` (`ImportTemplatesDialog`). On parse success, templates are
+  imported **sequentially** through a small queue (`importItems`/`importIndex`
+  state + a `LaunchedEffect` keyed on both, so each `POST` fires exactly once
+  per index): each one calls the now-extended
+  `UserViewModel.createMilestoneTemplate(..., onSuccess = ...)` (added an
+  `onSuccess` callback alongside the existing `onConflict` one, same for
+  `updateMilestoneTemplate`, to drive queue advancement). A `409` pauses the
+  queue on an overwrite/skip `AlertDialog` (re-fetches templates first and
+  disables "Overwrite" until the conflicting entry shows up in the refreshed
+  list, same race guard as the Phase 3 save-as-template flow) rather than
+  aborting the whole batch — mirrors the "handle partial failure, don't
+  abort" guardrail written for the future Batch Apply phase (§9.2), applied
+  here to import instead. A final "Import Complete" dialog lists a
+  created/overwrote/skipped line per template so nothing is silently dropped.
+  Toast feedback (`integrationMessage`/`errorMessage`) is now also wired into
+  this screen, matching the pattern already used in `ProfileScreen.kt`.
+- **Docs**: added a new §9 "Milestone Templates" to
+  `backend/iOS_DEVELOPER_GUIDE.md` (bumping the old §9 "Push Notification
+  Format" to §10) — documents the four REST endpoints and, per §6's
+  cross-platform note, the full `APMT1` wire format so an iOS client can
+  produce/consume identical strings.
+- Verified with a real `compileDevDebugKotlin` build (one missed
+  `Modifier.size` import caught and fixed by the compiler). No new warnings.
+
+**Not started:** Phase 7 (Batch Apply, post-MVP bonus, §9) is the only
+remaining item on the phase list — genuinely optional. Otherwise what's left
+before this could ship is the cross-cutting §7 checklist: Alembic migration
+already exists from Phase 1, but re-verify `alembic heads` before running it;
+backend tests exist (20, Phase 1) but there's no Android instrumentation test
+for the export/import path; and a `CHANGELOG.md` /
+`backend/app/data/changelog.json` entry hasn't been written yet — held off
+deliberately, since that's normally done at release-cut time (via the
+`release-notes` skill) rather than mid-feature-branch.
 
 ---
 

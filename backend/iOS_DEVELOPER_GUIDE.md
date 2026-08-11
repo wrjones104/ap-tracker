@@ -360,7 +360,80 @@ Allow users to suppress specific item popups via custom criteria definitions.
 
 ---
 
-## 9. Push Notification Format
+## 9. Milestone Templates
+
+Milestone templates let a user save a Milestone Group's item list (name + quantities) as a reusable, per-user, per-game preset, then start a new group from it later on any slot of the same game. They are keyed by **game name**, not datapackage checksum, so a template spans versions/seeds of a game.
+
+### REST Endpoints
+All endpoints require `Authorization: Bearer <JWT>` and are scoped to the calling user — you cannot read, edit, or delete another user's templates (404).
+
+- **`GET /milestone-templates`** — list the user's templates. Optional `?game=<name>` query param filters case-insensitively.
+  ```json
+  [
+    {
+      "id": 7,
+      "name": "Standard Start",
+      "game_name": "Mega Man 2",
+      "items": [
+        { "id": 21, "item_name": "Items", "quantity": 3, "is_group": true },
+        { "id": 22, "item_name": "Bubble Lead", "quantity": 1, "is_group": false }
+      ]
+    }
+  ]
+  ```
+- **`POST /milestone-templates`** — create a template.
+  ```json
+  {
+    "name": "Standard Start",
+    "game_name": "Mega Man 2",
+    "items": [
+      { "item_name": "Items", "quantity": 3, "is_group": true },
+      { "item_name": "Bubble Lead", "quantity": 1, "is_group": false }
+    ]
+  }
+  ```
+  - `name` and `game_name` are both required (unlike Milestone Group names, which are optional).
+  - `items` requires at least one valid entry (`item_name` non-empty, `quantity` ≥ 1).
+  - **`409 Conflict`** if a template with that exact `(game_name, name)` pair already exists for the user — prompt the user to overwrite (`PUT`) rather than silently failing.
+- **`PUT /milestone-templates/<id>`** — same body as `POST`; replaces the name, game, and full item list (also used for the overwrite-on-conflict flow).
+- **`DELETE /milestone-templates/<id>`** — deletes the template and its items.
+
+There is **no** "apply to slot" or "create from group" endpoint — both are pure client-side orchestration over data the client already has (prefill the normal `POST /rooms/<id>/slots/<slot_id>/threshold-groups` create flow from a template's items, or `POST /milestone-templates` from an existing group's items).
+
+### Export / Import (sharing) — client-side only
+Templates are otherwise private, but a user can share one with another player as a plain-text string (e.g. pasted into Discord). This encoding is entirely client-side — the backend is not involved in export/import beyond the normal `POST /milestone-templates` call each imported template makes.
+
+**Format**: a magic-prefixed, base64url-encoded JSON envelope:
+```
+APMT1:<base64url(json)>
+```
+`APMT1` = *Archipelago Alerts Milestone Template, format v1*. The decoded JSON:
+```json
+{
+  "v": 1,
+  "templates": [
+    {
+      "game": "Mega Man 2",
+      "name": "Standard Start",
+      "items": [
+        { "item_name": "Items", "quantity": 3, "is_group": true },
+        { "item_name": "Bubble Lead", "quantity": 1, "is_group": false }
+      ]
+    }
+  ]
+}
+```
+- `templates` is an array so the same envelope covers both a single-template export and a multi-template bundle — parse it the same way either way.
+- No `id` or `user_id` is included — the payload is portable and user-agnostic.
+- The base64url portion uses the standard `-`/`_` alphabet (RFC 4648 §5) rather than `+`/`/`, and is not line-wrapped. Padding (`=`) may or may not be present — accept either.
+- When **importing**, treat a bare (non-`APMT1:`-prefixed) JSON string that already matches this envelope shape as a lenient fallback input too.
+- **Validate before creating**: non-empty `game`/`name`, at least one item, `item_name` non-empty, `quantity` ≥ 1. Reject anything else client-side rather than sending it to `POST /milestone-templates`.
+- **No datapackage validation happens at import time** — the importing user may not even own a slot for that game yet. Item-existence validation (matching against the current datapackage) only happens later, client-side, when the user actually starts a Milestone Group from the template on a real slot.
+- Each parsed template is created via a normal `POST /milestone-templates` call. A `409` on any one of them means that user already has a template with that exact name for that game — same overwrite-or-skip decision as the single-create flow, just repeated per template in the batch.
+
+---
+
+## 10. Push Notification Format
 
 When a push notification is delivered via FCM to iOS, it will contain standard notification alert details, and custom data parameters containing any relevant metadata:
 

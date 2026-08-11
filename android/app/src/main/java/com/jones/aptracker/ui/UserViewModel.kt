@@ -1068,7 +1068,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         name: String,
         gameName: String,
         items: List<ThresholdGroupItemRequest>,
-        onConflict: (() -> Unit)? = null
+        onConflict: (() -> Unit)? = null,
+        onSuccess: (() -> Unit)? = null
     ) {
         viewModelScope.launch {
             try {
@@ -1077,6 +1078,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 if (response.isSuccessful) {
                     fetchMilestoneTemplates(latestMilestoneTemplatesGame)
                     _integrationMessage.value = "Template saved."
+                    onSuccess?.invoke()
                 } else if (response.code() == 409) {
                     if (onConflict != null) {
                         onConflict()
@@ -1097,7 +1099,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         templateId: Int,
         name: String,
         gameName: String,
-        items: List<ThresholdGroupItemRequest>
+        items: List<ThresholdGroupItemRequest>,
+        onSuccess: (() -> Unit)? = null
     ) {
         viewModelScope.launch {
             try {
@@ -1106,6 +1109,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 if (response.isSuccessful) {
                     fetchMilestoneTemplates(latestMilestoneTemplatesGame)
                     _integrationMessage.value = "Template updated."
+                    onSuccess?.invoke()
                 } else {
                     _errorMessage.value = "Failed to update template: ${response.code()}"
                 }

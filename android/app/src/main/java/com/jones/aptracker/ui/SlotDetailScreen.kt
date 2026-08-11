@@ -55,6 +55,7 @@ import com.jones.aptracker.network.ThresholdGroup
 import com.jones.aptracker.network.ThresholdGroupItem
 import com.jones.aptracker.network.ThresholdGroupItemRequest
 import com.jones.aptracker.network.AutocompleteOption
+import com.jones.aptracker.network.MilestoneTemplate
 import com.jones.aptracker.ui.theme.*
 import java.time.Duration
 import java.time.Instant
@@ -545,12 +546,15 @@ fun SlotDetailScreen(
             if (availableItems.isEmpty()) {
                 textClientViewModel.fetchAutocompleteData(roomDbId, slotId, slot?.game, context.applicationContext as? android.app.Application)
             }
+            userViewModel.fetchMilestoneTemplates(slot?.game)
         }
         ThresholdGroupSheet(
             title = "Create Milestone Group",
             confirmLabel = "Create",
             availableItems = availableItems,
             isAutocompleteLoading = isAutocompleteLoading,
+            milestoneTemplates = milestoneTemplates,
+            allowTemplatePicker = true,
             onDismiss = { showAddThresholdDialog = false },
             onConfirm = { name, items ->
                 userViewModel.createThresholdGroup(roomDbId, slotId, name, items)
@@ -1145,6 +1149,9 @@ fun ThresholdGroupSheet(
     initialItems: List<ThresholdGroupItemRequest> = emptyList(),
     availableItems: List<AutocompleteOption>,
     isAutocompleteLoading: Boolean = false,
+    milestoneTemplates: List<MilestoneTemplate> = emptyList(),
+    allowTemplatePicker: Boolean = false,
+    nameRequired: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: (String?, List<ThresholdGroupItemRequest>) -> Unit
 ) {
@@ -1152,9 +1159,20 @@ fun ThresholdGroupSheet(
     val selectedItems = remember(initialItems) {
         mutableStateListOf<ThresholdGroupItemRequest>().apply { addAll(initialItems) }
     }
+    var showTemplatePicker by remember { mutableStateOf(false) }
+    var templateDiffNote by remember { mutableStateOf<String?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
-    
+
+    fun applyTemplate(template: MilestoneTemplate) {
+        val (items, note) = resolveTemplateItems(template.items, availableItems)
+        groupName = template.name
+        selectedItems.clear()
+        selectedItems.addAll(items)
+        templateDiffNote = note
+        showTemplatePicker = false
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
@@ -1174,11 +1192,23 @@ fun ThresholdGroupSheet(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(16.dp))
-            
+
+            if (allowTemplatePicker && milestoneTemplates.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = { showTemplatePicker = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Start from a template")
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+
             OutlinedTextField(
                 value = groupName,
                 onValueChange = { groupName = it },
-                label = { Text("Group Name (Optional)") },
+                label = { Text(if (nameRequired) "Template Name" else "Group Name (Optional)") },
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(20.dp))
@@ -1261,7 +1291,16 @@ fun ThresholdGroupSheet(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(8.dp))
-            
+
+            templateDiffNote?.let { note ->
+                Text(
+                    note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
             if (selectedItems.isEmpty()) {
                 Text(
                     "No items added yet. Search below to add items.",
@@ -1327,13 +1366,83 @@ fun ThresholdGroupSheet(
                 Spacer(Modifier.width(16.dp))
                 Button(
                     onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList()) },
-                    enabled = selectedItems.isNotEmpty() && selectedItems.all { it.quantity >= 1 }
+                    enabled = selectedItems.isNotEmpty() &&
+                        selectedItems.all { it.quantity >= 1 } &&
+                        (!nameRequired || groupName.isNotBlank())
                 ) {
                     Text(confirmLabel)
                 }
             }
         }
     }
+
+    if (showTemplatePicker) {
+        AlertDialog(
+            onDismissRequest = { showTemplatePicker = false },
+            title = { Text("Start from a Template") },
+            text = {
+                LazyColumn(modifier = Modifier.heightIn(max = 350.dp)) {
+                    items(milestoneTemplates) { template ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { applyTemplate(template) }
+                                .padding(vertical = 10.dp)
+                        ) {
+                            Text(
+                                template.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            val summary = template.items.joinToString(", ") { "${it.item_name} x${it.quantity}" }
+                            Text(
+                                summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray,
+                                maxLines = 2
+                            )
+                        }
+                        HorizontalDivider(color = Color.DarkGray.copy(alpha = 0.3f))
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showTemplatePicker = false }) { Text("Cancel") } }
+        )
+    }
+}
+
+private fun resolveTemplateItems(
+    templateItems: List<ThresholdGroupItem>,
+    availableItems: List<AutocompleteOption>
+): Pair<List<ThresholdGroupItemRequest>, String?> {
+    if (availableItems.isEmpty()) {
+        val items = templateItems.map {
+            ThresholdGroupItemRequest(it.item_name, it.quantity, it.is_group)
+        }
+        return items to "Couldn't verify these items against this version."
+    }
+
+    val byLowerName = availableItems.associateBy { it.name.lowercase() }
+    val matched = mutableListOf<ThresholdGroupItemRequest>()
+    var missingCount = 0
+    templateItems.forEach { templateItem ->
+        val match = byLowerName[templateItem.item_name.lowercase()]
+        if (match != null) {
+            matched.add(ThresholdGroupItemRequest(match.name, templateItem.quantity, match.isGroup))
+        } else {
+            missingCount++
+        }
+    }
+
+    val note = if (missingCount > 0) {
+        val itemWord = if (missingCount == 1) "item isn't" else "items aren't"
+        "$missingCount $itemWord in this version and ${if (missingCount == 1) "was" else "were"} left out."
+    } else {
+        null
+    }
+    return matched to note
 }
 
 @Composable
