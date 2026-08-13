@@ -117,6 +117,28 @@ class TestMilestoneTemplates(unittest.TestCase):
         )
         self.assertEqual(r.status_code, 400)
 
+    def test_create_template_item_boolean_quantity_rejected(self):
+        r = self.client.post(
+            '/milestone-templates',
+            json={
+                'name': 'Test', 'game_name': 'Mega Man 2',
+                'items': [{'item_name': 'Items', 'quantity': True}],
+            },
+            headers=self._auth(self.token_a),
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_create_template_non_dict_items_handled_safely(self):
+        r = self.client.post(
+            '/milestone-templates',
+            json={
+                'name': 'Test', 'game_name': 'Mega Man 2',
+                'items': ['just_a_string', 123, None],
+            },
+            headers=self._auth(self.token_a),
+        )
+        self.assertEqual(r.status_code, 400)
+
     def test_create_template_duplicate_returns_409(self):
         self._create_template(self.token_a)
         r = self._create_template(self.token_a)

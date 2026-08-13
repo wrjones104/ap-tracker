@@ -1069,7 +1069,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         gameName: String,
         items: List<ThresholdGroupItemRequest>,
         onConflict: (() -> Unit)? = null,
-        onSuccess: (() -> Unit)? = null
+        onSuccess: (() -> Unit)? = null,
+        onError: (() -> Unit)? = null,
+        notify: Boolean = true
     ) {
         viewModelScope.launch {
             try {
@@ -1077,20 +1079,25 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 val response = RetrofitClient.instance.createMilestoneTemplate(request)
                 if (response.isSuccessful) {
                     fetchMilestoneTemplates(latestMilestoneTemplatesGame)
-                    _integrationMessage.value = "Template saved."
+                    if (notify) {
+                        _integrationMessage.value = "Template saved."
+                    }
                     onSuccess?.invoke()
                 } else if (response.code() == 409) {
                     if (onConflict != null) {
                         onConflict()
                     } else {
                         _errorMessage.value = "A template named '$name' already exists for $gameName."
+                        onError?.invoke()
                     }
                 } else {
                     _errorMessage.value = "Failed to save template: ${response.code()}"
+                    onError?.invoke()
                 }
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to create milestone template", e)
                 _errorMessage.value = "Failed to save template. Check connection."
+                onError?.invoke()
             }
         }
     }
@@ -1100,7 +1107,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         name: String,
         gameName: String,
         items: List<ThresholdGroupItemRequest>,
-        onSuccess: (() -> Unit)? = null
+        onSuccess: (() -> Unit)? = null,
+        onError: (() -> Unit)? = null,
+        notify: Boolean = true
     ) {
         viewModelScope.launch {
             try {
@@ -1108,14 +1117,18 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 val response = RetrofitClient.instance.updateMilestoneTemplate(templateId, request)
                 if (response.isSuccessful) {
                     fetchMilestoneTemplates(latestMilestoneTemplatesGame)
-                    _integrationMessage.value = "Template updated."
+                    if (notify) {
+                        _integrationMessage.value = "Template updated."
+                    }
                     onSuccess?.invoke()
                 } else {
                     _errorMessage.value = "Failed to update template: ${response.code()}"
+                    onError?.invoke()
                 }
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to update milestone template", e)
                 _errorMessage.value = "Failed to update template. Check connection."
+                onError?.invoke()
             }
         }
     }

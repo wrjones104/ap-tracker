@@ -1,7 +1,7 @@
 """add_milestone_templates
 
 Revision ID: a3f8c91d2e47
-Revises: f92a101b1a20
+Revises: a1c7e9f4b2d0
 Create Date: 2026-08-11 00:00:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'a3f8c91d2e47'
-down_revision: Union[str, Sequence[str], None] = 'f92a101b1a20'
+down_revision: Union[str, Sequence[str], None] = 'a1c7e9f4b2d0'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -25,7 +25,7 @@ def upgrade() -> None:
         sa.Column('user_id', sa.Integer(), nullable=False),
         sa.Column('game_name', sa.String(length=255), nullable=False),
         sa.Column('name', sa.String(length=255), nullable=False),
-        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(['user_id'], ['users.id']),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('user_id', 'game_name', 'name', name='_user_game_template_uc'),

@@ -117,7 +117,12 @@ fun MilestoneTemplatesScreen(
             onSuccess = {
                 importLog.add("Created \"${current.name}\" for ${current.game}.")
                 importIndex += 1
-            }
+            },
+            onError = {
+                importLog.add("Failed \"${current.name}\" for ${current.game}.")
+                importIndex += 1
+            },
+            notify = false
         )
     }
 
@@ -333,7 +338,13 @@ fun MilestoneTemplatesScreen(
                                 importLog.add("Overwrote \"${conflict.name}\" for ${conflict.game}.")
                                 importConflict = null
                                 importIndex += 1
-                            }
+                            },
+                            onError = {
+                                importLog.add("Failed overwriting \"${conflict.name}\" for ${conflict.game}.")
+                                importConflict = null
+                                importIndex += 1
+                            },
+                            notify = false
                         )
                     }
                 ) {

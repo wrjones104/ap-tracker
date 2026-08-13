@@ -29,13 +29,17 @@ def _serialize_template(t):
 
 
 def _validate_items(items_data):
-    """Returns a list of valid (item_name, quantity, is_group) tuples or None."""
+    """Returns a list of valid (item_name, quantity, is_group) tuples or empty list."""
+    if not isinstance(items_data, list):
+        return []
     valid = []
     for item_data in items_data:
+        if not isinstance(item_data, dict):
+            continue
         item_name = (item_data.get('item_name') or '').strip()
         quantity = item_data.get('quantity', 1)
         is_group = bool(item_data.get('is_group', False))
-        if item_name and isinstance(quantity, int) and quantity >= 1:
+        if item_name and isinstance(quantity, int) and not isinstance(quantity, bool) and quantity >= 1:
             valid.append((item_name, quantity, is_group))
     return valid
 
