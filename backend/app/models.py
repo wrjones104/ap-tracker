@@ -154,6 +154,33 @@ class ThresholdGroupItem(Base):
     
     group = relationship("ThresholdGroup", back_populates="items")
 
+class MilestoneTemplate(Base):
+    __tablename__ = 'milestone_templates'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    game_name = Column(String(255), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", viewonly=True)
+    items = relationship("MilestoneTemplateItem", back_populates="template", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'game_name', 'name', name='_user_game_template_uc'),
+    )
+
+
+class MilestoneTemplateItem(Base):
+    __tablename__ = 'milestone_template_items'
+    id = Column(Integer, primary_key=True)
+    template_id = Column(Integer, ForeignKey('milestone_templates.id'), nullable=False)
+    item_name = Column(String(255), nullable=False)
+    quantity = Column(Integer, nullable=False, default=1)
+    is_group = Column(Boolean, nullable=False, default=False)
+
+    template = relationship("MilestoneTemplate", back_populates="items")
+
+
 class UserIgnoreItem(Base):
     __tablename__ = 'user_ignore_items'
     id = Column(Integer, primary_key=True)

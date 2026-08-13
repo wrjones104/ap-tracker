@@ -55,6 +55,7 @@ import com.jones.aptracker.network.ThresholdGroup
 import com.jones.aptracker.network.ThresholdGroupItem
 import com.jones.aptracker.network.ThresholdGroupItemRequest
 import com.jones.aptracker.network.AutocompleteOption
+import com.jones.aptracker.network.MilestoneTemplate
 import com.jones.aptracker.ui.theme.*
 import java.time.Duration
 import java.time.Instant
@@ -73,6 +74,7 @@ fun SlotDetailScreen(
     slotId: Int,
     onBackClick: () -> Unit,
     onNavigateToHistory: (Int, String, String?, String?) -> Unit,
+    onNavigateToMilestoneTemplates: () -> Unit = {},
     userViewModel: UserViewModel = viewModel(),
     textClientViewModel: TextClientViewModel = viewModel()
 ) {
@@ -90,6 +92,8 @@ fun SlotDetailScreen(
     var showLocationHintDialog by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf<String?>(null) }
+    var savingAsTemplateGroup by remember { mutableStateOf<ThresholdGroup?>(null) }
+    var templateOverwriteConflict by remember { mutableStateOf<Pair<List<ThresholdGroupItemRequest>, String>?>(null) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val passwordManager = remember { com.jones.aptracker.network.PasswordManager(context) }
@@ -134,6 +138,7 @@ fun SlotDetailScreen(
     val isRefreshingCheese by userViewModel.isRefreshingCheese.collectAsState()
 
     val thresholdGroups by userViewModel.thresholdGroups.collectAsState()
+    val milestoneTemplates by userViewModel.milestoneTemplates.collectAsState()
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -269,15 +274,36 @@ fun SlotDetailScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Milestone Groups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                    TextButton(onClick = { showAddThresholdDialog = true }) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Add")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onNavigateToMilestoneTemplates) {
+                            Icon(
+                                Icons.Default.Bookmarks,
+                                contentDescription = "Manage Templates",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(onClick = { showAddThresholdDialog = true }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Add")
+                            }
                         }
                     }
                 }
-                
+
+                if (thresholdGroups.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Tap Bookmark to save a group's items as a reusable template.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -299,6 +325,7 @@ fun SlotDetailScreen(
                                         editingThresholdGroup = group
                                         showEditThresholdDialog = true
                                     },
+                                    onSaveAsTemplate = { savingAsTemplateGroup = group },
                                     onDelete = { userViewModel.deleteThresholdGroup(roomDbId, slotId, group.id) }
                                 )
                                 if (index < thresholdGroups.size - 1) {
@@ -541,15 +568,29 @@ fun SlotDetailScreen(
             if (availableItems.isEmpty()) {
                 textClientViewModel.fetchAutocompleteData(roomDbId, slotId, slot?.game, context.applicationContext as? android.app.Application)
             }
+            userViewModel.fetchMilestoneTemplates(slot?.game)
         }
         ThresholdGroupSheet(
             title = "Create Milestone Group",
             confirmLabel = "Create",
             availableItems = availableItems,
             isAutocompleteLoading = isAutocompleteLoading,
+            milestoneTemplates = milestoneTemplates,
+            allowTemplatePicker = true,
+            allowSaveAsTemplateToggle = true,
             onDismiss = { showAddThresholdDialog = false },
-            onConfirm = { name, items ->
+            onConfirm = { name, items, saveAsTemplate ->
                 userViewModel.createThresholdGroup(roomDbId, slotId, name, items)
+                val game = slot?.game
+                val templateName = name?.trim()
+                if (saveAsTemplate && !game.isNullOrBlank() && !templateName.isNullOrBlank()) {
+                    userViewModel.createMilestoneTemplate(
+                        name = templateName,
+                        gameName = game,
+                        items = items,
+                        onConflict = { templateOverwriteConflict = items to templateName }
+                    )
+                }
                 showAddThresholdDialog = false
             }
         )
@@ -580,7 +621,7 @@ fun SlotDetailScreen(
                 showEditThresholdDialog = false
                 editingThresholdGroup = null
             },
-            onConfirm = { name, items ->
+            onConfirm = { name, items, _ ->
                 userViewModel.updateThresholdGroup(roomDbId, slotId, groupToEdit.id, name, items)
                 showEditThresholdDialog = false
                 editingThresholdGroup = null
@@ -632,7 +673,82 @@ fun SlotDetailScreen(
                         passwordManager.deletePassword(host)
                     }
                 }
-                showPasswordDialog = false 
+                showPasswordDialog = false
+            }
+        )
+    }
+
+    val groupToSaveAsTemplate = savingAsTemplateGroup
+    if (groupToSaveAsTemplate != null) {
+        LaunchedEffect(groupToSaveAsTemplate) {
+            userViewModel.fetchMilestoneTemplates(slot?.game)
+        }
+        SaveAsTemplateDialog(
+            initialName = groupToSaveAsTemplate.name ?: "",
+            onDismiss = { savingAsTemplateGroup = null },
+            onConfirm = { templateName ->
+                val game = slot?.game
+                savingAsTemplateGroup = null
+                if (!game.isNullOrBlank()) {
+                    val items = groupToSaveAsTemplate.items.map {
+                        ThresholdGroupItemRequest(
+                            item_name = it.item_name,
+                            quantity = it.quantity,
+                            is_group = it.is_group
+                        )
+                    }
+                    userViewModel.createMilestoneTemplate(
+                        name = templateName,
+                        gameName = game,
+                        items = items,
+                        onConflict = { templateOverwriteConflict = items to templateName }
+                    )
+                }
+            }
+        )
+    }
+
+    val conflict = templateOverwriteConflict
+    if (conflict != null) {
+        val (conflictItems, conflictName) = conflict
+        val conflictGameName = slot?.game
+        LaunchedEffect(conflict) {
+            userViewModel.fetchMilestoneTemplates(conflictGameName)
+        }
+        val existingTemplate = milestoneTemplates.find {
+            it.game_name == conflictGameName && it.name == conflictName
+        }
+        AlertDialog(
+            onDismissRequest = { templateOverwriteConflict = null },
+            title = { Text("Template Already Exists") },
+            text = {
+                Text("A template named \"$conflictName\" already exists for $conflictGameName. Overwrite it?")
+            },
+            confirmButton = {
+                Button(
+                    enabled = existingTemplate != null,
+                    onClick = {
+                        val existing = existingTemplate
+                        if (existing != null && conflictGameName != null) {
+                            userViewModel.updateMilestoneTemplate(
+                                templateId = existing.id,
+                                name = conflictName,
+                                gameName = conflictGameName,
+                                items = conflictItems
+                            )
+                        }
+                        templateOverwriteConflict = null
+                    }
+                ) {
+                    if (existingTemplate == null) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Overwrite")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { templateOverwriteConflict = null }) { Text("Cancel") }
             }
         )
     }
@@ -720,164 +836,214 @@ fun CheeseSlotCard(
     onSaveNotes: (String) -> Unit
 ) {
     val canEdit = cheese.is_mine
+    var isExpanded by remember { mutableStateOf(false) }
     var showForfeitConfirm by remember { mutableStateOf(false) }
+
+    val currentProgressionOption = CHEESE_PROGRESSION_OPTIONS.find { it.id == cheese.progression_status }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            // Card header: title + refresh-this-card control
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Card header: title + status badge + refresh control + expand/collapse toggle
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "Cheese Tracker",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                IconButton(onClick = onRefresh, enabled = !isRefreshing && !isSaving) {
-                    if (isRefreshing) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Refresh from Cheese Tracker",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Cheese Tracker",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (currentProgressionOption != null && currentProgressionOption.id != "unknown") {
+                        Surface(
+                            color = currentProgressionOption.color.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                currentProgressionOption.label,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = currentProgressionOption.color,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
-            }
-            Spacer(Modifier.height(12.dp))
 
-            if (!canEdit) {
-                Text(
-                    "This slot is claimed by someone else on Cheese Tracker, so it's view-only here.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
-                Spacer(Modifier.height(16.dp))
-            }
-
-            // --- Status selectors ---
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                CheeseDropdownField(
-                    modifier = Modifier.weight(1f),
-                    label = "STATUS",
-                    selectedId = cheese.progression_status,
-                    options = CHEESE_PROGRESSION_OPTIONS,
-                    enabled = canEdit && !isSaving,
-                    onSelect = { onProgressionChange(it) }
-                )
-                CheeseDropdownField(
-                    modifier = Modifier.weight(1f),
-                    label = "COMPLETION",
-                    selectedId = cheese.completion_status,
-                    options = CHEESE_COMPLETION_OPTIONS,
-                    enabled = canEdit && !isSaving,
-                    onSelect = { selected ->
-                        if (selected == "released") showForfeitConfirm = true
-                        else onCompletionChange(selected)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    IconButton(
+                        onClick = onRefresh,
+                        enabled = !isRefreshing && !isSaving,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Refresh from Cheese Tracker",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
-                )
-            }
 
-            Spacer(Modifier.height(16.dp))
-
-            // --- Last checked + Still BK ---
-            val isBk = cheese.progression_status in CHEESE_BK_IDS
-            val isCompleted = cheese.completion_status in CHEESE_COMPLETE_IDS
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("LAST CHECKED", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
-                    Text(
-                        formatTimestamp(cheese.last_checked ?: cheese.last_activity),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.Medium
+                    Icon(
+                        if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (isExpanded) "Collapse Cheese Tracker" else "Expand Cheese Tracker",
+                        tint = Color.Gray
                     )
                 }
-                if (canEdit && isBk && !isCompleted) {
-                    OutlinedButton(
-                        onClick = onStillBk,
-                        enabled = !isSaving,
-                        shape = RoundedCornerShape(24.dp)
-                    ) {
-                        Text("Still BK")
-                    }
-                }
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            // --- Ping preference ---
-            if (cheese.global_ping_policy != null) {
-                Text("PING PREFERENCE", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
-                Text(
-                    cheeseOptionLabel(CHEESE_PING_OPTIONS, cheese.discord_ping),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    "This tracker uses a global ping policy, so per-slot ping is set by the tracker owner.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.Gray,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            } else {
-                CheeseDropdownField(
-                    modifier = Modifier.fillMaxWidth(),
-                    label = "PING PREFERENCE",
-                    selectedId = cheese.discord_ping,
-                    options = CHEESE_PING_OPTIONS,
-                    enabled = canEdit && !isSaving,
-                    onSelect = { onPingChange(it) }
-                )
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            // --- Notes ---
-            Text("NOTES", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            var notesDraft by remember(cheese.notes) { mutableStateOf(cheese.notes) }
-            val notesChanged = notesDraft != cheese.notes
-            OutlinedTextField(
-                value = notesDraft,
-                onValueChange = { if (it.length <= 5000) notesDraft = it },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = canEdit && !isSaving,
-                placeholder = { Text("Add notes for this slot...") },
-                minLines = 3,
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            )
-            if (canEdit && notesChanged) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.End
+            AnimatedVisibility(visible = isExpanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 20.dp, bottom = 20.dp)
                 ) {
-                    TextButton(onClick = { notesDraft = cheese.notes }, enabled = !isSaving) {
-                        Text("Cancel")
+                    if (!canEdit) {
+                        Text(
+                            "This slot is claimed by someone else on Cheese Tracker, so it's view-only here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                        Spacer(Modifier.height(16.dp))
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Button(onClick = { onSaveNotes(notesDraft) }, enabled = !isSaving) {
-                        Text("Save Notes")
+
+                    // --- Status selectors ---
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CheeseDropdownField(
+                            modifier = Modifier.weight(1f),
+                            label = "STATUS",
+                            selectedId = cheese.progression_status,
+                            options = CHEESE_PROGRESSION_OPTIONS,
+                            enabled = canEdit && !isSaving,
+                            onSelect = { onProgressionChange(it) }
+                        )
+                        CheeseDropdownField(
+                            modifier = Modifier.weight(1f),
+                            label = "COMPLETION",
+                            selectedId = cheese.completion_status,
+                            options = CHEESE_COMPLETION_OPTIONS,
+                            enabled = canEdit && !isSaving,
+                            onSelect = { selected ->
+                                if (selected == "released") showForfeitConfirm = true
+                                else onCompletionChange(selected)
+                            }
+                        )
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    // --- Last checked + Still BK ---
+                    val isBk = cheese.progression_status in CHEESE_BK_IDS
+                    val isCompleted = cheese.completion_status in CHEESE_COMPLETE_IDS
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("LAST CHECKED", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+                            Text(
+                                formatTimestamp(cheese.last_checked ?: cheese.last_activity),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        if (canEdit && isBk && !isCompleted) {
+                            OutlinedButton(
+                                onClick = onStillBk,
+                                enabled = !isSaving,
+                                shape = RoundedCornerShape(24.dp)
+                            ) {
+                                Text("Still BK")
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    // --- Ping preference ---
+                    if (cheese.global_ping_policy != null) {
+                        Text("PING PREFERENCE", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+                        Text(
+                            cheeseOptionLabel(CHEESE_PING_OPTIONS, cheese.discord_ping),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            "This tracker uses a global ping policy, so per-slot ping is set by the tracker owner.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    } else {
+                        CheeseDropdownField(
+                            modifier = Modifier.fillMaxWidth(),
+                            label = "PING PREFERENCE",
+                            selectedId = cheese.discord_ping,
+                            options = CHEESE_PING_OPTIONS,
+                            enabled = canEdit && !isSaving,
+                            onSelect = { onPingChange(it) }
+                        )
+                    }
+
+                    Spacer(Modifier.height(20.dp))
+
+                    // --- Notes ---
+                    Text("NOTES", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    var notesDraft by remember(cheese.notes) { mutableStateOf(cheese.notes) }
+                    val notesChanged = notesDraft != cheese.notes
+                    OutlinedTextField(
+                        value = notesDraft,
+                        onValueChange = { if (it.length <= 5000) notesDraft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = canEdit && !isSaving,
+                        placeholder = { Text("Add notes for this slot...") },
+                        minLines = 3,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    )
+                    if (canEdit && notesChanged) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = { notesDraft = cheese.notes }, enabled = !isSaving) {
+                                Text("Cancel")
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Button(onClick = { onSaveNotes(notesDraft) }, enabled = !isSaving) {
+                                Text("Save Notes")
+                            }
+                        }
                     }
                 }
             }
@@ -990,6 +1156,7 @@ fun CheeseDropdownField(
 fun ThresholdGroupRow(
     group: ThresholdGroup,
     onEdit: (() -> Unit)? = null,
+    onSaveAsTemplate: (() -> Unit)? = null,
     onDelete: () -> Unit
 ) {
     Row(
@@ -1038,6 +1205,11 @@ fun ThresholdGroupRow(
                 Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
             }
         }
+        if (onSaveAsTemplate != null) {
+            IconButton(onClick = onSaveAsTemplate) {
+                Icon(Icons.Default.BookmarkAdd, contentDescription = "Save as Template", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            }
+        }
         IconButton(onClick = onDelete) {
             Icon(Icons.Default.Delete, null, tint = Color(0xFFCF6679), modifier = Modifier.size(20.dp))
         }
@@ -1053,16 +1225,32 @@ fun ThresholdGroupSheet(
     initialItems: List<ThresholdGroupItemRequest> = emptyList(),
     availableItems: List<AutocompleteOption>,
     isAutocompleteLoading: Boolean = false,
+    milestoneTemplates: List<MilestoneTemplate> = emptyList(),
+    allowTemplatePicker: Boolean = false,
+    allowSaveAsTemplateToggle: Boolean = false,
+    nameRequired: Boolean = false,
     onDismiss: () -> Unit,
-    onConfirm: (String?, List<ThresholdGroupItemRequest>) -> Unit
+    onConfirm: (String?, List<ThresholdGroupItemRequest>, Boolean) -> Unit
 ) {
     var groupName by remember(initialName) { mutableStateOf(initialName) }
     val selectedItems = remember(initialItems) {
         mutableStateListOf<ThresholdGroupItemRequest>().apply { addAll(initialItems) }
     }
+    var showTemplatePicker by remember { mutableStateOf(false) }
+    var templateDiffNote by remember { mutableStateOf<String?>(null) }
+    var saveAsTemplateChecked by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
-    
+
+    fun applyTemplate(template: MilestoneTemplate) {
+        val (items, note) = resolveTemplateItems(template.items, availableItems)
+        groupName = template.name
+        selectedItems.clear()
+        selectedItems.addAll(items)
+        templateDiffNote = note
+        showTemplatePicker = false
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
@@ -1082,11 +1270,23 @@ fun ThresholdGroupSheet(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(16.dp))
-            
+
+            if (allowTemplatePicker && milestoneTemplates.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = { showTemplatePicker = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Start from a template")
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+
             OutlinedTextField(
                 value = groupName,
                 onValueChange = { groupName = it },
-                label = { Text("Group Name (Optional)") },
+                label = { Text(if (nameRequired) "Template Name" else "Group Name (Optional)") },
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(20.dp))
@@ -1169,7 +1369,16 @@ fun ThresholdGroupSheet(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(8.dp))
-            
+
+            templateDiffNote?.let { note ->
+                Text(
+                    note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
             if (selectedItems.isEmpty()) {
                 Text(
                     "No items added yet. Search below to add items.",
@@ -1222,9 +1431,41 @@ fun ThresholdGroupSheet(
                 }
             }
 
-            
+            if (allowSaveAsTemplateToggle) {
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { saveAsTemplateChecked = !saveAsTemplateChecked },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(checked = saveAsTemplateChecked, onCheckedChange = { saveAsTemplateChecked = it })
+                    Spacer(Modifier.width(4.dp))
+                    Column {
+                        Text(
+                            "Also save as a template",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "Reuse these items later on another slot for this game.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                }
+                if (saveAsTemplateChecked && groupName.isBlank()) {
+                    Text(
+                        "Enter a name above to save as a template.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(start = 48.dp, top = 2.dp)
+                    )
+                }
+            }
+
             Spacer(Modifier.height(24.dp))
-            
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
@@ -1234,14 +1475,85 @@ fun ThresholdGroupSheet(
                 }
                 Spacer(Modifier.width(16.dp))
                 Button(
-                    onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList()) },
-                    enabled = selectedItems.isNotEmpty() && selectedItems.all { it.quantity >= 1 }
+                    onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList(), saveAsTemplateChecked) },
+                    enabled = selectedItems.isNotEmpty() &&
+                        selectedItems.all { it.quantity >= 1 } &&
+                        (!nameRequired || groupName.isNotBlank()) &&
+                        (!saveAsTemplateChecked || groupName.isNotBlank())
                 ) {
                     Text(confirmLabel)
                 }
             }
         }
     }
+
+    if (showTemplatePicker) {
+        AlertDialog(
+            onDismissRequest = { showTemplatePicker = false },
+            title = { Text("Start from a Template") },
+            text = {
+                LazyColumn(modifier = Modifier.heightIn(max = 350.dp)) {
+                    items(milestoneTemplates) { template ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { applyTemplate(template) }
+                                .padding(vertical = 10.dp)
+                        ) {
+                            Text(
+                                template.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            val summary = template.items.joinToString(", ") { "${it.item_name} x${it.quantity}" }
+                            Text(
+                                summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray,
+                                maxLines = 2
+                            )
+                        }
+                        HorizontalDivider(color = Color.DarkGray.copy(alpha = 0.3f))
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showTemplatePicker = false }) { Text("Cancel") } }
+        )
+    }
+}
+
+private fun resolveTemplateItems(
+    templateItems: List<ThresholdGroupItem>,
+    availableItems: List<AutocompleteOption>
+): Pair<List<ThresholdGroupItemRequest>, String?> {
+    if (availableItems.isEmpty()) {
+        val items = templateItems.map {
+            ThresholdGroupItemRequest(it.item_name, it.quantity, it.is_group)
+        }
+        return items to "Couldn't verify these items against this version."
+    }
+
+    val byLowerName = availableItems.associateBy { it.name.lowercase() }
+    val matched = mutableListOf<ThresholdGroupItemRequest>()
+    var missingCount = 0
+    templateItems.forEach { templateItem ->
+        val match = byLowerName[templateItem.item_name.lowercase()]
+        if (match != null) {
+            matched.add(ThresholdGroupItemRequest(match.name, templateItem.quantity, match.isGroup))
+        } else {
+            missingCount++
+        }
+    }
+
+    val note = if (missingCount > 0) {
+        val itemWord = if (missingCount == 1) "item isn't" else "items aren't"
+        "$missingCount $itemWord in this version and ${if (missingCount == 1) "was" else "were"} left out."
+    } else {
+        null
+    }
+    return matched to note
 }
 
 @Composable
@@ -1453,6 +1765,50 @@ fun PasswordInputDialog(
         confirmButton = {
             Button(onClick = { onConfirm(text, shouldSave) }) {
                 Text("Confirm")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun SaveAsTemplateDialog(
+    initialName: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember { mutableStateOf(initialName) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save as Template") },
+        text = {
+            Column {
+                Text(
+                    "Save this milestone group's items as a reusable template for this game.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Template Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(name.trim()) },
+                enabled = name.isNotBlank()
+            ) {
+                Text("Save")
             }
         },
         dismissButton = {

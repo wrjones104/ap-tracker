@@ -1,6 +1,51 @@
 {
   "app_releases": [
     {
+      "version": "1.7.0",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-08-13",
+      "title": "Milestone Templates & Android 15 Edge-to-Edge",
+      "highlights": [
+        {
+          "title": "Milestone Templates",
+          "description": "Save threshold groups as reusable templates, quickly apply them to new slots, and export or import templates as JSON."
+        },
+        {
+          "title": "Collapsible Cheese Tracker Card",
+          "description": "The Cheese Tracker section on the Slot Details screen is now collapsible and starts collapsed by default for a cleaner view."
+        },
+        {
+          "title": "Android 15 Edge-to-Edge Support",
+          "description": "Updated window insets and dependencies to fully support Android 15 (SDK 35+) edge-to-edge display standards."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Milestone Templates",
+            "description": "Save milestone threshold groups as reusable templates from slot details, pick templates when creating new groups, and manage/export/import them via JSON."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Collapsible Cheese Tracker Card",
+            "description": "The Cheese Tracker card on the Slot Details screen is now collapsible with an interactive header and status badge, collapsed by default."
+          },
+          {
+            "title": "Android 15 Edge-to-Edge & Window Insets",
+            "description": "Updated system bar insets across screens and upgraded AndroidX dependencies to eliminate deprecated window management APIs."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Android App v1.7.0 Released!**\n\n**New Features**\n• **Milestone Templates**: Save your favorite milestone threshold groups as reusable templates! Pick templates when setting up new slots, or export/import templates as JSON to share with others.\n\n**Improvements**\n• **Collapsible Cheese Tracker Card**: The Cheese Tracker section on the Slot Details screen is now collapsible and starts collapsed by default for a cleaner view.\n• **Android 15 Edge-to-Edge**: Updated system bar insets and dependencies for full Android 15 (SDK 35+) edge-to-edge display compatibility.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "New: Milestone Templates — save your threshold groups as reusable templates, create groups from templates, and export/import templates as JSON.\n\nImproved: Collapsible Cheese Tracker card on the Slot Details screen, collapsed by default.\n\nImproved: Android 15 edge-to-edge display support and insets modernization.",
+        "github": "### Added\n- **Milestone Templates**: Save threshold groups as reusable templates from slot details, choose templates when creating new milestone groups, and manage/export/import templates via JSON on the Milestone Templates screen.\n\n### Changed\n- **Collapsible Cheese Tracker Card**: Made the Cheese Tracker card on `SlotDetailScreen` collapsible (starts collapsed by default) with an interactive header and status badge.\n- **Android 15 Edge-to-Edge Support**: Upgraded `androidx.activity` to 1.10.1 and `androidx.core:core-ktx` to 1.15.0 to migrate away from deprecated `Window` color APIs; corrected `WindowInsets` handling on `SettingsScreen`, `SlotOverridesScreen`, `ActivityFeedScreen`, and `ProfileScreen`."
+      }
+    },
+    {
       "version": "1.6.23",
       "component": "app",
       "component_label": "App",

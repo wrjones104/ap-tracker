@@ -149,6 +149,9 @@ fun MainNavHost(
                 onNavigateToWhitelist = {
                     navController.navigate("whitelist")
                 },
+                onNavigateToMilestoneTemplates = {
+                    navController.navigate("milestone_templates")
+                },
                 onNavigateToCredits = {
                     navController.navigate("credits")
                 },
@@ -177,6 +180,13 @@ fun MainNavHost(
 
         composable("whitelist") {
             WhitelistScreen(
+                userViewModel = userViewModel,
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+
+        composable("milestone_templates") {
+            MilestoneTemplatesScreen(
                 userViewModel = userViewModel,
                 onBackClick = { navController.popBackStack() }
             )
@@ -254,6 +264,9 @@ fun MainNavHost(
                 onNavigateToHistory = { roomId, _, query, player ->
                     historyViewModel.loadHistoryFor(roomId, query, player)
                     navController.navigate("slot_history")
+                },
+                onNavigateToMilestoneTemplates = {
+                    navController.navigate("milestone_templates")
                 }
             )
         }

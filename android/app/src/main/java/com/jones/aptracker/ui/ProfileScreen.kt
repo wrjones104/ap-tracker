@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Inventory2
@@ -72,6 +73,7 @@ fun ProfileScreen(
     onGuestUpgradeClick: () -> Unit,
     onIgnoreListClick: () -> Unit,
     onWhitelistClick: () -> Unit,
+    onMilestoneTemplatesClick: () -> Unit,
     onCreditsClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToGuide: () -> Unit = {},
@@ -141,18 +143,14 @@ fun ProfileScreen(
     }
 
     Scaffold(
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0.dp)
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = padding.calculateTopPadding())
+                .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(
-                    start = 16.dp,
-                    end = 16.dp,
-                    top = 16.dp,
-                    bottom = padding.calculateBottomPadding() + 16.dp
-                ),
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
 
@@ -251,6 +249,13 @@ fun ProfileScreen(
                 title = "Whitelist",
                 subtitle = "Always deliver notifications for specific items",
                 onClick = onWhitelistClick
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.Bookmarks,
+                title = "Milestone Templates",
+                subtitle = "Manage your saved milestone group templates",
+                onClick = onMilestoneTemplatesClick
             )
 
             HorizontalDivider(Modifier.padding(vertical = 16.dp))

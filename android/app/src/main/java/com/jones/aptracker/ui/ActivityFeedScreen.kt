@@ -5,11 +5,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -28,7 +29,7 @@ fun ActivityFeedScreen(
     onBackClick: (() -> Unit)? = null
 ) {
     Scaffold(
-        contentWindowInsets = WindowInsets(0.dp),
+        contentWindowInsets = if (onBackClick != null) ScaffoldDefaults.contentWindowInsets else WindowInsets(0.dp),
         topBar = {
             // Only shown when this screen is pushed as its own destination (e.g. from
             // SlotDetailScreen). Embedded in the Activity bottom-nav tab, MainScreen owns the bar.
@@ -45,7 +46,7 @@ fun ActivityFeedScreen(
                     title = { Text(titleText) },
                     navigationIcon = {
                         IconButton(onClick = onBackClick) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     }
                 )

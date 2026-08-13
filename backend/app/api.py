@@ -13,6 +13,7 @@ from app.routes.user_routes import user_bp
 from app.routes.rooms_routes import rooms_bp
 from app.routes.slots_routes import slots_bp
 from app.routes.thresholds_routes import thresholds_bp
+from app.routes.templates_routes import templates_bp
 from app.routes.history_routes import history_bp
 from app.routes.game_routes import game_bp
 from app.routes.whats_new_routes import whats_new_bp
@@ -36,6 +37,7 @@ def register_api_routes(app):
     app.register_blueprint(rooms_bp)
     app.register_blueprint(slots_bp)
     app.register_blueprint(thresholds_bp)
+    app.register_blueprint(templates_bp)
     app.register_blueprint(history_bp)
     app.register_blueprint(game_bp)
     app.register_blueprint(whats_new_bp)
