@@ -5,8 +5,55 @@ items + quantities as a named template, then start a new Milestone Group from it
 on any slot of the same game. Templates can also be exported as a portable string
 and shared with other users.
 
-> Status: **In progress — Phases 1–6 complete.** Branch: `feature/milestone-templates`.
-> Picking back up? Read §0 first, then jump straight to Phase 7 (Batch Apply, post-MVP bonus) in §9 — or consider the MVP done and move to migration/tests/changelog polish in §7.
+> Status: **MVP complete (Phases 1–6) + UX polish pass.** Branch: `feature/milestone-templates`.
+> Picking back up? Read §0 first. Phase 7 (Batch Apply, post-MVP bonus) in §9 is the only
+> unbuilt feature; otherwise what's left is migration/tests/changelog polish in §7.
+
+**UX polish pass (post-Phase-6, based on the author's own hands-on testing):**
+Three usability gaps were identified after using the feature end-to-end:
+1. The bookmark ("save as template") icon on an existing Milestone Group wasn't
+   obviously discoverable.
+2. The management screen (Profile → Milestone Templates) felt decoupled from
+   where templates are actually used/created (a slot's detail screen).
+3. The management screen had no explanation that new templates can't be
+   authored there — only edited/deleted/imported.
+
+Fixes, all in `SlotDetailScreen.kt` / `MilestoneTemplatesScreen.kt` /
+`AppNavigation.kt`:
+- `ThresholdGroupSheet` gained an `allowSaveAsTemplateToggle` param — the
+  Create Milestone Group sheet now has an "Also save as a template" checkbox,
+  so a template can be created in the same step as the group instead of
+  requiring a second trip through the bookmark icon afterward. Checking it
+  makes the group name required (it doubles as the template name), enforced
+  via the same enabled-button gating pattern as `nameRequired`. This changed
+  `onConfirm`'s signature to `(String?, List<ThresholdGroupItemRequest>,
+  Boolean) -> Unit` — all three call sites (create, edit-group, edit-template)
+  were updated; the latter two just ignore the new flag.
+- The single-group "save as template" conflict-resolution state
+  (`templateOverwriteConflict`) was generalized from `Pair<ThresholdGroup,
+  String>` to `Pair<List<ThresholdGroupItemRequest>, String>` so both the
+  existing bookmark-icon flow and the new inline-checkbox flow can share one
+  conflict dialog instead of duplicating it.
+- A one-line gray hint ("Tap 🔖 to save a group's items as a reusable
+  template.") now appears under the Milestone Groups header, only when the
+  list isn't empty (so the bookmark icon is actually on screen when the hint
+  shows).
+- A Bookmarks icon button next to "Add" in the Milestone Groups header
+  (`onNavigateToMilestoneTemplates`, threaded through `AppNavigation.kt`'s
+  existing `"milestone_templates"` route) now links straight to the
+  management screen from the slot detail screen — the missing link the author
+  called out between "where you set them" and "where you manage them."
+- `MilestoneTemplatesScreen.kt` gained a persistent `TemplatesTips` callout
+  (same visual pattern as `IgnoreListTips`) explaining templates are created
+  from a slot's Milestone Groups, not from this screen — shown above the list
+  when templates exist; the empty state (already had similar copy) also
+  gained a matching "Import a Template" shortcut button so first-time visitors
+  aren't stuck looking at plain text with no obvious next action.
+- Verified with a real `compileDevDebugKotlin` build — no new warnings.
+  On-device visual verification wasn't completed: the only connected device
+  was locked (fingerprint prompt) and unlocking someone's personal phone
+  isn't something to do without them present — worth a manual pass by the
+  author before merging.
 
 ---
 

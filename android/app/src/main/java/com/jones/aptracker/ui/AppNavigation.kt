@@ -264,6 +264,9 @@ fun MainNavHost(
                 onNavigateToHistory = { roomId, _, query, player ->
                     historyViewModel.loadHistoryFor(roomId, query, player)
                     navController.navigate("slot_history")
+                },
+                onNavigateToMilestoneTemplates = {
+                    navController.navigate("milestone_templates")
                 }
             )
         }

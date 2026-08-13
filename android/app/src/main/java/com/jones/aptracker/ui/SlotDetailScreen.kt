@@ -74,6 +74,7 @@ fun SlotDetailScreen(
     slotId: Int,
     onBackClick: () -> Unit,
     onNavigateToHistory: (Int, String, String?, String?) -> Unit,
+    onNavigateToMilestoneTemplates: () -> Unit = {},
     userViewModel: UserViewModel = viewModel(),
     textClientViewModel: TextClientViewModel = viewModel()
 ) {
@@ -92,7 +93,7 @@ fun SlotDetailScreen(
     var showPasswordDialog by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf<String?>(null) }
     var savingAsTemplateGroup by remember { mutableStateOf<ThresholdGroup?>(null) }
-    var templateOverwriteConflict by remember { mutableStateOf<Pair<ThresholdGroup, String>?>(null) }
+    var templateOverwriteConflict by remember { mutableStateOf<Pair<List<ThresholdGroupItemRequest>, String>?>(null) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val passwordManager = remember { com.jones.aptracker.network.PasswordManager(context) }
@@ -273,15 +274,36 @@ fun SlotDetailScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Milestone Groups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                    TextButton(onClick = { showAddThresholdDialog = true }) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Add")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onNavigateToMilestoneTemplates) {
+                            Icon(
+                                Icons.Default.Bookmarks,
+                                contentDescription = "Manage Templates",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(onClick = { showAddThresholdDialog = true }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Add")
+                            }
                         }
                     }
                 }
-                
+
+                if (thresholdGroups.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Tap Bookmark to save a group's items as a reusable template.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -555,9 +577,20 @@ fun SlotDetailScreen(
             isAutocompleteLoading = isAutocompleteLoading,
             milestoneTemplates = milestoneTemplates,
             allowTemplatePicker = true,
+            allowSaveAsTemplateToggle = true,
             onDismiss = { showAddThresholdDialog = false },
-            onConfirm = { name, items ->
+            onConfirm = { name, items, saveAsTemplate ->
                 userViewModel.createThresholdGroup(roomDbId, slotId, name, items)
+                val game = slot?.game
+                val templateName = name?.trim()
+                if (saveAsTemplate && !game.isNullOrBlank() && !templateName.isNullOrBlank()) {
+                    userViewModel.createMilestoneTemplate(
+                        name = templateName,
+                        gameName = game,
+                        items = items,
+                        onConflict = { templateOverwriteConflict = items to templateName }
+                    )
+                }
                 showAddThresholdDialog = false
             }
         )
@@ -588,7 +621,7 @@ fun SlotDetailScreen(
                 showEditThresholdDialog = false
                 editingThresholdGroup = null
             },
-            onConfirm = { name, items ->
+            onConfirm = { name, items, _ ->
                 userViewModel.updateThresholdGroup(roomDbId, slotId, groupToEdit.id, name, items)
                 showEditThresholdDialog = false
                 editingThresholdGroup = null
@@ -668,7 +701,7 @@ fun SlotDetailScreen(
                         name = templateName,
                         gameName = game,
                         items = items,
-                        onConflict = { templateOverwriteConflict = groupToSaveAsTemplate to templateName }
+                        onConflict = { templateOverwriteConflict = items to templateName }
                     )
                 }
             }
@@ -677,7 +710,7 @@ fun SlotDetailScreen(
 
     val conflict = templateOverwriteConflict
     if (conflict != null) {
-        val (conflictGroup, conflictName) = conflict
+        val (conflictItems, conflictName) = conflict
         val conflictGameName = slot?.game
         LaunchedEffect(conflict) {
             userViewModel.fetchMilestoneTemplates(conflictGameName)
@@ -697,18 +730,11 @@ fun SlotDetailScreen(
                     onClick = {
                         val existing = existingTemplate
                         if (existing != null && conflictGameName != null) {
-                            val items = conflictGroup.items.map {
-                                ThresholdGroupItemRequest(
-                                    item_name = it.item_name,
-                                    quantity = it.quantity,
-                                    is_group = it.is_group
-                                )
-                            }
                             userViewModel.updateMilestoneTemplate(
                                 templateId = existing.id,
                                 name = conflictName,
                                 gameName = conflictGameName,
-                                items = items
+                                items = conflictItems
                             )
                         }
                         templateOverwriteConflict = null
@@ -1151,9 +1177,10 @@ fun ThresholdGroupSheet(
     isAutocompleteLoading: Boolean = false,
     milestoneTemplates: List<MilestoneTemplate> = emptyList(),
     allowTemplatePicker: Boolean = false,
+    allowSaveAsTemplateToggle: Boolean = false,
     nameRequired: Boolean = false,
     onDismiss: () -> Unit,
-    onConfirm: (String?, List<ThresholdGroupItemRequest>) -> Unit
+    onConfirm: (String?, List<ThresholdGroupItemRequest>, Boolean) -> Unit
 ) {
     var groupName by remember(initialName) { mutableStateOf(initialName) }
     val selectedItems = remember(initialItems) {
@@ -1161,6 +1188,7 @@ fun ThresholdGroupSheet(
     }
     var showTemplatePicker by remember { mutableStateOf(false) }
     var templateDiffNote by remember { mutableStateOf<String?>(null) }
+    var saveAsTemplateChecked by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
 
@@ -1353,9 +1381,41 @@ fun ThresholdGroupSheet(
                 }
             }
 
-            
+            if (allowSaveAsTemplateToggle) {
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { saveAsTemplateChecked = !saveAsTemplateChecked },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(checked = saveAsTemplateChecked, onCheckedChange = { saveAsTemplateChecked = it })
+                    Spacer(Modifier.width(4.dp))
+                    Column {
+                        Text(
+                            "Also save as a template",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "Reuse these items later on another slot for this game.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                }
+                if (saveAsTemplateChecked && groupName.isBlank()) {
+                    Text(
+                        "Enter a name above to save as a template.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(start = 48.dp, top = 2.dp)
+                    )
+                }
+            }
+
             Spacer(Modifier.height(24.dp))
-            
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
@@ -1365,10 +1425,11 @@ fun ThresholdGroupSheet(
                 }
                 Spacer(Modifier.width(16.dp))
                 Button(
-                    onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList()) },
+                    onClick = { onConfirm(groupName.trim().ifBlank { null }, selectedItems.toList(), saveAsTemplateChecked) },
                     enabled = selectedItems.isNotEmpty() &&
                         selectedItems.all { it.quantity >= 1 } &&
-                        (!nameRequired || groupName.isNotBlank())
+                        (!nameRequired || groupName.isNotBlank()) &&
+                        (!saveAsTemplateChecked || groupName.isNotBlank())
                 ) {
                     Text(confirmLabel)
                 }
