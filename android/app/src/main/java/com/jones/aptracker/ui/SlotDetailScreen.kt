@@ -836,164 +836,214 @@ fun CheeseSlotCard(
     onSaveNotes: (String) -> Unit
 ) {
     val canEdit = cheese.is_mine
+    var isExpanded by remember { mutableStateOf(false) }
     var showForfeitConfirm by remember { mutableStateOf(false) }
+
+    val currentProgressionOption = CHEESE_PROGRESSION_OPTIONS.find { it.id == cheese.progression_status }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            // Card header: title + refresh-this-card control
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Card header: title + status badge + refresh control + expand/collapse toggle
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "Cheese Tracker",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                IconButton(onClick = onRefresh, enabled = !isRefreshing && !isSaving) {
-                    if (isRefreshing) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Refresh from Cheese Tracker",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Cheese Tracker",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (currentProgressionOption != null && currentProgressionOption.id != "unknown") {
+                        Surface(
+                            color = currentProgressionOption.color.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                currentProgressionOption.label,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = currentProgressionOption.color,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
-            }
-            Spacer(Modifier.height(12.dp))
 
-            if (!canEdit) {
-                Text(
-                    "This slot is claimed by someone else on Cheese Tracker, so it's view-only here.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
-                Spacer(Modifier.height(16.dp))
-            }
-
-            // --- Status selectors ---
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                CheeseDropdownField(
-                    modifier = Modifier.weight(1f),
-                    label = "STATUS",
-                    selectedId = cheese.progression_status,
-                    options = CHEESE_PROGRESSION_OPTIONS,
-                    enabled = canEdit && !isSaving,
-                    onSelect = { onProgressionChange(it) }
-                )
-                CheeseDropdownField(
-                    modifier = Modifier.weight(1f),
-                    label = "COMPLETION",
-                    selectedId = cheese.completion_status,
-                    options = CHEESE_COMPLETION_OPTIONS,
-                    enabled = canEdit && !isSaving,
-                    onSelect = { selected ->
-                        if (selected == "released") showForfeitConfirm = true
-                        else onCompletionChange(selected)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    IconButton(
+                        onClick = onRefresh,
+                        enabled = !isRefreshing && !isSaving,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Refresh from Cheese Tracker",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
-                )
-            }
 
-            Spacer(Modifier.height(16.dp))
-
-            // --- Last checked + Still BK ---
-            val isBk = cheese.progression_status in CHEESE_BK_IDS
-            val isCompleted = cheese.completion_status in CHEESE_COMPLETE_IDS
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("LAST CHECKED", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
-                    Text(
-                        formatTimestamp(cheese.last_checked ?: cheese.last_activity),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.Medium
+                    Icon(
+                        if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (isExpanded) "Collapse Cheese Tracker" else "Expand Cheese Tracker",
+                        tint = Color.Gray
                     )
                 }
-                if (canEdit && isBk && !isCompleted) {
-                    OutlinedButton(
-                        onClick = onStillBk,
-                        enabled = !isSaving,
-                        shape = RoundedCornerShape(24.dp)
-                    ) {
-                        Text("Still BK")
-                    }
-                }
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            // --- Ping preference ---
-            if (cheese.global_ping_policy != null) {
-                Text("PING PREFERENCE", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
-                Text(
-                    cheeseOptionLabel(CHEESE_PING_OPTIONS, cheese.discord_ping),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    "This tracker uses a global ping policy, so per-slot ping is set by the tracker owner.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.Gray,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            } else {
-                CheeseDropdownField(
-                    modifier = Modifier.fillMaxWidth(),
-                    label = "PING PREFERENCE",
-                    selectedId = cheese.discord_ping,
-                    options = CHEESE_PING_OPTIONS,
-                    enabled = canEdit && !isSaving,
-                    onSelect = { onPingChange(it) }
-                )
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            // --- Notes ---
-            Text("NOTES", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            var notesDraft by remember(cheese.notes) { mutableStateOf(cheese.notes) }
-            val notesChanged = notesDraft != cheese.notes
-            OutlinedTextField(
-                value = notesDraft,
-                onValueChange = { if (it.length <= 5000) notesDraft = it },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = canEdit && !isSaving,
-                placeholder = { Text("Add notes for this slot...") },
-                minLines = 3,
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            )
-            if (canEdit && notesChanged) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.End
+            AnimatedVisibility(visible = isExpanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 20.dp, bottom = 20.dp)
                 ) {
-                    TextButton(onClick = { notesDraft = cheese.notes }, enabled = !isSaving) {
-                        Text("Cancel")
+                    if (!canEdit) {
+                        Text(
+                            "This slot is claimed by someone else on Cheese Tracker, so it's view-only here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                        Spacer(Modifier.height(16.dp))
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Button(onClick = { onSaveNotes(notesDraft) }, enabled = !isSaving) {
-                        Text("Save Notes")
+
+                    // --- Status selectors ---
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CheeseDropdownField(
+                            modifier = Modifier.weight(1f),
+                            label = "STATUS",
+                            selectedId = cheese.progression_status,
+                            options = CHEESE_PROGRESSION_OPTIONS,
+                            enabled = canEdit && !isSaving,
+                            onSelect = { onProgressionChange(it) }
+                        )
+                        CheeseDropdownField(
+                            modifier = Modifier.weight(1f),
+                            label = "COMPLETION",
+                            selectedId = cheese.completion_status,
+                            options = CHEESE_COMPLETION_OPTIONS,
+                            enabled = canEdit && !isSaving,
+                            onSelect = { selected ->
+                                if (selected == "released") showForfeitConfirm = true
+                                else onCompletionChange(selected)
+                            }
+                        )
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    // --- Last checked + Still BK ---
+                    val isBk = cheese.progression_status in CHEESE_BK_IDS
+                    val isCompleted = cheese.completion_status in CHEESE_COMPLETE_IDS
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("LAST CHECKED", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+                            Text(
+                                formatTimestamp(cheese.last_checked ?: cheese.last_activity),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        if (canEdit && isBk && !isCompleted) {
+                            OutlinedButton(
+                                onClick = onStillBk,
+                                enabled = !isSaving,
+                                shape = RoundedCornerShape(24.dp)
+                            ) {
+                                Text("Still BK")
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    // --- Ping preference ---
+                    if (cheese.global_ping_policy != null) {
+                        Text("PING PREFERENCE", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+                        Text(
+                            cheeseOptionLabel(CHEESE_PING_OPTIONS, cheese.discord_ping),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            "This tracker uses a global ping policy, so per-slot ping is set by the tracker owner.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    } else {
+                        CheeseDropdownField(
+                            modifier = Modifier.fillMaxWidth(),
+                            label = "PING PREFERENCE",
+                            selectedId = cheese.discord_ping,
+                            options = CHEESE_PING_OPTIONS,
+                            enabled = canEdit && !isSaving,
+                            onSelect = { onPingChange(it) }
+                        )
+                    }
+
+                    Spacer(Modifier.height(20.dp))
+
+                    // --- Notes ---
+                    Text("NOTES", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    var notesDraft by remember(cheese.notes) { mutableStateOf(cheese.notes) }
+                    val notesChanged = notesDraft != cheese.notes
+                    OutlinedTextField(
+                        value = notesDraft,
+                        onValueChange = { if (it.length <= 5000) notesDraft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = canEdit && !isSaving,
+                        placeholder = { Text("Add notes for this slot...") },
+                        minLines = 3,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    )
+                    if (canEdit && notesChanged) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = { notesDraft = cheese.notes }, enabled = !isSaving) {
+                                Text("Cancel")
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Button(onClick = { onSaveNotes(notesDraft) }, enabled = !isSaving) {
+                                Text("Save Notes")
+                            }
+                        }
                     }
                 }
             }

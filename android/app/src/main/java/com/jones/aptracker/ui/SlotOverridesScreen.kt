@@ -119,7 +119,7 @@ fun SlotOverridesScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = padding.calculateTopPadding())
+                    .padding(padding)
             ) {
                 items(activeRooms) { room ->
                     // FIX 1: Wrap the content in a Column to prevent Z-stacking overlap

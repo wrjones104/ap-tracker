@@ -143,18 +143,14 @@ fun ProfileScreen(
     }
 
     Scaffold(
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0.dp)
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = padding.calculateTopPadding())
+                .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(
-                    start = 16.dp,
-                    end = 16.dp,
-                    top = 16.dp,
-                    bottom = padding.calculateBottomPadding() + 16.dp
-                ),
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
 
