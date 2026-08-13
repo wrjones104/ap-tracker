@@ -18,7 +18,7 @@ android/.kotlin/errors/
 # Local configuration file (contains SDK path, often strictly local)
 local.properties
 
-# Android Studio IDE files
+# Android Studio & IDE files
 *.iml
 .idea/
 .navigation/
@@ -27,6 +27,7 @@ captures/
 *.keystore
 *.p12
 *.pem
+.vscode
 
 # --- PYTHON / BACKEND ---
 # Virtual Environments
