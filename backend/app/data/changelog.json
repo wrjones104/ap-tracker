@@ -346,6 +346,47 @@
   ],
   "server_releases": [
     {
+      "version": "1.7.0",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-13",
+      "title": "Milestone Templates API & Database Migration",
+      "highlights": [
+        {
+          "title": "Milestone Templates REST API",
+          "description": "Added user-scoped CRUD endpoints to create, update, delete, and list milestone templates and items."
+        },
+        {
+          "title": "Milestone Templates Database Schema",
+          "description": "Introduced database tables for milestone templates and items with cascading deletion via Alembic migration."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Milestone Templates CRUD Endpoints",
+            "description": "New user-scoped routes (GET, POST, PUT, DELETE /milestone-templates) supporting game-specific templates with duplicate name validation and cascade deletion."
+          },
+          {
+            "title": "Milestone Template Database Models",
+            "description": "Added MilestoneTemplate and MilestoneTemplateItem models backed by Alembic migration a3f8c91d2e47."
+          }
+        ],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "What's New Endpoint Route Alignment",
+            "description": "Fixed /api/whats_new route prefixing and aligned release highlights data structures with the Android client."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Added\n- **Milestone Templates API**: New user-scoped CRUD endpoints (`GET /milestone-templates`, `POST /milestone-templates`, `PUT /milestone-templates/<id>`, `DELETE /milestone-templates/<id>`) for saving and managing milestone threshold group templates.\n- **Database Migration**: Added Alembic migration `a3f8c91d2e47_add_milestone_templates.py` introducing `milestone_templates` and `milestone_template_items` tables with cascade deletion and game/user indexes.\n\n### Fixed\n- **What's New Route Alignment**: Explicitly registered `/api/whats_new` and `/api/whats_new/latest` routes and aligned highlight data models with client expectations."
+      }
+    },
+    {
       "version": "1.6.23",
       "component": "server",
       "component_label": "Server",
