@@ -9,4 +9,4 @@ class MyApplication : Application() {
         RetrofitClient.init(this)
         NotificationHelper.createNotificationChannels(this)
     }
-}
+}

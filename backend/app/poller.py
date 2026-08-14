@@ -3137,10 +3137,15 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
         
         final_title = f"{title_base} ({count}){room_suffix}"
         
+        # If any item in the batch is progression/milestone, ensure the batch resolves to progression
+        resolved_type = notif_list[0]['type']
+        if any(n.get('type') in ('item_progression', 'item_milestone') for n in notif_list):
+            resolved_type = 'item_progression'
+
         compressed.append({
             'title': final_title,
             'body': body_str,
-            'type': notif_list[0]['type'],
+            'type': resolved_type,
             'bundled_items': json.dumps(item_strings) 
         })
 

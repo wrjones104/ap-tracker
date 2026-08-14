@@ -43,7 +43,6 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         channelId: String
     ) {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        NotificationHelper.createNotificationChannels(this)
 
         // Generate a unique ID for this notification
         val notificationId = System.currentTimeMillis().toInt()
@@ -103,7 +102,6 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             channelId: String = NotificationHelper.CHANNEL_GENERAL
         ) {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            NotificationHelper.createNotificationChannels(context)
 
             val notificationId = System.currentTimeMillis().toInt()
             
