@@ -1,6 +1,43 @@
 {
   "app_releases": [
     {
+      "version": "1.7.1",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-08-14",
+      "title": "Android Notification Channels & Custom Alerts",
+      "highlights": [
+        {
+          "title": "Android Notification Channels",
+          "description": "Push notifications are now categorized into dedicated system categories under Game & Room Alerts (Progression Items, Non-Progression Items, Hints, and General & System)."
+        },
+        {
+          "title": "Custom Alert Controls",
+          "description": "Customize distinct ringtones, vibration patterns, heads-up popups, and Do Not Disturb bypass per category directly in Android settings."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Android Notification Channels",
+            "description": "Registered Game & Room Alerts notification group with distinct channels (Progression Items, Non-Progression Items, Hints, and General & System), enabling OS-level sound and vibration customization."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "FCM Channel Routing & Legacy Cleanup",
+            "description": "Routed incoming FCM payloads directly to their designated notification channel and automatically cleaned up obsolete legacy channels from system settings."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Android App v1.7.1 Released!**\n\n**New Features & Improvements**\n• **Android Notification Channels**: Push notifications are now categorized into dedicated system channels under \"Game & Room Alerts\" (**Progression Items**, **Non-Progression Items**, **Hints**, and **General & System**).\n• **OS-Level Sound & Priority Controls**: Customize separate notification sounds, vibration patterns, heads-up popups, and Do Not Disturb overrides for each notification category directly in Android system settings!\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "New: Android Notification Channels — notifications are now organized into dedicated system channels (Progression Items, Non-Progression Items, Hints, General & System).\n\nNew: Custom OS Alert Controls — customize distinct ringtones, vibration patterns, heads-up popups, and Do Not Disturb bypass per notification category directly in your Android notification settings.",
+        "github": "### Added\n- **Android Notification Channels**: Push notifications are now categorized into dedicated Android system channels under the \"Game & Room Alerts\" group (`channel_progression`, `channel_non_progression`, `channel_hints`, and `channel_general`), allowing users to customize sounds, vibration, heads-up display, and DND overrides per category in Android OS settings.\n\n### Changed\n- **FCM Channel Routing**: Updated `MyFirebaseMessagingService` to route incoming notifications to the resolved category channel and clean up legacy channel registrations on startup."
+      }
+    },
+    {
       "version": "1.7.0",
       "component": "app",
       "component_label": "App",
@@ -345,6 +382,34 @@
     }
   ],
   "server_releases": [
+    {
+      "version": "1.7.1",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-14",
+      "title": "FCM Android Channel Payload Metadata",
+      "highlights": [
+        {
+          "title": "Android Notification Channel Dispatch",
+          "description": "Backend push notification service now includes channel ID and notification type metadata in FCM AndroidConfig and data payloads."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "FCM Notification Channel Mapping",
+            "description": "Mapped event types (progression, non-progression, hints, milestones, player finishes) to Android Notification Channel IDs with AndroidConfig support."
+          }
+        ],
+        "improvements": [],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Added\n- **Backend FCM Channel Metadata**: The backend notification service now attaches `AndroidConfig.AndroidNotification.channel_id` and payload metadata to route notifications to the correct channel (`channel_progression`, `channel_non_progression`, `channel_hints`, `channel_general`) for both foreground and background delivery."
+      }
+    },
     {
       "version": "1.7.0",
       "component": "server",

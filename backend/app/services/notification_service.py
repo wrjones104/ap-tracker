@@ -93,6 +93,25 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
 
     return compressed
 
+def map_notification_to_channel_id(notif):
+    """
+    Maps an internal notification dictionary to an Android notification channel ID.
+    Channels:
+      - channel_progression: Progression items and milestone groups
+      - channel_non_progression: Useful items, traps, and filler items
+      - channel_hints: Hints created or found
+      - channel_general: Game completion, system events, test notifications, fallback
+    """
+    notif_type = notif.get('type', '')
+    if notif_type in ('item_progression', 'item_milestone'):
+        return 'channel_progression'
+    elif notif_type in ('item_useful', 'item_trap', 'item_filler'):
+        return 'channel_non_progression'
+    elif notif_type == 'hint':
+        return 'channel_hints'
+    else:
+        return 'channel_general'
+
 def send_fcm_notifications(tokens, notifications):
     """
     Dispatches FCM push notifications to a list of device tokens.
@@ -106,14 +125,26 @@ def send_fcm_notifications(tokens, notifications):
     for token in tokens:
         for notif in notifications:
             try:
-                data_payload = {}
+                channel_id = map_notification_to_channel_id(notif)
+                data_payload = {
+                    'notification_type': str(notif.get('type', '')),
+                    'channel_id': channel_id
+                }
                 if 'bundled_items' in notif:
                     data_payload['bundled_items'] = notif['bundled_items']
+                if 'bundle_type' in notif:
+                    data_payload['bundle_type'] = notif['bundle_type']
 
                 message = messaging.Message(
                     notification=messaging.Notification(
                         title=notif['title'],
                         body=notif['body']
+                    ),
+                    android=messaging.AndroidConfig(
+                        notification=messaging.AndroidNotification(
+                            channel_id=channel_id
+                        ),
+                        priority='high'
                     ),
                     data=data_payload,
                     token=token

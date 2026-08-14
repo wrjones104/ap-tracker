@@ -306,8 +306,16 @@ def send_test_notification(current_user):
                         title="Test Notification",
                         body="This is a test bundle! Click me to see the sheet."
                     ),
+                    android=messaging.AndroidConfig(
+                        notification=messaging.AndroidNotification(
+                            channel_id="channel_general"
+                        ),
+                        priority='high'
+                    ),
                     data={
-                        'bundled_items': json.dumps(["Test Sword", "Debug Shield", "Potion of Coding"])
+                        'bundled_items': json.dumps(["Test Sword", "Debug Shield", "Potion of Coding"]),
+                        'notification_type': 'test',
+                        'channel_id': 'channel_general'
                     },
                     token=token
                 )

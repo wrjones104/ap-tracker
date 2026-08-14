@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.7.1] - 2026-08-14
+
+_FCM Android Channel Payload Metadata_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - **Backend FCM Channel Metadata**: The backend notification service now attaches `AndroidConfig.AndroidNotification.channel_id` and payload metadata to route notifications to the correct channel (`channel_progression`, `channel_non_progression`, `channel_hints`, `channel_general`) for both foreground and background delivery.
+> ```
+
+### Added
+- **FCM Notification Channel Mapping**: Mapped event types (progression, non-progression, hints, milestones, player finishes) to Android Notification Channel IDs with AndroidConfig support.
+
+---
+
 ## [1.7.0] - 2026-08-13
 
 _Milestone Templates API & Database Migration_
