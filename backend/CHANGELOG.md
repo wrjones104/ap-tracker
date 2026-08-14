@@ -10,6 +10,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.7.0] - 2026-08-13
+
+_Milestone Templates API & Database Migration_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - **Milestone Templates API**: New user-scoped CRUD endpoints (`GET /milestone-templates`, `POST /milestone-templates`, `PUT /milestone-templates/<id>`, `DELETE /milestone-templates/<id>`) for saving and managing milestone threshold group templates.
+> - **Database Migration**: Added Alembic migration `a3f8c91d2e47_add_milestone_templates.py` introducing `milestone_templates` and `milestone_template_items` tables with cascade deletion and game/user indexes.
+>
+> ### Fixed
+> - **What's New Route Alignment**: Explicitly registered `/api/whats_new` and `/api/whats_new/latest` routes and aligned highlight data models with client expectations.
+> ```
+
+### Added
+- **Milestone Templates CRUD Endpoints**: New user-scoped routes (GET, POST, PUT, DELETE /milestone-templates) supporting game-specific templates with duplicate name validation and cascade deletion.
+- **Milestone Template Database Models**: Added MilestoneTemplate and MilestoneTemplateItem models backed by Alembic migration a3f8c91d2e47.
+
+### Fixed
+- **What's New Endpoint Route Alignment**: Fixed /api/whats_new route prefixing and aligned release highlights data structures with the Android client.
+
+---
+
 ## [1.6.23] - 2026-08-03
 
 _Server-Side Ignore/Whitelist Filtering_
