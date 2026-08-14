@@ -68,6 +68,7 @@ The system consists of two main parts:
 *   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
 *   **Data Retention:** Historical events (`notified_items` and `notified_hints`) are maintained with a default 90-day retention policy to support long-running async multiworlds.
 *   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering, and slot collisions immediately trigger local untracking and FCM push notifications.
+*   **Push Notification Channels:** FCM pushes are categorized into Android Notification Channels (`channel_progression`, `channel_non_progression`, `channel_hints`, and `channel_general`) defined in `NotificationHelper.kt` and mapped on the backend in `notification_service.py`. This enables OS-level customization (distinct alert sounds, vibration, heads-up popup priority, and DND bypass) per event category directly in Android system settings.
 
 ## Database Schema (Key Models)
 

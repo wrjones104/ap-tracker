@@ -128,6 +128,7 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
     if not firebase_app or not notifications or not device_tokens: return
 
     from firebase_admin import messaging
+    from app.services.notification_service import map_notification_to_channel_id
   
     messages = []
     for content in notifications:
@@ -136,9 +137,15 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
         except Exception as e:
             logging.error(f"[NOTIFIER] Error creating log message: {e}")
             
+        channel_id = map_notification_to_channel_id(content)
+        priority = 'high' if channel_id == 'channel_progression' else 'normal'
+
         # We check if the 'bundled_items' key exists (created by our bundling logic)
         # FCM 'data' fields must be strings, so we ensure it's passed correctly.
-        data_payload = {}
+        data_payload = {
+            'notification_type': str(content.get('type', '')),
+            'channel_id': channel_id
+        }
         if 'bundled_items' in content:
             data_payload['bundled_items'] = content['bundled_items']
             if 'type' in content:
@@ -149,7 +156,12 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
             apns_config = None
 
             if platform == 'android':
-                android_config = messaging.AndroidConfig(priority='high')
+                android_config = messaging.AndroidConfig(
+                    priority=priority,
+                    notification=messaging.AndroidNotification(
+                        channel_id=channel_id
+                    )
+                )
             elif platform == 'ios':
                 apns_config = messaging.APNSConfig(
                     headers={'apns-priority': '10'},
@@ -3137,10 +3149,15 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
         
         final_title = f"{title_base} ({count}){room_suffix}"
         
+        # If any item in the batch is progression/milestone, ensure the batch resolves to progression
+        resolved_type = notif_list[0]['type']
+        if any(n.get('type') in ('item_progression', 'item_milestone') for n in notif_list):
+            resolved_type = 'item_progression'
+
         compressed.append({
             'title': final_title,
             'body': body_str,
-            'type': notif_list[0]['type'],
+            'type': resolved_type,
             'bundled_items': json.dumps(item_strings) 
         })
 

@@ -1,6 +1,5 @@
 package com.jones.aptracker
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -17,14 +16,17 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         super.onMessageReceived(remoteMessage)
         Log.d("FCM_DEBUG", "Raw Data Payload: ${remoteMessage.data}")
 
-        // Extract the "bundled_items" from the data payload if it exists
+        // Extract bundled items, bundle type, channel, and notification type
         val bundledItems = remoteMessage.data["bundled_items"]
         val bundleType = remoteMessage.data["bundle_type"]
+        val payloadChannelId = remoteMessage.data["channel_id"]
+        val notificationType = remoteMessage.data["notification_type"] ?: remoteMessage.data["type"]
+        val channelId = NotificationHelper.getChannelId(payloadChannelId, notificationType)
 
         remoteMessage.notification?.let { notification ->
-            Log.d("FCM", "Notification Received: ${notification.title} - ${notification.body}")
-            // Pass the bundled items and bundle type to the notification generator
-            sendSystemNotification(notification.title, notification.body, bundledItems, bundleType)
+            Log.d("FCM", "Notification Received: ${notification.title} - ${notification.body} (Channel: $channelId)")
+            // Pass the bundled items, bundle type, and resolved channel ID to the generator
+            sendSystemNotification(notification.title, notification.body, bundledItems, bundleType, channelId)
         }
     }
 
@@ -33,12 +35,14 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         Log.d("FCM", "New token generated: $token")
     }
 
-    private fun sendSystemNotification(title: String?, body: String?, bundledItems: String?, bundleType: String?) {
+    private fun sendSystemNotification(
+        title: String?,
+        body: String?,
+        bundledItems: String?,
+        bundleType: String?,
+        channelId: String
+    ) {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "ap_tracker_channel"
-
-        val channel = NotificationChannel(channelId, "AP Tracker Notifications", NotificationManager.IMPORTANCE_DEFAULT)
-        notificationManager.createNotificationChannel(channel)
 
         // Generate a unique ID for this notification
         val notificationId = System.currentTimeMillis().toInt()
@@ -91,14 +95,13 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     companion object {
-        fun sendLocalNotification(context: Context, title: String, body: String) {
+        fun sendLocalNotification(
+            context: Context,
+            title: String,
+            body: String,
+            channelId: String = NotificationHelper.CHANNEL_GENERAL
+        ) {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val channelId = "ap_tracker_channel"
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val channel = NotificationChannel(channelId, "AP Tracker Notifications", NotificationManager.IMPORTANCE_DEFAULT)
-                notificationManager.createNotificationChannel(channel)
-            }
 
             val notificationId = System.currentTimeMillis().toInt()
             

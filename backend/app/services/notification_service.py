@@ -76,10 +76,15 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
         
         final_title = f"{title_base} ({count}){room_suffix}"
         
+        # If any item in the batch is progression/milestone, ensure the batch resolves to progression
+        resolved_type = notif_list[0]['type']
+        if any(n.get('type') in ('item_progression', 'item_milestone') for n in notif_list):
+            resolved_type = 'item_progression'
+
         compressed.append({
             'title': final_title,
             'body': body_str,
-            'type': notif_list[0]['type'],
+            'type': resolved_type,
             'bundled_items': json.dumps(item_strings) 
         })
 
@@ -92,6 +97,25 @@ def compress_notifications(user_notifications, user_prefs, slot_prefs_map):
     squash(finishes, t_finish)
 
     return compressed
+
+def map_notification_to_channel_id(notif):
+    """
+    Maps an internal notification dictionary to an Android notification channel ID.
+    Channels:
+      - channel_progression: Progression items and milestone groups
+      - channel_non_progression: Useful items, traps, and filler items
+      - channel_hints: Hints created or found
+      - channel_general: Game completion, system events, test notifications, fallback
+    """
+    notif_type = notif.get('type', '')
+    if notif_type in ('item_progression', 'item_milestone'):
+        return 'channel_progression'
+    elif notif_type in ('item_useful', 'item_trap', 'item_filler'):
+        return 'channel_non_progression'
+    elif notif_type == 'hint':
+        return 'channel_hints'
+    else:
+        return 'channel_general'
 
 def send_fcm_notifications(tokens, notifications):
     """
@@ -106,14 +130,27 @@ def send_fcm_notifications(tokens, notifications):
     for token in tokens:
         for notif in notifications:
             try:
-                data_payload = {}
+                channel_id = map_notification_to_channel_id(notif)
+                priority = 'high' if channel_id == 'channel_progression' else 'normal'
+                data_payload = {
+                    'notification_type': str(notif.get('type', '')),
+                    'channel_id': channel_id
+                }
                 if 'bundled_items' in notif:
                     data_payload['bundled_items'] = notif['bundled_items']
+                if 'bundle_type' in notif:
+                    data_payload['bundle_type'] = notif['bundle_type']
 
                 message = messaging.Message(
                     notification=messaging.Notification(
                         title=notif['title'],
                         body=notif['body']
+                    ),
+                    android=messaging.AndroidConfig(
+                        notification=messaging.AndroidNotification(
+                            channel_id=channel_id
+                        ),
+                        priority=priority
                     ),
                     data=data_payload,
                     token=token

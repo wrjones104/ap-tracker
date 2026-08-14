@@ -790,7 +790,16 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                                             body=f"Slot '{player_name}' in room '{room_alias}' is already claimed by another user on Cheese Tracker. Untracked slot."
                                         ),
                                         token=token,
-                                        android=messaging.AndroidConfig(priority='high')
+                                        android=messaging.AndroidConfig(
+                                            priority='high',
+                                            notification=messaging.AndroidNotification(
+                                                channel_id='channel_general'
+                                            )
+                                        ),
+                                        data={
+                                            'notification_type': 'conflict',
+                                            'channel_id': 'channel_general'
+                                        }
                                     )
                                     for token in tokens
                                 ]

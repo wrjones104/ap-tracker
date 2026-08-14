@@ -10,6 +10,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.7.1] - 2026-08-14
+
+_Android Notification Channels & Custom Alerts_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts Android App v1.7.1 Released!**
+>
+> **New Features & Improvements**
+> • **Android Notification Channels**: Push notifications are now categorized into dedicated system channels under "Game & Room Alerts" (**Progression Items**, **Non-Progression Items**, **Hints**, and **General & System**).
+> • **OS-Level Sound & Priority Controls**: Customize separate notification sounds, vibration patterns, heads-up popups, and Do Not Disturb overrides for each notification category directly in Android system settings!
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> New: Android Notification Channels — notifications are now organized into dedicated system channels (Progression Items, Non-Progression Items, Hints, General & System).
+>
+> New: Custom OS Alert Controls — customize distinct ringtones, vibration patterns, heads-up popups, and Do Not Disturb bypass per notification category directly in your Android notification settings.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - **Android Notification Channels**: Push notifications are now categorized into dedicated Android system channels under the "Game & Room Alerts" group (`channel_progression`, `channel_non_progression`, `channel_hints`, and `channel_general`), allowing users to customize sounds, vibration, heads-up display, and DND overrides per category in Android OS settings.
+>
+> ### Changed
+> - **FCM Channel Routing**: Updated `MyFirebaseMessagingService` to route incoming notifications to the resolved category channel and clean up legacy channel registrations on startup.
+> ```
+
+### Added
+- **Android Notification Channels**: Registered Game & Room Alerts notification group with distinct channels (Progression Items, Non-Progression Items, Hints, and General & System), enabling OS-level sound and vibration customization.
+
+### Changed
+- **FCM Channel Routing & Legacy Cleanup**: Routed incoming FCM payloads directly to their designated notification channel and automatically cleaned up obsolete legacy channels from system settings.
+
+---
+
 ## [1.7.0] - 2026-08-13
 
 _Milestone Templates & Android 15 Edge-to-Edge_
