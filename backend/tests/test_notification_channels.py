@@ -97,7 +97,48 @@ class TestNotificationChannels(unittest.TestCase):
         self.assertEqual(compressed[0]['type'], 'item_progression')
         self.assertEqual(map_notification_to_channel_id(compressed[0]), 'channel_progression')
 
+    @patch('firebase_admin.messaging.send_each')
+    @patch('app.poller.get_firebase_app')
+    def test_poller_send_push_notifications_sets_android_channel(self, mock_get_app, mock_send_each):
+        import asyncio
+        from app.poller import send_push_notifications as poller_send_push
+
+        notifications = [
+            {'title': 'Sword - [Room]', 'body': 'Got sword', 'type': 'item_progression'},
+            {'title': 'Shield - [Room]', 'body': 'Got shield', 'type': 'item_useful'},
+            {'title': 'Hint - [Room]', 'body': 'Hint body', 'type': 'hint'}
+        ]
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(poller_send_push(notifications, ['token_123'], loop, platform='android'))
+        finally:
+            loop.close()
+
+        self.assertTrue(mock_send_each.called)
+        sent_messages = mock_send_each.call_args[0][0]
+        self.assertEqual(len(sent_messages), 3)
+
+        # Progression
+        self.assertEqual(sent_messages[0].android.notification.channel_id, 'channel_progression')
+        self.assertEqual(sent_messages[0].android.priority, 'high')
+        self.assertEqual(sent_messages[0].data['channel_id'], 'channel_progression')
+        self.assertEqual(sent_messages[0].data['notification_type'], 'item_progression')
+
+        # Useful
+        self.assertEqual(sent_messages[1].android.notification.channel_id, 'channel_non_progression')
+        self.assertEqual(sent_messages[1].android.priority, 'normal')
+        self.assertEqual(sent_messages[1].data['channel_id'], 'channel_non_progression')
+        self.assertEqual(sent_messages[1].data['notification_type'], 'item_useful')
+
+        # Hint
+        self.assertEqual(sent_messages[2].android.notification.channel_id, 'channel_hints')
+        self.assertEqual(sent_messages[2].android.priority, 'normal')
+        self.assertEqual(sent_messages[2].data['channel_id'], 'channel_hints')
+        self.assertEqual(sent_messages[2].data['notification_type'], 'hint')
+
 
 if __name__ == '__main__':
     unittest.main()
+
 
