@@ -55,6 +55,7 @@ fun AppNavigation(
     onLogoutClick: () -> Unit,
     onGuestUpgradeClick: () -> Unit,
     targetTab: String? = null,
+    targetRoomId: Int? = null,
     onTargetTabConsumed: () -> Unit = {}
 ) {
     if (isLoggedIn) {
@@ -64,6 +65,7 @@ fun AppNavigation(
             onLogoutClick = onLogoutClick,
             onGuestUpgradeClick = onGuestUpgradeClick,
             targetTab = targetTab,
+            targetRoomId = targetRoomId,
             onTargetTabConsumed = onTargetTabConsumed
         )
     } else {
@@ -81,6 +83,7 @@ fun MainNavHost(
     onLogoutClick: () -> Unit,
     onGuestUpgradeClick: () -> Unit,
     targetTab: String? = null,
+    targetRoomId: Int? = null,
     onTargetTabConsumed: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -166,6 +169,7 @@ fun MainNavHost(
                 onShowWhatsNew = { showWhatsNewSheet = true },
                 onNavigateToArchived = { navController.navigate("archived_rooms") },
                 initialTab = targetTab,
+                targetRoomId = targetRoomId,
                 onTargetTabConsumed = onTargetTabConsumed,
                 onNavigateToSlotDetail = { roomDbId, slotId ->
                     navController.navigate("slot_detail/$roomDbId/$slotId")

@@ -80,6 +80,7 @@ fun MainScreen(
 
     onNavigateToSlotDetail: (Int, Int) -> Unit,
     initialTab: String? = null,
+    targetRoomId: Int? = null,
     onTargetTabConsumed: () -> Unit = {},
     userViewModel: UserViewModel = viewModel(),
     roomsViewModel: RoomsViewModel = viewModel(),
@@ -106,8 +107,15 @@ fun MainScreen(
     var showAddRoomDialog by remember { mutableStateOf(false) }
 
     // --- TARGET TAB EFFECT ---
-    LaunchedEffect(initialTab) {
+    LaunchedEffect(initialTab, targetRoomId) {
         if (initialTab != null) {
+            if (initialTab == "activity") {
+                if (targetRoomId != null && targetRoomId != -1) {
+                    historyViewModel.setHistoryFilter(HistoryFilter.Specific(targetRoomId))
+                } else {
+                    historyViewModel.setHistoryFilter(HistoryFilter.Active)
+                }
+            }
             val route = when (initialTab) {
                 "activity" -> BottomNavItem.Activity.route
                 "slots" -> BottomNavItem.Slots.route

@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
     private val bundledItemsState = mutableStateOf<List<String>?>(null)
     private val bundleTypeState = mutableStateOf<String?>(null)
     private val targetTabState = mutableStateOf<String?>(null)
+    private val targetRoomIdState = mutableStateOf<Int?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -166,9 +167,12 @@ class MainActivity : ComponentActivity() {
                     onCheckNotificationPermission = { checkAndRequestNotificationPermission() },
                     onGuestUpgradeClick = onGuestUpgradeClick,
                     targetTab = targetTabState.value,
+                    targetRoomId = targetRoomIdState.value,
                     onTargetTabConsumed = {
                         targetTabState.value = null
+                        targetRoomIdState.value = null
                         intent?.removeExtra("target_tab")
+                        intent?.removeExtra("target_room_id")
                     }
                 )
 
@@ -200,8 +204,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         val targetTab = intent?.getStringExtra("target_tab")
+        val targetRoomId = intent?.getIntExtra("target_room_id", -1)?.takeIf { it != -1 }
         if (targetTab != null) {
             targetTabState.value = targetTab
+            targetRoomIdState.value = targetRoomId
         }
 
         val jsonStr = intent?.getStringExtra("bundled_items")
@@ -367,6 +373,7 @@ fun VersionGate(
     onCheckNotificationPermission: () -> Unit,
     onGuestUpgradeClick: () -> Unit,
     targetTab: String? = null,
+    targetRoomId: Int? = null,
     onTargetTabConsumed: () -> Unit = {}
 ) {
     val versionState by mainViewModel.versionState.collectAsState()
@@ -398,6 +405,7 @@ fun VersionGate(
                 onLogoutClick = onLogout,
                 onGuestUpgradeClick = onGuestUpgradeClick,
                 targetTab = targetTab,
+                targetRoomId = targetRoomId,
                 onTargetTabConsumed = onTargetTabConsumed
             )
         }

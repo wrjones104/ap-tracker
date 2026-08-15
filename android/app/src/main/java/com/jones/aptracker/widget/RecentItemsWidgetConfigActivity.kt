@@ -4,6 +4,7 @@ import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -26,9 +27,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ViewDay
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -37,6 +40,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -110,22 +114,22 @@ class RecentItemsWidgetConfigActivity : ComponentActivity() {
 
     private fun saveWidgetPreferences(widgetId: Int, targetRoomId: Int, fontDensity: String) {
         val prefs = getSharedPreferences("widget_${widgetId}_prefs", Context.MODE_PRIVATE)
-        prefs.edit {
+        prefs.edit(commit = true) {
             putInt("target_room_id", targetRoomId)
             putString("font_density", fontDensity)
         }
 
-        // Trigger widget update
+        // Trigger widget update immediately
         val coroutineScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO)
         coroutineScope.launch {
             try {
-                val glanceManager = GlanceAppWidgetManager(this@RecentItemsWidgetConfigActivity)
+                val glanceManager = GlanceAppWidgetManager(applicationContext)
                 val glanceId = glanceManager.getGlanceIdBy(widgetId)
-                RecentItemsWidget().update(this@RecentItemsWidgetConfigActivity, glanceId)
+                RecentItemsWidget().update(applicationContext, glanceId)
             } catch (e: Exception) {
-                // Fallback to global updater if specific glanceId lookup fails
-                RecentItemsWidgetUpdater.update(this@RecentItemsWidgetConfigActivity)
+                Log.e("WidgetConfig", "Failed to update specific glance ID $widgetId", e)
             }
+            RecentItemsWidgetUpdater.update(applicationContext)
 
             withContext(Dispatchers.Main) {
                 val resultValue = Intent().apply {
@@ -149,7 +153,15 @@ private fun WidgetConfigScreen(
     var rooms by remember { mutableStateOf<List<RoomEntity>>(emptyList()) }
     var selectedRoomId by remember { mutableIntStateOf(-1) } // -1 means all active rooms
     var selectedDensity by remember { mutableStateOf("standard") } // "standard" or "compact"
+    var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
+
+    val filteredRooms = remember(rooms, searchQuery) {
+        if (searchQuery.isBlank()) rooms else rooms.filter {
+            it.alias.contains(searchQuery, ignoreCase = true) ||
+            (it.host?.contains(searchQuery, ignoreCase = true) == true)
+        }
+    }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
@@ -193,7 +205,7 @@ private fun WidgetConfigScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -212,6 +224,27 @@ private fun WidgetConfigScreen(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
+                }
+
+                if (rooms.size > 4) {
+                    item {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search rooms...") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                            trailingIcon = if (searchQuery.isNotEmpty()) {
+                                {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                    }
+                                }
+                            } else null,
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                    }
                 }
 
                 item {
@@ -259,8 +292,8 @@ private fun WidgetConfigScreen(
                     }
                 }
 
-                if (rooms.isNotEmpty()) {
-                    items(rooms, key = { it.id }) { room ->
+                if (filteredRooms.isNotEmpty()) {
+                    items(filteredRooms, key = { it.id }) { room ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()

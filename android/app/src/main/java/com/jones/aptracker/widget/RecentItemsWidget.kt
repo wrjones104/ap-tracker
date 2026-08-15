@@ -62,6 +62,7 @@ import java.time.format.DateTimeFormatter
 data class RecentItemsWidgetState(
     val items: List<HistoryItemEntity> = emptyList(),
     val roomNames: Map<Int, String> = emptyMap(),
+    val targetRoomId: Int = -1,
     val customTitle: String? = null,
     val isCompact: Boolean = false,
     val isLoading: Boolean = true
@@ -92,7 +93,7 @@ class RecentItemsWidget : GlanceAppWidget() {
 
                 val widgetState by produceState(
                     initialValue = RecentItemsWidgetState(),
-                    key1 = currentContext
+                    key1 = System.currentTimeMillis()
                 ) {
                     withContext(Dispatchers.IO) {
                         val database = AppDatabase.getInstance(currentContext)
@@ -168,6 +169,7 @@ class RecentItemsWidget : GlanceAppWidget() {
                         value = RecentItemsWidgetState(
                             items = filteredItems,
                             roomNames = roomNames,
+                            targetRoomId = targetRoomId,
                             customTitle = targetRoomName,
                             isCompact = isCompactConfig,
                             isLoading = false
@@ -176,7 +178,16 @@ class RecentItemsWidget : GlanceAppWidget() {
                 }
 
                 val openActivityAction = actionStartActivity<MainActivity>(
-                    actionParametersOf(ActionParameters.Key<String>("target_tab") to "activity")
+                    if (widgetState.targetRoomId != -1) {
+                        actionParametersOf(
+                            ActionParameters.Key<String>("target_tab") to "activity",
+                            ActionParameters.Key<Int>("target_room_id") to widgetState.targetRoomId
+                        )
+                    } else {
+                        actionParametersOf(
+                            ActionParameters.Key<String>("target_tab") to "activity"
+                        )
+                    }
                 )
 
                 Box(
