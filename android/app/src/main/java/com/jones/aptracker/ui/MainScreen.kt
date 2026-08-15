@@ -79,6 +79,8 @@ fun MainScreen(
     onNavigateToArchived: () -> Unit,
 
     onNavigateToSlotDetail: (Int, Int) -> Unit,
+    initialTab: String? = null,
+    onTargetTabConsumed: () -> Unit = {},
     userViewModel: UserViewModel = viewModel(),
     roomsViewModel: RoomsViewModel = viewModel(),
     historyViewModel: HistoryViewModel = viewModel()
@@ -102,6 +104,24 @@ fun MainScreen(
     var now by remember { mutableStateOf(Instant.now()) }
     var newRoomAliasToFind by remember { mutableStateOf<String?>(null) }
     var showAddRoomDialog by remember { mutableStateOf(false) }
+
+    // --- TARGET TAB EFFECT ---
+    LaunchedEffect(initialTab) {
+        if (initialTab != null) {
+            val route = when (initialTab) {
+                "activity" -> BottomNavItem.Activity.route
+                "slots" -> BottomNavItem.Slots.route
+                "profile" -> BottomNavItem.Profile.route
+                else -> BottomNavItem.Rooms.route
+            }
+            bottomNavController.navigate(route) {
+                popUpTo(bottomNavController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+            onTargetTabConsumed()
+        }
+    }
 
     // --- NAVIGATION EFFECT ---
     LaunchedEffect(rooms, newRoomAliasToFind) {

@@ -82,23 +82,23 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _isNextPageLoading = MutableStateFlow(false)
     val isNextPageLoading: StateFlow<Boolean> = _isNextPageLoading
 
-    // --- Toggles ---
-    private val _showFoundHints = MutableStateFlow(false)
+    // --- Toggles (Initialized from SharedPreferences) ---
+    private val _showFoundHints = MutableStateFlow(prefs.getBoolean("ui_show_found_hints", false))
     val showFoundHints: StateFlow<Boolean> = _showFoundHints
 
-    private val _showFinished = MutableStateFlow(true)
+    private val _showFinished = MutableStateFlow(prefs.getBoolean("ui_show_finished", true))
     val showFinished: StateFlow<Boolean> = _showFinished
 
-    private val _showProgression = MutableStateFlow(true)
+    private val _showProgression = MutableStateFlow(prefs.getBoolean("ui_show_progression", true))
     val showProgression: StateFlow<Boolean> = _showProgression
 
-    private val _showUseful = MutableStateFlow(true)
+    private val _showUseful = MutableStateFlow(prefs.getBoolean("ui_show_useful", true))
     val showUseful: StateFlow<Boolean> = _showUseful
 
-    private val _showFiller = MutableStateFlow(false)
+    private val _showFiller = MutableStateFlow(prefs.getBoolean("ui_show_filler", false))
     val showFiller: StateFlow<Boolean> = _showFiller
 
-    private val _showTrap = MutableStateFlow(false)
+    private val _showTrap = MutableStateFlow(prefs.getBoolean("ui_show_trap", false))
     val showTrap: StateFlow<Boolean> = _showTrap
 
     // Initialize from SharedPreferences (Default to false/OFF)
@@ -332,13 +332,33 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val profile = RetrofitClient.instance.getUserProfile()
-                // We no longer sync condensed preference from API for the UI view
-                _showFinished.value = profile.ui_show_finished_default
-                _showFoundHints.value = profile.ui_show_found_hints_default
-                _showProgression.value = profile.ui_show_progression_default
-                _showUseful.value = profile.ui_show_useful_default
-                _showFiller.value = profile.ui_show_filler_default
-                _showTrap.value = profile.ui_show_trap_default
+                // Only initialize from API profile if not already set locally in SharedPreferences
+                if (!prefs.contains("ui_show_finished")) {
+                    _showFinished.value = profile.ui_show_finished_default
+                    prefs.edit(commit = true) { putBoolean("ui_show_finished", profile.ui_show_finished_default) }
+                }
+                if (!prefs.contains("ui_show_found_hints")) {
+                    _showFoundHints.value = profile.ui_show_found_hints_default
+                    prefs.edit(commit = true) { putBoolean("ui_show_found_hints", profile.ui_show_found_hints_default) }
+                }
+                if (!prefs.contains("ui_show_progression")) {
+                    _showProgression.value = profile.ui_show_progression_default
+                    prefs.edit(commit = true) { putBoolean("ui_show_progression", profile.ui_show_progression_default) }
+                }
+                if (!prefs.contains("ui_show_useful")) {
+                    _showUseful.value = profile.ui_show_useful_default
+                    prefs.edit(commit = true) { putBoolean("ui_show_useful", profile.ui_show_useful_default) }
+                }
+                if (!prefs.contains("ui_show_filler")) {
+                    _showFiller.value = profile.ui_show_filler_default
+                    prefs.edit(commit = true) { putBoolean("ui_show_filler", profile.ui_show_filler_default) }
+                }
+                if (!prefs.contains("ui_show_trap")) {
+                    _showTrap.value = profile.ui_show_trap_default
+                    prefs.edit(commit = true) { putBoolean("ui_show_trap", profile.ui_show_trap_default) }
+                }
+
+                com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
             } catch (e: Exception) {
                 Log.e("HistoryViewModel", "Failed to load user profile for settings", e)
             }
@@ -348,9 +368,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowIgnoredItems(show: Boolean) {
         if (_showIgnoredItems.value != show) {
             _showIgnoredItems.value = show
-            prefs.edit {
+            prefs.edit(commit = true) {
                 putBoolean("ui_show_ignored_items", show)
             }
+            com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
     }
 
@@ -359,13 +380,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowFinished(show: Boolean) {
         if (_showFinished.value != show) {
             _showFinished.value = show
+            prefs.edit(commit = true) { putBoolean("ui_show_finished", show) }
             saveViewPreferences(showFinished = show)
+            com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
     }
 
     fun setShowFoundHints(show: Boolean) {
         if (_showFoundHints.value != show) {
             _showFoundHints.value = show
+            prefs.edit(commit = true) { putBoolean("ui_show_found_hints", show) }
             saveViewPreferences(showFoundHints = show)
 
             // The reactive combine flow above automatically handles the UI update locally!
@@ -379,28 +403,36 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowProgression(show: Boolean) {
         if (_showProgression.value != show) {
             _showProgression.value = show
+            prefs.edit(commit = true) { putBoolean("ui_show_progression", show) }
             saveViewPreferences(showProgression = show)
+            com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
     }
 
     fun setShowUseful(show: Boolean) {
         if (_showUseful.value != show) {
             _showUseful.value = show
+            prefs.edit(commit = true) { putBoolean("ui_show_useful", show) }
             saveViewPreferences(showUseful = show)
+            com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
     }
     
     fun setShowFiller(show: Boolean) {
         if (_showFiller.value != show) {
             _showFiller.value = show
+            prefs.edit(commit = true) { putBoolean("ui_show_filler", show) }
             saveViewPreferences(showFiller = show)
+            com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
     }
 
     fun setShowTrap(show: Boolean) {
         if (_showTrap.value != show) {
             _showTrap.value = show
+            prefs.edit(commit = true) { putBoolean("ui_show_trap", show) }
             saveViewPreferences(showTrap = show)
+            com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
     }
 
@@ -408,7 +440,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         if (_useCondensed.value != use) {
             _useCondensed.value = use
             // Save to SharedPreferences using KTX
-            prefs.edit {
+            prefs.edit(commit = true) {
                 putBoolean("ui_use_condensed", use)
             }
         }

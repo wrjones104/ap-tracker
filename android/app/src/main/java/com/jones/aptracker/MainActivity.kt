@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
     // State for the summary sheet
     private val bundledItemsState = mutableStateOf<List<String>?>(null)
     private val bundleTypeState = mutableStateOf<String?>(null)
+    private val targetTabState = mutableStateOf<String?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -163,7 +164,12 @@ class MainActivity : ComponentActivity() {
                     onStartDiscordAuth = { startAuthentication(authLauncher) },
                     onStartGuestAuth = { startGuestAuthentication() },
                     onCheckNotificationPermission = { checkAndRequestNotificationPermission() },
-                    onGuestUpgradeClick = onGuestUpgradeClick
+                    onGuestUpgradeClick = onGuestUpgradeClick,
+                    targetTab = targetTabState.value,
+                    onTargetTabConsumed = {
+                        targetTabState.value = null
+                        intent?.removeExtra("target_tab")
+                    }
                 )
 
                 if (summaryItems != null) {
@@ -193,6 +199,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        val targetTab = intent?.getStringExtra("target_tab")
+        if (targetTab != null) {
+            targetTabState.value = targetTab
+        }
+
         val jsonStr = intent?.getStringExtra("bundled_items")
         val bundleType = intent?.getStringExtra("bundle_type")
         if (jsonStr == null) {
@@ -354,7 +365,9 @@ fun VersionGate(
     onStartDiscordAuth: () -> Unit,
     onStartGuestAuth: () -> Unit,
     onCheckNotificationPermission: () -> Unit,
-    onGuestUpgradeClick: () -> Unit
+    onGuestUpgradeClick: () -> Unit,
+    targetTab: String? = null,
+    onTargetTabConsumed: () -> Unit = {}
 ) {
     val versionState by mainViewModel.versionState.collectAsState()
 
@@ -383,7 +396,9 @@ fun VersionGate(
                 onDiscordLoginClick = onStartDiscordAuth,
                 onGuestLoginClick = onStartGuestAuth,
                 onLogoutClick = onLogout,
-                onGuestUpgradeClick = onGuestUpgradeClick
+                onGuestUpgradeClick = onGuestUpgradeClick,
+                targetTab = targetTab,
+                onTargetTabConsumed = onTargetTabConsumed
             )
         }
         is AppVersionState.Outdated -> {
