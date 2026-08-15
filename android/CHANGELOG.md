@@ -10,6 +10,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.8.0] - 2026-08-15
+
+_Recent Items Received Android Widget_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts Android App v1.8.0 Released!**
+>
+> **New Features & Improvements**
+> • **Recent Items Home Screen Widget**: Keep track of your multiworld progress directly from your Android home screen! View the latest items received across all your active games at a glance.
+> • **In-App Filter Mirroring**: The widget automatically respects your Activity Feed filter settings (Progression, Useful, Filler, Trap, Finished, and Ignored items).
+> • **Automatic Background Sync**: Receive push notifications or background updates that keep the widget fresh even when the app is closed.
+> • **One-Tap Deep Linking**: Tap any item in the widget to jump directly to your Activity Feed.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> New: Recent Items Home Screen Widget — view your latest received items directly on your home screen without opening the app.
+>
+> New: Filter Mirroring — the widget automatically reflects your active Activity Feed toggles (Progression, Useful, Filler, Trap).
+>
+> New: Background Sync & Deep-Linking — push notifications update your widget in real time, and tapping any item jumps straight to your Activity Feed.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - **Recent Items Received Android Widget**: Built with Jetpack Glance 1.1.1, featuring responsive sizing (compact single-item and standard multi-item scrollable list), item classification badges (Progression, Useful, Filler, Trap), relative timestamps, and on-demand refresh.
+> - **Graphical Widget Preview**: Added `android:previewLayout` rendering a styled preview in the Android 12+ widget picker.
+> - **Background Synchronization**: Integrated push-triggered instant background syncing via `MyFirebaseMessagingService` and recurring 15-minute polling via Android `WorkManager` (`HistorySyncWorker`).
+> - **Activity Tab Deep-Linking**: Added `target_tab = "activity"` intent navigation handling from the widget directly into the Activity Feed screen.
+>
+> ### Changed
+> - **Query Depth**: Expanded widget database history scan window to 500 records to accurately find all active filtered items.
+> ```
+
+### Added
+- **Recent Items Android Widget**: Implemented Glance-based home screen widget with responsive multi-size support, item classification colors (Progression, Useful, Filler, Trap), and on-demand refresh.
+- **Push-Driven Background Sync**: Added background history synchronization in MyFirebaseMessagingService and 15-minute periodic WorkManager sync to keep the local database and widget up to date.
+- **Activity Feed Deep-Linking**: Tapping any item in the widget navigates directly to the Activity Feed screen.
+
+### Changed
+- **Graphical Widget Preview Layout**: Added previewLayout XML for a styled preview in the Android 12+ widget picker.
+- **History Query Scan Depth**: Expanded local query scan window to 500 records so active filter toggles find all matching recent items.
+
+---
+
 ## [1.7.1] - 2026-08-14
 
 _Android Notification Channels & Custom Alerts_
