@@ -4,8 +4,6 @@ import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.Color
@@ -17,7 +15,6 @@ import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
 import androidx.glance.Image
 import androidx.glance.ImageProvider
-import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
@@ -64,9 +61,8 @@ data class RecentItemsWidgetState(
     val roomNames: Map<Int, String> = emptyMap(),
     val targetRoomId: Int = -1,
     val customTitle: String? = null,
-    val isConfigured: Boolean = true,
     val isCompact: Boolean = false,
-    val isLoading: Boolean = true
+    val isLoading: Boolean = false
 )
 
 class RecentItemsWidget : GlanceAppWidget() {
@@ -87,112 +83,97 @@ class RecentItemsWidget : GlanceAppWidget() {
     )
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
+        val widgetId = try {
+            GlanceAppWidgetManager(context).getAppWidgetId(id)
+        } catch (e: Exception) {
+            AppWidgetManager.INVALID_APPWIDGET_ID
+        }
+
+        // Fetch and compute all widget state directly in provideGlance BEFORE rendering
+        val widgetState = withContext(Dispatchers.IO) {
+            val database = AppDatabase.getInstance(context)
+            val prefs = context.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
+
+            val widgetPrefs = if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                context.getSharedPreferences("widget_${widgetId}_prefs", Context.MODE_PRIVATE)
+            } else null
+
+            val targetRoomId = widgetPrefs?.getInt("target_room_id", -1) ?: -1
+            val fontDensity = widgetPrefs?.getString("font_density", "standard") ?: "standard"
+            val isCompactConfig = fontDensity == "compact"
+
+            val showProgression = prefs.getBoolean("ui_show_progression", true)
+            val showUseful = prefs.getBoolean("ui_show_useful", true)
+            val showFiller = prefs.getBoolean("ui_show_filler", false)
+            val showTrap = prefs.getBoolean("ui_show_trap", false)
+            val showFinished = prefs.getBoolean("ui_show_finished", true)
+            val showIgnoredItems = prefs.getBoolean("ui_show_ignored_items", false)
+
+            val rooms = try {
+                database.roomDao().getAllRoomsOneShot()
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val roomNames = rooms.associate { it.id to it.alias }
+            val activeRoomIds = rooms.filter { !it.is_archived }.map { it.id }.toSet()
+
+            // Room-Specific Query Optimization: If widget is configured for a specific room,
+            // query that room's history directly from SQLite rather than the global scan window.
+            val rawHistoryItems = try {
+                if (targetRoomId != -1) {
+                    database.historyDao().getHistoryForRoomPaged(roomId = targetRoomId, limit = 200, offset = 0)
+                } else {
+                    database.historyDao().getGlobalHistoryPaged(limit = 500, offset = 0)
+                }
+            } catch (e: Exception) {
+                Log.e("RecentItemsWidget", "Failed to fetch history items from DB", e)
+                emptyList()
+            }
+
+            val filteredItems = rawHistoryItems.filter { item ->
+                val matchesRoom = if (targetRoomId != -1) {
+                    item.roomId == targetRoomId
+                } else {
+                    item.roomId == null || activeRoomIds.isEmpty() || item.roomId in activeRoomIds
+                }
+                // Architectural note: Standalone widget uses item.isPlayerFinished stored in SQLite;
+                // the full in-app feed derives finished status from live slot data (HistoryScreen.kt:990).
+                val matchesFinished = showFinished || !item.isPlayerFinished
+
+                // --- TYPE CHECK (Prioritized to match visual colors and in-app feed verbatim) ---
+                val isProgression = (item.itemFlags and 1) != 0
+                val isUseful = (item.itemFlags and 2) != 0
+                val isTrap = (item.itemFlags and 4) != 0
+
+                val matchesType = when {
+                    isProgression -> showProgression
+                    isUseful -> showUseful
+                    isTrap -> showTrap
+                    else -> showFiller
+                }
+
+                // Whitelist exempts items from both category and ignored filters
+                val matchesCategoryOrWhitelist = item.isWhitelisted || matchesType
+                val matchesIgnoredOrWhitelist = item.isWhitelisted || (showIgnoredItems || !item.isIgnored)
+
+                matchesRoom && matchesFinished && matchesCategoryOrWhitelist && matchesIgnoredOrWhitelist
+            }.take(10)
+
+            val targetRoomName = if (targetRoomId != -1) roomNames[targetRoomId] else null
+
+            RecentItemsWidgetState(
+                items = filteredItems,
+                roomNames = roomNames,
+                targetRoomId = targetRoomId,
+                customTitle = targetRoomName,
+                isCompact = isCompactConfig,
+                isLoading = false
+            )
+        }
+
         provideContent {
             GlanceTheme {
-                val currentContext = LocalContext.current
                 val size = LocalSize.current
-
-                val widgetId = try {
-                    GlanceAppWidgetManager(currentContext).getAppWidgetId(id)
-                } catch (e: Exception) {
-                    AppWidgetManager.INVALID_APPWIDGET_ID
-                }
-
-                val widgetState by produceState(
-                    initialValue = RecentItemsWidgetState(),
-                    key1 = System.currentTimeMillis()
-                ) {
-                    withContext(Dispatchers.IO) {
-                        val database = AppDatabase.getInstance(currentContext)
-                        val prefs = currentContext.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
-
-                        val widgetPrefs = if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
-                            currentContext.getSharedPreferences("widget_${widgetId}_prefs", Context.MODE_PRIVATE)
-                        } else null
-
-                        // If the widget has never been saved via RecentItemsWidgetConfigActivity, hold off loading default items
-                        val isConfigured = if (widgetPrefs != null) {
-                            widgetPrefs.getBoolean("is_configured", false) || widgetPrefs.contains("target_room_id")
-                        } else {
-                            true
-                        }
-
-                        if (!isConfigured) {
-                            value = RecentItemsWidgetState(
-                                isConfigured = false,
-                                isLoading = false
-                            )
-                            return@withContext
-                        }
-
-                        val targetRoomId = widgetPrefs?.getInt("target_room_id", -1) ?: -1
-                        val fontDensity = widgetPrefs?.getString("font_density", "standard") ?: "standard"
-                        val isCompactConfig = fontDensity == "compact"
-
-                        val showProgression = prefs.getBoolean("ui_show_progression", true)
-                        val showUseful = prefs.getBoolean("ui_show_useful", true)
-                        val showFiller = prefs.getBoolean("ui_show_filler", false)
-                        val showTrap = prefs.getBoolean("ui_show_trap", false)
-                        val showFinished = prefs.getBoolean("ui_show_finished", true)
-                        val showIgnoredItems = prefs.getBoolean("ui_show_ignored_items", false)
-
-                        val rooms = try {
-                            database.roomDao().getAllRoomsOneShot()
-                        } catch (e: Exception) {
-                            emptyList()
-                        }
-                        val roomNames = rooms.associate { it.id to it.alias }
-                        val activeRoomIds = rooms.filter { !it.is_archived }.map { it.id }.toSet()
-
-                        val rawHistoryItems = try {
-                            database.historyDao().getGlobalHistoryPaged(limit = 500, offset = 0)
-                        } catch (e: Exception) {
-                            Log.e("RecentItemsWidget", "Failed to fetch history items from DB", e)
-                            emptyList()
-                        }
-
-                        val filteredItems = rawHistoryItems.filter { item ->
-                            val matchesRoom = if (targetRoomId != -1) {
-                                item.roomId == targetRoomId
-                            } else {
-                                item.roomId == null || activeRoomIds.isEmpty() || item.roomId in activeRoomIds
-                            }
-                            // Architectural note: Standalone widget uses item.isPlayerFinished stored in SQLite;
-                            // the full in-app feed derives finished status from live slot data (HistoryScreen.kt:990).
-                            val matchesFinished = showFinished || !item.isPlayerFinished
-
-                            // --- TYPE CHECK (Prioritized to match visual colors and in-app feed verbatim) ---
-                            val isProgression = (item.itemFlags and 1) != 0
-                            val isUseful = (item.itemFlags and 2) != 0
-                            val isTrap = (item.itemFlags and 4) != 0
-
-                            val matchesType = when {
-                                isProgression -> showProgression
-                                isUseful -> showUseful
-                                isTrap -> showTrap
-                                else -> showFiller
-                            }
-
-                            // Whitelist exempts items from both category and ignored filters
-                            val matchesCategoryOrWhitelist = item.isWhitelisted || matchesType
-                            val matchesIgnoredOrWhitelist = item.isWhitelisted || (showIgnoredItems || !item.isIgnored)
-
-                            matchesRoom && matchesFinished && matchesCategoryOrWhitelist && matchesIgnoredOrWhitelist
-                        }.take(10)
-
-                        val targetRoomName = if (targetRoomId != -1) roomNames[targetRoomId] else null
-
-                        value = RecentItemsWidgetState(
-                            items = filteredItems,
-                            roomNames = roomNames,
-                            targetRoomId = targetRoomId,
-                            customTitle = targetRoomName,
-                            isConfigured = true,
-                            isCompact = isCompactConfig,
-                            isLoading = false
-                        )
-                    }
-                }
 
                 val openActivityAction = actionStartActivity<MainActivity>(
                     if (widgetState.targetRoomId != -1) {
@@ -214,74 +195,30 @@ class RecentItemsWidget : GlanceAppWidget() {
                         .cornerRadius(16.dp)
                         .padding(if (size.width < 160.dp) 10.dp else 14.dp)
                 ) {
-                    if (!widgetState.isConfigured) {
-                        SetupWidgetLayout(
-                            onClick = actionStartActivity<RecentItemsWidgetConfigActivity>(
-                                if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
-                                    actionParametersOf(
-                                        ActionParameters.Key<Int>(AppWidgetManager.EXTRA_APPWIDGET_ID) to widgetId
-                                    )
-                                } else {
-                                    actionParametersOf()
-                                }
+                    when {
+                        size.height < 110.dp -> {
+                            SmallWidgetLayout(
+                                item = widgetState.items.firstOrNull(),
+                                roomNames = widgetState.roomNames,
+                                title = widgetState.customTitle ?: "Archipelago Alerts",
+                                isCompact = widgetState.isCompact || size.width < 160.dp,
+                                onClick = openActivityAction
                             )
-                        )
-                    } else {
-                        when {
-                            size.height < 110.dp -> {
-                                SmallWidgetLayout(
-                                    item = widgetState.items.firstOrNull(),
-                                    roomNames = widgetState.roomNames,
-                                    title = widgetState.customTitle ?: "Archipelago Alerts",
-                                    isCompact = widgetState.isCompact || size.width < 160.dp,
-                                    onClick = openActivityAction
-                                )
-                            }
-                            else -> {
-                                StandardWidgetLayout(
-                                    items = widgetState.items,
-                                    roomNames = widgetState.roomNames,
-                                    title = widgetState.customTitle ?: "Archipelago Alerts",
-                                    isCompact = widgetState.isCompact || size.width < 180.dp,
-                                    isLoading = widgetState.isLoading,
-                                    onOpenApp = openActivityAction
-                                )
-                            }
+                        }
+                        else -> {
+                            StandardWidgetLayout(
+                                items = widgetState.items,
+                                roomNames = widgetState.roomNames,
+                                title = widgetState.customTitle ?: "Archipelago Alerts",
+                                isCompact = widgetState.isCompact || size.width < 180.dp,
+                                isLoading = widgetState.isLoading,
+                                onOpenApp = openActivityAction
+                            )
                         }
                     }
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun SetupWidgetLayout(
-    onClick: androidx.glance.action.Action
-) {
-    Column(
-        modifier = GlanceModifier
-            .fillMaxSize()
-            .clickable(onClick),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = "Archipelago Alerts",
-            style = TextStyle(
-                color = GlanceTheme.colors.primary,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp
-            )
-        )
-        Spacer(modifier = GlanceModifier.height(4.dp))
-        Text(
-            text = "Complete setup in settings...",
-            style = TextStyle(
-                color = GlanceTheme.colors.onSurfaceVariant,
-                fontSize = 12.sp
-            )
-        )
     }
 }
 
