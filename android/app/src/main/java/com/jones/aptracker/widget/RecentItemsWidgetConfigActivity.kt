@@ -115,6 +115,7 @@ class RecentItemsWidgetConfigActivity : ComponentActivity() {
     private fun saveWidgetPreferences(widgetId: Int, targetRoomId: Int, fontDensity: String) {
         val prefs = getSharedPreferences("widget_${widgetId}_prefs", Context.MODE_PRIVATE)
         prefs.edit(commit = true) {
+            putBoolean("is_configured", true)
             putInt("target_room_id", targetRoomId)
             putString("font_density", fontDensity)
         }

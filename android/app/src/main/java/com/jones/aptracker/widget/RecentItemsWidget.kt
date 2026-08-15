@@ -64,6 +64,7 @@ data class RecentItemsWidgetState(
     val roomNames: Map<Int, String> = emptyMap(),
     val targetRoomId: Int = -1,
     val customTitle: String? = null,
+    val isConfigured: Boolean = true,
     val isCompact: Boolean = false,
     val isLoading: Boolean = true
 )
@@ -91,6 +92,12 @@ class RecentItemsWidget : GlanceAppWidget() {
                 val currentContext = LocalContext.current
                 val size = LocalSize.current
 
+                val widgetId = try {
+                    GlanceAppWidgetManager(currentContext).getAppWidgetId(id)
+                } catch (e: Exception) {
+                    AppWidgetManager.INVALID_APPWIDGET_ID
+                }
+
                 val widgetState by produceState(
                     initialValue = RecentItemsWidgetState(),
                     key1 = System.currentTimeMillis()
@@ -99,15 +106,24 @@ class RecentItemsWidget : GlanceAppWidget() {
                         val database = AppDatabase.getInstance(currentContext)
                         val prefs = currentContext.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
 
-                        val widgetId = try {
-                            GlanceAppWidgetManager(currentContext).getAppWidgetId(id)
-                        } catch (e: Exception) {
-                            AppWidgetManager.INVALID_APPWIDGET_ID
-                        }
-
                         val widgetPrefs = if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
                             currentContext.getSharedPreferences("widget_${widgetId}_prefs", Context.MODE_PRIVATE)
                         } else null
+
+                        // If the widget has never been saved via RecentItemsWidgetConfigActivity, hold off loading default items
+                        val isConfigured = if (widgetPrefs != null) {
+                            widgetPrefs.getBoolean("is_configured", false) || widgetPrefs.contains("target_room_id")
+                        } else {
+                            true
+                        }
+
+                        if (!isConfigured) {
+                            value = RecentItemsWidgetState(
+                                isConfigured = false,
+                                isLoading = false
+                            )
+                            return@withContext
+                        }
 
                         val targetRoomId = widgetPrefs?.getInt("target_room_id", -1) ?: -1
                         val fontDensity = widgetPrefs?.getString("font_density", "standard") ?: "standard"
@@ -171,6 +187,7 @@ class RecentItemsWidget : GlanceAppWidget() {
                             roomNames = roomNames,
                             targetRoomId = targetRoomId,
                             customTitle = targetRoomName,
+                            isConfigured = true,
                             isCompact = isCompactConfig,
                             isLoading = false
                         )
@@ -197,30 +214,74 @@ class RecentItemsWidget : GlanceAppWidget() {
                         .cornerRadius(16.dp)
                         .padding(if (size.width < 160.dp) 10.dp else 14.dp)
                 ) {
-                    when {
-                        size.height < 110.dp -> {
-                            SmallWidgetLayout(
-                                item = widgetState.items.firstOrNull(),
-                                roomNames = widgetState.roomNames,
-                                title = widgetState.customTitle ?: "Archipelago Alerts",
-                                isCompact = widgetState.isCompact || size.width < 160.dp,
-                                onClick = openActivityAction
+                    if (!widgetState.isConfigured) {
+                        SetupWidgetLayout(
+                            onClick = actionStartActivity<RecentItemsWidgetConfigActivity>(
+                                if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                                    actionParametersOf(
+                                        ActionParameters.Key<Int>(AppWidgetManager.EXTRA_APPWIDGET_ID) to widgetId
+                                    )
+                                } else {
+                                    actionParametersOf()
+                                }
                             )
-                        }
-                        else -> {
-                            StandardWidgetLayout(
-                                items = widgetState.items,
-                                roomNames = widgetState.roomNames,
-                                title = widgetState.customTitle ?: "Archipelago Alerts",
-                                isCompact = widgetState.isCompact || size.width < 180.dp,
-                                isLoading = widgetState.isLoading,
-                                onOpenApp = openActivityAction
-                            )
+                        )
+                    } else {
+                        when {
+                            size.height < 110.dp -> {
+                                SmallWidgetLayout(
+                                    item = widgetState.items.firstOrNull(),
+                                    roomNames = widgetState.roomNames,
+                                    title = widgetState.customTitle ?: "Archipelago Alerts",
+                                    isCompact = widgetState.isCompact || size.width < 160.dp,
+                                    onClick = openActivityAction
+                                )
+                            }
+                            else -> {
+                                StandardWidgetLayout(
+                                    items = widgetState.items,
+                                    roomNames = widgetState.roomNames,
+                                    title = widgetState.customTitle ?: "Archipelago Alerts",
+                                    isCompact = widgetState.isCompact || size.width < 180.dp,
+                                    isLoading = widgetState.isLoading,
+                                    onOpenApp = openActivityAction
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SetupWidgetLayout(
+    onClick: androidx.glance.action.Action
+) {
+    Column(
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .clickable(onClick),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "Archipelago Alerts",
+            style = TextStyle(
+                color = GlanceTheme.colors.primary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+        )
+        Spacer(modifier = GlanceModifier.height(4.dp))
+        Text(
+            text = "Complete setup in settings...",
+            style = TextStyle(
+                color = GlanceTheme.colors.onSurfaceVariant,
+                fontSize = 12.sp
+            )
+        )
     }
 }
 
