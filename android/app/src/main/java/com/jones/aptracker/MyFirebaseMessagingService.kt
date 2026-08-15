@@ -40,7 +40,15 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             sendSystemNotification(notification.title, notification.body, bundledItems, bundleType, channelId)
         }
 
-        // 1. Immediately kick off in-process background history sync to populate SQLite
+        // 1. Enqueue guaranteed background sync worker with WorkManager (OS wake lock protection)
+        try {
+            val syncRequest = OneTimeWorkRequestBuilder<HistorySyncWorker>().build()
+            WorkManager.getInstance(applicationContext).enqueue(syncRequest)
+        } catch (e: Exception) {
+            Log.e("FCM", "Failed to enqueue WorkManager sync request", e)
+        }
+
+        // 2. Also run in-process background history sync for instantaneous widget update if process remains active
         serviceScope.launch {
             try {
                 val repository = HistoryRepository.getInstance(applicationContext)
@@ -49,15 +57,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 repository.syncHistoryBatch(trackedRooms)
                 repository.refreshHintHistory(null)
                 com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(applicationContext)
-                Log.d("FCM", "Background history sync completed for incoming push.")
+                Log.d("FCM", "Background in-process history sync completed for incoming push.")
             } catch (e: Exception) {
-                Log.e("FCM", "In-process FCM history sync failed, delegating to WorkManager fallback", e)
-                try {
-                    val syncRequest = OneTimeWorkRequestBuilder<HistorySyncWorker>().build()
-                    WorkManager.getInstance(applicationContext).enqueue(syncRequest)
-                } catch (wmEx: Exception) {
-                    Log.e("FCM", "Failed to enqueue WorkManager fallback", wmEx)
-                }
+                Log.e("FCM", "In-process FCM history sync failed (WorkManager fallback active)", e)
             }
         }
     }

@@ -32,7 +32,7 @@ class MyApplication : Application() {
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "PERIODIC_HISTORY_SYNC",
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             periodicSyncRequest
         )
     }

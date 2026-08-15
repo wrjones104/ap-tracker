@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -86,57 +88,65 @@ class RecentItemsWidget : GlanceAppWidget() {
 
                 val widgetState by produceState(
                     initialValue = RecentItemsWidgetState(),
-                    key1 = System.currentTimeMillis()
+                    key1 = currentContext
                 ) {
-                    val database = AppDatabase.getInstance(currentContext)
-                    val prefs = currentContext.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
+                    withContext(Dispatchers.IO) {
+                        val database = AppDatabase.getInstance(currentContext)
+                        val prefs = currentContext.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
 
-                    val showProgression = prefs.getBoolean("ui_show_progression", true)
-                    val showUseful = prefs.getBoolean("ui_show_useful", true)
-                    val showFiller = prefs.getBoolean("ui_show_filler", false)
-                    val showTrap = prefs.getBoolean("ui_show_trap", false)
-                    val showFinished = prefs.getBoolean("ui_show_finished", true)
-                    val showIgnoredItems = prefs.getBoolean("ui_show_ignored_items", false)
+                        val showProgression = prefs.getBoolean("ui_show_progression", true)
+                        val showUseful = prefs.getBoolean("ui_show_useful", true)
+                        val showFiller = prefs.getBoolean("ui_show_filler", false)
+                        val showTrap = prefs.getBoolean("ui_show_trap", false)
+                        val showFinished = prefs.getBoolean("ui_show_finished", true)
+                        val showIgnoredItems = prefs.getBoolean("ui_show_ignored_items", false)
 
-                    val rooms = try {
-                        database.roomDao().getAllRoomsOneShot()
-                    } catch (e: Exception) {
-                        emptyList()
+                        val rooms = try {
+                            database.roomDao().getAllRoomsOneShot()
+                        } catch (e: Exception) {
+                            emptyList()
+                        }
+                        val roomNames = rooms.associate { it.id to it.alias }
+                        val activeRoomIds = rooms.filter { !it.is_archived }.map { it.id }.toSet()
+
+                        val rawHistoryItems = try {
+                            database.historyDao().getGlobalHistoryPaged(limit = 500, offset = 0)
+                        } catch (e: Exception) {
+                            Log.e("RecentItemsWidget", "Failed to fetch history items from DB", e)
+                            emptyList()
+                        }
+
+                        val filteredItems = rawHistoryItems.filter { item ->
+                            val matchesRoom = item.roomId == null || activeRoomIds.isEmpty() || item.roomId in activeRoomIds
+                            // Architectural note: Standalone widget uses item.isPlayerFinished stored in SQLite;
+                            // the full in-app feed derives finished status from live slot data (HistoryScreen.kt:990).
+                            val matchesFinished = showFinished || !item.isPlayerFinished
+
+                            // --- TYPE CHECK (Prioritized to match visual colors and in-app feed verbatim) ---
+                            val isProgression = (item.itemFlags and 1) != 0
+                            val isUseful = (item.itemFlags and 2) != 0
+                            val isTrap = (item.itemFlags and 4) != 0
+
+                            val matchesType = when {
+                                isProgression -> showProgression
+                                isUseful -> showUseful
+                                isTrap -> showTrap
+                                else -> showFiller
+                            }
+
+                            // Whitelist exempts items from both category and ignored filters
+                            val matchesCategoryOrWhitelist = item.isWhitelisted || matchesType
+                            val matchesIgnoredOrWhitelist = item.isWhitelisted || (showIgnoredItems || !item.isIgnored)
+
+                            matchesRoom && matchesFinished && matchesCategoryOrWhitelist && matchesIgnoredOrWhitelist
+                        }.take(10)
+
+                        value = RecentItemsWidgetState(
+                            items = filteredItems,
+                            roomNames = roomNames,
+                            isLoading = false
+                        )
                     }
-                    val roomNames = rooms.associate { it.id to it.alias }
-                    val activeRoomIds = rooms.filter { !it.is_archived }.map { it.id }.toSet()
-
-                    val rawHistoryItems = try {
-                        database.historyDao().getGlobalHistoryPaged(limit = 500, offset = 0)
-                    } catch (e: Exception) {
-                        Log.e("RecentItemsWidget", "Failed to fetch history items from DB", e)
-                        emptyList()
-                    }
-
-                    val filteredItems = rawHistoryItems.filter { item ->
-                        val matchesRoom = item.roomId == null || activeRoomIds.isEmpty() || item.roomId in activeRoomIds
-                        val matchesFinished = showFinished || !item.isPlayerFinished
-
-                        val isProgression = (item.itemFlags and 1) != 0
-                        val isUseful = (item.itemFlags and 2) != 0
-                        val isTrap = (item.itemFlags and 4) != 0
-                        val isFiller = !isProgression && !isUseful && !isTrap
-
-                        val matchesType = (isProgression && showProgression) ||
-                                (isUseful && showUseful) ||
-                                (isTrap && showTrap) ||
-                                (isFiller && showFiller)
-
-                        val matchesIgnored = showIgnoredItems || !item.isIgnored || item.isWhitelisted
-
-                        matchesRoom && matchesFinished && matchesType && matchesIgnored
-                    }.take(10)
-
-                    value = RecentItemsWidgetState(
-                        items = filteredItems,
-                        roomNames = roomNames,
-                        isLoading = false
-                    )
                 }
 
                 val openActivityAction = actionStartActivity<MainActivity>(
@@ -246,10 +256,12 @@ private fun SmallWidgetLayout(
             Spacer(modifier = GlanceModifier.height(4.dp))
 
             val receiverName = item.playerAlias?.takeIf { it.isNotBlank() } ?: item.playerName
+            val roomAlias = item.roomId?.let { roomNames[it] }
             val timeAgo = formatRelativeTimestamp(item.timestamp)
+            val detailsText = listOfNotNull("To $receiverName", roomAlias, timeAgo).joinToString(" • ")
 
             Text(
-                text = "To $receiverName • $timeAgo",
+                text = detailsText,
                 style = TextStyle(
                     color = GlanceTheme.colors.onSurfaceVariant,
                     fontSize = 12.5.sp

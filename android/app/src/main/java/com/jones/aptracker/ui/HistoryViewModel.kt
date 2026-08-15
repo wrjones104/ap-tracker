@@ -380,7 +380,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowFinished(show: Boolean) {
         if (_showFinished.value != show) {
             _showFinished.value = show
-            prefs.edit(commit = true) { putBoolean("ui_show_finished", show) }
+            prefs.edit { putBoolean("ui_show_finished", show) }
             saveViewPreferences(showFinished = show)
             com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
@@ -389,7 +389,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowFoundHints(show: Boolean) {
         if (_showFoundHints.value != show) {
             _showFoundHints.value = show
-            prefs.edit(commit = true) { putBoolean("ui_show_found_hints", show) }
+            prefs.edit { putBoolean("ui_show_found_hints", show) }
             saveViewPreferences(showFoundHints = show)
 
             // The reactive combine flow above automatically handles the UI update locally!
@@ -403,7 +403,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowProgression(show: Boolean) {
         if (_showProgression.value != show) {
             _showProgression.value = show
-            prefs.edit(commit = true) { putBoolean("ui_show_progression", show) }
+            prefs.edit { putBoolean("ui_show_progression", show) }
             saveViewPreferences(showProgression = show)
             com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
@@ -412,7 +412,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowUseful(show: Boolean) {
         if (_showUseful.value != show) {
             _showUseful.value = show
-            prefs.edit(commit = true) { putBoolean("ui_show_useful", show) }
+            prefs.edit { putBoolean("ui_show_useful", show) }
             saveViewPreferences(showUseful = show)
             com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
@@ -421,7 +421,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowFiller(show: Boolean) {
         if (_showFiller.value != show) {
             _showFiller.value = show
-            prefs.edit(commit = true) { putBoolean("ui_show_filler", show) }
+            prefs.edit { putBoolean("ui_show_filler", show) }
             saveViewPreferences(showFiller = show)
             com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
@@ -430,7 +430,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun setShowTrap(show: Boolean) {
         if (_showTrap.value != show) {
             _showTrap.value = show
-            prefs.edit(commit = true) { putBoolean("ui_show_trap", show) }
+            prefs.edit { putBoolean("ui_show_trap", show) }
             saveViewPreferences(showTrap = show)
             com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
         }
@@ -440,7 +440,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         if (_useCondensed.value != use) {
             _useCondensed.value = use
             // Save to SharedPreferences using KTX
-            prefs.edit(commit = true) {
+            prefs.edit {
                 putBoolean("ui_use_condensed", use)
             }
         }
