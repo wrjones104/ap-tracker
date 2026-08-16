@@ -267,3 +267,43 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
         db.execSQL("ALTER TABLE hints ADD COLUMN isWhitelisted INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+/**
+ * Adds the local milestone cache backing the Milestones home screen widget.
+ *
+ * The widget previously called the network from inside its Glance composition -- a ~750 KB
+ * tracked-slots fetch plus one threshold-groups request per slot, sequentially -- which left it
+ * showing its "Setup needed" placeholder for seconds after configuration. The sync layer now
+ * writes these two tables and the widget reads only from them.
+ *
+ * Both tables are pure caches: they are rebuilt on the next sync, so there is nothing to backfill.
+ */
+val MIGRATION_22_23 = object : Migration(22, 23) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `cached_tracked_slots` (
+                `roomDbId` INTEGER NOT NULL,
+                `slotId` INTEGER NOT NULL,
+                `roomAlias` TEXT NOT NULL,
+                `playerName` TEXT NOT NULL,
+                `playerAlias` TEXT,
+                `isArchived` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`roomDbId`, `slotId`)
+            )
+        """.trimIndent())
+
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `cached_milestone_groups` (
+                `roomDbId` INTEGER NOT NULL,
+                `slotId` INTEGER NOT NULL,
+                `groupId` INTEGER NOT NULL,
+                `name` TEXT,
+                `isTriggered` INTEGER NOT NULL,
+                `itemsJson` TEXT NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`roomDbId`, `slotId`, `groupId`)
+            )
+        """.trimIndent())
+    }
+}

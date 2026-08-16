@@ -10,20 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
-## [1.8.0] - 2026-08-15
+## [1.8.0] - 2026-08-16
 
-_Recent Items Received Android Widget_
+_Home Screen Widgets & Notification Channels_
 
 > **Discord Copy-Paste:**
 > ```markdown
 > **Archipelago Alerts Android App v1.8.0 Released!**
 >
 > **New Features & Improvements**
-> • **Recent Items Home Screen Widget**: Keep track of your multiworld progress directly from your Android home screen!
-> • **Per-Room or Global Scope**: Track all active games combined or pin a dedicated widget to a specific room with custom branding.
-> • **Customizable Display Density**: Choose between Standard and Compact font layouts during setup.
-> • **In-App Filter Mirroring**: The widget automatically respects your Activity Feed filter settings (Progression, Useful, Filler, Trap, Finished, and Ignored items).
-> • **Background Sync & Targeted Deep-Linking**: Instant push notification updates, and tapping a widget jumps directly to that room's filtered Activity Feed.
+> • **Recent Items Widget**: See the latest items flowing through your multiworld right on your home screen.
+> • **Milestones Widget**: Track progress toward your milestone goals at a glance, with a progress bar for every tracked slot.
+> • **Categorized Notifications**: Alerts are now split into **Progression Items**, **Non-Progression Items**, **Hints**, and **General & System**, so you can give each its own sound, vibration, and Do Not Disturb rules in Android settings.
+> • **Widget Customization**: Pin a widget to one room or all of them, give it a custom title, choose Standard or Compact text, and hide the milestone flags or item colour dots if you prefer a plainer look.
+> • **Stays Current**: Widgets refresh in the background as new items arrive, and tapping one opens the app right where you were looking.
 >
 > GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
 > Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
@@ -31,77 +31,44 @@ _Recent Items Received Android Widget_
 
 > **Play Console — What's New Copy-Paste:**
 > ```markdown
-> New: Recent Items Home Screen Widget — view your latest received items directly on your home screen without opening the app.
+> New: Recent Items home screen widget - see the latest items in your multiworld at a glance.
 >
-> New: Room Customization & Font Density — configure widgets for all active games or pin them to specific rooms, with Standard or Compact font layouts.
+> New: Milestones home screen widget - track progress toward your goals with a bar for every tracked slot.
 >
-> New: Background Sync & Deep-Linking — push notifications update your widget in real time, and tapping any item jumps straight to your filtered Activity Feed.
+> New: Categorized notifications - give progression items, hints, and general alerts their own sounds and Do Not Disturb rules in Android settings.
+>
+> Widgets can be pinned to one room or all of them, renamed, resized, and simplified to taste.
 > ```
 
 > **GitHub Release Copy-Paste:**
 > ```markdown
 > ### Added
-> - **Recent Items Received Android Widget**: Built with Jetpack Glance 1.1.1, featuring responsive sizing (compact single-item and standard multi-item scrollable list), item classification badges (Progression, Useful, Filler, Trap), relative timestamps, and on-demand refresh.
-> - **Widget Configuration & Customization**: Added setup screen for choosing room scope (All Active Rooms vs. specific pinned room), searchable room picker, and display density presets (Standard / Compact).
-> - **Graphical Widget Preview**: Added `android:previewLayout` rendering a styled preview in the Android 12+ widget picker.
-> - **Background Synchronization**: Integrated push-triggered instant background syncing via `MyFirebaseMessagingService` and recurring 15-minute polling via Android `WorkManager` (`HistorySyncWorker`).
-> - **Targeted Activity Deep-Linking**: Added intent navigation handling from the widget directly into the Activity Feed screen, automatically filtering to the selected room when pinned.
+> - **Recent Items Home Screen Widget**: Glance-based widget with responsive small/medium/large layouts, item classification colours (Progression, Useful, Filler, Trap), and on-demand refresh.
+> - **Milestones Home Screen Widget**: Shows milestone group progress per tracked slot - progress bar, acquired/required counts, and per-item breakdown - scoped to a single room or all active rooms.
+> - **Android Notification Channels**: Push notifications are categorized into dedicated system channels under the "Game & Room Alerts" group (`channel_progression`, `channel_non_progression`, `channel_hints`, `channel_general`), enabling per-category sound, vibration, heads-up, and DND control.
+> - **Widget Configuration**: Per-room scoping with a searchable room picker, optional custom widget titles on both widgets, Standard/Compact density presets, and toggles for the milestone flag emoji and the item colour dots.
+> - **Deep Linking**: Tapping a widget opens the relevant Activity Feed or room screen, filtered to that room where applicable.
 >
 > ### Changed
-> - **Room-Specific Query Optimization**: Room-scoped widgets query SQLite directly by room ID so items are never missed even when pushed past the global history window.
-> - **Query Depth**: Expanded widget database history scan window to 500 records to accurately find all active filtered items.
+> - **Milestone data moved out of the widget composition**: `MilestonesRepository` caches the tracked-slot roster and threshold-group definitions into Room (`cached_tracked_slots`, `cached_milestone_groups`, schema v23), refreshed by the sync layer. The widget reads local data only, so it renders immediately instead of blocking on a ~750 KB roster fetch plus one `threshold-groups` request per slot from inside `provideGlance`. Per-slot fetches now run in parallel, are coalesced across concurrent callers, and are skipped entirely when no Milestones widget is placed.
+> - **Aggregated history tallies**: Added `HistoryDao.getItemCountsForRoom()` so milestone progress is computed from a grouped SQL count rather than loading every history row for a room.
+> - **FCM channel routing**: `MyFirebaseMessagingService` routes incoming notifications to the resolved category channel and cleans up legacy channel registrations on startup.
+> - **Room-specific widget queries**: Widgets pinned to a room query that room's history directly from SQLite rather than scanning a global window.
+> - **Widget title and room-alias display decoupled**: Per-item room aliases now key off the widget's room scope rather than the header text, so setting a custom title no longer changes which aliases are shown.
 > ```
 
 ### Added
-- **Recent Items Android Widget**: Implemented Glance-based home screen widget with responsive multi-size support, item classification colors (Progression, Useful, Filler, Trap), and on-demand refresh.
-- **Widget Setup & Room Customization**: Added configuration screen supporting per-room scoping, searchable room selection, and Standard vs. Compact font density presets.
-- **Push-Driven Background Sync**: Added background history synchronization in MyFirebaseMessagingService and 15-minute periodic WorkManager sync to keep the local database and widget up to date.
-- **Activity Feed Deep-Linking**: Tapping any item in the widget navigates directly to the Activity Feed screen, automatically filtering to the specific room when applicable.
+- **Recent Items Home Screen Widget**: See the latest items flowing through your multiworld right on your Android home screen, in a compact single-item or scrollable multi-item layout.
+- **Milestones Home Screen Widget**: Track progress toward your milestone goals at a glance, with a progress bar and item breakdown for every tracked slot.
+- **Categorized Notifications**: Alerts are now sorted into their own Android categories - Progression Items, Non-Progression Items, Hints, and General & System - each with its own sound, vibration, heads-up popup, and Do Not Disturb behaviour in your system settings.
+- **Room Scope & Widget Setup**: Choose whether a widget follows all your active rooms or just one, with a searchable room picker during setup.
+- **Tap Straight Through**: Tapping a widget opens the app on the matching Activity Feed or room, already filtered to what you were looking at.
 
 ### Changed
-- **Room-Specific Query Optimization**: Widgets pinned to specific rooms query room history directly from SQLite rather than a global window, ensuring older items always display.
-- **Graphical Widget Preview Layout**: Added previewLayout XML for a styled preview in the Android 12+ widget picker.
-- **History Query Scan Depth**: Expanded local query scan window to 500 records so active filter toggles find all matching recent items.
-
----
-
-## [1.7.1] - 2026-08-14
-
-_Android Notification Channels & Custom Alerts_
-
-> **Discord Copy-Paste:**
-> ```markdown
-> **Archipelago Alerts Android App v1.7.1 Released!**
->
-> **New Features & Improvements**
-> • **Android Notification Channels**: Push notifications are now categorized into dedicated system channels under "Game & Room Alerts" (**Progression Items**, **Non-Progression Items**, **Hints**, and **General & System**).
-> • **OS-Level Sound & Priority Controls**: Customize separate notification sounds, vibration patterns, heads-up popups, and Do Not Disturb overrides for each notification category directly in Android system settings!
->
-> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
-> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
-> ```
-
-> **Play Console — What's New Copy-Paste:**
-> ```markdown
-> New: Android Notification Channels — notifications are now organized into dedicated system channels (Progression Items, Non-Progression Items, Hints, General & System).
->
-> New: Custom OS Alert Controls — customize distinct ringtones, vibration patterns, heads-up popups, and Do Not Disturb bypass per notification category directly in your Android notification settings.
-> ```
-
-> **GitHub Release Copy-Paste:**
-> ```markdown
-> ### Added
-> - **Android Notification Channels**: Push notifications are now categorized into dedicated Android system channels under the "Game & Room Alerts" group (`channel_progression`, `channel_non_progression`, `channel_hints`, and `channel_general`), allowing users to customize sounds, vibration, heads-up display, and DND overrides per category in Android OS settings.
->
-> ### Changed
-> - **FCM Channel Routing**: Updated `MyFirebaseMessagingService` to route incoming notifications to the resolved category channel and clean up legacy channel registrations on startup.
-> ```
-
-### Added
-- **Android Notification Channels**: Registered Game & Room Alerts notification group with distinct channels (Progression Items, Non-Progression Items, Hints, and General & System), enabling OS-level sound and vibration customization.
-
-### Changed
-- **FCM Channel Routing & Legacy Cleanup**: Routed incoming FCM payloads directly to their designated notification channel and automatically cleaned up obsolete legacy channels from system settings.
+- **Widget Personalization**: Give any widget a custom title, and turn off the milestone flags or the item colour dots if you would rather keep things plain.
+- **Display Density Presets**: Pick Standard for larger, comfortable text or Compact to fit more rows into the same space.
+- **Faster Widgets, Less Data**: Widgets now draw from data already stored on your phone, so they appear instantly after setup and use far less mobile data.
+- **Activity Feed Filter Mirroring**: The Recent Items widget respects the same item type and ignore filters you have set in the in-app Activity Feed.
 
 ---
 

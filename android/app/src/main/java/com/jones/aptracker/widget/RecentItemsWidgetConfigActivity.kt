@@ -103,8 +103,8 @@ class RecentItemsWidgetConfigActivity : ComponentActivity() {
             APTrackerTheme {
                 WidgetConfigScreen(
                     appWidgetId = appWidgetId,
-                    onSave = { targetRoomId, fontDensity ->
-                        saveWidgetPreferences(appWidgetId, targetRoomId, fontDensity)
+                    onSave = { targetRoomId, fontDensity, customTitle, showItemDots ->
+                        saveWidgetPreferences(appWidgetId, targetRoomId, fontDensity, customTitle, showItemDots)
                     },
                     onCancel = {
                         finish()
@@ -114,12 +114,20 @@ class RecentItemsWidgetConfigActivity : ComponentActivity() {
         }
     }
 
-    private fun saveWidgetPreferences(widgetId: Int, targetRoomId: Int, fontDensity: String) {
+    private fun saveWidgetPreferences(
+        widgetId: Int,
+        targetRoomId: Int,
+        fontDensity: String,
+        customTitle: String?,
+        showItemDots: Boolean
+    ) {
         val prefs = getSharedPreferences("widget_${widgetId}_prefs", Context.MODE_PRIVATE)
         prefs.edit(commit = true) {
             putBoolean("is_configured", true)
             putInt("target_room_id", targetRoomId)
             putString("font_density", fontDensity)
+            putString("custom_title", customTitle?.takeIf { it.isNotBlank() })
+            putBoolean("show_item_dots", showItemDots)
         }
 
         // Set result eagerly so the launcher always receives RESULT_OK upon activity completion
@@ -153,13 +161,15 @@ class RecentItemsWidgetConfigActivity : ComponentActivity() {
 @Composable
 private fun WidgetConfigScreen(
     appWidgetId: Int,
-    onSave: (targetRoomId: Int, fontDensity: String) -> Unit,
+    onSave: (targetRoomId: Int, fontDensity: String, customTitle: String?, showItemDots: Boolean) -> Unit,
     onCancel: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var rooms by remember { mutableStateOf<List<RoomEntity>>(emptyList()) }
     var selectedRoomId by remember { mutableIntStateOf(-1) } // -1 means all active rooms
     var selectedDensity by remember { mutableStateOf("standard") } // "standard" or "compact"
+    var customTitle by remember { mutableStateOf("") }
+    var showItemDots by remember { mutableStateOf(true) }
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
 
@@ -178,6 +188,8 @@ private fun WidgetConfigScreen(
             val prefs = context.getSharedPreferences("widget_${appWidgetId}_prefs", Context.MODE_PRIVATE)
             selectedRoomId = prefs.getInt("target_room_id", -1)
             selectedDensity = prefs.getString("font_density", "standard") ?: "standard"
+            customTitle = prefs.getString("custom_title", "") ?: ""
+            showItemDots = prefs.getBoolean("show_item_dots", true)
             isLoading = false
         }
     }
@@ -451,13 +463,51 @@ private fun WidgetConfigScreen(
                     }
                 }
 
+                // Section 3: Appearance
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Appearance",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                item {
+                    val selectedRoom = rooms.firstOrNull { it.id == selectedRoomId }
+                    val placeholderTitle = if (selectedRoomId == -1) {
+                        "Archipelago Alerts"
+                    } else {
+                        selectedRoom?.alias ?: "Archipelago Alerts"
+                    }
+                    OutlinedTextField(
+                        value = customTitle,
+                        onValueChange = { customTitle = it },
+                        label = { Text("Custom Widget Title (Optional)") },
+                        placeholder = { Text(placeholderTitle) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                }
+
+                item {
+                    ToggleOptionRow(
+                        title = "Show item colour dots",
+                        description = "Colour-coded dot before each item marking its category.",
+                        checked = showItemDots,
+                        onCheckedChange = { showItemDots = it }
+                    )
+                }
+
                 item {
                     Spacer(modifier = Modifier.height(16.dp))
                 }
             }
 
             Button(
-                onClick = { onSave(selectedRoomId, selectedDensity) },
+                onClick = { onSave(selectedRoomId, selectedDensity, customTitle, showItemDots) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 12.dp),

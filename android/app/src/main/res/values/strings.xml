@@ -3,4 +3,6 @@
     <string name="keep_screen_on">Keep Screen On</string>
     <string name="widget_recent_items_name">Recent Items</string>
     <string name="widget_recent_items_description">Shows the most recent items received across your tracked Archipelago games.</string>
+    <string name="widget_milestones_name">Milestones &amp; Objectives</string>
+    <string name="widget_milestones_description">Track milestone threshold groups and visual progress toward your Archipelago goals.</string>
 </resources>

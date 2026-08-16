@@ -994,6 +994,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 val response = RetrofitClient.instance.createThresholdGroup(roomDbId, slotId, request)
                 if (response.isSuccessful) {
                     fetchThresholdGroups(roomDbId, slotId)
+                    com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshSlotAndUpdateAsync(getApplication(), roomDbId, slotId)
                     _integrationMessage.value = "Milestone group created."
                 } else {
                     _errorMessage.value = "Failed to create milestone group: ${response.code()}"
@@ -1018,6 +1019,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 val response = RetrofitClient.instance.updateThresholdGroup(roomDbId, slotId, groupId, request)
                 if (response.isSuccessful) {
                     fetchThresholdGroups(roomDbId, slotId)
+                    com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshSlotAndUpdateAsync(getApplication(), roomDbId, slotId)
                     _integrationMessage.value = "Milestone group updated."
                 } else {
                     _errorMessage.value = "Failed to update milestone group: ${response.code()}"
@@ -1035,6 +1037,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 val response = RetrofitClient.instance.deleteThresholdGroup(roomDbId, slotId, groupId)
                 if (response.isSuccessful) {
                     fetchThresholdGroups(roomDbId, slotId)
+                    com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshSlotAndUpdateAsync(getApplication(), roomDbId, slotId)
                 } else {
                     _errorMessage.value = "Failed to delete milestone group: ${response.code()}"
                 }

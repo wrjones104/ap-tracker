@@ -34,6 +34,7 @@ class HistorySyncWorker(
             repository.refreshHintHistory(targetRoomId)
 
             com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(applicationContext)
+            com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdate(applicationContext, trackedRooms)
 
             Log.d("HistorySyncWorker", "Background HistorySyncWorker completed successfully.")
             Result.success()

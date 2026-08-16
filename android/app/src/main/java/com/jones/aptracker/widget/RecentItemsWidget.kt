@@ -64,15 +64,36 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+/** Header text used when the widget is scoped to all rooms and has no custom title. */
+const val DEFAULT_WIDGET_TITLE = "Archipelago Alerts"
+
 data class RecentItemsWidgetState(
     val items: List<HistoryItemEntity> = emptyList(),
     val roomNames: Map<Int, String> = emptyMap(),
     val targetRoomId: Int = -1,
+    /** User-entered title from the config screen; blank or absent falls back to [roomTitle]. */
     val customTitle: String? = null,
+    /** Alias of the scoped room, or null in all-rooms mode. */
+    val roomTitle: String? = null,
     val isCompact: Boolean = false,
+    /** When false, item rows drop the leading category colour dot. */
+    val showItemDots: Boolean = true,
     val isLoading: Boolean = false,
     val isConfigured: Boolean = false
-)
+) {
+    val isAllRooms: Boolean = targetRoomId == -1
+
+    /**
+     * Header text. Deliberately NOT the signal for whether to show per-item room aliases -- use
+     * [isAllRooms] for that. The two used to be conflated through a `title == "Archipelago Alerts"`
+     * comparison, which a user-set custom title would silently break.
+     */
+    val displayTitle: String =
+        customTitle?.takeIf { it.isNotBlank() } ?: roomTitle ?: DEFAULT_WIDGET_TITLE
+
+    /** True when the header shows something else, so app branding moves down to the subtitle. */
+    val hasDistinctTitle: Boolean = displayTitle != DEFAULT_WIDGET_TITLE
+}
 
 class RecentItemsWidget : GlanceAppWidget() {
 
@@ -148,7 +169,9 @@ class RecentItemsWidget : GlanceAppWidget() {
                             SmallWidgetLayout(
                                 item = widgetState.items.firstOrNull(),
                                 roomNames = widgetState.roomNames,
-                                title = widgetState.customTitle ?: "Archipelago Alerts",
+                                title = widgetState.displayTitle,
+                                showRoomAlias = widgetState.isAllRooms,
+                                showItemDots = widgetState.showItemDots,
                                 isCompact = widgetState.isCompact || size.width < 160.dp,
                                 onClick = openActivityAction
                             )
@@ -157,7 +180,10 @@ class RecentItemsWidget : GlanceAppWidget() {
                             StandardWidgetLayout(
                                 items = widgetState.items,
                                 roomNames = widgetState.roomNames,
-                                title = widgetState.customTitle ?: "Archipelago Alerts",
+                                title = widgetState.displayTitle,
+                                showBrandingSubtitle = widgetState.hasDistinctTitle,
+                                showRoomAlias = widgetState.isAllRooms,
+                                showItemDots = widgetState.showItemDots,
                                 isCompact = widgetState.isCompact || size.width < 180.dp,
                                 isLoading = widgetState.isLoading,
                                 onOpenApp = openActivityAction
@@ -191,6 +217,8 @@ private suspend fun loadWidgetState(context: Context, widgetId: Int): RecentItem
         val targetRoomId = widgetPrefs?.getInt("target_room_id", -1) ?: -1
         val fontDensity = widgetPrefs?.getString("font_density", "standard") ?: "standard"
         val isCompactConfig = fontDensity == "compact"
+        val configuredTitle = widgetPrefs?.getString("custom_title", null)
+        val showItemDots = widgetPrefs?.getBoolean("show_item_dots", true) ?: true
 
         val showProgression = prefs.getBoolean("ui_show_progression", true)
         val showUseful = prefs.getBoolean("ui_show_useful", true)
@@ -255,8 +283,10 @@ private suspend fun loadWidgetState(context: Context, widgetId: Int): RecentItem
             items = filteredItems,
             roomNames = roomNames,
             targetRoomId = targetRoomId,
-            customTitle = targetRoomName,
+            customTitle = configuredTitle,
+            roomTitle = targetRoomName,
             isCompact = isCompactConfig,
+            showItemDots = showItemDots,
             isLoading = false,
             isConfigured = true
         )
@@ -298,6 +328,8 @@ private fun SmallWidgetLayout(
     item: HistoryItemEntity?,
     roomNames: Map<Int, String>,
     title: String,
+    showRoomAlias: Boolean,
+    showItemDots: Boolean,
     isCompact: Boolean,
     onClick: androidx.glance.action.Action
 ) {
@@ -347,13 +379,15 @@ private fun SmallWidgetLayout(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = GlanceModifier.fillMaxWidth()
             ) {
-                Box(
-                    modifier = GlanceModifier
-                        .size(if (isCompact) 7.5.dp else 9.dp)
-                        .cornerRadius(if (isCompact) 3.75.dp else 4.5.dp)
-                        .background(itemColor)
-                ) {}
-                Spacer(modifier = GlanceModifier.width(6.dp))
+                if (showItemDots) {
+                    Box(
+                        modifier = GlanceModifier
+                            .size(if (isCompact) 7.5.dp else 9.dp)
+                            .cornerRadius(if (isCompact) 3.75.dp else 4.5.dp)
+                            .background(itemColor)
+                    ) {}
+                    Spacer(modifier = GlanceModifier.width(6.dp))
+                }
                 Text(
                     text = item.itemName,
                     style = TextStyle(
@@ -368,7 +402,7 @@ private fun SmallWidgetLayout(
             Spacer(modifier = GlanceModifier.height(2.dp))
 
             val receiverName = item.playerAlias?.takeIf { it.isNotBlank() } ?: item.playerName
-            val roomAlias = if (title == "Archipelago Alerts") item.roomId?.let { roomNames[it] } else null
+            val roomAlias = if (showRoomAlias) item.roomId?.let { roomNames[it] } else null
             val timeAgo = formatRelativeTimestamp(item.timestamp)
             val detailsText = listOfNotNull("To $receiverName", roomAlias, timeAgo).joinToString(" • ")
 
@@ -389,6 +423,9 @@ private fun StandardWidgetLayout(
     items: List<HistoryItemEntity>,
     roomNames: Map<Int, String>,
     title: String,
+    showBrandingSubtitle: Boolean,
+    showRoomAlias: Boolean,
+    showItemDots: Boolean,
     isCompact: Boolean,
     isLoading: Boolean,
     onOpenApp: androidx.glance.action.Action
@@ -420,7 +457,7 @@ private fun StandardWidgetLayout(
                         maxLines = 1
                     )
                     Text(
-                        text = if (title != "Archipelago Alerts") "Archipelago Alerts • Recent Items" else "Recent Items",
+                        text = if (showBrandingSubtitle) "$DEFAULT_WIDGET_TITLE • Recent Items" else "Recent Items",
                         style = TextStyle(
                             color = GlanceTheme.colors.onSurfaceVariant,
                             fontWeight = FontWeight.Medium,
@@ -474,7 +511,8 @@ private fun StandardWidgetLayout(
                     ItemRow(
                         item = item,
                         roomNames = roomNames,
-                        showRoomAlias = title == "Archipelago Alerts",
+                        showRoomAlias = showRoomAlias,
+                        showItemDots = showItemDots,
                         isCompact = isCompact,
                         onClick = onOpenApp
                     )
@@ -489,6 +527,7 @@ private fun ItemRow(
     item: HistoryItemEntity,
     roomNames: Map<Int, String>,
     showRoomAlias: Boolean,
+    showItemDots: Boolean,
     isCompact: Boolean,
     onClick: androidx.glance.action.Action
 ) {
@@ -508,14 +547,16 @@ private fun ItemRow(
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = GlanceModifier
-                    .size(if (isCompact) 7.5.dp else 9.dp)
-                    .cornerRadius(if (isCompact) 3.75.dp else 4.5.dp)
-                    .background(itemColor)
-            ) {}
+            if (showItemDots) {
+                Box(
+                    modifier = GlanceModifier
+                        .size(if (isCompact) 7.5.dp else 9.dp)
+                        .cornerRadius(if (isCompact) 3.75.dp else 4.5.dp)
+                        .background(itemColor)
+                ) {}
 
-            Spacer(modifier = GlanceModifier.width(if (isCompact) 6.dp else 8.dp))
+                Spacer(modifier = GlanceModifier.width(if (isCompact) 6.dp else 8.dp))
+            }
 
             Text(
                 text = item.itemName,

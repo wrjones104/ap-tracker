@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
     private val bundleTypeState = mutableStateOf<String?>(null)
     private val targetTabState = mutableStateOf<String?>(null)
     private val targetRoomIdState = mutableStateOf<Int?>(null)
+    private val targetSlotIdState = mutableStateOf<Int?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -168,11 +169,14 @@ class MainActivity : ComponentActivity() {
                     onGuestUpgradeClick = onGuestUpgradeClick,
                     targetTab = targetTabState.value,
                     targetRoomId = targetRoomIdState.value,
+                    targetSlotId = targetSlotIdState.value,
                     onTargetTabConsumed = {
                         targetTabState.value = null
                         targetRoomIdState.value = null
+                        targetSlotIdState.value = null
                         intent?.removeExtra("target_tab")
                         intent?.removeExtra("target_room_id")
+                        intent?.removeExtra("target_slot_id")
                     }
                 )
 
@@ -205,9 +209,11 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent?) {
         val targetTab = intent?.getStringExtra("target_tab")
         val targetRoomId = intent?.getIntExtra("target_room_id", -1)?.takeIf { it != -1 }
-        if (targetTab != null) {
+        val targetSlotId = intent?.getIntExtra("target_slot_id", -1)?.takeIf { it != -1 }
+        if (targetTab != null || targetRoomId != null || targetSlotId != null) {
             targetTabState.value = targetTab
             targetRoomIdState.value = targetRoomId
+            targetSlotIdState.value = targetSlotId
         }
 
         val jsonStr = intent?.getStringExtra("bundled_items")
@@ -374,6 +380,7 @@ fun VersionGate(
     onGuestUpgradeClick: () -> Unit,
     targetTab: String? = null,
     targetRoomId: Int? = null,
+    targetSlotId: Int? = null,
     onTargetTabConsumed: () -> Unit = {}
 ) {
     val versionState by mainViewModel.versionState.collectAsState()
@@ -406,6 +413,7 @@ fun VersionGate(
                 onGuestUpgradeClick = onGuestUpgradeClick,
                 targetTab = targetTab,
                 targetRoomId = targetRoomId,
+                targetSlotId = targetSlotId,
                 onTargetTabConsumed = onTargetTabConsumed
             )
         }
