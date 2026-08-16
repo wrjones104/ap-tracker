@@ -1,6 +1,42 @@
 {
   "app_releases": [
     {
+      "version": "1.8.1",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-08-16",
+      "title": "Widget Loading Fix",
+      "highlights": [
+        {
+          "title": "Widgets Load Again",
+          "description": "The home screen widgets introduced in 1.8.0 came up empty on the Play Store build and never filled in. They now load and keep themselves up to date as intended."
+        },
+        {
+          "title": "Manual Refresh Works Again",
+          "description": "Refreshing by hand now fetches new data straight away, instead of leaving you to wait for the next scheduled background sync."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Home Screen Widgets Not Loading",
+            "description": "Both widgets stayed empty on the Play Store build because the background job that fills them failed before it could start. Widgets pinned on 1.8.0 will start working on this update without needing to be removed and re-added."
+          },
+          {
+            "title": "On-Demand Sync",
+            "description": "Refreshing from the app or from a widget now pulls new data immediately. Previously these requests were dropped and only the automatic sync every 15 minutes brought anything in."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Android App v1.8.1 Released!**\n\n**Fixes**\n• **Widgets Load Again**: The home screen widgets added in 1.8.0 came up empty on the Play Store build and never filled in. They now load and refresh the way they were meant to.\n• **Manual Refresh Works Again**: Refreshing by hand now fetches new data straight away instead of leaving you to wait for the next background sync.\n\nIf you pinned a widget on 1.8.0 and gave up on it, this is the update that makes it work - no need to remove and re-add it.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "New: Recent Items home screen widget - see the latest items in your multiworld at a glance.\n\nNew: Milestones home screen widget - track progress toward your goals with a bar for every tracked slot.\n\nNew: Categorized notifications - give progression items, hints, and general alerts their own sounds and Do Not Disturb rules in Android settings.\n\nWidgets can be pinned to one room or all of them, renamed, resized, and simplified to taste.",
+        "github": "### Fixed\n- **Widgets never loaded in minified builds**: WorkManager failed with `NoSuchMethodException: androidx.work.OverwritingInputMerger.<init> []` before any worker ran. R8 full mode (the default since AGP 8) does not implicitly retain default constructors for `-keep` rules that carry no member spec, so it stripped the constructor WorkManager instantiates reflectively. `work-runtime` ships `-keep class * extends androidx.work.InputMerger`, but that rule is written for ProGuard-compat semantics. Added an explicit `<init>();` member spec to `proguard-rules.pro`.\n- **Every one-time WorkRequest failed before `doWork()`**: `WorkerWrapper.runWorker` skips input merging for periodic work, so the fault was scoped to `OneTimeWorkRequest` - the widget refresh in `RecentItemsWidget` and the foreground sync in `HistorySyncManager`. The 15-minute periodic sync in `MyApplication` still ran, so data arrived eventually but never on demand. `prodDebug` was unaffected because the debug build type never minifies, which is what hid this until it reached production.\n\n### Changed\n- **New `minified` build type** (`./gradlew :app:assembleProdMinified`): `initWith(release)`, so it inherits the same R8 pipeline, resource shrinking, and proguard files, but is debuggable and debug-signed. Verified it reproduces the stripped constructor when the keep rule is removed, so this class of fault surfaces during testing rather than in the store build. It reuses the `.debug` application id because `google-services.json` only declares Firebase clients for `com.jones.aptracker` and `com.jones.aptracker.debug`, so it installs over `prodDebug`, and it borrows the debug manifest so `devMinified` can still reach `10.0.2.2` over cleartext."
+      }
+    },
+    {
       "version": "1.8.0",
       "component": "app",
       "component_label": "App",
