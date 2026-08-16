@@ -76,7 +76,7 @@ data class RecentItemsWidgetState(
     /** Alias of the scoped room, or null in all-rooms mode. */
     val roomTitle: String? = null,
     val isCompact: Boolean = false,
-    /** When false, item rows drop the leading category colour dot. */
+    /** When false, item rows drop the leading category color dot. */
     val showItemDots: Boolean = true,
     val isLoading: Boolean = false,
     val isConfigured: Boolean = false

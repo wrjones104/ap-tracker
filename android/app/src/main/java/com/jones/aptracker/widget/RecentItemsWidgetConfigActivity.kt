@@ -494,8 +494,8 @@ private fun WidgetConfigScreen(
 
                 item {
                     ToggleOptionRow(
-                        title = "Show item colour dots",
-                        description = "Colour-coded dot before each item marking its category.",
+                        title = "Show item color dots",
+                        description = "Color-coded dot before each item marking its category.",
                         checked = showItemDots,
                         onCheckedChange = { showItemDots = it }
                     )
