@@ -56,3 +56,13 @@
     @androidx.room.Relation <fields>;
     @androidx.room.ForeignKey <fields>;
 }
+
+# WorkManager reflectively instantiates InputMerger implementations by class name
+# (InputMergerFactory.createInputMergerWithDefaultFallback -> getDeclaredConstructor).
+# work-runtime ships "-keep class * extends androidx.work.InputMerger", but under R8
+# full mode a -keep rule with no member spec does NOT implicitly retain the default
+# constructor, so R8 stripped OverwritingInputMerger.<init>() and every one-time
+# WorkRequest failed with "Could not create Input Merger" before doWork() ran.
+-keep class * extends androidx.work.InputMerger {
+    <init>();
+}
