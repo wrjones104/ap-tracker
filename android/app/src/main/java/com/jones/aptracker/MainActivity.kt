@@ -80,6 +80,8 @@ class MainActivity : ComponentActivity() {
     // State for the summary sheet
     private val bundledItemsState = mutableStateOf<List<String>?>(null)
     private val bundleTypeState = mutableStateOf<String?>(null)
+    private val targetTabState = mutableStateOf<String?>(null)
+    private val targetRoomIdState = mutableStateOf<Int?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -163,7 +165,15 @@ class MainActivity : ComponentActivity() {
                     onStartDiscordAuth = { startAuthentication(authLauncher) },
                     onStartGuestAuth = { startGuestAuthentication() },
                     onCheckNotificationPermission = { checkAndRequestNotificationPermission() },
-                    onGuestUpgradeClick = onGuestUpgradeClick
+                    onGuestUpgradeClick = onGuestUpgradeClick,
+                    targetTab = targetTabState.value,
+                    targetRoomId = targetRoomIdState.value,
+                    onTargetTabConsumed = {
+                        targetTabState.value = null
+                        targetRoomIdState.value = null
+                        intent?.removeExtra("target_tab")
+                        intent?.removeExtra("target_room_id")
+                    }
                 )
 
                 if (summaryItems != null) {
@@ -193,6 +203,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        val targetTab = intent?.getStringExtra("target_tab")
+        val targetRoomId = intent?.getIntExtra("target_room_id", -1)?.takeIf { it != -1 }
+        if (targetTab != null) {
+            targetTabState.value = targetTab
+            targetRoomIdState.value = targetRoomId
+        }
+
         val jsonStr = intent?.getStringExtra("bundled_items")
         val bundleType = intent?.getStringExtra("bundle_type")
         if (jsonStr == null) {
@@ -354,7 +371,10 @@ fun VersionGate(
     onStartDiscordAuth: () -> Unit,
     onStartGuestAuth: () -> Unit,
     onCheckNotificationPermission: () -> Unit,
-    onGuestUpgradeClick: () -> Unit
+    onGuestUpgradeClick: () -> Unit,
+    targetTab: String? = null,
+    targetRoomId: Int? = null,
+    onTargetTabConsumed: () -> Unit = {}
 ) {
     val versionState by mainViewModel.versionState.collectAsState()
 
@@ -383,7 +403,10 @@ fun VersionGate(
                 onDiscordLoginClick = onStartDiscordAuth,
                 onGuestLoginClick = onStartGuestAuth,
                 onLogoutClick = onLogout,
-                onGuestUpgradeClick = onGuestUpgradeClick
+                onGuestUpgradeClick = onGuestUpgradeClick,
+                targetTab = targetTab,
+                targetRoomId = targetRoomId,
+                onTargetTabConsumed = onTargetTabConsumed
             )
         }
         is AppVersionState.Outdated -> {

@@ -10,6 +10,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.8.0] - 2026-08-15
+
+_Recent Items Received Android Widget_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts Android App v1.8.0 Released!**
+>
+> **New Features & Improvements**
+> • **Recent Items Home Screen Widget**: Keep track of your multiworld progress directly from your Android home screen!
+> • **Per-Room or Global Scope**: Track all active games combined or pin a dedicated widget to a specific room with custom branding.
+> • **Customizable Display Density**: Choose between Standard and Compact font layouts during setup.
+> • **In-App Filter Mirroring**: The widget automatically respects your Activity Feed filter settings (Progression, Useful, Filler, Trap, Finished, and Ignored items).
+> • **Background Sync & Targeted Deep-Linking**: Instant push notification updates, and tapping a widget jumps directly to that room's filtered Activity Feed.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> New: Recent Items Home Screen Widget — view your latest received items directly on your home screen without opening the app.
+>
+> New: Room Customization & Font Density — configure widgets for all active games or pin them to specific rooms, with Standard or Compact font layouts.
+>
+> New: Background Sync & Deep-Linking — push notifications update your widget in real time, and tapping any item jumps straight to your filtered Activity Feed.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - **Recent Items Received Android Widget**: Built with Jetpack Glance 1.1.1, featuring responsive sizing (compact single-item and standard multi-item scrollable list), item classification badges (Progression, Useful, Filler, Trap), relative timestamps, and on-demand refresh.
+> - **Widget Configuration & Customization**: Added setup screen for choosing room scope (All Active Rooms vs. specific pinned room), searchable room picker, and display density presets (Standard / Compact).
+> - **Graphical Widget Preview**: Added `android:previewLayout` rendering a styled preview in the Android 12+ widget picker.
+> - **Background Synchronization**: Integrated push-triggered instant background syncing via `MyFirebaseMessagingService` and recurring 15-minute polling via Android `WorkManager` (`HistorySyncWorker`).
+> - **Targeted Activity Deep-Linking**: Added intent navigation handling from the widget directly into the Activity Feed screen, automatically filtering to the selected room when pinned.
+>
+> ### Changed
+> - **Room-Specific Query Optimization**: Room-scoped widgets query SQLite directly by room ID so items are never missed even when pushed past the global history window.
+> - **Query Depth**: Expanded widget database history scan window to 500 records to accurately find all active filtered items.
+> ```
+
+### Added
+- **Recent Items Android Widget**: Implemented Glance-based home screen widget with responsive multi-size support, item classification colors (Progression, Useful, Filler, Trap), and on-demand refresh.
+- **Widget Setup & Room Customization**: Added configuration screen supporting per-room scoping, searchable room selection, and Standard vs. Compact font density presets.
+- **Push-Driven Background Sync**: Added background history synchronization in MyFirebaseMessagingService and 15-minute periodic WorkManager sync to keep the local database and widget up to date.
+- **Activity Feed Deep-Linking**: Tapping any item in the widget navigates directly to the Activity Feed screen, automatically filtering to the specific room when applicable.
+
+### Changed
+- **Room-Specific Query Optimization**: Widgets pinned to specific rooms query room history directly from SQLite rather than a global window, ensuring older items always display.
+- **Graphical Widget Preview Layout**: Added previewLayout XML for a styled preview in the Android 12+ widget picker.
+- **History Query Scan Depth**: Expanded local query scan window to 500 records so active filter toggles find all matching recent items.
+
+---
+
 ## [1.7.1] - 2026-08-14
 
 _Android Notification Channels & Custom Alerts_

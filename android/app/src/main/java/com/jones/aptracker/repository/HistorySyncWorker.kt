@@ -33,6 +33,8 @@ class HistorySyncWorker(
             repository.syncHistoryBatch(trackedRooms, priorityRoomId = targetRoomId)
             repository.refreshHintHistory(targetRoomId)
 
+            com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(applicationContext)
+
             Log.d("HistorySyncWorker", "Background HistorySyncWorker completed successfully.")
             Result.success()
         } catch (e: Exception) {

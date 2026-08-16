@@ -14,7 +14,7 @@ interface RoomDao {
     @Query("SELECT * FROM rooms ORDER BY sort_order ASC")
     fun getAllRooms(): Flow<List<RoomEntity>>
 
-    @Query("SELECT * FROM rooms")
+    @Query("SELECT * FROM rooms ORDER BY sort_order ASC, alias ASC")
     suspend fun getAllRoomsOneShot(): List<RoomEntity>
 
     @Query("DELETE FROM rooms")

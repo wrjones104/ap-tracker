@@ -7,10 +7,21 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.jones.aptracker.network.RetrofitClient
+import com.jones.aptracker.repository.HistoryRepository
+import com.jones.aptracker.repository.HistorySyncWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class MyFirebaseMessagingService : FirebaseMessagingService() {
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         super.onMessageReceived(remoteMessage)
@@ -27,6 +38,29 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             Log.d("FCM", "Notification Received: ${notification.title} - ${notification.body} (Channel: $channelId)")
             // Pass the bundled items, bundle type, and resolved channel ID to the generator
             sendSystemNotification(notification.title, notification.body, bundledItems, bundleType, channelId)
+        }
+
+        // 1. Enqueue guaranteed background sync worker with WorkManager (OS wake lock protection)
+        try {
+            val syncRequest = OneTimeWorkRequestBuilder<HistorySyncWorker>().build()
+            WorkManager.getInstance(applicationContext).enqueue(syncRequest)
+        } catch (e: Exception) {
+            Log.e("FCM", "Failed to enqueue WorkManager sync request", e)
+        }
+
+        // 2. Also run in-process background history sync for instantaneous widget update if process remains active
+        serviceScope.launch {
+            try {
+                val repository = HistoryRepository.getInstance(applicationContext)
+                val apiService = RetrofitClient.instance
+                val trackedRooms = apiService.getUserTrackedSlots()
+                repository.syncHistoryBatch(trackedRooms)
+                repository.refreshHintHistory(null)
+                com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(applicationContext)
+                Log.d("FCM", "Background in-process history sync completed for incoming push.")
+            } catch (e: Exception) {
+                Log.e("FCM", "In-process FCM history sync failed (WorkManager fallback active)", e)
+            }
         }
     }
 

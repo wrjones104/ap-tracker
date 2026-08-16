@@ -53,14 +53,20 @@ fun AppNavigation(
     onDiscordLoginClick: () -> Unit,
     onGuestLoginClick: () -> Unit,
     onLogoutClick: () -> Unit,
-    onGuestUpgradeClick: () -> Unit
+    onGuestUpgradeClick: () -> Unit,
+    targetTab: String? = null,
+    targetRoomId: Int? = null,
+    onTargetTabConsumed: () -> Unit = {}
 ) {
     if (isLoggedIn) {
         val navController = rememberNavController()
         MainNavHost(
             navController = navController,
             onLogoutClick = onLogoutClick,
-            onGuestUpgradeClick = onGuestUpgradeClick
+            onGuestUpgradeClick = onGuestUpgradeClick,
+            targetTab = targetTab,
+            targetRoomId = targetRoomId,
+            onTargetTabConsumed = onTargetTabConsumed
         )
     } else {
         LoginScreen(
@@ -75,7 +81,10 @@ fun AppNavigation(
 fun MainNavHost(
     navController: NavHostController,
     onLogoutClick: () -> Unit,
-    onGuestUpgradeClick: () -> Unit
+    onGuestUpgradeClick: () -> Unit,
+    targetTab: String? = null,
+    targetRoomId: Int? = null,
+    onTargetTabConsumed: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val tokenManager = remember { com.jones.aptracker.network.TokenManager(context) }
@@ -159,8 +168,9 @@ fun MainNavHost(
                 onNavigateToGuide = { navController.navigate("tutorial_guide") },
                 onShowWhatsNew = { showWhatsNewSheet = true },
                 onNavigateToArchived = { navController.navigate("archived_rooms") },
-
-
+                initialTab = targetTab,
+                targetRoomId = targetRoomId,
+                onTargetTabConsumed = onTargetTabConsumed,
                 onNavigateToSlotDetail = { roomDbId, slotId ->
                     navController.navigate("slot_detail/$roomDbId/$slotId")
                 },

@@ -138,6 +138,7 @@ object HistorySyncManager {
                 )
 
                 onBatchReceived?.invoke()
+                com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(appContext)
 
                 // Auto-dismiss completion banner state after delay
                 applicationScope.launch {
