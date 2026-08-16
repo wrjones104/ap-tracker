@@ -139,6 +139,10 @@ object HistorySyncManager {
 
                 onBatchReceived?.invoke()
                 com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(appContext)
+                // The Milestones widget reads only local data, so its cache has to be refreshed
+                // here or it would redraw stale milestones. `trackedRooms` is reused to avoid
+                // re-fetching the large roster response.
+                com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdateAsync(appContext, trackedRooms)
 
                 // Auto-dismiss completion banner state after delay
                 applicationScope.launch {

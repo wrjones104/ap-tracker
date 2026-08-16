@@ -50,4 +50,29 @@ interface HistoryDao {
 
     @Query("UPDATE history_items SET roomId = :newId WHERE roomId = :oldId")
     suspend fun updateRoomIdForHistory(oldId: Int, newId: Int)
+
+    /**
+     * Per-slot item tallies for a room, aggregated in SQLite instead of loading every row.
+     *
+     * The Milestones widget only needs counts, and a busy room can hold tens of thousands of
+     * history rows. Grouping on the raw itemName (rather than LOWER(itemName)) keeps the
+     * case-folding in Kotlin, where `lowercase()` is Unicode-aware and SQLite's ASCII-only LOWER()
+     * would disagree on non-ASCII item names.
+     */
+    @Query("""
+        SELECT slot_id AS slotId, playerName, playerAlias, itemName, COUNT(*) AS itemCount
+        FROM history_items
+        WHERE roomId = :roomId
+        GROUP BY slot_id, playerName, playerAlias, itemName
+    """)
+    suspend fun getItemCountsForRoom(roomId: Int): List<RoomItemCount>
 }
+
+/** Aggregated row returned by [HistoryDao.getItemCountsForRoom]. */
+data class RoomItemCount(
+    val slotId: Int?,
+    val playerName: String,
+    val playerAlias: String?,
+    val itemName: String,
+    val itemCount: Int
+)

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_milestones_description"
+    android:configure="com.jones.aptracker.widget.MilestonesWidgetConfigActivity"
+    android:widgetFeatures="reconfigurable"
+    android:previewLayout="@layout/widget_milestones_preview"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="130dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:minResizeWidth="130dp"
+    android:minResizeHeight="70dp"
+    android:maxResizeWidth="500dp"
+    android:maxResizeHeight="600dp"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

@@ -57,6 +57,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 repository.syncHistoryBatch(trackedRooms)
                 repository.refreshHintHistory(null)
                 com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(applicationContext)
+                com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdate(applicationContext, trackedRooms)
                 Log.d("FCM", "Background in-process history sync completed for incoming push.")
             } catch (e: Exception) {
                 Log.e("FCM", "In-process FCM history sync failed (WorkManager fallback active)", e)

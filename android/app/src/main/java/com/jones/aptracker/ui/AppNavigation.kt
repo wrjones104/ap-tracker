@@ -56,6 +56,7 @@ fun AppNavigation(
     onGuestUpgradeClick: () -> Unit,
     targetTab: String? = null,
     targetRoomId: Int? = null,
+    targetSlotId: Int? = null,
     onTargetTabConsumed: () -> Unit = {}
 ) {
     if (isLoggedIn) {
@@ -66,6 +67,7 @@ fun AppNavigation(
             onGuestUpgradeClick = onGuestUpgradeClick,
             targetTab = targetTab,
             targetRoomId = targetRoomId,
+            targetSlotId = targetSlotId,
             onTargetTabConsumed = onTargetTabConsumed
         )
     } else {
@@ -84,6 +86,7 @@ fun MainNavHost(
     onGuestUpgradeClick: () -> Unit,
     targetTab: String? = null,
     targetRoomId: Int? = null,
+    targetSlotId: Int? = null,
     onTargetTabConsumed: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -100,6 +103,18 @@ fun MainNavHost(
 
     val historyViewModel: HistoryViewModel = viewModel()
     val userViewModel: UserViewModel = viewModel()
+
+    // Direct deep-link to a specific slot if both targetRoomId and targetSlotId are provided
+    androidx.compose.runtime.LaunchedEffect(targetRoomId, targetSlotId) {
+        if (targetRoomId != null && targetSlotId != null && targetRoomId != -1 && targetSlotId != -1) {
+            navController.navigate("slot_detail/$targetRoomId/$targetSlotId") {
+                // Repeated widget taps on the same slot would otherwise stack duplicate
+                // back-stack entries.
+                launchSingleTop = true
+            }
+            onTargetTabConsumed()
+        }
+    }
 
     // Fetch latest release info for What's New sheet if active
     androidx.compose.runtime.LaunchedEffect(showWhatsNewSheet) {

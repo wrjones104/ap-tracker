@@ -15,4 +15,6 @@
     <color name="widget_useful">#FF69C4FF</color>
     <color name="widget_filler">#FF8E9199</color>
     <color name="widget_trap">#FFFFB4AB</color>
+    <color name="widget_success">#FF80D992</color>
+    <color name="widget_progress_track">#FF3B383E</color>
 </resources>
