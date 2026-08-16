@@ -10,6 +10,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.8.1] - 2026-08-16
+
+_Widget Loading Fix_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts Android App v1.8.1 Released!**
+>
+> **Fixes**
+> • **Widgets Load Again**: The home screen widgets added in 1.8.0 came up empty on the Play Store build and never filled in. They now load and refresh the way they were meant to.
+> • **Manual Refresh Works Again**: Refreshing by hand now fetches new data straight away instead of leaving you to wait for the next background sync.
+>
+> If you pinned a widget on 1.8.0 and gave up on it, this is the update that makes it work - no need to remove and re-add it.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> New: Recent Items home screen widget - see the latest items in your multiworld at a glance.
+>
+> New: Milestones home screen widget - track progress toward your goals with a bar for every tracked slot.
+>
+> New: Categorized notifications - give progression items, hints, and general alerts their own sounds and Do Not Disturb rules in Android settings.
+>
+> Widgets can be pinned to one room or all of them, renamed, resized, and simplified to taste.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - **Widgets never loaded in minified builds**: WorkManager failed with `NoSuchMethodException: androidx.work.OverwritingInputMerger.<init> []` before any worker ran. R8 full mode (the default since AGP 8) does not implicitly retain default constructors for `-keep` rules that carry no member spec, so it stripped the constructor WorkManager instantiates reflectively. `work-runtime` ships `-keep class * extends androidx.work.InputMerger`, but that rule is written for ProGuard-compat semantics. Added an explicit `<init>();` member spec to `proguard-rules.pro`.
+> - **Every one-time WorkRequest failed before `doWork()`**: `WorkerWrapper.runWorker` skips input merging for periodic work, so the fault was scoped to `OneTimeWorkRequest` - the widget refresh in `RecentItemsWidget` and the foreground sync in `HistorySyncManager`. The 15-minute periodic sync in `MyApplication` still ran, so data arrived eventually but never on demand. `prodDebug` was unaffected because the debug build type never minifies, which is what hid this until it reached production.
+>
+> ### Changed
+> - **New `minified` build type** (`./gradlew :app:assembleProdMinified`): `initWith(release)`, so it inherits the same R8 pipeline, resource shrinking, and proguard files, but is debuggable and debug-signed. Verified it reproduces the stripped constructor when the keep rule is removed, so this class of fault surfaces during testing rather than in the store build. It reuses the `.debug` application id because `google-services.json` only declares Firebase clients for `com.jones.aptracker` and `com.jones.aptracker.debug`, so it installs over `prodDebug`, and it borrows the debug manifest so `devMinified` can still reach `10.0.2.2` over cleartext.
+> ```
+
+### Fixed
+- **Home Screen Widgets Not Loading**: Both widgets stayed empty on the Play Store build because the background job that fills them failed before it could start. Widgets pinned on 1.8.0 will start working on this update without needing to be removed and re-added.
+- **On-Demand Sync**: Refreshing from the app or from a widget now pulls new data immediately. Previously these requests were dropped and only the automatic sync every 15 minutes brought anything in.
+
+---
+
 ## [1.8.0] - 2026-08-16
 
 _Home Screen Widgets & Notification Channels_
@@ -22,7 +67,7 @@ _Home Screen Widgets & Notification Channels_
 > • **Recent Items Widget**: See the latest items flowing through your multiworld right on your home screen.
 > • **Milestones Widget**: Track progress toward your milestone goals at a glance, with a progress bar for every tracked slot.
 > • **Categorized Notifications**: Alerts are now split into **Progression Items**, **Non-Progression Items**, **Hints**, and **General & System**, so you can give each its own sound, vibration, and Do Not Disturb rules in Android settings.
-> • **Widget Customization**: Pin a widget to one room or all of them, give it a custom title, choose Standard or Compact text, and hide the milestone flags or item color dots if you prefer a plainer look.
+> • **Widget Customization**: Pin a widget to one room or all of them, give it a custom title, choose Standard or Compact text, and hide the milestone flags or item colour dots if you prefer a plainer look.
 > • **Stays Current**: Widgets refresh in the background as new items arrive, and tapping one opens the app right where you were looking.
 >
 > GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
@@ -43,10 +88,10 @@ _Home Screen Widgets & Notification Channels_
 > **GitHub Release Copy-Paste:**
 > ```markdown
 > ### Added
-> - **Recent Items Home Screen Widget**: Glance-based widget with responsive small/medium/large layouts, item classification colors (Progression, Useful, Filler, Trap), and on-demand refresh.
+> - **Recent Items Home Screen Widget**: Glance-based widget with responsive small/medium/large layouts, item classification colours (Progression, Useful, Filler, Trap), and on-demand refresh.
 > - **Milestones Home Screen Widget**: Shows milestone group progress per tracked slot - progress bar, acquired/required counts, and per-item breakdown - scoped to a single room or all active rooms.
 > - **Android Notification Channels**: Push notifications are categorized into dedicated system channels under the "Game & Room Alerts" group (`channel_progression`, `channel_non_progression`, `channel_hints`, `channel_general`), enabling per-category sound, vibration, heads-up, and DND control.
-> - **Widget Configuration**: Per-room scoping with a searchable room picker, optional custom widget titles on both widgets, Standard/Compact density presets, and toggles for the milestone flag emoji and the item color dots.
+> - **Widget Configuration**: Per-room scoping with a searchable room picker, optional custom widget titles on both widgets, Standard/Compact density presets, and toggles for the milestone flag emoji and the item colour dots.
 > - **Deep Linking**: Tapping a widget opens the relevant Activity Feed or room screen, filtered to that room where applicable.
 >
 > ### Changed
@@ -65,7 +110,7 @@ _Home Screen Widgets & Notification Channels_
 - **Tap Straight Through**: Tapping a widget opens the app on the matching Activity Feed or room, already filtered to what you were looking at.
 
 ### Changed
-- **Widget Personalization**: Give any widget a custom title, and turn off the milestone flags or the item color dots if you would rather keep things plain.
+- **Widget Personalization**: Give any widget a custom title, and turn off the milestone flags or the item colour dots if you would rather keep things plain.
 - **Display Density Presets**: Pick Standard for larger, comfortable text or Compact to fit more rows into the same space.
 - **Faster Widgets, Less Data**: Widgets now draw from data already stored on your phone, so they appear instantly after setup and use far less mobile data.
 - **Activity Feed Filter Mirroring**: The Recent Items widget respects the same item type and ignore filters you have set in the in-app Activity Feed.
