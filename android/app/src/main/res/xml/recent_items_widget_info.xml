@@ -4,6 +4,7 @@
     android:configure="com.jones.aptracker.widget.RecentItemsWidgetConfigActivity"
     android:widgetFeatures="reconfigurable"
     android:previewLayout="@layout/widget_recent_items_preview"
+    android:initialLayout="@layout/glance_default_loading_layout"
     android:minWidth="130dp"
     android:minHeight="110dp"
     android:targetCellWidth="4"
@@ -13,5 +14,5 @@
     android:maxResizeWidth="500dp"
     android:maxResizeHeight="600dp"
     android:resizeMode="horizontal|vertical"
-    android:updatePeriodMillis="1800000"
+    android:updatePeriodMillis="0"
     android:widgetCategory="home_screen" />

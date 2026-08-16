@@ -4,15 +4,23 @@ import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.Color
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.currentState
 import androidx.glance.Image
 import androidx.glance.ImageProvider
 import androidx.glance.LocalSize
@@ -62,7 +70,8 @@ data class RecentItemsWidgetState(
     val targetRoomId: Int = -1,
     val customTitle: String? = null,
     val isCompact: Boolean = false,
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    val isConfigured: Boolean = false
 )
 
 class RecentItemsWidget : GlanceAppWidget() {
@@ -76,6 +85,10 @@ class RecentItemsWidget : GlanceAppWidget() {
         val COLOR_USEFUL = Color(0xFF69C4FF)
         val COLOR_TRAP = Color(0xFFFFB4AB)
         val COLOR_NORMAL = Color(0xFF8E9199)
+
+        // Bumped by the config activity and the updater to force a running session to
+        // re-read SharedPreferences and the database. See the comment in provideGlance.
+        val REFRESH_TOKEN = longPreferencesKey("refresh_token")
     }
 
     override val sizeMode: SizeMode = SizeMode.Responsive(
@@ -89,89 +102,21 @@ class RecentItemsWidget : GlanceAppWidget() {
             AppWidgetManager.INVALID_APPWIDGET_ID
         }
 
-        // Fetch and compute all widget state directly in provideGlance BEFORE rendering
-        val widgetState = withContext(Dispatchers.IO) {
-            val database = AppDatabase.getInstance(context)
-            val prefs = context.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
-
-            val widgetPrefs = if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
-                context.getSharedPreferences("widget_${widgetId}_prefs", Context.MODE_PRIVATE)
-            } else null
-
-            val targetRoomId = widgetPrefs?.getInt("target_room_id", -1) ?: -1
-            val fontDensity = widgetPrefs?.getString("font_density", "standard") ?: "standard"
-            val isCompactConfig = fontDensity == "compact"
-
-            val showProgression = prefs.getBoolean("ui_show_progression", true)
-            val showUseful = prefs.getBoolean("ui_show_useful", true)
-            val showFiller = prefs.getBoolean("ui_show_filler", false)
-            val showTrap = prefs.getBoolean("ui_show_trap", false)
-            val showFinished = prefs.getBoolean("ui_show_finished", true)
-            val showIgnoredItems = prefs.getBoolean("ui_show_ignored_items", false)
-
-            val rooms = try {
-                database.roomDao().getAllRoomsOneShot()
-            } catch (e: Exception) {
-                emptyList()
-            }
-            val roomNames = rooms.associate { it.id to it.alias }
-            val activeRoomIds = rooms.filter { !it.is_archived }.map { it.id }.toSet()
-
-            // Room-Specific Query Optimization: If widget is configured for a specific room,
-            // query that room's history directly from SQLite rather than the global scan window.
-            val rawHistoryItems = try {
-                if (targetRoomId != -1) {
-                    database.historyDao().getHistoryForRoomPaged(roomId = targetRoomId, limit = 200, offset = 0)
-                } else {
-                    database.historyDao().getGlobalHistoryPaged(limit = 500, offset = 0)
-                }
-            } catch (e: Exception) {
-                Log.e("RecentItemsWidget", "Failed to fetch history items from DB", e)
-                emptyList()
-            }
-
-            val filteredItems = rawHistoryItems.filter { item ->
-                val matchesRoom = if (targetRoomId != -1) {
-                    item.roomId == targetRoomId
-                } else {
-                    item.roomId == null || activeRoomIds.isEmpty() || item.roomId in activeRoomIds
-                }
-                // Architectural note: Standalone widget uses item.isPlayerFinished stored in SQLite;
-                // the full in-app feed derives finished status from live slot data (HistoryScreen.kt:990).
-                val matchesFinished = showFinished || !item.isPlayerFinished
-
-                // --- TYPE CHECK (Prioritized to match visual colors and in-app feed verbatim) ---
-                val isProgression = (item.itemFlags and 1) != 0
-                val isUseful = (item.itemFlags and 2) != 0
-                val isTrap = (item.itemFlags and 4) != 0
-
-                val matchesType = when {
-                    isProgression -> showProgression
-                    isUseful -> showUseful
-                    isTrap -> showTrap
-                    else -> showFiller
-                }
-
-                // Whitelist exempts items from both category and ignored filters
-                val matchesCategoryOrWhitelist = item.isWhitelisted || matchesType
-                val matchesIgnoredOrWhitelist = item.isWhitelisted || (showIgnoredItems || !item.isIgnored)
-
-                matchesRoom && matchesFinished && matchesCategoryOrWhitelist && matchesIgnoredOrWhitelist
-            }.take(10)
-
-            val targetRoomName = if (targetRoomId != -1) roomNames[targetRoomId] else null
-
-            RecentItemsWidgetState(
-                items = filteredItems,
-                roomNames = roomNames,
-                targetRoomId = targetRoomId,
-                customTitle = targetRoomName,
-                isCompact = isCompactConfig,
-                isLoading = false
-            )
-        }
+        val initialState = loadWidgetState(context, widgetId)
 
         provideContent {
+            // Glance does NOT re-run provideGlance for a session that is already running. update()
+            // only re-reads `stateDefinition` and recomposes the content lambda, so anything
+            // captured before provideContent stays frozen for the life of that session -- which is
+            // why a widget configured moments after placement kept rendering its pre-config state.
+            // Reading the refresh token inside the composition and reloading when it changes is
+            // what makes update() actually pick up new configuration and new history rows.
+            val refreshToken = currentState<Preferences>()[REFRESH_TOKEN] ?: 0L
+            var widgetState by remember { mutableStateOf(initialState) }
+            LaunchedEffect(refreshToken) {
+                widgetState = loadWidgetState(context, widgetId)
+            }
+
             GlanceTheme {
                 val size = LocalSize.current
 
@@ -196,6 +141,9 @@ class RecentItemsWidget : GlanceAppWidget() {
                         .padding(if (size.width < 160.dp) 10.dp else 14.dp)
                 ) {
                     when {
+                        !widgetState.isConfigured -> {
+                            SetupWidgetLayout(onClick = openActivityAction)
+                        }
                         size.height < 110.dp -> {
                             SmallWidgetLayout(
                                 item = widgetState.items.firstOrNull(),
@@ -218,6 +166,129 @@ class RecentItemsWidget : GlanceAppWidget() {
                     }
                 }
             }
+        }
+    }
+}
+
+private suspend fun loadWidgetState(context: Context, widgetId: Int): RecentItemsWidgetState =
+    withContext(Dispatchers.IO) {
+        val database = AppDatabase.getInstance(context)
+        val prefs = context.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
+
+        val widgetPrefs = if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            context.getSharedPreferences("widget_${widgetId}_prefs", Context.MODE_PRIVATE)
+        } else null
+
+        // Guard: never render "all rooms / standard" defaults for a widget that hasn't been
+        // configured yet. Without this, a composition that races ahead of the config activity
+        // (or a widget whose prefs were cleared) shows a plausible-but-wrong feed instead of a
+        // neutral setup prompt.
+        val isConfigured = widgetPrefs?.getBoolean("is_configured", false) ?: false
+        if (!isConfigured) {
+            return@withContext RecentItemsWidgetState(isConfigured = false)
+        }
+
+        val targetRoomId = widgetPrefs?.getInt("target_room_id", -1) ?: -1
+        val fontDensity = widgetPrefs?.getString("font_density", "standard") ?: "standard"
+        val isCompactConfig = fontDensity == "compact"
+
+        val showProgression = prefs.getBoolean("ui_show_progression", true)
+        val showUseful = prefs.getBoolean("ui_show_useful", true)
+        val showFiller = prefs.getBoolean("ui_show_filler", false)
+        val showTrap = prefs.getBoolean("ui_show_trap", false)
+        val showFinished = prefs.getBoolean("ui_show_finished", true)
+        val showIgnoredItems = prefs.getBoolean("ui_show_ignored_items", false)
+
+        val rooms = try {
+            database.roomDao().getAllRoomsOneShot()
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val roomNames = rooms.associate { it.id to it.alias }
+        val activeRoomIds = rooms.filter { !it.is_archived }.map { it.id }.toSet()
+
+        // Room-Specific Query Optimization: If widget is configured for a specific room,
+        // query that room's history directly from SQLite rather than the global scan window.
+        val rawHistoryItems = try {
+            if (targetRoomId != -1) {
+                database.historyDao().getHistoryForRoomPaged(roomId = targetRoomId, limit = 200, offset = 0)
+            } else {
+                database.historyDao().getGlobalHistoryPaged(limit = 500, offset = 0)
+            }
+        } catch (e: Exception) {
+            Log.e("RecentItemsWidget", "Failed to fetch history items from DB", e)
+            emptyList()
+        }
+
+        val filteredItems = rawHistoryItems.filter { item ->
+            val matchesRoom = if (targetRoomId != -1) {
+                item.roomId == targetRoomId
+            } else {
+                item.roomId == null || activeRoomIds.isEmpty() || item.roomId in activeRoomIds
+            }
+            // Architectural note: Standalone widget uses item.isPlayerFinished stored in SQLite;
+            // the full in-app feed derives finished status from live slot data (HistoryScreen.kt:990).
+            val matchesFinished = showFinished || !item.isPlayerFinished
+
+            // --- TYPE CHECK (Prioritized to match visual colors and in-app feed verbatim) ---
+            val isProgression = (item.itemFlags and 1) != 0
+            val isUseful = (item.itemFlags and 2) != 0
+            val isTrap = (item.itemFlags and 4) != 0
+
+            val matchesType = when {
+                isProgression -> showProgression
+                isUseful -> showUseful
+                isTrap -> showTrap
+                else -> showFiller
+            }
+
+            // Whitelist exempts items from both category and ignored filters
+            val matchesCategoryOrWhitelist = item.isWhitelisted || matchesType
+            val matchesIgnoredOrWhitelist = item.isWhitelisted || (showIgnoredItems || !item.isIgnored)
+
+            matchesRoom && matchesFinished && matchesCategoryOrWhitelist && matchesIgnoredOrWhitelist
+        }.take(10)
+
+        val targetRoomName = if (targetRoomId != -1) roomNames[targetRoomId] else null
+
+        RecentItemsWidgetState(
+            items = filteredItems,
+            roomNames = roomNames,
+            targetRoomId = targetRoomId,
+            customTitle = targetRoomName,
+            isCompact = isCompactConfig,
+            isLoading = false,
+            isConfigured = true
+        )
+    }
+
+@Composable
+private fun SetupWidgetLayout(onClick: androidx.glance.action.Action) {
+    Box(
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .clickable(onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Setup needed",
+                style = TextStyle(
+                    color = GlanceTheme.colors.primary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                ),
+                maxLines = 1
+            )
+            Spacer(modifier = GlanceModifier.height(4.dp))
+            Text(
+                text = "Tap to open the app",
+                style = TextStyle(
+                    color = GlanceTheme.colors.onSurfaceVariant,
+                    fontSize = 12.5.sp
+                ),
+                maxLines = 1
+            )
         }
     }
 }
@@ -546,7 +617,8 @@ class RefreshRecentItemsAction : ActionCallback {
         } catch (e: Exception) {
             Log.e("RecentItemsWidget", "Failed to enqueue background sync from widget refresh", e)
         }
-        RecentItemsWidget().update(context, glanceId)
+        // Goes through the updater so the refresh token is bumped first; calling update()
+        // directly would only recompose this session's already-loaded state.
         RecentItemsWidgetUpdater.update(context)
     }
 }

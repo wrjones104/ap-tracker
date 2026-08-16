@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
 import androidx.glance.appwidget.GlanceAppWidgetManager
+import androidx.glance.appwidget.state.updateAppWidgetState
+import androidx.lifecycle.lifecycleScope
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.RoomEntity
 import com.jones.aptracker.ui.theme.APTrackerTheme
@@ -120,25 +122,29 @@ class RecentItemsWidgetConfigActivity : ComponentActivity() {
             putString("font_density", fontDensity)
         }
 
-        // Trigger widget update immediately
-        val coroutineScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO)
-        coroutineScope.launch {
+        // Set result eagerly so the launcher always receives RESULT_OK upon activity completion
+        val resultValue = Intent().apply {
+            putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+        }
+        setResult(RESULT_OK, resultValue)
+
+        // Widgets with a configuration activity receive NO automatic update broadcast, even after
+        // RESULT_OK, so the first composition is our responsibility here. The token bump matters as
+        // much as the update() call: if the launcher already started a Glance session for this
+        // widget before configuration finished, update() would only recompose that session's cached
+        // state and the widget would keep showing its pre-config view.
+        lifecycleScope.launch {
             try {
-                val glanceManager = GlanceAppWidgetManager(applicationContext)
-                val glanceId = glanceManager.getGlanceIdBy(widgetId)
+                val glanceId = GlanceAppWidgetManager(applicationContext).getGlanceIdBy(widgetId)
+                updateAppWidgetState(applicationContext, glanceId) { prefs ->
+                    prefs[RecentItemsWidget.REFRESH_TOKEN] = System.currentTimeMillis()
+                }
                 RecentItemsWidget().update(applicationContext, glanceId)
             } catch (e: Exception) {
-                Log.e("WidgetConfig", "Failed to update specific glance ID $widgetId", e)
+                Log.e("WidgetConfig", "Failed to update widget $widgetId, falling back to updateAll", e)
+                RecentItemsWidgetUpdater.update(applicationContext)
             }
-            RecentItemsWidgetUpdater.update(applicationContext)
-
-            withContext(Dispatchers.Main) {
-                val resultValue = Intent().apply {
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
-                }
-                setResult(RESULT_OK, resultValue)
-                finish()
-            }
+            finish()
         }
     }
 }
