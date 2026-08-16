@@ -22,6 +22,7 @@
 
         <receiver
             android:name=".widget.RecentItemsWidgetReceiver"
+            android:label="@string/widget_recent_items_name"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -42,6 +43,7 @@
 
         <receiver
             android:name=".widget.MilestonesWidgetReceiver"
+            android:label="@string/widget_milestones_name"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />

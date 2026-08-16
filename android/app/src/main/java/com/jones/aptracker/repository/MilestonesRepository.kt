@@ -22,11 +22,19 @@ import kotlinx.coroutines.withContext
 
 data class MilestoneItemProgress(
     val itemName: String,
+    /** Count held, or [UNKNOWN_QUANTITY] when it cannot be determined on-device. */
     val quantityAcquired: Int,
     val quantityRequired: Int,
     val isGroup: Boolean = false
 ) {
-    val isComplete: Boolean = quantityAcquired >= quantityRequired
+    /** True when local progress is unknowable, i.e. an unexpanded server-side item group. */
+    val isIndeterminate: Boolean = quantityAcquired == UNKNOWN_QUANTITY
+
+    val isComplete: Boolean = !isIndeterminate && quantityAcquired >= quantityRequired
+
+    companion object {
+        const val UNKNOWN_QUANTITY = -1
+    }
 }
 
 data class MilestoneGroupDisplay(
@@ -43,6 +51,12 @@ data class MilestoneGroupDisplay(
     val progressRatio: Float
 ) {
     val isComplete: Boolean = isTriggered || (totalRequired > 0 && totalAcquired >= totalRequired)
+
+    /**
+     * True when every requirement is a server-resolved item group, so there is no local number to
+     * show at all. Rendered as "Tracked on server" rather than a misleading 0/0.
+     */
+    val isServerTracked: Boolean = !isTriggered && totalRequired == 0 && items.isNotEmpty()
 }
 
 /**
@@ -79,7 +93,10 @@ object MilestonesRepository {
     /** Cap on concurrent per-slot fetches, so a user with many slots does not open a socket per slot. */
     private const val MAX_PARALLEL_SLOT_FETCHES = 6
 
-    private const val DEFAULT_MAX_CACHE_AGE_MS = 15 * 60 * 1000L
+    private const val DEFAULT_MAX_CACHE_AGE_MS = 5 * 60 * 1000L
+
+    private const val REFRESH_PREFS = "milestone_cache_prefs"
+    private const val KEY_LAST_REFRESH = "last_refresh_at"
 
     private val gson = Gson()
     private val itemListType = object : TypeToken<List<ThresholdGroupItem>>() {}.type
@@ -111,22 +128,28 @@ object MilestonesRepository {
         }
     }
 
-    /** [refreshCache], but a no-op when the cache was refreshed within [maxAgeMs]. */
+    /**
+     * [refreshCache], but a no-op when the cache was refreshed within [maxAgeMs].
+     *
+     * This is the default path for sync-driven refreshes. Milestone *definitions* only change when
+     * the user edits them (covered by [refreshSlot]) or when the server flips `is_triggered`;
+     * progress itself is recomputed locally from history on every read. Without this gate, every
+     * incoming push would pay a full per-slot fan-out for data that almost never changed.
+     */
     suspend fun refreshCacheIfStale(
         context: Context,
+        trackedRooms: List<RoomWithTrackedSlots>? = null,
         maxAgeMs: Long = DEFAULT_MAX_CACHE_AGE_MS
     ): Boolean {
         val lastRefresh = try {
-            withContext(Dispatchers.IO) {
-                AppDatabase.getInstance(context).milestoneCacheDao().getLastTrackedSlotRefresh()
-            }
+            withContext(Dispatchers.IO) { readLastRefresh(context) }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read milestone cache age; refreshing anyway", e)
             null
         }
 
         val isFresh = lastRefresh != null && System.currentTimeMillis() - lastRefresh < maxAgeMs
-        return if (isFresh) false else refreshCache(context)
+        return if (isFresh) false else refreshCache(context, trackedRooms)
     }
 
     /**
@@ -228,6 +251,11 @@ object MilestonesRepository {
             val knownRoomIds = rooms.map { it.room_db_id }
             dao.deleteMilestoneGroupsForRoomsNotIn(knownRoomIds.ifEmpty { listOf(Int.MIN_VALUE) })
 
+            // Recorded separately from the tables themselves: MAX(updatedAt) over
+            // cached_tracked_slots is null for an account with no tracked slots, which would leave
+            // the widget stuck on "loading" forever instead of showing the empty state.
+            writeLastRefresh(context, now)
+
             Log.d(TAG, "Milestone cache refreshed: ${slotRows.size} slots, ${fetched.size} fetched.")
             true
         } catch (e: Exception) {
@@ -250,7 +278,7 @@ object MilestonesRepository {
             val isAllRooms = targetRoomId == -1
 
             val hasCache = try {
-                dao.getLastTrackedSlotRefresh() != null
+                readLastRefresh(context) != null
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to read milestone cache state", e)
                 return@withContext MilestonesSnapshot()
@@ -335,6 +363,17 @@ object MilestonesRepository {
             )
         }
 
+    private fun refreshPrefs(context: Context) =
+        context.applicationContext.getSharedPreferences(REFRESH_PREFS, Context.MODE_PRIVATE)
+
+    /** Epoch millis of the last completed refresh, or null if one has never completed. */
+    private fun readLastRefresh(context: Context): Long? =
+        refreshPrefs(context).getLong(KEY_LAST_REFRESH, 0L).takeIf { it > 0L }
+
+    private fun writeLastRefresh(context: Context, at: Long) {
+        refreshPrefs(context).edit().putLong(KEY_LAST_REFRESH, at).apply()
+    }
+
     /**
      * Folds a room's aggregated history tallies down to the items belonging to one slot.
      *
@@ -383,6 +422,22 @@ object MilestonesRepository {
 
         val itemProgressList = requirements.map { itemReq ->
             val reqQty = maxOf(itemReq.quantity, 1)
+
+            // Item-group requirements are expanded against the datapackage server-side (see
+            // poller.py) and summed across every member item. The client has no membership data --
+            // /games/<game>/items exposes only an is_group flag -- so counting the literal group
+            // name here would always yield 0 and render a confidently wrong "0/4". Leave these
+            // indeterminate and out of the totals; the server's is_triggered flag is what resolves
+            // them.
+            if (itemReq.is_group && !isTriggered) {
+                return@map MilestoneItemProgress(
+                    itemName = itemReq.item_name,
+                    quantityAcquired = MilestoneItemProgress.UNKNOWN_QUANTITY,
+                    quantityRequired = reqQty,
+                    isGroup = true
+                )
+            }
+
             totalRequired += reqQty
 
             val acquiredQty = if (isTriggered) {

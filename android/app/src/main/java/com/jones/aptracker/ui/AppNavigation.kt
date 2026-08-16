@@ -107,7 +107,11 @@ fun MainNavHost(
     // Direct deep-link to a specific slot if both targetRoomId and targetSlotId are provided
     androidx.compose.runtime.LaunchedEffect(targetRoomId, targetSlotId) {
         if (targetRoomId != null && targetSlotId != null && targetRoomId != -1 && targetSlotId != -1) {
-            navController.navigate("slot_detail/$targetRoomId/$targetSlotId")
+            navController.navigate("slot_detail/$targetRoomId/$targetSlotId") {
+                // Repeated widget taps on the same slot would otherwise stack duplicate
+                // back-stack entries.
+                launchSingleTop = true
+            }
             onTargetTabConsumed()
         }
     }

@@ -17,12 +17,6 @@ object MilestonesWidgetUpdater {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    fun updateAsync(context: Context) {
-        scope.launch {
-            update(context)
-        }
-    }
-
     suspend fun update(context: Context) {
         try {
             // updateAll() alone is not enough: for a widget whose Glance session is still running,
@@ -45,14 +39,23 @@ object MilestonesWidgetUpdater {
      * when the caller already fetched the roster, which every sync path has.
      *
      * No-ops when no Milestones widget is placed, so accounts without the widget pay nothing.
+     *
+     * Sync-driven callers leave [force] false: a push storm would otherwise pay a full per-slot
+     * fan-out per push for definitions that rarely change. Only the widget's own refresh button
+     * forces an unconditional fetch.
      */
     suspend fun refreshDataAndUpdate(
         context: Context,
-        trackedRooms: List<RoomWithTrackedSlots>? = null
+        trackedRooms: List<RoomWithTrackedSlots>? = null,
+        force: Boolean = false
     ) {
         try {
             if (!hasPlacedWidgets(context)) return
-            MilestonesRepository.refreshCache(context, trackedRooms)
+            if (force) {
+                MilestonesRepository.refreshCache(context, trackedRooms)
+            } else {
+                MilestonesRepository.refreshCacheIfStale(context, trackedRooms)
+            }
             update(context)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to refresh milestone data for widgets", e)
@@ -61,11 +64,12 @@ object MilestonesWidgetUpdater {
 
     fun refreshDataAndUpdateAsync(
         context: Context,
-        trackedRooms: List<RoomWithTrackedSlots>? = null
+        trackedRooms: List<RoomWithTrackedSlots>? = null,
+        force: Boolean = false
     ) {
         val appContext = context.applicationContext
         scope.launch {
-            refreshDataAndUpdate(appContext, trackedRooms)
+            refreshDataAndUpdate(appContext, trackedRooms, force)
         }
     }
 
@@ -92,6 +96,9 @@ object MilestonesWidgetUpdater {
      * configuration so a widget placed on a cold app still fills in without waiting for a sync.
      */
     fun refreshIfStaleAndUpdateAsync(context: Context) {
+        // Deliberately does NOT go through refreshDataAndUpdate: this runs from the config
+        // activity, where the widget may not be registered with Glance yet, so the
+        // hasPlacedWidgets() guard would skip the very refresh the new widget is waiting on.
         val appContext = context.applicationContext
         scope.launch {
             try {

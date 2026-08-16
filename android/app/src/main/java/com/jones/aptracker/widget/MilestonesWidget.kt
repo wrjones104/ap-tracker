@@ -56,6 +56,7 @@ import androidx.glance.unit.ColorProvider
 import com.jones.aptracker.MainActivity
 import com.jones.aptracker.R
 import com.jones.aptracker.repository.MilestoneGroupDisplay
+import com.jones.aptracker.repository.MilestoneItemProgress
 import com.jones.aptracker.repository.MilestonesRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -451,7 +452,11 @@ private fun SmallMilestonesLayout(
                 )
                 Spacer(modifier = GlanceModifier.width(4.dp))
                 Text(
-                    text = if (targetGroup.isComplete) "✓ Complete" else "${targetGroup.totalAcquired}/${targetGroup.totalRequired}",
+                    text = when {
+                        targetGroup.isComplete -> "✓ Complete"
+                        targetGroup.isServerTracked -> "Tracked on server"
+                        else -> "${targetGroup.totalAcquired}/${targetGroup.totalRequired}"
+                    },
                     style = TextStyle(
                         color = if (targetGroup.isComplete) ColorProvider(MilestonesWidget.COLOR_SUCCESS) else GlanceTheme.colors.primary,
                         fontWeight = FontWeight.Bold,
@@ -474,9 +479,7 @@ private fun SmallMilestonesLayout(
 
             Spacer(modifier = GlanceModifier.height(2.dp))
 
-            val itemsSummary = targetGroup.items.joinToString(" • ") {
-                "${it.itemName} (${it.quantityAcquired}/${it.quantityRequired})"
-            }
+            val itemsSummary = targetGroup.items.joinToString(" • ") { formatItemProgress(it) }
             Text(
                 text = itemsSummary,
                 style = TextStyle(
@@ -608,6 +611,25 @@ private fun StandardMilestonesLayout(
     }
 }
 
+/**
+ * One requirement as "Name (2/3)".
+ *
+ * Item-group requirements are resolved server-side against the datapackage, so the client cannot
+ * count them; those render as an em dash rather than a confident and wrong 0.
+ */
+private fun formatItemProgress(
+    item: MilestoneItemProgress,
+    showGroupSuffix: Boolean = false
+): String {
+    val suffix = if (showGroupSuffix && item.isGroup) " (Group)" else ""
+    val progress = if (item.isIndeterminate) {
+        "—"
+    } else {
+        "${item.quantityAcquired}/${item.quantityRequired}"
+    }
+    return "${item.itemName}$suffix ($progress)"
+}
+
 @Composable
 private fun MilestoneGroupRow(
     group: MilestoneGroupDisplay,
@@ -646,7 +668,9 @@ private fun MilestoneGroupRow(
             )
             Spacer(modifier = GlanceModifier.width(6.dp))
             val percent = (group.progressRatio * 100).toInt()
-            val statusText = if (group.isComplete) {
+            val statusText = if (group.isServerTracked) {
+                "Tracked on server"
+            } else if (group.isComplete) {
                 "✓ Complete"
             } else {
                 "${group.totalAcquired}/${group.totalRequired} ($percent%)"
@@ -675,10 +699,7 @@ private fun MilestoneGroupRow(
 
         Spacer(modifier = GlanceModifier.height(2.dp))
 
-        val itemsSummary = group.items.joinToString(" • ") {
-            val suffix = if (it.isGroup) " (Group)" else ""
-            "${it.itemName}$suffix (${it.quantityAcquired}/${it.quantityRequired})"
-        }
+        val itemsSummary = group.items.joinToString(" • ") { formatItemProgress(it, showGroupSuffix = true) }
         Text(
             text = itemsSummary,
             style = TextStyle(

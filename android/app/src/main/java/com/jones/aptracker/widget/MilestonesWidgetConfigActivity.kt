@@ -69,6 +69,7 @@ import com.jones.aptracker.ui.theme.APTrackerTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
 class MilestonesWidgetConfigActivity : ComponentActivity() {
     private var appWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,7 +86,7 @@ class MilestonesWidgetConfigActivity : ComponentActivity() {
                 AppWidgetManager.INVALID_APPWIDGET_ID
             )
         }
- if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
+        if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
             finish()
             return
         }
@@ -124,8 +125,16 @@ class MilestonesWidgetConfigActivity : ComponentActivity() {
             putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
         }
         setResult(RESULT_OK, resultValue)
-        // Bumping the refresh token first is what ensures Glance doesn't display a stale
-        // pre-configuration snapshot.
+
+        // Covers the cold case -- a widget placed before the app has ever synced -- without holding
+        // up the activity. Runs in the updater's own scope so it survives this activity finishing.
+        MilestonesWidgetUpdater.refreshIfStaleAndUpdateAsync(applicationContext)
+
+        // Widgets with a configuration activity receive NO automatic update broadcast, even after
+        // RESULT_OK, so the first composition is our responsibility here. The token bump matters as
+        // much as the update() call: the launcher starts a Glance session on placement, before the
+        // user finishes configuring, and update() alone would only recompose that session's cached
+        // state.
         lifecycleScope.launch {
             try {
                 val glanceId = GlanceAppWidgetManager(applicationContext).getGlanceIdBy(widgetId)
@@ -141,8 +150,11 @@ class MilestonesWidgetConfigActivity : ComponentActivity() {
         }
     }
 }
+
 @OptIn(ExperimentalMaterial3Api::class)
+
 @Composable
+
 private fun MilestonesWidgetConfigScreen(
     appWidgetId: Int,
     onSave: (targetRoomId: Int, roomAlias: String, customTitle: String?, fontDensity: String, showFlagEmoji: Boolean) -> Unit,
@@ -205,7 +217,7 @@ private fun MilestonesWidgetConfigScreen(
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
-                           } else {
+            } else {
                 LazyColumn(
                     modifier = Modifier
                         .weight(1f)
@@ -228,7 +240,7 @@ private fun MilestonesWidgetConfigScreen(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
-                                           }
+                    }
                     if (rooms.size > 4) {
                         item {
                             OutlinedTextField(
@@ -428,7 +440,9 @@ private fun MilestonesWidgetConfigScreen(
         }
     }
 }
+
 @Composable
+
 private fun DensityOptionCard(
     title: String,
     description: String,
