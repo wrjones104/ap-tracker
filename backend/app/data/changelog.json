@@ -12,12 +12,16 @@
           "description": "Keep track of multiworld progress right from your Android home screen with responsive compact and multi-item scrollable layouts."
         },
         {
-          "title": "In-App Filter Mirroring",
-          "description": "The widget automatically reflects your active Activity Feed toggles (Progression, Useful, Filler, Trap, Finished, and Ignored items)."
+          "title": "Per-Room & Global Customization",
+          "description": "Configure your widget to track all active games combined or pin dedicated widgets to specific rooms with custom header branding."
         },
         {
-          "title": "Background Sync & Deep-Linking",
-          "description": "Incoming push notifications update the widget in real time, and tapping any item jumps straight to your Activity Feed."
+          "title": "Display Density & Filter Mirroring",
+          "description": "Choose between Standard and Compact font presets during setup, while automatically respecting your in-app Activity Feed filter toggles."
+        },
+        {
+          "title": "Background Sync & Targeted Deep-Linking",
+          "description": "Incoming push notifications update the widget in real time, and tapping a widget jumps directly to that room's filtered Activity Feed."
         }
       ],
       "categories": {
@@ -27,15 +31,23 @@
             "description": "Implemented Glance-based home screen widget with responsive multi-size support, item classification colors (Progression, Useful, Filler, Trap), and on-demand refresh."
           },
           {
+            "title": "Widget Setup & Room Customization",
+            "description": "Added configuration screen supporting per-room scoping, searchable room selection, and Standard vs. Compact font density presets."
+          },
+          {
             "title": "Push-Driven Background Sync",
             "description": "Added background history synchronization in MyFirebaseMessagingService and 15-minute periodic WorkManager sync to keep the local database and widget up to date."
           },
           {
             "title": "Activity Feed Deep-Linking",
-            "description": "Tapping any item in the widget navigates directly to the Activity Feed screen."
+            "description": "Tapping any item in the widget navigates directly to the Activity Feed screen, automatically filtering to the specific room when applicable."
           }
         ],
         "improvements": [
+          {
+            "title": "Room-Specific Query Optimization",
+            "description": "Widgets pinned to specific rooms query room history directly from SQLite rather than a global window, ensuring older items always display."
+          },
           {
             "title": "Graphical Widget Preview Layout",
             "description": "Added previewLayout XML for a styled preview in the Android 12+ widget picker."
@@ -48,9 +60,9 @@
         "fixes": []
       },
       "release_notes": {
-        "discord": "**Archipelago Alerts Android App v1.8.0 Released!**\n\n**New Features & Improvements**\n• **Recent Items Home Screen Widget**: Keep track of your multiworld progress directly from your Android home screen! View the latest items received across all your active games at a glance.\n• **In-App Filter Mirroring**: The widget automatically respects your Activity Feed filter settings (Progression, Useful, Filler, Trap, Finished, and Ignored items).\n• **Automatic Background Sync**: Receive push notifications or background updates that keep the widget fresh even when the app is closed.\n• **One-Tap Deep Linking**: Tap any item in the widget to jump directly to your Activity Feed.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
-        "play_store": "New: Recent Items Home Screen Widget — view your latest received items directly on your home screen without opening the app.\n\nNew: Filter Mirroring — the widget automatically reflects your active Activity Feed toggles (Progression, Useful, Filler, Trap).\n\nNew: Background Sync & Deep-Linking — push notifications update your widget in real time, and tapping any item jumps straight to your Activity Feed.",
-        "github": "### Added\n- **Recent Items Received Android Widget**: Built with Jetpack Glance 1.1.1, featuring responsive sizing (compact single-item and standard multi-item scrollable list), item classification badges (Progression, Useful, Filler, Trap), relative timestamps, and on-demand refresh.\n- **Graphical Widget Preview**: Added `android:previewLayout` rendering a styled preview in the Android 12+ widget picker.\n- **Background Synchronization**: Integrated push-triggered instant background syncing via `MyFirebaseMessagingService` and recurring 15-minute polling via Android `WorkManager` (`HistorySyncWorker`).\n- **Activity Tab Deep-Linking**: Added `target_tab = \"activity\"` intent navigation handling from the widget directly into the Activity Feed screen.\n\n### Changed\n- **Query Depth**: Expanded widget database history scan window to 500 records to accurately find all active filtered items."
+        "discord": "**Archipelago Alerts Android App v1.8.0 Released!**\n\n**New Features & Improvements**\n• **Recent Items Home Screen Widget**: Keep track of your multiworld progress directly from your Android home screen!\n• **Per-Room or Global Scope**: Track all active games combined or pin a dedicated widget to a specific room with custom branding.\n• **Customizable Display Density**: Choose between Standard and Compact font layouts during setup.\n• **In-App Filter Mirroring**: The widget automatically respects your Activity Feed filter settings (Progression, Useful, Filler, Trap, Finished, and Ignored items).\n• **Background Sync & Targeted Deep-Linking**: Instant push notification updates, and tapping a widget jumps directly to that room's filtered Activity Feed.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "New: Recent Items Home Screen Widget — view your latest received items directly on your home screen without opening the app.\n\nNew: Room Customization & Font Density — configure widgets for all active games or pin them to specific rooms, with Standard or Compact font layouts.\n\nNew: Background Sync & Deep-Linking — push notifications update your widget in real time, and tapping any item jumps straight to your filtered Activity Feed.",
+        "github": "### Added\n- **Recent Items Received Android Widget**: Built with Jetpack Glance 1.1.1, featuring responsive sizing (compact single-item and standard multi-item scrollable list), item classification badges (Progression, Useful, Filler, Trap), relative timestamps, and on-demand refresh.\n- **Widget Configuration & Customization**: Added setup screen for choosing room scope (All Active Rooms vs. specific pinned room), searchable room picker, and display density presets (Standard / Compact).\n- **Graphical Widget Preview**: Added `android:previewLayout` rendering a styled preview in the Android 12+ widget picker.\n- **Background Synchronization**: Integrated push-triggered instant background syncing via `MyFirebaseMessagingService` and recurring 15-minute polling via Android `WorkManager` (`HistorySyncWorker`).\n- **Targeted Activity Deep-Linking**: Added intent navigation handling from the widget directly into the Activity Feed screen, automatically filtering to the selected room when pinned.\n\n### Changed\n- **Room-Specific Query Optimization**: Room-scoped widgets query SQLite directly by room ID so items are never missed even when pushed past the global history window.\n- **Query Depth**: Expanded widget database history scan window to 500 records to accurately find all active filtered items."
       }
     },
     {
