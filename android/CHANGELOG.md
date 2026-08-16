@@ -22,7 +22,7 @@ _Home Screen Widgets & Notification Channels_
 > • **Recent Items Widget**: See the latest items flowing through your multiworld right on your home screen.
 > • **Milestones Widget**: Track progress toward your milestone goals at a glance, with a progress bar for every tracked slot.
 > • **Categorized Notifications**: Alerts are now split into **Progression Items**, **Non-Progression Items**, **Hints**, and **General & System**, so you can give each its own sound, vibration, and Do Not Disturb rules in Android settings.
-> • **Widget Customization**: Pin a widget to one room or all of them, give it a custom title, choose Standard or Compact text, and hide the milestone flags or item colour dots if you prefer a plainer look.
+> • **Widget Customization**: Pin a widget to one room or all of them, give it a custom title, choose Standard or Compact text, and hide the milestone flags or item color dots if you prefer a plainer look.
 > • **Stays Current**: Widgets refresh in the background as new items arrive, and tapping one opens the app right where you were looking.
 >
 > GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
@@ -43,10 +43,10 @@ _Home Screen Widgets & Notification Channels_
 > **GitHub Release Copy-Paste:**
 > ```markdown
 > ### Added
-> - **Recent Items Home Screen Widget**: Glance-based widget with responsive small/medium/large layouts, item classification colours (Progression, Useful, Filler, Trap), and on-demand refresh.
+> - **Recent Items Home Screen Widget**: Glance-based widget with responsive small/medium/large layouts, item classification colors (Progression, Useful, Filler, Trap), and on-demand refresh.
 > - **Milestones Home Screen Widget**: Shows milestone group progress per tracked slot - progress bar, acquired/required counts, and per-item breakdown - scoped to a single room or all active rooms.
 > - **Android Notification Channels**: Push notifications are categorized into dedicated system channels under the "Game & Room Alerts" group (`channel_progression`, `channel_non_progression`, `channel_hints`, `channel_general`), enabling per-category sound, vibration, heads-up, and DND control.
-> - **Widget Configuration**: Per-room scoping with a searchable room picker, optional custom widget titles on both widgets, Standard/Compact density presets, and toggles for the milestone flag emoji and the item colour dots.
+> - **Widget Configuration**: Per-room scoping with a searchable room picker, optional custom widget titles on both widgets, Standard/Compact density presets, and toggles for the milestone flag emoji and the item color dots.
 > - **Deep Linking**: Tapping a widget opens the relevant Activity Feed or room screen, filtered to that room where applicable.
 >
 > ### Changed
@@ -65,7 +65,7 @@ _Home Screen Widgets & Notification Channels_
 - **Tap Straight Through**: Tapping a widget opens the app on the matching Activity Feed or room, already filtered to what you were looking at.
 
 ### Changed
-- **Widget Personalization**: Give any widget a custom title, and turn off the milestone flags or the item colour dots if you would rather keep things plain.
+- **Widget Personalization**: Give any widget a custom title, and turn off the milestone flags or the item color dots if you would rather keep things plain.
 - **Display Density Presets**: Pick Standard for larger, comfortable text or Compact to fit more rows into the same space.
 - **Faster Widgets, Less Data**: Widgets now draw from data already stored on your phone, so they appear instantly after setup and use far less mobile data.
 - **Activity Feed Filter Mirroring**: The Recent Items widget respects the same item type and ignore filters you have set in the in-app Activity Feed.
