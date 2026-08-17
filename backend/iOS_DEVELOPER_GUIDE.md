@@ -53,7 +53,7 @@ curl -X PUT https://archipelagoalerts.com/rooms/<subscription_id>/slots \
     "tracked_slot_ids": [1, 2]
   }'
 ```
-*Polling Note*: Submitting slot changes automatically forces an immediate background server check cycle to securely backfill past event records, ensuring historical sync metrics align cleanly on your client device dashboard without notification flood-spam.
+*Polling Note*: Submitting slot changes triggers an immediate server poll rather than waiting for the next cycle. That first poll **backfills** the slot's existing history instead of notifying on it, so newly tracked slots populate your history views without firing a burst of push notifications for events that already happened.
 
 ---
 
@@ -313,6 +313,26 @@ You can register milestone rules to notify only when a certain quantity of one o
   - `PUT /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/<group_id>` — update a group.
   - `DELETE /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/<group_id>` — remove a group.
 
+#### Reading Milestone Progress (`acquired`)
+The `GET` response returns the group definitions plus a server-computed progress count per requirement:
+```json
+[
+  {
+    "id": 42,
+    "name": "Rupee Milestone",
+    "is_triggered": false,
+    "items": [
+      { "id": 88, "item_name": "Rupee", "quantity": 10, "is_group": false, "acquired": 4 },
+      { "id": 89, "item_name": "Swords", "quantity": 3, "is_group": true, "acquired": 1 }
+    ]
+  }
+]
+```
+- **`acquired`** is the running count the server has credited to that slot for the requirement. It is authoritative in two cases the client cannot handle on its own: **item-group requirements** (`is_group: true`), which cannot be counted by item name locally, and items that have aged out of the 90-day history window or were hidden by an ignore rule.
+- **`acquired` may be `null`.** Progress computation is advisory and is wrapped so a failure never takes down the definitions fetch. Render a `null` as "progress unavailable" rather than as zero.
+- **Recommended display rule**: use `max(local history count, acquired)` for non-group requirements — local history is live but lossy, the server count is complete but lags by a poll cycle. For group requirements, use `acquired` alone.
+- **`is_triggered`** indicates the group has already fired its notification.
+
 ---
 
 ## 8. Native API Notification Features
@@ -331,10 +351,27 @@ Instead of making repetitive requests to separate history pages, use the central
     ]
   }
   ```
-- **Response Framework**: Returns distinct structural delta maps tracking `new_items` and `updated_hints`, alongside state-token sync watermarks (`item_watermarks`, `hint_watermarks`).
+- **Response**: four keys — `new_items` and `updated_hints` carry the deltas, and `item_watermarks` / `hint_watermarks` carry the cursors to send back on the next call. An empty request returns all four as empty.
+
+  ```json
+  {
+    "new_items": [],
+    "updated_hints": [],
+    "item_watermarks": {},
+    "hint_watermarks": {}
+  }
+  ```
+- **Persist the watermarks** and replay them on the next sync. Do not derive your cursor from the timestamps of the returned rows — the server re-indexes item ids, and the watermarks account for that.
+
+### Filter Status on History Rows
+Item rows returned by the history endpoints carry the user's filter state, evaluated server-side against the exact datapackage checksum the item arrived under:
+- **`isIgnored`** (Boolean): an ignore rule matched this item.
+- **`isWhitelisted`** (Boolean): a whitelist rule matched, which overrides ignore rules and category mutes.
+
+Do not recompute these on the client. Item-group rules require datapackage group membership for the specific checksum, which is why the evaluation moved server-side.
 
 ### User Account & Slot Snoozing
-Silence incoming alert tracking streams globally or down to the individual player channel level.
+Mute notifications globally or for a single tracked slot.
 - **Global Snooze**: `POST /users/me/snooze`
 - **Slot Snooze**: `POST /rooms/<subscription_id>/slots/<slot_id>/snooze`
 - **Payload Format**:
@@ -345,18 +382,25 @@ Silence incoming alert tracking streams globally or down to the individual playe
   ```
   *Note*: Pass `0` or a negative integer value to instantly lift an active snooze lock constraint.
 
-### Global Wildcard Item Ignore Feed
-Allow users to suppress specific item popups via custom criteria definitions.
-- **Endpoint**: `POST /users/me/ignore-list`
-- **Payload Options**:
-  ```json
-  {
-    "item_name": "Heart",
-    "game_name": "The Legend of Zelda",
-    "is_group": false
-  }
-  ```
-  Supports standardized dynamic system group filters when linking tracking profiles directly across Cheese Tracker infrastructure endpoints.
+### Ignore List and Whitelist
+Two symmetric, account-level rule lists. **Ignore** suppresses notifications for matching items; **whitelist** forces them through, overriding both ignore rules and category preference mutes (so a whitelisted filler item still notifies with `notify_filler: false`).
+
+- **Ignore**: `GET`, `POST` `/users/me/ignore-list` · `PUT`, `DELETE` `/users/me/ignore-list/<item_id>`
+- **Whitelist**: `GET`, `POST` `/users/me/whitelist` · `PUT`, `DELETE` `/users/me/whitelist/<item_id>`
+
+Both take the same body shape:
+```json
+{
+  "item_name": "Heart",
+  "game_name": "The Legend of Zelda",
+  "is_group": false
+}
+```
+- **`item_name`** (String, required): rejected with 400 if empty.
+- **`game_name`** (String, optional): scopes the rule to one game. Omit or send `null` for a global rule matching that item name in every game.
+- **`is_group`** (Boolean, default `false`): matches an Archipelago item *group* rather than a single item name. **`game_name` is required when `is_group` is `true`** (400 otherwise), because group membership is only meaningful within a game's datapackage.
+- **`409 Conflict`** if a rule with the same `(item_name, game_name)` pair already exists for the user.
+- `GET` returns `id`, `item_name`, `game_name`, `is_group`, and `created_at` per rule. Keep the `id` — it is what `PUT` and `DELETE` address.
 
 ---
 
@@ -435,21 +479,41 @@ APMT1:<base64url(json)>
 
 ## 10. Push Notification Format
 
-When a push notification is delivered via FCM to iOS, it will contain standard notification alert details, and custom data parameters containing any relevant metadata:
+The backend sends a single FCM message per notification, built from a common `notification` block (`title`, `body`), a `data` dictionary, and an `android` block. **There is currently no `APNSConfig` on the message** — the server sets no `sound`, `badge`, or `content-available`. Whatever `aps` your app receives is what FCM synthesizes from the `notification` block alone, so if you want a sound or a badge count, set it client-side or request that the backend add an APNs config.
 
-```json
-{
-  "aps": {
-    "alert": {
-      "title": "🏆 Hookshot - [My AP Co-op Game]",
-      "body": "HeroLink sent Hookshot to SamusAran (Zelda: Hookshot Chest)"
-    },
-    "sound": "default",
-    "badge": 1,
-    "content-available": 1
-  },
-  "bundled_items": "[{\"item_id\": 12345, \"loc_id\": 67890}]",
-  "bundle_type": "item_progression"
-}
-```
-Use the `bundle_type` and `bundled_items` keys to load the notification details context inside the iOS app when the notification is tapped.
+### The `data` dictionary
+
+All values arrive as strings, per FCM's data-payload contract.
+
+| Key | Always present | Meaning |
+| --- | --- | --- |
+| `notification_type` | Yes | The event type: `item_progression`, `item_useful`, `item_filler`, `item_trap`, `item_milestone`, `hint`, or `player_finish`. |
+| `channel_id` | Yes | The Android notification channel. Android-specific, but a **useful categorization signal on iOS** — see below. |
+| `bundled_items` | No | JSON-encoded **string** of the events in this push, e.g. `"[{\"item_id\": 12345, \"loc_id\": 67890}]"`. Present when the notification represents one or more item events. Parse it as JSON after reading it as a string. |
+| `bundle_type` | No | The type of the bundled batch, mirroring `notification_type` for the batch as a whole. |
+
+### Mapping `channel_id` to iOS
+
+`channel_id` is derived server-side from `notification_type` and is the same categorization the Android app uses. It maps cleanly onto **iOS notification categories / interruption levels**:
+
+| `channel_id` | Source event types | FCM priority | Suggested iOS treatment |
+| --- | --- | --- | --- |
+| `channel_progression` | `item_progression`, `item_milestone` | `high` | `.timeSensitive` interruption level |
+| `channel_non_progression` | `item_useful`, `item_trap`, `item_filler` | `normal` | `.active` |
+| `channel_hints` | `hint` | `normal` | `.active` |
+| `channel_general` | `player_finish`, plus system, test, and any unmapped type | `normal` | `.passive` |
+
+Only `channel_progression` is sent at FCM `high` priority; everything else is `normal`. Registering matching `UNNotificationCategory` values lets users tune each class of alert separately, which is the iOS equivalent of the per-channel controls Android users get in system settings.
+
+Use `bundle_type` and `bundled_items` to load the relevant detail context when the user taps the notification.
+
+---
+
+## 11. Release Notes (`GET /api/whats_new`)
+
+Unauthenticated. Serves the same release-notes data that drives the in-app "What's New" sheet, from the backend's single source of truth.
+
+- **Query Parameters**:
+  - `target`: `app`, `server`, or `all` (default `all`). Use `server` for backend releases; `app` returns the *official Android app's* notes, which will not match a third-party iOS client's versioning.
+  - `limit`: caps the number of releases returned, newest first. Omitted or non-positive returns the full list.
+- Each release carries a `version`, `release_date`, `title`, a `highlights` array for user-facing display, and a `categories` object splitting entries into `features` / `improvements` / `fixes`.
