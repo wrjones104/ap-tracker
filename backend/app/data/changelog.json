@@ -495,6 +495,34 @@
   ],
   "server_releases": [
     {
+      "version": "1.8.1",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-17",
+      "title": "Automatic Alembic Head Reconciliation",
+      "highlights": [
+        {
+          "title": "Self-Healing Migration Startup",
+          "description": "Fixed an Alembic startup crash caused by overlapping or re-parented migration revisions in the database version table. Startup migrations now prune redundant ancestor records automatically before upgrading."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Self-Healing Migration Startup",
+            "description": "Automatic migration on startup now reconciles overlapping version entries in `alembic_version` under the advisory lock. If branch heads were previously applied and then linearized or re-parented, redundant ancestor records are pruned before running `alembic upgrade heads`."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Fixed\n- **Self-healing Alembic startup migration**: `db_migrations.py` now detects and reconciles overlapping version entries in `alembic_version` prior to calling `alembic upgrade heads`. If historical branch heads were linearized or re-parented after being applied, redundant ancestor records are pruned automatically under the migration advisory lock."
+      }
+    },
+    {
       "version": "1.8.0",
       "component": "server",
       "component_label": "Server",
