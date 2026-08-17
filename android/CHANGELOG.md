@@ -10,6 +10,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.8.2] - 2026-08-17
+
+_Milestone Group Progress_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts Android App v1.8.2 Released!**
+>
+> **Fixes**
+> • **Item Group Milestones Show Progress**: Milestones built from item groups (Essences, Medals, and the like) sat at "Tracked on server" with an empty bar. They now show a real count and fill in like every other milestone.
+> • **More Accurate Counts**: Progress no longer undercounts items that aged out of your history or were hidden by your ignore list.
+>
+> Pinned widgets pick this up on their own - no need to remove and re-add them.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> Fixed: Milestones built from item groups now show real progress in the Milestones widget. They previously showed "Tracked on server" with an empty bar.
+>
+> Fixed: Milestone progress no longer undercounts items that aged out of your history or were hidden by your ignore list.
+>
+> Pinned widgets pick this up automatically.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - **Item-group milestone progress**: The Milestones widget left any requirement backed by a datapackage item group indeterminate and excluded it from the totals, so a milestone made entirely of groups rendered as "Tracked on server" with an empty bar. Group requirements now display real progress from the server's `acquired` count. Requires server 1.8.0.
+> - **Undercounted progress on plain items**: counts now take `max(local history, server acquired)`. Local history is live but lossy — pruned by the retention window, and missing anything excluded by an ignore rule.
+> ```
+
+### Fixed
+- **Item Group Milestone Progress**: The Milestones widget could not count requirements built from an item group, because it counts items by name on your device and an item group is not an item name. Those milestones sat at "Tracked on server" with an empty bar, and mixed milestones quietly left their groups out of the total. Progress for them now comes from the server.
+- **Undercounted Progress**: Milestone progress is now the higher of what your device has in history and what the server counts. History is pruned after 90 days and leaves out anything an ignore rule hid, so it could report less progress than the milestone was actually credited with.
+
+---
+
 ## [1.8.1] - 2026-08-16
 
 _Widget Loading Fix_

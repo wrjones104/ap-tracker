@@ -10,6 +10,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.8.0] - 2026-08-17
+
+_Milestone Progress API & Startup Migrations_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - **Per-requirement milestone progress**: `GET /rooms/<id>/slots/<slot_id>/threshold-groups` now returns an `acquired` count per requirement. Item groups are expanded against `item_name_groups_json` and summed over `SlotItemCount` — the same data the milestone trigger reads, so displayed progress matches what fires the notification. A requirement whose name or datapackage cannot be resolved is omitted rather than reported as `0`, and any failure yields `acquired: null` without breaking the definitions fetch.
+>
+> ### Changed
+> - **Schema migrations run on startup**: `create_app` runs `alembic upgrade heads` for Postgres under a session-scoped advisory lock, so the API and poller cannot race. This replaces the manual `docker exec ... alembic upgrade heads` step — a container restart can now migrate.
+> - **Dev containers mount the running package**: `docker-compose.dev.yml` mounts `./backend/app` at `/app/app` instead of `./backend` at `/app/backend` (an unused second copy), so backend edits no longer require an image rebuild.
+> ```
+
+### Added
+- **Milestone Progress in the Threshold Groups API**: GET /rooms/<id>/slots/<slot_id>/threshold-groups returns an `acquired` count per requirement. Item groups are expanded against `item_name_groups_json` and summed over `SlotItemCount`, the same data the milestone trigger reads, so reported progress matches what fires the notification. A requirement whose name or datapackage cannot be resolved is omitted rather than reported as 0, and any failure yields a null count without breaking the definitions fetch.
+
+### Changed
+- **Automatic Schema Migration on Startup**: create_app runs `alembic upgrade heads` for Postgres under a session-scoped advisory lock, so the API and poller cannot race each other. This replaces the manual `docker exec ... alembic upgrade heads` step; a container restart can now migrate the database.
+- **Dev Containers Mount the Running Package**: docker-compose.dev.yml mounts ./backend/app at /app/app instead of ./backend at /app/backend, which was an unused second copy that left the real code baked into the image. Backend edits no longer require an image rebuild.
+
+---
+
 ## [1.7.1] - 2026-08-14
 
 _FCM Android Channel Payload Metadata_

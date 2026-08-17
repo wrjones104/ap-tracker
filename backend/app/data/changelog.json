@@ -1,6 +1,42 @@
 {
   "app_releases": [
     {
+      "version": "1.8.2",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-08-17",
+      "title": "Milestone Group Progress",
+      "highlights": [
+        {
+          "title": "Item Group Milestones Show Progress",
+          "description": "Milestones built from item groups showed \"Tracked on server\" with an empty bar instead of a count. They now show real progress and fill in like every other milestone."
+        },
+        {
+          "title": "More Accurate Milestone Counts",
+          "description": "Progress no longer undercounts items that aged out of your history or were hidden by an ignore rule."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Item Group Milestone Progress",
+            "description": "The Milestones widget could not count requirements built from an item group, because it counts items by name on your device and an item group is not an item name. Those milestones sat at \"Tracked on server\" with an empty bar, and mixed milestones quietly left their groups out of the total. Progress for them now comes from the server."
+          },
+          {
+            "title": "Undercounted Progress",
+            "description": "Milestone progress is now the higher of what your device has in history and what the server counts. History is pruned after 90 days and leaves out anything an ignore rule hid, so it could report less progress than the milestone was actually credited with."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Android App v1.8.2 Released!**\n\n**Fixes**\n• **Item Group Milestones Show Progress**: Milestones built from item groups (Essences, Medals, and the like) sat at \"Tracked on server\" with an empty bar. They now show a real count and fill in like every other milestone.\n• **More Accurate Counts**: Progress no longer undercounts items that aged out of your history or were hidden by your ignore list.\n\nPinned widgets pick this up on their own - no need to remove and re-add them.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "Fixed: Milestones built from item groups now show real progress in the Milestones widget. They previously showed \"Tracked on server\" with an empty bar.\n\nFixed: Milestone progress no longer undercounts items that aged out of your history or were hidden by your ignore list.\n\nPinned widgets pick this up automatically.",
+        "github": "### Fixed\n- **Item-group milestone progress**: The Milestones widget left any requirement backed by a datapackage item group indeterminate and excluded it from the totals, so a milestone made entirely of groups rendered as \"Tracked on server\" with an empty bar. Group requirements now display real progress from the server's `acquired` count. Requires server 1.8.0.\n- **Undercounted progress on plain items**: counts now take `max(local history, server acquired)`. Local history is live but lossy — pruned by the retention window, and missing anything excluded by an ignore rule."
+      }
+    },
+    {
       "version": "1.8.1",
       "component": "app",
       "component_label": "App",
@@ -458,6 +494,47 @@
     }
   ],
   "server_releases": [
+    {
+      "version": "1.8.0",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-17",
+      "title": "Milestone Progress API & Startup Migrations",
+      "highlights": [
+        {
+          "title": "Per-Requirement Milestone Progress",
+          "description": "The threshold-groups endpoint now returns an acquired count for each requirement, expanding item groups against the datapackage so clients can display progress they cannot compute themselves."
+        },
+        {
+          "title": "Schema Migrations Run On Startup",
+          "description": "Alembic now runs from the application factory under an advisory lock, so a database can no longer be left behind the code by a missed manual step."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Milestone Progress in the Threshold Groups API",
+            "description": "GET /rooms/<id>/slots/<slot_id>/threshold-groups returns an `acquired` count per requirement. Item groups are expanded against `item_name_groups_json` and summed over `SlotItemCount`, the same data the milestone trigger reads, so reported progress matches what fires the notification. A requirement whose name or datapackage cannot be resolved is omitted rather than reported as 0, and any failure yields a null count without breaking the definitions fetch."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Automatic Schema Migration on Startup",
+            "description": "create_app runs `alembic upgrade heads` for Postgres under a session-scoped advisory lock, so the API and poller cannot race each other. This replaces the manual `docker exec ... alembic upgrade heads` step; a container restart can now migrate the database."
+          },
+          {
+            "title": "Dev Containers Mount the Running Package",
+            "description": "docker-compose.dev.yml mounts ./backend/app at /app/app instead of ./backend at /app/backend, which was an unused second copy that left the real code baked into the image. Backend edits no longer require an image rebuild."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Added\n- **Per-requirement milestone progress**: `GET /rooms/<id>/slots/<slot_id>/threshold-groups` now returns an `acquired` count per requirement. Item groups are expanded against `item_name_groups_json` and summed over `SlotItemCount` — the same data the milestone trigger reads, so displayed progress matches what fires the notification. A requirement whose name or datapackage cannot be resolved is omitted rather than reported as `0`, and any failure yields `acquired: null` without breaking the definitions fetch.\n\n### Changed\n- **Schema migrations run on startup**: `create_app` runs `alembic upgrade heads` for Postgres under a session-scoped advisory lock, so the API and poller cannot race. This replaces the manual `docker exec ... alembic upgrade heads` step — a container restart can now migrate.\n- **Dev containers mount the running package**: `docker-compose.dev.yml` mounts `./backend/app` at `/app/app` instead of `./backend` at `/app/backend` (an unused second copy), so backend edits no longer require an image rebuild."
+      }
+    },
     {
       "version": "1.7.1",
       "component": "server",
