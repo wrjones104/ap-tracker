@@ -28,7 +28,9 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-if config.config_file_name is not None:
+# Skipped when the app runs migrations itself on startup (app/db_migrations.py), where this would
+# replace the logging configuration the application has already installed.
+if config.config_file_name is not None and config.attributes.get('configure_logger', True):
     fileConfig(config.config_file_name)
 
 # add your model's MetaData object here
