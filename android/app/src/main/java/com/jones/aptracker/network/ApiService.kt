@@ -528,7 +528,13 @@ data class ThresholdGroupItem(
     val id: Int? = null,
     val item_name: String,
     val quantity: Int,
-    val is_group: Boolean = false
+    val is_group: Boolean = false,
+    /**
+     * Server-side count for this requirement, or null when the server could not resolve it (or is
+     * older than this field). Item-group requirements have no other source of progress: the client
+     * knows a name is a group but not which items belong to it.
+     */
+    val acquired: Int? = null
 )
 
 data class CreateThresholdGroupRequest(
