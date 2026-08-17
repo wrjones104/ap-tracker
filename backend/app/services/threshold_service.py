@@ -168,6 +168,115 @@ def evaluate_threshold_groups(session, room_db_id, room_uuid, game_checksums, gr
     return notifications_by_user
 
 
+def _resolve_slot_checksum(room, slot_id):
+    """Datapackage checksum for the game a slot is playing, or None if it cannot be resolved."""
+    try:
+        players = json.loads(room.cached_players_json or '[]')
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    game = next((p.get('game') for p in players if p.get('slot_id') == slot_id), None)
+    if not game:
+        return None
+
+    try:
+        checksums = json.loads(room.game_checksums_json or '{}')
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(checksums, dict):
+        return None
+
+    checksum = checksums.get(game)
+    if checksum:
+        return checksum
+
+    game_lower = game.lower()
+    return next(
+        (v for k, v in checksums.items() if isinstance(k, str) and k.lower() == game_lower),
+        None
+    )
+
+
+def compute_requirement_progress(session, room, slot_id, requirements):
+    """
+    Per-requirement acquired counts for one tracked slot, keyed by ThresholdGroupItem id.
+
+    Mirrors the expansion evaluate_threshold_groups performs: an item-group requirement is
+    resolved against the game's item_name_groups datapackage entry and summed over every member,
+    and the counts come from SlotItemCount -- the same table that decides when a milestone
+    actually fires. Clients cannot do this themselves; the datapackage exposes only an is_group
+    flag to them, not membership.
+
+    A requirement is omitted from the result (rather than reported as 0) whenever its name or its
+    game's datapackage cannot be resolved, so a caller can tell "nothing acquired yet" apart from
+    "not knowable" and render accordingly.
+
+    Deliberately does not heal a stale datapackage cache: this runs on a read path the Milestones
+    widget calls once per tracked slot, and healing opens a WebSocket to the Archipelago server.
+    """
+    if not requirements:
+        return {}
+
+    checksum = _resolve_slot_checksum(room, slot_id)
+    if not checksum:
+        return {}
+
+    name_to_id = {}
+    for name, entity_id in session.query(
+        DatapackageCache.entity_name, DatapackageCache.entity_id
+    ).filter(
+        DatapackageCache.checksum == checksum,
+        DatapackageCache.entity_type == 'item'
+    ).all():
+        name_to_id[name.lower().strip()] = entity_id
+
+    requested_groups = {r.item_name.lower().strip() for r in requirements if r.is_group}
+    group_expansions = {}
+    if requested_groups:
+        groups_row = session.query(DatapackageCache.entity_name).filter(
+            DatapackageCache.checksum == checksum,
+            DatapackageCache.entity_type == 'item_name_groups_json'
+        ).first()
+        if groups_row and groups_row[0]:
+            try:
+                parsed = json.loads(groups_row[0])
+                if isinstance(parsed, dict):
+                    for g_name, members in parsed.items():
+                        g_key = g_name.lower().strip()
+                        if g_key in requested_groups and isinstance(members, list):
+                            group_expansions[g_key] = {m.lower().strip() for m in members}
+            except Exception as e:
+                logging.warning(f"[MILESTONE_PROGRESS] Bad item_name_groups_json for checksum {checksum}: {e}")
+
+    counts_by_item_id = {}
+    for item_id, count in session.query(SlotItemCount.item_id, SlotItemCount.count).filter(
+        SlotItemCount.room_id == room.room_id,
+        SlotItemCount.slot_id == slot_id
+    ).all():
+        counts_by_item_id[item_id] = count
+
+    progress = {}
+    for req in requirements:
+        req_key = req.item_name.lower().strip()
+        if req.is_group:
+            members = group_expansions.get(req_key)
+            if members is None:
+                continue
+            total = 0
+            for member_name in members:
+                member_id = name_to_id.get(member_name)
+                if member_id is not None:
+                    total += counts_by_item_id.get(member_id, 0)
+        else:
+            item_id = name_to_id.get(req_key)
+            if item_id is None:
+                continue
+            total = counts_by_item_id.get(item_id, 0)
+        progress[req.id] = total
+
+    return progress
+
+
 def reconcile_slot_item_counts(session=None):
     """
     Recalculates SlotItemCount table directly from NotifiedItem table room by room.

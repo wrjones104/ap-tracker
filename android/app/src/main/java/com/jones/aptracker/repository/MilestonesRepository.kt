@@ -133,8 +133,12 @@ object MilestonesRepository {
      *
      * This is the default path for sync-driven refreshes. Milestone *definitions* only change when
      * the user edits them (covered by [refreshSlot]) or when the server flips `is_triggered`;
-     * progress itself is recomputed locally from history on every read. Without this gate, every
-     * incoming push would pay a full per-slot fan-out for data that almost never changed.
+     * progress on plain items is recomputed locally from history on every read. Without this gate,
+     * every incoming push would pay a full per-slot fan-out for data that almost never changed.
+     *
+     * Item-group progress is the one thing that can only arrive with a refresh, since the server
+     * counts it (see `acquired` on `ThresholdGroupItem`). It therefore lags by at most this window
+     * -- in practice much less, because a push-driven sync refreshes on the way through.
      */
     suspend fun refreshCacheIfStale(
         context: Context,
@@ -424,12 +428,12 @@ object MilestonesRepository {
             val reqQty = maxOf(itemReq.quantity, 1)
 
             // Item-group requirements are expanded against the datapackage server-side (see
-            // poller.py) and summed across every member item. The client has no membership data --
-            // /games/<game>/items exposes only an is_group flag -- so counting the literal group
-            // name here would always yield 0 and render a confidently wrong "0/4". Leave these
-            // indeterminate and out of the totals; the server's is_triggered flag is what resolves
-            // them.
-            if (itemReq.is_group && !isTriggered) {
+            // threshold_service.compute_requirement_progress) and summed across every member item.
+            // The client has no membership data -- /games/<game>/items exposes only an is_group
+            // flag -- so the server's `acquired` count is the only source of progress for them.
+            // Without it (older server, or a datapackage it could not resolve) they stay
+            // indeterminate and out of the totals, resolved only by the is_triggered flag.
+            if (itemReq.is_group && !isTriggered && itemReq.acquired == null) {
                 return@map MilestoneItemProgress(
                     itemName = itemReq.item_name,
                     quantityAcquired = MilestoneItemProgress.UNKNOWN_QUANTITY,
@@ -440,10 +444,18 @@ object MilestonesRepository {
 
             totalRequired += reqQty
 
+            // Plain items take the higher of the two counts. Local history is live but lossy -- it
+            // is pruned by the retention window and excludes items the user filtered out -- while
+            // the server count is the one the milestone actually triggers on.
             val acquiredQty = if (isTriggered) {
                 reqQty
             } else {
-                minOf(countsByItem[itemReq.item_name.lowercase().trim()] ?: 0, reqQty)
+                val localCount = if (itemReq.is_group) {
+                    0
+                } else {
+                    countsByItem[itemReq.item_name.lowercase().trim()] ?: 0
+                }
+                minOf(maxOf(localCount, itemReq.acquired ?: 0), reqQty)
             }
 
             if (!isTriggered) {

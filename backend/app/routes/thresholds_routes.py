@@ -3,8 +3,9 @@ from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import selectinload
 
 from app import Session
-from app.models import UserTrackedSlot, ThresholdGroup, ThresholdGroupItem
+from app.models import UserTrackedSlot, ThresholdGroup, ThresholdGroupItem, TrackedRoom
 from app.routes.common import log_api_call, token_required, handle_db_errors
+from app.services.threshold_service import compute_requirement_progress
 
 thresholds_bp = Blueprint('thresholds_routes', __name__)
 
@@ -27,6 +28,22 @@ def get_threshold_groups(current_user, room_db_id, slot_id):
             user_tracked_slot_id=tracked_slot.id
         ).options(selectinload(ThresholdGroup.items)).all()
 
+        # Progress is advisory: clients render it, they do not act on it, and item-group
+        # requirements are the only ones they cannot count for themselves. Never let a failure
+        # here take down the definitions fetch -- 'acquired' simply comes back null.
+        progress = {}
+        all_items = [item for g in groups for item in g.items]
+        if all_items:
+            try:
+                room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+                if room:
+                    progress = compute_requirement_progress(session, room, slot_id, all_items)
+            except Exception as e:
+                logging.error(
+                    f"Failed to compute milestone progress for room {room_db_id} slot {slot_id}: {e}",
+                    exc_info=True
+                )
+
         return jsonify([{
             'id': g.id,
             'name': g.name,
@@ -35,7 +52,8 @@ def get_threshold_groups(current_user, room_db_id, slot_id):
                 'id': item.id,
                 'item_name': item.item_name,
                 'quantity': item.quantity,
-                'is_group': item.is_group
+                'is_group': item.is_group,
+                'acquired': progress.get(item.id)
             } for item in g.items]
         } for g in groups])
     finally:
