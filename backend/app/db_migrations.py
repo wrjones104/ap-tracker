@@ -47,27 +47,41 @@ def _reconcile_overlapping_heads(conn, config):
     """
     try:
         rows = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-        if len(rows) <= 1:
-            return
+    except Exception as e:
+        # Fresh database: the table is created by the first upgrade.
+        logging.debug(f"[MIGRATE] No alembic_version table to reconcile: {e}")
+        return
 
-        script = ScriptDirectory.from_config(config)
-        redundant = set()
-        for rev_id in rows:
+    if len(rows) <= 1:
+        return
+
+    present = set(rows)
+    script = ScriptDirectory.from_config(config)
+    redundant = set()
+    for rev_id in rows:
+        try:
             rev = script.get_revision(rev_id)
-            if rev:
-                for ancestor in script.revision_map._get_ancestor_nodes([rev]):
-                    if ancestor.revision != rev_id and ancestor.revision in rows:
-                        redundant.add(ancestor.revision)
+        except Exception as e:
+            # An entry with no revision file left in the tree; upgrade will report it properly.
+            logging.warning(f"[MIGRATE] Cannot resolve applied revision {rev_id}, leaving it in place: {e}")
+            continue
 
-        for rev_id in redundant:
-            logging.info(f"[MIGRATE] Pruning redundant ancestor revision {rev_id} from alembic_version")
+        if rev is None:
+            continue
+
+        for ancestor in script.revision_map._get_ancestor_nodes([rev], include_dependencies=False):
+            if ancestor.revision != rev_id and ancestor.revision in present:
+                redundant.add(ancestor.revision)
+
+    for rev_id in redundant:
+        logging.info(f"[MIGRATE] Pruning redundant ancestor revision {rev_id} from alembic_version")
+        try:
             conn.execute(
                 text("DELETE FROM alembic_version WHERE version_num = :rev"),
                 {"rev": rev_id},
             )
-    except Exception as e:
-        # Table might not exist yet on a fresh database, or other non-fatal pre-flight exception
-        logging.debug(f"[MIGRATE] Pre-migration head reconciliation skipped: {e}")
+        except Exception as e:
+            logging.warning(f"[MIGRATE] Failed to prune {rev_id}: {e}")
 
 
 def upgrade_to_head(engine):
