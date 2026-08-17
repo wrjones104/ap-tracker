@@ -182,8 +182,11 @@ def create_app():
         models.Base.metadata.create_all(engine)
         logging.info("[MAIN] SQLite DB detected. Tables verified/created.")
     else:
-        # For prod (Postgres), we trust Alembic to handle the schema.
-        logging.info("[MAIN] Production database engine initialized.")
+        # Postgres is migrated by Alembic, on startup rather than by hand: every entry point
+        # (run.py, run_api_only.py, run_poller_only.py) goes through create_app, so dev and prod
+        # get the same guarantee without either compose file having to arrange it.
+        from .db_migrations import upgrade_to_head
+        upgrade_to_head(engine)
 
 
     @app.teardown_appcontext

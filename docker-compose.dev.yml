@@ -52,7 +52,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./backend:/app/backend
+      # The Dockerfile does `COPY backend/ /app/`, so the running package is /app/app. Mounting
+      # ./backend at /app/backend put a second, unused copy in the image and left the real code
+      # baked in, which meant every backend edit needed a rebuild. Mount the package itself.
+      - ./backend/app:/app/app
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini
     depends_on:
@@ -78,7 +81,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./backend:/app/backend
+      - ./backend/app:/app/app
     depends_on:
       postgres:
         condition: service_healthy
