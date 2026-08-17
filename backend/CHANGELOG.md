@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.8.1] - 2026-08-17
+
+_Automatic Alembic Head Reconciliation_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - **Self-healing Alembic startup migration**: `db_migrations.py` now detects and reconciles overlapping version entries in `alembic_version` prior to calling `alembic upgrade heads`. If historical branch heads were linearized or re-parented after being applied, redundant ancestor records are pruned automatically under the migration advisory lock.
+> ```
+
+### Fixed
+- **Self-Healing Migration Startup**: Automatic migration on startup now reconciles overlapping version entries in `alembic_version` under the advisory lock. If branch heads were previously applied and then linearized or re-parented, redundant ancestor records are pruned before running `alembic upgrade heads`.
+
+---
+
 ## [1.8.0] - 2026-08-17
 
 _Milestone Progress API & Startup Migrations_
