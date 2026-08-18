@@ -12,6 +12,7 @@ from app.models import (
     UserIgnoreItem, UserWhitelistItem, NotifiedItem
 )
 from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z
+from app.utils import parse_cached_checks, VALID_FINISHED_DEFINITIONS
 
 slots_bp = Blueprint('slots_routes', __name__)
 
@@ -160,6 +161,17 @@ def update_slot_preferences(current_user, room_db_id, slot_id):
             if field in data:
                 val = data[field]
                 setattr(slot, field, bool(val) if val is not None else None)
+
+        # Handled separately: the loop above coerces with bool(), which would
+        # turn any non-empty definition string into True.
+        if 'finished_definition' in data:
+            val = data['finished_definition']
+            if val is None:
+                slot.finished_definition = None
+            elif val in VALID_FINISHED_DEFINITIONS:
+                slot.finished_definition = val
+            else:
+                return jsonify({'error': 'Invalid finished_definition.'}), 400
 
         session.commit()
         return jsonify({'message': 'Slot preferences updated successfully'}), 200
@@ -358,6 +370,9 @@ def get_user_tracked_slots(current_user):
                 players_json = []
 
             players_map = {p['slot_id']: p for p in players_json}
+            checks_map = parse_cached_checks(room_data.cached_checks_json)
+            # null = counts never fetched for this room (see rooms_routes).
+            checks_known = bool(checks_map)
 
             # Parse the room's cached Cheese Tracker data (if any) once per room,
             # indexed by slot position, so we can attach per-slot Cheese state.
@@ -386,6 +401,8 @@ def get_user_tracked_slots(current_user):
                 p_name = p_obj.get('name', f"Player {slot.slot_id}") if p_obj else f"Player {slot.slot_id}"
                 p_alias = p_obj.get('alias') if p_obj else None
                 p_finished = p_obj.get('is_finished', False) if p_obj else False
+                p_all_checks = (p_obj.get('has_all_checks', False) if p_obj else False) if checks_known else None
+                p_total_locations = p_obj.get('total_locations', 0) if p_obj else 0
                 p_game = p_obj.get('game') if p_obj else None
 
                 slot_last_activity = last_activity_map.get((room_data.room_id, slot.slot_id))
@@ -405,7 +422,11 @@ def get_user_tracked_slots(current_user):
                     'slot_id': slot.slot_id,
                     'player_name': p_name,
                     'player_alias': p_alias,
+                    # Goal-only, for backward compatibility with older app builds.
                     'is_finished': p_finished,
+                    'has_all_checks': p_all_checks,
+                    'checks_done': checks_map.get(slot.slot_id) if checks_known else None,
+                    'total_locations': p_total_locations,
                     'game': p_game,
                     'last_activity': format_iso_z(slot_last_activity),
                     'item_count': slot_item_count,
@@ -417,6 +438,7 @@ def get_user_tracked_slots(current_user):
                     'notify_hints': slot.notify_hints,
                     'notify_hints_remote_items': slot.notify_hints_remote_items,
                     'notify_finished': slot.notify_finished,
+                    'finished_definition': slot.finished_definition,
                     'use_condensed_messages': slot.use_condensed_messages,
                     'combine_notifications': slot.combine_notifications,
                     'suppress_own_events': slot.suppress_own_events,

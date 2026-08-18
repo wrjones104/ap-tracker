@@ -319,6 +319,7 @@ def get_item_history(current_user, room_db_id):
         sender_game = game_map.get(sender_id, "Unknown")
         
         is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
+        has_all_checks = receiver_obj.get('has_all_checks', False) if receiver_obj else False
         
         rec_checksum = game_checksums.get(receiver_game)
         snd_checksum = game_checksums.get(sender_game)
@@ -350,6 +351,7 @@ def get_item_history(current_user, room_db_id):
             "slot_id": receiver_id,
             "host": room.hostname,
             "isPlayerFinished": is_finished,
+            "playerHasAllChecks": has_all_checks,
             "itemFlags": item.item_flags or 0,
             "_item_name_key": item_name_key,
             "_loc_name_key": location_name_key,
@@ -413,6 +415,7 @@ def get_item_history(current_user, room_db_id):
             "senderGame": temp_item["senderGame"],
             "locationName": location_name,
             "isPlayerFinished": temp_item["isPlayerFinished"],
+            "playerHasAllChecks": temp_item.get("playerHasAllChecks", False),
             "itemFlags": temp_item["itemFlags"],
             "timestamp": temp_item["timestamp"],
             "room_db_id": room.id,
@@ -734,6 +737,7 @@ def sync_history(current_user):
         sender_game = game_map.get(sender_id, "Unknown")
         
         is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
+        has_all_checks = receiver_obj.get('has_all_checks', False) if receiver_obj else False
         
         rec_checksum = game_checksums.get(receiver_game)
         snd_checksum = game_checksums.get(sender_game)
@@ -764,6 +768,7 @@ def sync_history(current_user):
             "senderGame": sender_game,
             "locationName": location_name,
             "isPlayerFinished": is_finished,
+            "playerHasAllChecks": has_all_checks,
             "itemFlags": item.item_flags or 0,
             "timestamp": format_iso_z(item.timestamp),
             "tracker_id": room_data.tracker_id,
@@ -1050,6 +1055,7 @@ def get_global_item_history(current_user):
         sender_game = game_map.get(sender_id, "Unknown")
         
         is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
+        has_all_checks = receiver_obj.get('has_all_checks', False) if receiver_obj else False
 
         rec_checksum = game_checksums.get(receiver_game)
         snd_checksum = game_checksums.get(sender_game)
@@ -1086,6 +1092,7 @@ def get_global_item_history(current_user):
             "_raw_loc_id": item.location_id,
             "_game_checksum": rec_checksum,
             "isPlayerFinished": is_finished,
+            "playerHasAllChecks": has_all_checks,
             "itemFlags": item.item_flags or 0,
             "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
         })
@@ -1147,6 +1154,7 @@ def get_global_item_history(current_user):
             "senderGame": temp_item['senderGame'],
             "locationName": location_name,
             "isPlayerFinished": temp_item['isPlayerFinished'],
+            "playerHasAllChecks": temp_item.get('playerHasAllChecks', False),
             "itemFlags": temp_item['itemFlags'],
             "timestamp": temp_item["timestamp"],
             "tracker_id": temp_item["tracker_id"],
