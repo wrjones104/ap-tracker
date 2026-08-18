@@ -372,10 +372,21 @@ def evaluate_finished(is_goaled, has_all_checks, definition):
     """
     Single source of truth for whether a slot counts as "finished".
 
+    has_all_checks may be None, meaning "we have never fetched check counts for
+    this room". That is distinct from False ("fetched, and they still have
+    locations out"), and every definition degrades to goal-only when it is
+    unknown. Otherwise a room whose counts we have never seen -- an archived
+    async that gets un-archived, or a host that does not serve
+    player_checks_done -- would report every goaled slot as unfinished, which is
+    the exact complaint this feature exists to fix, inverted.
+
     Unrecognized definitions (including None, and values written by a newer
     server than this process) fall back to 'goal' rather than raising -- a bad
     row must never be able to break a poll cycle.
     """
+    if has_all_checks is None:
+        return bool(is_goaled)
+
     if definition == 'all_checks':
         return bool(has_all_checks)
     if definition == 'both':

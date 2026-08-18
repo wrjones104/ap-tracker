@@ -349,6 +349,10 @@ def get_room_players(current_user, room_db_id):
             players_list = []
 
         checks_map = parse_cached_checks(room.cached_checks_json)
+        # None (JSON null) means "counts never fetched for this room", which is
+        # distinct from False. Clients must treat null as unknown and fall back
+        # to goal-only rather than reporting the slot as unfinished.
+        checks_known = bool(checks_map)
 
         tracked_slots_query = session.query(UserTrackedSlot).filter_by(
             user_id=current_user.id,
@@ -377,8 +381,8 @@ def get_room_players(current_user, room_db_id):
                 # their existing behavior. Clients that understand the newer facts
                 # evaluate the user's chosen definition themselves.
                 'is_finished': p.get('is_finished', False),
-                'has_all_checks': p.get('has_all_checks', False),
-                'checks_done': checks_map.get(slot_id_int, 0),
+                'has_all_checks': p.get('has_all_checks', False) if checks_known else None,
+                'checks_done': checks_map.get(slot_id_int) if checks_known else None,
                 'total_locations': p.get('total_locations', 0),
                 'is_tracked': is_tracked,
                 'needs_backfill': tracked_slot_entry.needs_backfill if tracked_slot_entry else False,

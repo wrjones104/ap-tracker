@@ -371,6 +371,8 @@ def get_user_tracked_slots(current_user):
 
             players_map = {p['slot_id']: p for p in players_json}
             checks_map = parse_cached_checks(room_data.cached_checks_json)
+            # null = counts never fetched for this room (see rooms_routes).
+            checks_known = bool(checks_map)
 
             # Parse the room's cached Cheese Tracker data (if any) once per room,
             # indexed by slot position, so we can attach per-slot Cheese state.
@@ -399,7 +401,7 @@ def get_user_tracked_slots(current_user):
                 p_name = p_obj.get('name', f"Player {slot.slot_id}") if p_obj else f"Player {slot.slot_id}"
                 p_alias = p_obj.get('alias') if p_obj else None
                 p_finished = p_obj.get('is_finished', False) if p_obj else False
-                p_all_checks = p_obj.get('has_all_checks', False) if p_obj else False
+                p_all_checks = (p_obj.get('has_all_checks', False) if p_obj else False) if checks_known else None
                 p_total_locations = p_obj.get('total_locations', 0) if p_obj else 0
                 p_game = p_obj.get('game') if p_obj else None
 
@@ -423,7 +425,7 @@ def get_user_tracked_slots(current_user):
                     # Goal-only, for backward compatibility with older app builds.
                     'is_finished': p_finished,
                     'has_all_checks': p_all_checks,
-                    'checks_done': checks_map.get(slot.slot_id, 0),
+                    'checks_done': checks_map.get(slot.slot_id) if checks_known else None,
                     'total_locations': p_total_locations,
                     'game': p_game,
                     'last_activity': format_iso_z(slot_last_activity),

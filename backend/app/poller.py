@@ -26,7 +26,7 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
-from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks
+from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks, parse_cached_checks
 from app.services.redis_service import get_redis_client, publish_event
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 
@@ -276,7 +276,7 @@ def _parse_player_checks_done(tracker_data):
     return counts, True
 
 
-def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id, prefs_by_user_slot, tracked_slots_by_user, backfill_check_set, full_name_map, short_name_map, aliases_by_user):
+def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id, prefs_by_user_slot, tracked_slots_by_user, backfill_check_set, full_name_map, short_name_map, aliases_by_user, prior_checks_known=False):
     """
     Determines per-slot completion facts and fires 'Player(s) Finished!' notifications.
 
@@ -308,6 +308,12 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
                     network_finished_ids.add(status_info.get('player'))
 
     checks_counts, has_checks_data = _parse_player_checks_done(tracker_data)
+
+    # Whether check counts are trustworthy for this room at all. A room we have
+    # never successfully read counts for -- including hosts that do not serve
+    # player_checks_done -- stays unknown, and every definition degrades to
+    # goal-only rather than reporting goaled slots as unfinished.
+    checks_known = has_checks_data or prior_checks_known
 
     # 2. Update Cache & Build Final Truth
     players_list_updated = False
@@ -400,8 +406,11 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
                 prev_goaled, prev_all_checks, now_goaled, now_all_checks = changed_slots[slot_id]
                 definition = resolve_finished_definition(user_prefs, slot_prefs)
 
-                was_finished = evaluate_finished(prev_goaled, prev_all_checks, definition)
-                is_finished = evaluate_finished(now_goaled, now_all_checks, definition)
+                prev_checks_fact = prev_all_checks if checks_known else None
+                now_checks_fact = now_all_checks if checks_known else None
+
+                was_finished = evaluate_finished(prev_goaled, prev_checks_fact, definition)
+                is_finished = evaluate_finished(now_goaled, now_checks_fact, definition)
 
                 # Only the false -> true edge notifies. Anything else (still
                 # finished, un-finished by a status revert) stays quiet.
@@ -435,7 +444,7 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
                 'details': (room_db_id, user_id, player_names_str)
             })
 
-    return notifications_by_user, goaled_ids, all_checks_ids, checks_counts, players_list_updated
+    return notifications_by_user, goaled_ids, all_checks_ids, checks_counts, checks_known, players_list_updated
 
 def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_in_db, tracked_slots_by_user, game_map, game_checksums, has_item_history):
     """
@@ -633,15 +642,19 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
 
     return hints_to_add, new_hints_for_notify, cache_keys_to_fetch, just_found_hint_item_loc_pairs
 
-def _slot_is_finished_for_user(slot_id, goaled_ids, all_checks_ids, user_prefs, slot_prefs):
+def _slot_is_finished_for_user(slot_id, goaled_ids, all_checks_ids, user_prefs, slot_prefs, checks_known):
     """
     Whether one slot reads as finished for one user, under their own definition.
+
+    checks_known False means the room has no trustworthy check counts, so the
+    all-checks fact is passed as unknown and every definition falls back to goal.
     """
+    has_all_checks = (slot_id in all_checks_ids) if checks_known else None
     definition = resolve_finished_definition(user_prefs, slot_prefs)
-    return evaluate_finished(slot_id in goaled_ids, slot_id in all_checks_ids, definition)
+    return evaluate_finished(slot_id in goaled_ids, has_all_checks, definition)
 
 
-def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, goaled_ids, all_checks_ids, connected_slots_set, item_counts):
+def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, goaled_ids, all_checks_ids, checks_known, connected_slots_set, item_counts):
     """
     Fetches names from DB in chunks and constructs final notification payloads.
     Applies filtering, backfill checks, ignore lists, alias/condensed formatting, and snooze logic.
@@ -783,7 +796,7 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
 
                     # Check Finished Suppression
                     wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
-                    if not wants_finished_notifs and _slot_is_finished_for_user(rid, goaled_ids, all_checks_ids, user_prefs, slot_prefs):
+                    if not wants_finished_notifs and _slot_is_finished_for_user(rid, goaled_ids, all_checks_ids, user_prefs, slot_prefs, checks_known):
                         logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed item for Slot {rid} (Slot Finished).")
                         continue
 
@@ -913,7 +926,7 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                 if relevant_slot_prefs and relevant_slot_prefs.notify_finished is not None:
                     wants_finished_notifs = relevant_slot_prefs.notify_finished
 
-                if not wants_finished_notifs and _slot_is_finished_for_user(relevant_slot, goaled_ids, all_checks_ids, user_prefs, relevant_slot_prefs):
+                if not wants_finished_notifs and _slot_is_finished_for_user(relevant_slot, goaled_ids, all_checks_ids, user_prefs, relevant_slot_prefs, checks_known):
                     logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed hint for Slot {relevant_slot} (Slot Finished).")
                     continue
 
@@ -1373,9 +1386,12 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                 backfill_check_set = {k for k in backfill_check_set if k[0] != uid}
 
         # --- LOGIC STEP 1: Check Player Completions ---
-        finish_notifs, goaled_ids, all_checks_ids, checks_counts, players_updated_finished = _check_player_completion(
+        prior_checks_known = bool(parse_cached_checks(room.cached_checks_json))
+
+        finish_notifs, goaled_ids, all_checks_ids, checks_counts, checks_known, players_updated_finished = _check_player_completion(
             tracker_data, players, db_id, users_by_id, prefs_by_user_slot,
-            tracked_slots_by_user, backfill_check_set, full_name_map, short_name_map, aliases_by_user
+            tracked_slots_by_user, backfill_check_set, full_name_map, short_name_map, aliases_by_user,
+            prior_checks_known
         )
 
         if players_updated_finished:
@@ -1463,7 +1479,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
             all_cache_keys, new_items_notif, new_hints_notif,
             users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, 
             full_name_map, short_name_map,
-            backfill_check_set, just_found_hints, goaled_ids, all_checks_ids, connected_slots_set,
+            backfill_check_set, just_found_hints, goaled_ids, all_checks_ids, checks_known, connected_slots_set,
             count_updates
         )
 
@@ -1738,6 +1754,11 @@ async def run_room_poll(room_info, loop):
     last_known_activity = room_data['last_remote_activity']
     cached_address = room_data.get('cached_full_address')
     needs_backfill = room_data.get('needs_backfill', False)
+    has_tracked_slots = room_data.get('has_tracked_slots', False)
+
+    # Rooms cached before completion facts existed carry no 'has_all_checks'
+    # key. Mirrors the has_total_locations re-setup guard in the supervisor.
+    has_completion_facts = '"has_all_checks":' in (room_data.get('cached_players_json_str') or "")
 
     if not tracker_id: return
 
@@ -1808,6 +1829,16 @@ async def run_room_poll(room_info, loop):
 
     if needs_backfill:
         logging.info(f"[POLLER_GATE] needs_backfill detected for Room {db_id}. Forcing poll to backfill new slots.")
+        should_fetch_tracker = True
+
+    # Reason 4: no completion facts yet. Without this a room that is already
+    # finished never sees new activity, so the gate never opens, so its check
+    # counts are never fetched -- and every goaled slot would read as unfinished
+    # under a definition that needs them. One poll is enough: 'has_all_checks'
+    # is written unconditionally once processing reaches that point, so this
+    # clears itself even on hosts that never serve player_checks_done.
+    if not has_completion_facts and has_tracked_slots:
+        logging.info(f"[POLLER_GATE] Room {db_id} has no completion facts cached. Forcing one poll to populate them.")
         should_fetch_tracker = True
 
     # FINAL DECISION
@@ -1943,9 +1974,20 @@ def db_read_room_poll_state(db_id):
             UserRoomSubscription.is_archived == False
         ).first() is not None
 
+        # db_process_poll_data bails before computing completion facts when a
+        # room has no active tracked slots, so the gatekeeper must not force
+        # polls for those rooms -- it would refetch forever and never persist.
+        has_tracked_slots = session.query(UserTrackedSlot.id).join(
+            UserRoomSubscription
+        ).filter(
+            UserTrackedSlot.room_id == db_id,
+            UserRoomSubscription.is_archived == False
+        ).first() is not None
+
         return {
             'room_uuid': room.room_id,
             'tracker_id': room.tracker_id,
+            'has_tracked_slots': has_tracked_slots,
             'cached_players_json_str': room.cached_players_json,
             'game_checksums_json_str': room.game_checksums_json,
             'is_complete_status': room.is_complete,
