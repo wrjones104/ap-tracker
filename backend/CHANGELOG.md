@@ -10,6 +10,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.8.2] - 2026-08-18
+
+_Milestone Group Edits & Migration Hardening_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts Backend v1.8.2 Released!**
+>
+> **Fixes**
+> • **Milestone Group Edits Now Save**: Editing a milestone group reported success and then showed the old items again — the change was never written. Your edits now stick.
+> • **Steadier Startup Migrations**: Migration cleanup on startup is stricter about which records it prunes, and now reports problems instead of quietly skipping them.
+>
+> Server-side only — no app update needed.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - **Milestone group edits were silently discarded**: `PUT /rooms/<id>/slots/<slot_id>/threshold-groups/<group_id>` returned `200 {'message': 'Threshold group updated'}` without committing. The route relied on the implicit `session.commit()` in `handle_db_errors`, which cannot fire for it: `token_required` calls `Session.remove()` before the route body runs, so the decorator holds a different session than the one the route mutates, and its closing `Session.remove()` rolled the real transaction back. The route now commits explicitly, and flushes the `delete-orphan` cascade between `items.clear()` and the re-append so an item removed and re-added in one edit does not collide with its own outgoing row. Adds 9 regression tests in `backend/tests/test_threshold_group_crud.py` that re-read over HTTP rather than through the ORM session. See #258.
+> - **Alembic head reconciliation hardening**: `_reconcile_overlapping_heads` no longer wraps the whole routine in one broad `except`. A missing `alembic_version` table (fresh database) is now distinguished from a real failure; revisions with no file left in the tree are left in place with a warning instead of being swallowed; ancestor walking passes `include_dependencies=False` so cross-branch dependency edges are not mistaken for ancestry and wrongly pruned; and each `DELETE` is isolated so one failure cannot abort the rest.
+> ```
+
+### Fixed
+- **Milestone Group Edits Discarded**: Saving an edited milestone group returned success without writing the change, so the app re-read the old items. The update route relied on an implicit commit that could never fire for it, because the session it mutated was not the session being committed. It now commits explicitly, and removing and re-adding the same item in one edit no longer collides with its own outgoing row.
+- **Migration Reconciliation Hardening**: Startup reconciliation of overlapping `alembic_version` entries no longer hides every failure behind one broad `except`. A missing version table on a fresh database is distinguished from a real error, revisions with no file left in the tree are kept in place with a warning rather than swallowed, ancestor walking ignores cross-branch dependency edges so unrelated revisions are not wrongly pruned, and each delete is isolated so one failure cannot abort the rest.
+
+---
+
 ## [1.8.1] - 2026-08-17
 
 _Automatic Alembic Head Reconciliation_
