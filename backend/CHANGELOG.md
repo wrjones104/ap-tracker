@@ -10,6 +10,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.9.0] - 2026-08-18
+
+_Groundwork for User-Defined “Finished”_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> Server-side groundwork for user-configurable "finished" semantics. **No user-visible behavior change**: every account defaults to `goal`, which is what the app has always done. The setting UI ships separately with the Android client (Phase 2).
+>
+> ### Added
+> - **Two independent completion facts per slot.** `is_finished` continues to mean ClientStatus 30 (goal) and is unchanged on the wire, so older app builds behave identically. A new `has_all_checks` is derived from `player_checks_done` in `/api/tracker/<id>` compared against `player_locations_total` from `/api/static_tracker/<id>` — both already fetched and parsed each poll, so no additional Archipelago requests. These diverge only when a room has release disabled, which is the case this exists for.
+> - **`finished_definition` preference.** `users.finished_definition_default` (default `goal`) with a nullable `user_tracked_slots.finished_definition` override. Accepted values: `goal`, `all_checks`, `both`, `either`. Validated separately from the boolean preference loops in `slots_routes` and `user_routes`, which coerce with `bool()` and would otherwise mangle an enum string. Unrecognized values fall back to `goal` rather than raising.
+> - **Per-slot check counts.** `tracked_rooms.cached_checks_json` holds `{slot_id: checks_done}`. Deliberately a separate column from `cached_players_json`, which is TOASTed past roughly 15 slots and is only rewritten when a flag flips — folding a per-poll counter into it would rewrite the whole TOAST value every poll. Written only when a count actually changes.
+> - **Additive API fields**: `has_all_checks`, `checks_done` and `total_locations` on the players and tracked-slot payloads, `playerHasAllChecks` on history items, and `finished_definition` / `finished_definition_default` on the slot and profile payloads. `has_all_checks` and `checks_done` serialize as `null` when a room's counts have never been fetched, which is distinct from `false`.
+> - Migration `c4d21a7f9b83`.
+>
+> ### Changed
+> - **Finish-notification transitions are now evaluated per user.** Because the definition is per-account, "just became finished" differs between two users tracking the same slot and can no longer come from one shared flag flipping. Both facts are cached per slot and each user's false→true edge is computed from their own previous-versus-current evaluation.
+> - **Notification suppression** for finished slots evaluates the effective definition (slot override, then account default) instead of a single shared set.
+> - **`TrackedRoom.is_complete` remains goal-only** and is explicitly not affected by any user preference. It gates whether a room is polled at all, it is a single global column with no user to attribute it to, and a stricter definition would keep release-off rooms polling indefinitely.
+> - **Gatekeeper forced poll** when a room has tracked slots but no cached completion facts, so rooms too idle for the activity gate to open still populate their counts once. Self-clearing after a single poll, including on hosts that never serve `player_checks_done`.
+>
+> ### Notes
+> - `player_checks_done` entries carry a `team`; filtered to team 0, consistent with the existing `player_status` parsing. Multi-team rooms remain unsupported, as before.
+> - `total_locations` of 0 is the failed-static-fetch sentinel and never counts as all-checks.
+> - Validated against a live release-off room with staggered goals: see #260.
+> - Adds 39 tests in `backend/tests/test_finished_definition.py`.
+> ```
+
+### Added
+- **Separate Goal and Check-Completion Tracking**: Completion is now two independent facts per slot rather than one. Goal status still comes from the Archipelago client status; “no items left to send” is derived by comparing each slot's completed locations against its total. Both come from tracker data the poller already downloads, so this costs no extra requests to Archipelago.
+- **Configurable Finished Definition (Not Yet Exposed)**: Accounts and individual tracked slots can now carry a preference for what counts as finished — goal, all checks sent, both, or either — with a per-slot value overriding the account default. Every existing and new account is set to goal, which is the behavior the app has always had. No interface reads or writes this yet.
+
+### Changed
+- **One-Time Catch-Up for Existing Rooms**: Rooms tracked before this release have no check counts recorded. Each one fetches them once shortly after the update so the data is ready when the setting ships. Rooms that never get the chance — finished asyncs that are no longer polled — are treated as unknown rather than incomplete, so their slots keep reading as finished exactly as they do today.
+
+---
+
 ## [1.8.2] - 2026-08-18
 
 _Milestone Group Edits & Migration Hardening_
