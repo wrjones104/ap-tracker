@@ -1,6 +1,7 @@
 # User-Defined "Finished" — Implementation Plan
 
-**Status:** Phase 1 (server) complete and tested. Phase 2 (Android) not started.
+**Status:** Phase 1 (server) complete, tested, and validated against a live release-off room
+(PR #260). Phase 2 (Android) not started.
 **Origin:** Discord request (ChromaNyan, 2026-08-16) — slots that have goaled but not sent all
 their locations are treated as "finished" and hidden, which is wrong for release-off worlds.
 
@@ -320,6 +321,31 @@ mechanical once the facts are on the wire.
 
 ---
 
+## 8a. Completion-fact catch-up (added after dev testing)
+
+`has_all_checks = False` originally did double duty for "fetched, still has locations out" and
+"never fetched counts for this room". Two fixes, and it is worth being precise about which covers
+what -- an earlier draft of this doc got it wrong.
+
+**Unknown is its own state.** `has_all_checks` may be `None`, and every definition degrades to
+goal-only when it is. On the wire it serializes as JSON `null`, so clients get the same tri-state.
+**This is what covers a completed room being un-archived**: `is_complete` is set in exactly one
+place (`poller.py:1414`) and is never reset, and every room-selection query filters
+`is_complete == False`, so such a room is never polled again and stays permanently unknown --
+correctly falling back to goal-only.
+
+**Gatekeeper Reason 4** covers a narrower case: a room that is still active (`is_complete` false,
+not suspended) but too idle for the activity gate to open, which would otherwise sit at unknown
+indefinitely. It forces one poll when the room has tracked slots and `cached_players_json` lacks
+the `has_all_checks` key.
+
+The `has_tracked_slots` guard is load-bearing: `db_process_poll_data` returns before computing
+facts when a room has no active tracked slots (`poller.py:1324`), so without it those rooms would
+force a fetch every cycle forever and never persist anything. The trigger self-clears after one
+poll because `has_all_checks` is written unconditionally once processing reaches that point, even
+on hosts that never serve `player_checks_done`. A test pins the string marker so a rename cannot
+silently disable it.
+
 ## 9. Open risks
 
 - **Transition detection is the subtle part.** Firing a finish notification twice, or never, for
@@ -330,3 +356,7 @@ mechanical once the facts are on the wire.
   meaningfully worse than today.
 - **Multi-team rooms** are out of scope and consistent with existing behavior. If anyone is
   running multi-team, finished detection is already wrong for them today.
+- **Release-off rooms stop polling once everyone goals** (issue #263). Pre-existing and untouched
+  here, but it interacts badly with this feature: a user who picks "Both" specifically to keep
+  seeing release-off slots may find the room stops polling entirely. Worth fixing before Phase 2
+  ships the setting.
