@@ -50,6 +50,11 @@ class User(Base):
     notify_trap_default = Column(Boolean, default=False, nullable=False)
     ui_show_filler_default = Column(Boolean, default=True, nullable=False)
     ui_show_trap_default = Column(Boolean, default=True, nullable=False)
+    # What counts as a "finished" slot for visibility filters and notification
+    # suppression. One of: goal | all_checks | both | either. Anything else is
+    # treated as 'goal'. Does NOT affect TrackedRoom.is_complete, which is
+    # always goal-only. See evaluate_finished() in app/utils.py.
+    finished_definition_default = Column(String(16), default='goal', nullable=False, server_default='goal')
     global_snooze_until = Column(DateTime, nullable=True)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
     whitelist_items = relationship("UserWhitelistItem", back_populates="user", cascade="all, delete-orphan")
@@ -84,6 +89,12 @@ class TrackedRoom(Base):
     cached_total_slots = Column(Integer, default=0)
     last_api_check = Column(DateTime)
     cached_players_json = Column(String, default='[]')
+    # {slot_id: checks_done_count}. Deliberately kept out of cached_players_json:
+    # that column is TOASTed for any room past ~15 slots and is only rewritten
+    # when a finished flag flips, so folding a per-poll counter into it would
+    # rewrite the whole TOAST value every poll. This one stays small enough to
+    # live inline. Only assigned when a count actually changed.
+    cached_checks_json = Column(String, default='{}', server_default='{}')
     is_setup = Column(Boolean, default=False, nullable=False)
     last_remote_activity = Column(DateTime, nullable=True)
     last_revive_attempt = Column(DateTime, nullable=True)
@@ -122,6 +133,8 @@ class UserTrackedSlot(Base):
     suppress_self_found = Column(Boolean, nullable=True, default=None)
     use_condensed_messages = Column(Boolean, nullable=True, default=None)
     suppress_connected = Column(Boolean, nullable=True, default=None)
+    # Per-slot override for User.finished_definition_default. Null = inherit.
+    finished_definition = Column(String(16), nullable=True, default=None)
     snooze_until = Column(DateTime, nullable=True)
     snooze_wake_on_slot_id = Column(Integer, nullable=True)
     user = relationship("User", viewonly=True)    

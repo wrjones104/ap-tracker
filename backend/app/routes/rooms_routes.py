@@ -12,7 +12,7 @@ from flask import Blueprint, request, jsonify, current_app
 
 from app import Session
 from app.models import TrackedRoom, UserRoomSubscription, UserTrackedSlot, DatapackageCache
-from app.utils import verify_ap_server, get_web_base_url
+from app.utils import verify_ap_server, get_web_base_url, parse_cached_checks
 from app.routes.common import log_api_call, token_required, handle_db_errors
 
 from sqlalchemy import func
@@ -348,6 +348,8 @@ def get_room_players(current_user, room_db_id):
         except (json.JSONDecodeError, TypeError):
             players_list = []
 
+        checks_map = parse_cached_checks(room.cached_checks_json)
+
         tracked_slots_query = session.query(UserTrackedSlot).filter_by(
             user_id=current_user.id,
             room_id=room_db_id
@@ -371,7 +373,13 @@ def get_room_players(current_user, room_db_id):
                 'name': p.get('name'),
                 'alias': p.get('alias'),
                 'game': p.get('game'),
+                # is_finished stays goal-only on the wire so older app builds keep
+                # their existing behavior. Clients that understand the newer facts
+                # evaluate the user's chosen definition themselves.
                 'is_finished': p.get('is_finished', False),
+                'has_all_checks': p.get('has_all_checks', False),
+                'checks_done': checks_map.get(slot_id_int, 0),
+                'total_locations': p.get('total_locations', 0),
                 'is_tracked': is_tracked,
                 'needs_backfill': tracked_slot_entry.needs_backfill if tracked_slot_entry else False,
                 'notify_progression': tracked_slot_entry.notify_progression if tracked_slot_entry else None,

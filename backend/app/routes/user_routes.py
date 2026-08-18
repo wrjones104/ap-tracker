@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from app import Session, get_firebase_app
 from app.models import User, Device, JWTBlocklist
 from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z
+from app.utils import VALID_FINISHED_DEFINITIONS
 
 user_bp = Blueprint('user_routes', __name__)
 
@@ -125,6 +126,7 @@ def get_current_user(current_user):
             'notify_trap_default': current_user.notify_trap_default,
             'notify_hints_default': current_user.notify_hints_default,
             'notify_finished_default': current_user.notify_finished_default,
+            'finished_definition_default': current_user.finished_definition_default,
             'use_condensed_messages_default': current_user.use_condensed_messages_default,
             'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
             'combine_notifications_default': current_user.combine_notifications_default,
@@ -166,6 +168,7 @@ def get_current_user(current_user):
             'notify_trap_default': current_user.notify_trap_default,
             'notify_hints_default': current_user.notify_hints_default,
             'notify_finished_default': current_user.notify_finished_default,
+            'finished_definition_default': current_user.finished_definition_default,
             'use_condensed_messages_default': current_user.use_condensed_messages_default,
             'notify_hints_remote_items_default': current_user.notify_hints_remote_items_default,
             'combine_notifications_default': current_user.combine_notifications_default,
@@ -212,6 +215,12 @@ def update_user_preferences(current_user):
             setattr(user, 'notify_finished_default', bool(data['notify_finished']))
         if 'notify_hints_remote_items' in data:
             setattr(user, 'notify_hints_remote_items_default', bool(data['notify_hints_remote_items']))
+        # Validated rather than bool()-coerced: this one is an enum string.
+        if 'finished_definition' in data:
+            val = data['finished_definition']
+            if val not in VALID_FINISHED_DEFINITIONS:
+                return jsonify({'error': 'Invalid finished_definition.'}), 400
+            setattr(user, 'finished_definition_default', val)
         if 'use_condensed_messages' in data:
             setattr(user, 'use_condensed_messages_default', bool(data['use_condensed_messages']))
         if 'ui_show_finished' in data:

@@ -344,3 +344,101 @@ def generate_negative_id(namespace: str, name: str) -> int:
     return val
 
 
+
+
+# =============================================================================
+# "FINISHED" SEMANTICS
+# =============================================================================
+#
+# Archipelago only reports one completion signal directly: ClientStatus 30
+# (CLIENT_GOAL). "All checks" is derived by comparing the slot's checks-done
+# count from /api/tracker's player_checks_done against total_locations from
+# /api/static_tracker's player_locations_total.
+#
+# Those two diverge only when the room has release disabled. With auto-release
+# on, goaling routes every remaining location through register_location_checks,
+# so both facts land together. Release-off rooms are the case this exists for.
+#
+# Note that another player collecting also registers checks against the source
+# player's world, so "all checks" really means "no items remain to be sent from
+# this world" rather than "this player personally checked everything".
+
+VALID_FINISHED_DEFINITIONS = {'goal', 'all_checks', 'both', 'either'}
+
+DEFAULT_FINISHED_DEFINITION = 'goal'
+
+
+def evaluate_finished(is_goaled, has_all_checks, definition):
+    """
+    Single source of truth for whether a slot counts as "finished".
+
+    Unrecognized definitions (including None, and values written by a newer
+    server than this process) fall back to 'goal' rather than raising -- a bad
+    row must never be able to break a poll cycle.
+    """
+    if definition == 'all_checks':
+        return bool(has_all_checks)
+    if definition == 'both':
+        return bool(is_goaled) and bool(has_all_checks)
+    if definition == 'either':
+        return bool(is_goaled) or bool(has_all_checks)
+    return bool(is_goaled)
+
+
+def resolve_finished_definition(user_prefs, slot_prefs):
+    """
+    Effective definition for one user/slot pair: slot override wins, then the
+    user default, then 'goal'.
+    """
+    if slot_prefs is not None:
+        slot_value = getattr(slot_prefs, 'finished_definition', None)
+        if slot_value in VALID_FINISHED_DEFINITIONS:
+            return slot_value
+
+    if user_prefs is not None:
+        user_value = getattr(user_prefs, 'finished_definition_default', None)
+        if user_value in VALID_FINISHED_DEFINITIONS:
+            return user_value
+
+    return DEFAULT_FINISHED_DEFINITION
+
+
+def serialize_cached_checks(counts):
+    """
+    Encodes {slot_id: checks_done_count} for TrackedRoom.cached_checks_json.
+
+    Keys are sorted so the output is byte-stable for a given set of counts --
+    the poller compares the serialized form against the stored one to decide
+    whether to write at all, and an unstable encoding would defeat that.
+    """
+    import json as _json
+    return _json.dumps({str(k): int(v) for k, v in sorted(counts.items())})
+
+
+def parse_cached_checks(cached_checks_json):
+    """
+    Decodes TrackedRoom.cached_checks_json into {slot_id: checks_done_count}.
+
+    JSON object keys are strings, so they are coerced back to ints here to match
+    the slot_id types used everywhere else. Bad or missing data yields {} rather
+    than raising -- callers treat an absent count as 0.
+    """
+    if not cached_checks_json:
+        return {}
+
+    try:
+        import json as _json
+        raw = _json.loads(cached_checks_json)
+    except (ValueError, TypeError):
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    counts = {}
+    for key, value in raw.items():
+        try:
+            counts[int(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return counts
