@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -103,12 +104,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.material.icons.filled.Visibility
 import com.google.accompanist.swiperefresh.SwipeRefresh
@@ -121,6 +127,9 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+
+/** Inline-content key for the finished-status icon in a history row's main text. */
+private const val STATUS_ICON_ID = "finishedStatusIcon"
 
 // --- 1. THE REUSABLE CONTENT ---
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -1178,12 +1187,39 @@ fun ItemHistoryTab(
                                 val displayPlayer = getDisplayName(item.playerName, item.playerAlias, useCondensed)
                                 val displaySender = getDisplayName(item.senderName, item.senderAlias, useCondensed)
 
+                                // A vector icon rather than a literal emoji: it renders the
+                                // same on every device, carries a contentDescription for
+                                // screen readers, and can distinguish "goaled, still has
+                                // items to send" from "fully done" (issue #262).
+                                val fullyDone = item.isPlayerFinished && item.playerHasAllChecks == true
+                                val statusIcon = if (fullyDone) Icons.Filled.CheckCircle else Icons.Filled.Flag
+                                val statusLabel = if (fullyDone) "Goaled, no items left to send" else "Goaled"
+                                val inlineStatusIcon = remember(statusIcon, statusLabel, finishedColor) {
+                                    mapOf(
+                                        STATUS_ICON_ID to InlineTextContent(
+                                            Placeholder(
+                                                width = 1.2.em,
+                                                height = 1.2.em,
+                                                placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = statusIcon,
+                                                contentDescription = statusLabel,
+                                                tint = finishedColor
+                                            )
+                                        }
+                                    )
+                                }
+
                                 // MAIN TEXT: "Player received Item"
                                 Text(
                                     buildAnnotatedString {
                                         if (item.isPlayerFinished) {
+                                            appendInlineContent(STATUS_ICON_ID, statusLabel)
+                                            append(" ")
                                             withStyle(style = SpanStyle(color = finishedColor, fontWeight = FontWeight.SemiBold)) {
-                                                append("🏁 $displayPlayer ")
+                                                append("$displayPlayer ")
                                             }
                                         } else {
                                             withStyle(style = SpanStyle(fontWeight = FontWeight.SemiBold)) {
@@ -1197,6 +1233,7 @@ fun ItemHistoryTab(
                                             append(item.itemName)
                                         }
                                     },
+                                    inlineContent = inlineStatusIcon,
                                     style = MaterialTheme.typography.bodyLarge
                                 )
 

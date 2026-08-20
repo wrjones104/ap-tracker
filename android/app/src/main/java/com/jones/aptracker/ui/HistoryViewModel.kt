@@ -7,6 +7,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.jones.aptracker.data.FinishedDefinition
+import com.jones.aptracker.data.FinishedDefinitionStore
+import com.jones.aptracker.data.FinishedResolver
+import com.jones.aptracker.data.ShowFinishedPreference
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
@@ -25,6 +29,18 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
+/**
+ * The completion facts for one slot, as known from live roster data or a cached row.
+ *
+ * [hasAllChecks] is tri-state: null means the server has no check counts for the room,
+ * which degrades every definition to goal-only rather than reading as "still sending".
+ */
+data class SlotFinishState(
+    val slotId: Int?,
+    val isGoaled: Boolean,
+    val hasAllChecks: Boolean?
+)
+
 // --- 1. FILTER INTERFACE ---
 sealed interface HistoryFilter {
     object Active : HistoryFilter
@@ -40,6 +56,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     // SharedPreferences for local UI settings
     private val prefs = application.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
+
+    init {
+        ShowFinishedPreference.ensureLoaded(application)
+        FinishedDefinitionStore.ensureLoaded(application)
+    }
 
     private val _itemHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
     val itemHistory: StateFlow<List<HistoryItem>> = _itemHistory
@@ -86,8 +107,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _showFoundHints = MutableStateFlow(prefs.getBoolean("ui_show_found_hints", false))
     val showFoundHints: StateFlow<Boolean> = _showFoundHints
 
-    private val _showFinished = MutableStateFlow(prefs.getBoolean("ui_show_finished", true))
-    val showFinished: StateFlow<Boolean> = _showFinished
+    /**
+     * Shared with the slots list and the widgets. Backed by [ShowFinishedPreference] rather
+     * than a local flow so toggling it on either screen is visible on the other immediately.
+     */
+    val showFinished: StateFlow<Boolean> = ShowFinishedPreference.value
 
     private val _showProgression = MutableStateFlow(prefs.getBoolean("ui_show_progression", true))
     val showProgression: StateFlow<Boolean> = _showProgression
@@ -121,16 +145,50 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private var latestGroupQuery: Triple<String, String, Int?>? = null
 
     private val _liveAliases = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
-    private val _confirmedFinishedPlayers = MutableStateFlow<Set<Pair<Int, String>>>(emptySet())
+    /**
+     * Live completion facts from the tracked-slot roster, keyed by (roomDbId, playerName).
+     *
+     * Two facts rather than one flag: what counts as "finished" is the user's choice, so
+     * goaled and drained have to travel separately and be evaluated per slot. Cached
+     * history rows supply the same facts when a slot is not in the live roster.
+     */
+    private val _liveFinishState = MutableStateFlow<Map<Pair<Int, String>, SlotFinishState>>(emptyMap())
 
-    val finishedPlayerKeys: StateFlow<Set<Pair<Int, String>>> = combine(_itemHistory, _confirmedFinishedPlayers) { history, confirmed ->
-        val fromHistory = history
-            .filter { it.isPlayerFinished && it.room_db_id != null }
-            .map { it.room_db_id!! to it.playerName }
-            .toSet()
+    /** Shared, so changing the setting anywhere re-filters this feed without a resync. */
+    private val _finishedResolver = FinishedDefinitionStore.resolverFlow
 
-        fromHistory + confirmed
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+    /**
+     * Players whose slots read as finished *for this user*, under their own definition.
+     *
+     * Both history filter sites and the hints filter consume this, which is what keeps
+     * them from having to know about definitions individually.
+     */
+    val finishedPlayerKeys: StateFlow<Set<Pair<Int, String>>> =
+        combine(_itemHistory, _liveFinishState, _finishedResolver) { history, live, resolver ->
+            // Start from what the cached rows know, then let live roster facts win --
+            // a cached row can be arbitrarily old, the roster is from this fetch.
+            val facts = mutableMapOf<Pair<Int, String>, SlotFinishState>()
+            for (item in history) {
+                val roomId = item.room_db_id ?: continue
+                val key = roomId to item.playerName
+                val existing = facts[key]
+                facts[key] = SlotFinishState(
+                    slotId = item.slot_id ?: existing?.slotId,
+                    isGoaled = item.isPlayerFinished || existing?.isGoaled == true,
+                    hasAllChecks = item.playerHasAllChecks ?: existing?.hasAllChecks
+                )
+            }
+            facts.putAll(live)
+
+            facts.filter { (key, state) ->
+                resolver.isFinished(
+                    roomDbId = key.first,
+                    slotId = state.slotId,
+                    isGoaled = state.isGoaled,
+                    hasAllChecks = state.hasAllChecks
+                )
+            }.keys
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     private var currentRoomId: Int? = null
 
@@ -334,9 +392,15 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 val profile = RetrofitClient.instance.getUserProfile()
                 // Only initialize from API profile if not already set locally in SharedPreferences
                 if (!prefs.contains("ui_show_finished")) {
-                    _showFinished.value = profile.ui_show_finished_default
-                    prefs.edit(commit = true) { putBoolean("ui_show_finished", profile.ui_show_finished_default) }
+                    ShowFinishedPreference.set(getApplication(), profile.ui_show_finished_default)
                 }
+
+                // The definition is server-owned, so unlike the view toggles above it is
+                // mirrored on every fetch rather than only when absent locally.
+                FinishedDefinitionStore.writeDefault(
+                    getApplication(),
+                    FinishedDefinition.fromWire(profile.finished_definition_default)
+                )
                 if (!prefs.contains("ui_show_found_hints")) {
                     _showFoundHints.value = profile.ui_show_found_hints_default
                     prefs.edit(commit = true) { putBoolean("ui_show_found_hints", profile.ui_show_found_hints_default) }
@@ -378,11 +442,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     // --- TOGGLE SETTERS ---
 
     fun setShowFinished(show: Boolean) {
-        if (_showFinished.value != show) {
-            _showFinished.value = show
-            prefs.edit { putBoolean("ui_show_finished", show) }
+        if (showFinished.value != show) {
+            ShowFinishedPreference.set(getApplication(), show)
             saveViewPreferences(showFinished = show)
             com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(getApplication())
+            viewModelScope.launch {
+                com.jones.aptracker.widget.MilestonesWidgetUpdater.update(getApplication())
+            }
         }
     }
 
@@ -468,9 +534,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
 
                 val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
-                val liveFinishedSlots = mutableSetOf<Pair<Int, Int>>()
                 val liveIcons = mutableMapOf<Int, String>()
-                val finishedPlayerNames = mutableSetOf<Pair<Int, String>>()
+                val liveFinishState = mutableMapOf<Pair<Int, String>, SlotFinishState>()
+                val slotDefinitions = mutableMapOf<Pair<Int, Int>, String?>()
                 val roomNameMap = mutableMapOf<Int, String>()
                 val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
                 val trackedPlayersList = mutableListOf<TrackedPlayer>()
@@ -503,17 +569,23 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         if (!slot.player_alias.isNullOrBlank()) {
                             aliasMap[room.room_db_id to slot.slot_id] = slot.player_alias
                         }
-                        if (slot.is_finished) {
-                            liveFinishedSlots.add(room.room_db_id to slot.slot_id)
-                            finishedPlayerNames.add(room.room_db_id to slot.player_name)
-                        }
+                        liveFinishState[room.room_db_id to slot.player_name] = SlotFinishState(
+                            slotId = slot.slot_id,
+                            isGoaled = slot.is_finished,
+                            hasAllChecks = slot.has_all_checks
+                        )
+                        slotDefinitions[room.room_db_id to slot.slot_id] = slot.finished_definition
                     }
                 }
 
                 _roomNames.value = roomNameMap
                 _validTrackedSlots.value = validSlotsSet
                 _liveAliases.value = aliasMap
-                _confirmedFinishedPlayers.value = finishedPlayerNames
+                _liveFinishState.value = liveFinishState
+
+                // Mirror the per-slot overrides so the widgets, which have no ViewModel
+                // and no network call on their load path, resolve them the same way.
+                FinishedDefinitionStore.writeOverrides(getApplication(), slotDefinitions)
                 _activeRoomIds.value = activeIds
                 _archivedRoomIds.value = archivedIds
                 _roomIcons.value = liveIcons
@@ -604,7 +676,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         val validSlotsSet = _validTrackedSlots.value
         val liveAliases = _liveAliases.value
         val liveIcons = _roomIcons.value
-        val confirmedFinished = _confirmedFinishedPlayers.value
+        val liveFinishState = _liveFinishState.value
         
         var filteredCount = 0
         val result = entities.mapNotNull { entity ->
@@ -623,16 +695,20 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 liveIcons[entity.roomId]
             } else null
 
-            val isActuallyFinished = entity.isPlayerFinished ||
-                    (entity.roomId != null && entity.slot_id != null &&
-                            confirmedFinished.contains(entity.roomId to entity.playerName))
+            // Both facts stay separate here. isPlayerFinished keeps meaning goaled --
+            // filtering goes through finishedPlayerKeys, and the row's status icon needs
+            // to tell "goaled, still sending" apart from "fully done".
+            val live = if (entity.roomId != null) liveFinishState[entity.roomId to entity.playerName] else null
+            val isActuallyGoaled = entity.isPlayerFinished || live?.isGoaled == true
+            val hasAllChecks = live?.hasAllChecks ?: entity.playerHasAllChecks
 
             HistoryItem(
                 id = entity.id,
                 playerName = entity.playerName,
                 playerAlias = liveAlias ?: entity.playerAlias,
                 itemName = entity.itemName,
-                isPlayerFinished = isActuallyFinished,
+                isPlayerFinished = isActuallyGoaled,
+                playerHasAllChecks = hasAllChecks,
                 itemFlags = entity.itemFlags,
                 timestamp = entity.timestamp,
                 tracker_id = entity.tracker_id,

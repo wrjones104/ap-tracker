@@ -12,6 +12,7 @@ from app.models import (
     DatapackageCache, NotifiedItem, NotifiedHint, SlotItemCount
 )
 from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z
+from app.utils import parse_cached_checks
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 
 history_bp = Blueprint('history_routes', __name__)
@@ -302,6 +303,9 @@ def get_item_history(current_user, room_db_id):
     player_map = {p['slot_id']: p for p in players}
     game_map = {p['slot_id']: p.get('game') for p in players} 
 
+    # Whether this room has trustworthy check counts at all. See has_all_checks below.
+    checks_known = bool(parse_cached_checks(room.cached_checks_json))
+
     history_pre_cache = []
     cache_keys_to_find = set()
     
@@ -319,7 +323,11 @@ def get_item_history(current_user, room_db_id):
         sender_game = game_map.get(sender_id, "Unknown")
         
         is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
-        has_all_checks = receiver_obj.get('has_all_checks', False) if receiver_obj else False
+        # None means "counts never fetched for this room", which is categorically
+        # different from False and makes every definition fall back to goal-only.
+        # Emitting False there would report goaled slots as still sending.
+        has_all_checks = (receiver_obj.get('has_all_checks', False) if receiver_obj else False) \
+            if checks_known else None
         
         rec_checksum = game_checksums.get(receiver_game)
         snd_checksum = game_checksums.get(sender_game)
@@ -415,7 +423,7 @@ def get_item_history(current_user, room_db_id):
             "senderGame": temp_item["senderGame"],
             "locationName": location_name,
             "isPlayerFinished": temp_item["isPlayerFinished"],
-            "playerHasAllChecks": temp_item.get("playerHasAllChecks", False),
+            "playerHasAllChecks": temp_item.get("playerHasAllChecks"),
             "itemFlags": temp_item["itemFlags"],
             "timestamp": temp_item["timestamp"],
             "room_db_id": room.id,
@@ -613,6 +621,7 @@ def sync_history(current_user):
             parsed_room_metadata[room_uuid] = {
                 'player_map': player_map,
                 'game_map': game_map,
+                'checks_known': bool(parse_cached_checks(room_data.cached_checks_json)),
                 'game_checksums': game_checksums
             }
         except Exception:
@@ -737,7 +746,11 @@ def sync_history(current_user):
         sender_game = game_map.get(sender_id, "Unknown")
         
         is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
-        has_all_checks = receiver_obj.get('has_all_checks', False) if receiver_obj else False
+        # None means "counts never fetched for this room", which is categorically
+        # different from False and makes every definition fall back to goal-only.
+        # Emitting False there would report goaled slots as still sending.
+        has_all_checks = (receiver_obj.get('has_all_checks', False) if receiver_obj else False) \
+            if meta.get('checks_known') else None
         
         rec_checksum = game_checksums.get(receiver_game)
         snd_checksum = game_checksums.get(sender_game)
@@ -996,6 +1009,7 @@ def get_global_item_history(current_user):
             parsed_room_metadata[room_uuid] = {
                 'player_map': player_map,
                 'game_map': game_map,
+                'checks_known': bool(parse_cached_checks(room_data.cached_checks_json)),
                 'game_checksums': game_checksums
             }
         except (json.JSONDecodeError, TypeError):
@@ -1055,7 +1069,11 @@ def get_global_item_history(current_user):
         sender_game = game_map.get(sender_id, "Unknown")
         
         is_finished = receiver_obj.get('is_finished', False) if receiver_obj else False
-        has_all_checks = receiver_obj.get('has_all_checks', False) if receiver_obj else False
+        # None means "counts never fetched for this room", which is categorically
+        # different from False and makes every definition fall back to goal-only.
+        # Emitting False there would report goaled slots as still sending.
+        has_all_checks = (receiver_obj.get('has_all_checks', False) if receiver_obj else False) \
+            if meta.get('checks_known') else None
 
         rec_checksum = game_checksums.get(receiver_game)
         snd_checksum = game_checksums.get(sender_game)
@@ -1154,7 +1172,7 @@ def get_global_item_history(current_user):
             "senderGame": temp_item['senderGame'],
             "locationName": location_name,
             "isPlayerFinished": temp_item['isPlayerFinished'],
-            "playerHasAllChecks": temp_item.get('playerHasAllChecks', False),
+            "playerHasAllChecks": temp_item.get('playerHasAllChecks'),
             "itemFlags": temp_item['itemFlags'],
             "timestamp": temp_item["timestamp"],
             "tracker_id": temp_item["tracker_id"],

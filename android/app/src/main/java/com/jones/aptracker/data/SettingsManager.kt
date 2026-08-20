@@ -52,11 +52,19 @@ class SettingsManager(context: Context) {
         }
 
     /**
-     * A flow that emits whether finished slots should be shown on the slots screen.
+     * The superseded slots-screen-only "show finished" flag.
+     *
+     * Read once at startup so [com.jones.aptracker.data.ShowFinishedPreference] can carry
+     * the user's choice onto the unified, server-synced toggle. Nothing writes it any
+     * more -- do not reintroduce a setter, or the two would diverge again.
      */
-    val slotsShowFinished: Flow<Boolean> = dataStore.data
+    val slotsShowFinished: Flow<Boolean?> = dataStore.data
         .map { preferences ->
-            preferences[SLOTS_SHOW_FINISHED_KEY] ?: false
+            // Nullable on purpose. The migration must not treat "never set" as an explicit
+            // false: this flag defaulted to false while the unified toggle defaults to
+            // true, so carrying over a phantom false would silently hide finished slots
+            // for users who never touched it.
+            preferences[SLOTS_SHOW_FINISHED_KEY]
         }
 
     /**
@@ -97,15 +105,6 @@ class SettingsManager(context: Context) {
     suspend fun setDateFormatPreset(preset: String) {
         dataStore.edit { preferences ->
             preferences[DATE_FORMAT_PRESET_KEY] = preset
-        }
-    }
-
-    /**
-     * Saves whether finished slots are shown.
-     */
-    suspend fun setSlotsShowFinished(show: Boolean) {
-        dataStore.edit { preferences ->
-            preferences[SLOTS_SHOW_FINISHED_KEY] = show
         }
     }
 

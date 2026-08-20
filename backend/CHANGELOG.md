@@ -10,6 +10,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.9.1] - 2026-08-20
+
+_Release-Off Rooms Keep Polling_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts Server v1.9.1**
+>
+> **Fixed**
+> • **Release-off rooms keep updating**: a room where everyone has goaled but items are still being sent no longer stops polling. Previously the last goal marked the room complete and notifications went silent for a room people were still playing. Rooms already stuck this way have been revived.
+> • **You always hear about a finish**: the "Player(s) Finished!" notification now arrives even with "Keep notifying finished slots" turned off. That setting only controls the items and hints that come *after* a slot finishes.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - The "Player(s) Finished!" notification is no longer gated on `notify_finished`. That preference now governs only the item and hint stream for a slot that has already finished, which is what the in-app copy already described. Users with the preference off will begin receiving finish notifications.
+>
+> ### Fixed
+> - `is_complete` now requires all-goaled **and** all-drained (#263). With release disabled, goaling leaves a player's locations unchecked while they keep playing so others still receive items; marking the room complete dropped it from every poll query permanently, and the column is never reset. Falls back to goal-only when check counts are unknown, so hosts that do not serve `player_checks_done` are unaffected.
+> - Migration `b2e75c4a19d8` performs a one-off revival of rooms already stuck in that state, scoped to unsuspended rooms with remote activity inside the 30-day stale window. Nothing would ever have polled them again otherwise.
+> ```
+
+### Changed
+- **Finish Notifications Are No Longer Optional**: The finish announcement is no longer gated on the finished-slot notification preference. That preference governs the item and hint stream for a slot that has already finished, which is what the in-app description always said it did. Anyone with it switched off will start seeing finish notifications they were not getting before.
+
+### Fixed
+- **Completion Requires An Empty Slot, Not Just A Goal**: A room is marked complete only when every slot has both reached its goal and run out of checks to send. Completion permanently removes a room from every polling query and is never undone, so firing it early took the room offline for everyone tracking it. Rooms on hosts that do not report check counts keep the previous goal-only behavior rather than polling indefinitely.
+- **One-Time Repair For Rooms Marked Complete Too Early**: A migration revives rooms that were marked complete while still holding items, limited to rooms that are not suspended and had activity within the last thirty days. Rooms that really were finished are re-marked complete on their next poll, and genuinely abandoned ones are caught by the existing thirty-day inactivity check.
+
+---
+
 ## [1.9.0] - 2026-08-18
 
 _Groundwork for User-Defined “Finished”_

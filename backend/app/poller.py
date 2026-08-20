@@ -378,6 +378,7 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
     # Evaluated per user against their own definition, so two users tracking the
     # same slot can legitimately be notified on different polls.
     if changed_slots:
+        now_utc = datetime.now(timezone.utc)
         for user_id, tracked_slots in tracked_slots_by_user.items():
             user_prefs = users_by_id.get(user_id)
             if not user_prefs: continue
@@ -421,14 +422,24 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
                     logging.debug(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {slot_id} is backfilling. Suppressing 'Finished' notification.")
                     continue
 
-                notify_override = slot_prefs.notify_finished
-                should_notify = notify_override if notify_override is not None else user_prefs.notify_finished_default
+                # Snooze still applies. notify_finished is no longer the escape hatch
+                # (see below), so without this a globally snoozed user -- or one who
+                # snoozed this exact slot -- would have no way at all to stay quiet.
+                # The item, hint, and milestone paths all check this already.
+                if is_snoozed(user_prefs, slot_prefs, now_utc, user_id, slot_id, "finish"):
+                    continue
 
-                if should_notify:
-                    player_name = current_name_map.get(slot_id, f"Player {slot_id}")
-                    names_to_notify.append(player_name)
-                else:
-                    logging.info(f"[NOTIFY_SKIP] User {user_id} has disabled finished notifications for Slot {slot_id}.")
+                # Deliberately NOT gated on notify_finished. That preference governs
+                # whether items and hints keep arriving for a slot that has already
+                # finished (see the suppression checks in _resolve_names_and_notify),
+                # not whether you are told it finished in the first place.
+                #
+                # The finish is a one-off event and the thing most users turning the
+                # preference off are actually trying to stop is the ongoing stream
+                # afterwards -- silencing the announcement too meant they simply never
+                # learned a slot was done.
+                player_name = current_name_map.get(slot_id, f"Player {slot_id}")
+                names_to_notify.append(player_name)
 
             if not names_to_notify:
                 continue
@@ -654,6 +665,46 @@ def _slot_is_finished_for_user(slot_id, goaled_ids, all_checks_ids, user_prefs, 
     return evaluate_finished(slot_id in goaled_ids, has_all_checks, definition)
 
 
+def _room_is_complete(total_players, goaled_ids, all_checks_ids, checks_known, totals_known=True):
+    """
+    Whether a room should stop being polled entirely.
+
+    is_complete gates every room-selection query and is never reset, so this has
+    to be conservative: a room marked complete while items are still being sent
+    goes dark permanently and every subscriber silently stops getting notified.
+
+    All-goaled alone is not sufficient. With release disabled, goaling leaves a
+    player's remaining locations unchecked and they keep playing so other players
+    still receive their items -- a normal, long-lived state in those communities,
+    and the bug in issue #263. Require the room to be drained as well.
+
+    Deliberately room-global and independent of per-user finished definitions:
+    there is no user to attribute the column to, and letting a preference feed
+    into it would let one user's setting drive polling cost for everyone.
+
+    When check counts are unknown -- a host that never serves player_checks_done
+    -- this falls back to goal-only. Requiring a fact the host cannot supply
+    would keep those rooms polling until db_check_stale_rooms suspends them, for
+    no correctness gain.
+
+    totals_known is the same escape hatch for the other half of the comparison.
+    has_all_checks is checks_done >= total_locations, so a slot whose
+    total_locations is 0 -- the sentinel for a static-tracker fetch that came back
+    without player_locations_total -- can never satisfy it. Those rooms are not
+    self-healing either: the re-setup guard only tests that the total_locations
+    key is present, not that it holds a real number. Without this, such a room
+    would be permanently ineligible for completion even though its checks are
+    perfectly well known, and would poll until the stale sweep suspended it.
+    """
+    if total_players <= 0:
+        return False
+    if len(goaled_ids) < total_players:
+        return False
+    if not (checks_known and totals_known):
+        return True
+    return len(all_checks_ids) >= total_players
+
+
 def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, goaled_ids, all_checks_ids, checks_known, connected_slots_set, item_counts):
     """
     Fetches names from DB in chunks and constructs final notification payloads.
@@ -794,7 +845,12 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                             logging.debug(f"[NOTIFY_SUPPRESSED] User {user_id}: Cross-slot item (From {send_id} to {rid}).")
                             continue
 
-                    # Check Finished Suppression
+                    # Check Finished Suppression.
+                    #
+                    # This is the whole scope of notify_finished: the ongoing item and
+                    # hint stream for a slot that has already finished. The "Player(s)
+                    # Finished!" announcement itself always fires regardless -- see
+                    # _check_player_completion.
                     wants_finished_notifs = slot_prefs.notify_finished if slot_prefs.notify_finished is not None else user_prefs.notify_finished_default
                     if not wants_finished_notifs and _slot_is_finished_for_user(rid, goaled_ids, all_checks_ids, user_prefs, slot_prefs, checks_known):
                         logging.info(f"[NOTIFY_SUPPRESSED] User {user_id} suppressed item for Slot {rid} (Slot Finished).")
@@ -921,7 +977,8 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
                 if is_snoozed(user_prefs, relevant_slot_prefs, now_utc, user_id, relevant_slot, "hint"):
                     continue
 
-                # Check Finished
+                # Check Finished. As with items above, this governs the post-finish
+                # stream only, never the finish announcement itself.
                 wants_finished_notifs = user_prefs.notify_finished_default
                 if relevant_slot_prefs and relevant_slot_prefs.notify_finished is not None:
                     wants_finished_notifs = relevant_slot_prefs.notify_finished
@@ -1406,10 +1463,11 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                 room.cached_checks_json = new_checks_json
 
         total_players = len(players)
-        # Goal-only, deliberately. is_complete gates whether the room gets polled
-        # at all -- it is a single global column with no user to attribute it to,
-        # and a stricter definition would keep release-off rooms polling forever.
-        if total_players > 0 and len(goaled_ids) >= total_players:
+        # A slot with no total_locations can never register as drained, so treat the
+        # room's totals as unusable and fall back to goal-only rather than pinning it
+        # open forever. See _room_is_complete.
+        totals_known = all((p.get('total_locations', 0) or 0) > 0 for p in players)
+        if _room_is_complete(total_players, goaled_ids, all_checks_ids, checks_known, totals_known):
             if not is_complete_status:
                 room.is_complete = True
                 logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Room marked as complete.")

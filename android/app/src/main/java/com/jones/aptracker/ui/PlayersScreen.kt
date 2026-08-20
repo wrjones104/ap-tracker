@@ -9,10 +9,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -155,12 +158,29 @@ fun PlayersScreen(
                                             originalName
                                         }
 
-                                        val statusPrefix = if (isPlayerDone) "🏁 " else ""
-
-                                        Text(
-                                            text = statusPrefix + displayName,
-                                            color = if (isPlayerDone) Color(0xFF0E8A0E) else Color.Unspecified
-                                        )
+                                        // Vector icon rather than a literal emoji: consistent
+                                        // across devices and readable by screen readers, and it
+                                        // distinguishes goaled from fully drained (issue #262).
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (isPlayerDone || player.has_all_checks == true) {
+                                                val fullyDone = isPlayerDone && player.has_all_checks == true
+                                                Icon(
+                                                    imageVector = if (fullyDone) Icons.Filled.CheckCircle else Icons.Filled.Flag,
+                                                    contentDescription = when {
+                                                        fullyDone -> "Goaled, no items left to send"
+                                                        isPlayerDone -> "Goaled"
+                                                        else -> "No items left to send"
+                                                    },
+                                                    tint = Color(0xFF0E8A0E),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                            }
+                                            Text(
+                                                text = displayName,
+                                                color = if (isPlayerDone) Color(0xFF0E8A0E) else Color.Unspecified
+                                            )
+                                        }
                                         Text(
                                             text =  player.game ?: "Unknown Game",
                                             style = MaterialTheme.typography.bodySmall,

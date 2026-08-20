@@ -13,7 +13,11 @@ import com.jones.aptracker.network.IgnoreItem
 import com.jones.aptracker.network.WhitelistItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
-import com.jones.aptracker.network.UpdateSlotPrefsRequest
+import com.jones.aptracker.data.FinishedDefinition
+import com.jones.aptracker.data.FinishedDefinitionStore
+import com.jones.aptracker.data.FinishedResolver
+import com.jones.aptracker.data.ShowFinishedPreference
+import com.jones.aptracker.network.toPrefsRequest
 import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.network.SnoozeRequest
 import com.jones.aptracker.network.AutocompleteOption
@@ -28,10 +32,13 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.UserRepository
+import com.jones.aptracker.widget.MilestonesWidgetUpdater
+import com.jones.aptracker.widget.RecentItemsWidgetUpdater
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -60,15 +67,84 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     val userProfile = _userProfile.asStateFlow()
 
     // --- Persistent Slots View Preferences ---
-    val slotsShowFinished: StateFlow<Boolean> = settingsManager.slotsShowFinished
-        .stateIn(viewModelScope, SharingStarted.Lazily, false)
+    /**
+     * Shared with the history feed and the widgets rather than local to this screen.
+     * See [ShowFinishedPreference] for why it is not a plain StateFlow here.
+     */
+    val slotsShowFinished: StateFlow<Boolean> = ShowFinishedPreference.value
+
+    /** What "finished" means to this user. Shared so every screen agrees immediately. */
+    val finishedResolver: StateFlow<FinishedResolver> = FinishedDefinitionStore.resolverFlow
 
     val expandedRoomIds: StateFlow<Set<Int>> = settingsManager.expandedRoomIds
         .stateIn(viewModelScope, SharingStarted.Lazily, emptySet())
 
-    fun setSlotsShowFinished(show: Boolean) {
+    init {
+        ShowFinishedPreference.ensureLoaded(application)
+        FinishedDefinitionStore.ensureLoaded(application)
         viewModelScope.launch {
-            settingsManager.setSlotsShowFinished(show)
+            // One-time carry-over of the superseded slots-screen-only toggle, so nobody's
+            // setting silently flips when the two toggles become one. Null means the user
+            // never set it, in which case there is nothing to carry and the unified
+            // default stands.
+            settingsManager.slotsShowFinished.first()?.let { legacyValue ->
+                if (ShowFinishedPreference.migrateLegacyValue(application, legacyValue)) {
+                    // The unified toggle is account-wide, so a carried-over value has to
+                    // reach the server or it stays on this device only and the next
+                    // profile fetch on another device disagrees with this one.
+                    try {
+                        RetrofitClient.instance.updateUserPreferences(
+                            mapOf("ui_show_finished" to legacyValue)
+                        )
+                    } catch (e: Exception) {
+                        // Local value stands; the user can still change it by hand.
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
+    }
+
+    fun setSlotsShowFinished(show: Boolean) {
+        ShowFinishedPreference.set(getApplication(), show)
+        viewModelScope.launch {
+            try {
+                RetrofitClient.instance.updateUserPreferences(mapOf("ui_show_finished" to show))
+            } catch (e: Exception) {
+                // Local state already applied; the next profile fetch reconciles.
+                e.printStackTrace()
+            }
+            RecentItemsWidgetUpdater.updateAsync(getApplication())
+            MilestonesWidgetUpdater.update(getApplication())
+        }
+    }
+
+    /**
+     * Change the global finished definition.
+     *
+     * Written straight through rather than folded into [updateGlobalPreferences]: that
+     * one builds a Map<String, Boolean>, and this value is a string enum.
+     */
+    fun setFinishedDefinition(definition: FinishedDefinition) {
+        // Rolled back on failure, matching updateSlotFinishedDefinition. Without it a
+        // failed save leaves every surface -- slots, history, both widgets -- filtering on
+        // a definition the server does not have, and nothing corrects it until the next
+        // profile fetch.
+        val previous = FinishedDefinition.fromWire(_userProfile.value?.finished_definition_default)
+        FinishedDefinitionStore.writeDefault(getApplication(), definition)
+        viewModelScope.launch {
+            try {
+                RetrofitClient.instance.updateUserPreferences(
+                    mapOf("finished_definition" to definition.wireValue)
+                )
+                fetchUserProfile()
+            } catch (e: Exception) {
+                FinishedDefinitionStore.writeDefault(getApplication(), previous)
+                _errorMessage.value = "Failed to save finished definition."
+                e.printStackTrace()
+            }
+            RecentItemsWidgetUpdater.updateAsync(getApplication())
+            MilestonesWidgetUpdater.update(getApplication())
         }
     }
 
@@ -199,6 +275,13 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 val profile = RetrofitClient.instance.getUserProfile()
                 _userProfile.value = profile
                 settingsManager.setCheeseConnected(profile.is_cheese_connected)
+
+                // The definition is server-owned, so mirror it on every fetch rather than
+                // only when absent locally -- a change made on another device lands here.
+                FinishedDefinitionStore.writeDefault(
+                    getApplication(),
+                    FinishedDefinition.fromWire(profile.finished_definition_default)
+                )
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to load user profile."
                 e.printStackTrace()
@@ -213,7 +296,19 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     /** Awaitable tracked-slots load, so callers (e.g. refresh) can sequence work. */
     private suspend fun loadTrackedSlots() {
         try {
-            _trackedSlotsByRoom.value = RetrofitClient.instance.getUserTrackedSlots()
+            val rooms = RetrofitClient.instance.getUserTrackedSlots()
+            _trackedSlotsByRoom.value = rooms
+
+            // Mirror the per-slot overrides for the widgets, which resolve them with no
+            // ViewModel and no network call on their load path.
+            FinishedDefinitionStore.writeOverrides(
+                getApplication(),
+                rooms.flatMap { room ->
+                    room.tracked_slots.map { slot ->
+                        (room.room_db_id to slot.slot_id) to slot.finished_definition
+                    }
+                }.toMap()
+            )
         } catch (e: Exception) {
             _errorMessage.value = "Failed to load tracked slots."
             e.printStackTrace()
@@ -316,24 +411,11 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _trackedSlotsByRoom.value = updatedRooms
 
-                // 4. Construct request payload and send to backend
-                val request = UpdateSlotPrefsRequest(
-                    notify_progression = updatedSlot.notify_progression,
-                    notify_useful = updatedSlot.notify_useful,
-                    notify_filler = updatedSlot.notify_filler,
-                    notify_trap = updatedSlot.notify_trap,
-                    notify_hints = updatedSlot.notify_hints,
-                    notify_hints_remote_items = updatedSlot.notify_hints_remote_items,
-                    notify_finished = updatedSlot.notify_finished,
-                    combine_notifications = updatedSlot.combine_notifications,
-                    suppress_own_events = updatedSlot.suppress_own_events,
-                    remove_emojis = updatedSlot.remove_emojis,
-                    suppress_self_found = updatedSlot.suppress_self_found,
-                    use_condensed_messages = updatedSlot.use_condensed_messages,
-                    suppress_connected = updatedSlot.suppress_connected
+                // 4. Construct request payload and send to backend.
+                // Full current state, not a patch -- see toPrefsRequest.
+                val response = RetrofitClient.instance.updateSlotPreferences(
+                    roomId, slotId, updatedSlot.toPrefsRequest()
                 )
-
-                val response = RetrofitClient.instance.updateSlotPreferences(roomId, slotId, request)
 
                 if (!response.isSuccessful) {
                     _trackedSlotsByRoom.value = previousRooms
@@ -921,6 +1003,56 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Set or clear one slot's finished-definition override.
+     *
+     * Separate from [updateSlotPreferences] because that one is keyed on Boolean values.
+     * Null clears the override so the slot inherits the global default again.
+     */
+    fun updateSlotFinishedDefinition(roomId: Int, slotId: Int, definition: FinishedDefinition?) {
+        viewModelScope.launch {
+            val previousRooms = _trackedSlotsByRoom.value
+            try {
+                val currentRoom = previousRooms.find { it.room_db_id == roomId } ?: return@launch
+                val currentSlot = currentRoom.tracked_slots.find { it.slot_id == slotId } ?: return@launch
+
+                val updatedSlot = currentSlot.copy(finished_definition = definition?.wireValue)
+
+                _trackedSlotsByRoom.value = previousRooms.map { room ->
+                    if (room.room_db_id == roomId) {
+                        room.copy(tracked_slots = room.tracked_slots.map { slot ->
+                            if (slot.slot_id == slotId) updatedSlot else slot
+                        })
+                    } else room
+                }
+
+                val response = RetrofitClient.instance.updateSlotPreferences(
+                    roomId, slotId, updatedSlot.toPrefsRequest()
+                )
+                if (!response.isSuccessful) {
+                    _trackedSlotsByRoom.value = previousRooms
+                    _errorMessage.value = "Failed to update settings: ${response.code()}"
+                    return@launch
+                }
+
+                FinishedDefinitionStore.writeOverrides(
+                    getApplication(),
+                    _trackedSlotsByRoom.value.flatMap { room ->
+                        room.tracked_slots.map { slot ->
+                            (room.room_db_id to slot.slot_id) to slot.finished_definition
+                        }
+                    }.toMap()
+                )
+                RecentItemsWidgetUpdater.updateAsync(getApplication())
+                MilestonesWidgetUpdater.update(getApplication())
+            } catch (e: Exception) {
+                _trackedSlotsByRoom.value = previousRooms
+                _errorMessage.value = "Failed to save slot settings."
+                e.printStackTrace()
+            }
+        }
+    }
+
     fun applySlotSettingsToAll(roomId: Int, sourceSlotId: Int) {
         viewModelScope.launch {
             try {
@@ -931,22 +1063,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 // 2. Loop through targets
                 room.tracked_slots.forEach { targetSlot ->
                     if (targetSlot.slot_id != sourceSlotId) {
-                        // Create request with SOURCE values
-                        val request = UpdateSlotPrefsRequest(
-                            notify_progression = sourceSlot.notify_progression,
-                            notify_useful = sourceSlot.notify_useful,
-                            notify_filler = sourceSlot.notify_filler,
-                            notify_trap = sourceSlot.notify_trap,
-                            notify_hints = sourceSlot.notify_hints,
-                            notify_hints_remote_items = sourceSlot.notify_hints_remote_items,
-                            notify_finished = sourceSlot.notify_finished,
-                            combine_notifications = sourceSlot.combine_notifications,
-                            suppress_own_events = sourceSlot.suppress_own_events,
-                            remove_emojis = sourceSlot.remove_emojis,
-                            suppress_self_found = sourceSlot.suppress_self_found,
-                            use_condensed_messages = sourceSlot.use_condensed_messages
+                        // Every preference the source slot carries, from one builder.
+                        // Enumerating them here is what dropped suppress_connected and
+                        // wiped it on every target slot (issue #261).
+                        RetrofitClient.instance.updateSlotPreferences(
+                            roomId, targetSlot.slot_id, sourceSlot.toPrefsRequest()
                         )
-                        RetrofitClient.instance.updateSlotPreferences(roomId, targetSlot.slot_id, request)
                     }
                 }
 
