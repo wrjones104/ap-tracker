@@ -10,6 +10,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.9.0] - 2026-08-20
+
+_You Decide What “Finished” Means_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts Android App v1.9.0 Released!**
+>
+> **New**
+> • **You decide what "finished" means**: goaled, all checks, both, or either. Set it once in Settings, or override it for a single slot. Everyone starts on goaled, so nothing changes unless you want it to.
+> • **Built for release-off rooms**: a slot that goaled but still has items to send no longer has to disappear from your lists.
+> • **Check counts on slot cards**: see "215/375 checks" right in the list.
+>
+> **Improved**
+> • Room headers now show how many slots are active vs finished, so you can tell when the filter is hiding something.
+> • One "Show Finished" toggle now covers the slots list, history, and both widgets — including the Milestones widget, which used to ignore it.
+>
+> **Fixed**
+> • A room no longer vanishes from My Slots the moment its last slot finishes.
+> • "Copy settings to all slots" no longer wipes your per-slot "Suppress if I'm connected" overrides.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> New: You choose what "finished" means - goaled, all checks, both, or either. Set it globally or per slot. Everyone starts on goaled, so nothing changes unless you want it to.
+>
+> New: Slot cards show check counts, and room headers show active vs finished slots.
+>
+> Fixed: A room no longer disappears from My Slots when its last slot finishes.
+>
+> Fixed: "Copy settings to all slots" no longer clears your per-slot connected-suppression overrides.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - User-defined "finished" definition: `goal`, `all_checks`, `both`, or `either`, as an account default with an optional per-slot override. Defaults to `goal`, so behavior is unchanged until a user opts in.
+> - Slot cards show `checks_done / total_locations`, and room headers carry a persistent active/finished progress indicator.
+> - Room DB migration 23 -> 24, storing both completion facts on history rows and the milestone cache so widgets can filter without a network call.
+>
+> ### Changed
+> - The slots list and history feed now share one server-synced "show finished" toggle. The former slots-only local flag is migrated once, and only when it was explicitly set.
+> - Status flags are Material vector icons rather than hardcoded emoji, and distinguish "goaled, still sending" from "fully done" (#262).
+> - The Milestones widget honors the show-finished toggle (#268).
+>
+> ### Fixed
+> - `applySlotSettingsToAll` cleared `suppress_connected` on every target slot. Both slot-preference write paths now build from a single `toPrefsRequest()` builder, since `serializeNulls()` means an omitted field arrives as an explicit null and clears the override (#261).
+> - The slots list dropped a room entirely once every slot was filtered out, so a room vanished when its last slot finished. Search emptying a room still removes it; the finished filter no longer does.
+> ```
+
+### Added
+- **Finished Definition Setting**: A new “Finished means” setting offers Goaled, All checks, Goaled + all checks, and Goaled or all checks. It lives in Settings under the finished-slot notification toggle, and every tracked slot can override it from that slot's settings sheet. It governs which slots are hidden by “Show Finished” across the slots list, history, hints, and both widgets.
+- **Check Counts And Room Progress**: Slot cards show completed locations against the slot's total. Room headers carry a progress bar and an active-versus-finished count that is always present, whatever the finished filter is doing, so hidden slots are never a surprise.
+
+### Changed
+- **One “Show Finished” Toggle**: The slots list used to keep its own separate switch that lived only on that device, while history and the widgets used the account-wide one. They are now a single setting that follows you between devices. If you had set the old slots-only switch, its value carries over.
+- **Status Icons Instead Of Emoji**: The finished flag on slots, players, and history rows is now a drawn icon rather than an emoji character. It renders the same on every device, screen readers can describe it, and it can tell “goaled, still sending” apart from “fully done” at a glance.
+- **Milestones Widget Respects Show Finished**: The Milestones widget kept showing progress for slots the rest of the app had already hidden. It now follows the same toggle and the same definition as everything else.
+
+### Fixed
+- **Finished Rooms No Longer Disappear**: With finished slots hidden, a room vanished from My Slots entirely once every one of its slots was finished. The room now stays in the list with a note about what is hidden and a one-tap way to show it. Searching still removes rooms that do not match, which is what searching is for.
+- **Copy Settings To All Slots Kept Your Overrides**: Using “copy settings to all slots” silently cleared the “Suppress if I'm connected” setting on every other slot in the room, with no sign anything had happened. All thirteen of the other preferences copied correctly; that one was left out of the list the copy was built from. The copy is now built from one place, so a preference cannot go missing from it again.
+
+---
+
 ## [1.8.2] - 2026-08-17
 
 _Milestone Group Progress_

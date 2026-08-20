@@ -1,6 +1,72 @@
 {
   "app_releases": [
     {
+      "version": "1.9.0",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-08-20",
+      "title": "You Decide What “Finished” Means",
+      "highlights": [
+        {
+          "title": "Choose What Counts As Finished",
+          "description": "A slot can count as finished when its player reaches their goal, when it has no checks left to send, when both are true, or when either is. Set it once for your account, or override it for a single slot. Every account starts on goaled, which is what the app has always done, so nothing changes until you change it."
+        },
+        {
+          "title": "Built For Rooms With Release Turned Off",
+          "description": "In those rooms a player reaches their goal and then keeps checking locations so everyone else still gets their items. Until now the app treated that slot as done and hid it. Pick “Goaled + all checks” and it stays visible until it really has nothing left to send."
+        },
+        {
+          "title": "See How Far Along A Slot Is",
+          "description": "Slot cards show a check count such as “215/375 checks”, and each room header shows how many of its slots are active versus finished. Together they tell you why a slot is still listed, and when the filter is hiding something."
+        },
+        {
+          "title": "Finished Rooms Stay Put",
+          "description": "A room used to disappear from My Slots the moment its last slot finished. It now stays where it is and tells you what it is hiding. A room leaving your list should only ever be something you did."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Finished Definition Setting",
+            "description": "A new “Finished means” setting offers Goaled, All checks, Goaled + all checks, and Goaled or all checks. It lives in Settings under the finished-slot notification toggle, and every tracked slot can override it from that slot's settings sheet. It governs which slots are hidden by “Show Finished” across the slots list, history, hints, and both widgets."
+          },
+          {
+            "title": "Check Counts And Room Progress",
+            "description": "Slot cards show completed locations against the slot's total. Room headers carry a progress bar and an active-versus-finished count that is always present, whatever the finished filter is doing, so hidden slots are never a surprise."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "One “Show Finished” Toggle",
+            "description": "The slots list used to keep its own separate switch that lived only on that device, while history and the widgets used the account-wide one. They are now a single setting that follows you between devices. If you had set the old slots-only switch, its value carries over."
+          },
+          {
+            "title": "Status Icons Instead Of Emoji",
+            "description": "The finished flag on slots, players, and history rows is now a drawn icon rather than an emoji character. It renders the same on every device, screen readers can describe it, and it can tell “goaled, still sending” apart from “fully done” at a glance."
+          },
+          {
+            "title": "Milestones Widget Respects Show Finished",
+            "description": "The Milestones widget kept showing progress for slots the rest of the app had already hidden. It now follows the same toggle and the same definition as everything else."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Finished Rooms No Longer Disappear",
+            "description": "With finished slots hidden, a room vanished from My Slots entirely once every one of its slots was finished. The room now stays in the list with a note about what is hidden and a one-tap way to show it. Searching still removes rooms that do not match, which is what searching is for."
+          },
+          {
+            "title": "Copy Settings To All Slots Kept Your Overrides",
+            "description": "Using “copy settings to all slots” silently cleared the “Suppress if I'm connected” setting on every other slot in the room, with no sign anything had happened. All thirteen of the other preferences copied correctly; that one was left out of the list the copy was built from. The copy is now built from one place, so a preference cannot go missing from it again."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Android App v1.9.0 Released!**\n\n**New**\n• **You decide what \"finished\" means**: goaled, all checks, both, or either. Set it once in Settings, or override it for a single slot. Everyone starts on goaled, so nothing changes unless you want it to.\n• **Built for release-off rooms**: a slot that goaled but still has items to send no longer has to disappear from your lists.\n• **Check counts on slot cards**: see \"215/375 checks\" right in the list.\n\n**Improved**\n• Room headers now show how many slots are active vs finished, so you can tell when the filter is hiding something.\n• One \"Show Finished\" toggle now covers the slots list, history, and both widgets — including the Milestones widget, which used to ignore it.\n\n**Fixed**\n• A room no longer vanishes from My Slots the moment its last slot finishes.\n• \"Copy settings to all slots\" no longer wipes your per-slot \"Suppress if I'm connected\" overrides.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "New: You choose what \"finished\" means - goaled, all checks, both, or either. Set it globally or per slot. Everyone starts on goaled, so nothing changes unless you want it to.\n\nNew: Slot cards show check counts, and room headers show active vs finished slots.\n\nFixed: A room no longer disappears from My Slots when its last slot finishes.\n\nFixed: \"Copy settings to all slots\" no longer clears your per-slot connected-suppression overrides.",
+        "github": "### Added\n- User-defined \"finished\" definition: `goal`, `all_checks`, `both`, or `either`, as an account default with an optional per-slot override. Defaults to `goal`, so behavior is unchanged until a user opts in.\n- Slot cards show `checks_done / total_locations`, and room headers carry a persistent active/finished progress indicator.\n- Room DB migration 23 -> 24, storing both completion facts on history rows and the milestone cache so widgets can filter without a network call.\n\n### Changed\n- The slots list and history feed now share one server-synced \"show finished\" toggle. The former slots-only local flag is migrated once, and only when it was explicitly set.\n- Status flags are Material vector icons rather than hardcoded emoji, and distinguish \"goaled, still sending\" from \"fully done\" (#262).\n- The Milestones widget honors the show-finished toggle (#268).\n\n### Fixed\n- `applySlotSettingsToAll` cleared `suppress_connected` on every target slot. Both slot-preference write paths now build from a single `toPrefsRequest()` builder, since `serializeNulls()` means an omitted field arrives as an explicit null and clears the override (#261).\n- The slots list dropped a room entirely once every slot was filtered out, so a room vanished when its last slot finished. Search emptying a room still removes it; the finished filter no longer does."
+      }
+    },
+    {
       "version": "1.8.2",
       "component": "app",
       "component_label": "App",
@@ -494,6 +560,51 @@
     }
   ],
   "server_releases": [
+    {
+      "version": "1.9.1",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-20",
+      "title": "Release-Off Rooms Keep Polling",
+      "highlights": [
+        {
+          "title": "Rooms Still Being Played No Longer Go Silent",
+          "description": "In a room with release turned off, everyone can reach their goal while still holding hundreds of unchecked locations. The last goal marked the room finished and the server stopped checking it for good, so everyone tracking it quietly stopped getting notifications for a room that was still being played. A room is now only considered finished once it has also run out of items to send."
+        },
+        {
+          "title": "Rooms Already Stuck Have Been Revived",
+          "description": "Nothing would ever have picked those rooms back up on their own, so this release repairs them once. Recently active rooms that were marked finished while still holding items are back on the polling schedule."
+        },
+        {
+          "title": "You Always Hear That A Slot Finished",
+          "description": "The “Player(s) Finished!” notification now arrives whether or not you keep notifications on for finished slots. That setting was silencing the announcement as well as the items and hints that follow it, so people who turned it off to quiet the aftermath never found out a slot was done. It now controls only what comes afterwards."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Finish Notifications Are No Longer Optional",
+            "description": "The finish announcement is no longer gated on the finished-slot notification preference. That preference governs the item and hint stream for a slot that has already finished, which is what the in-app description always said it did. Anyone with it switched off will start seeing finish notifications they were not getting before."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Completion Requires An Empty Slot, Not Just A Goal",
+            "description": "A room is marked complete only when every slot has both reached its goal and run out of checks to send. Completion permanently removes a room from every polling query and is never undone, so firing it early took the room offline for everyone tracking it. Rooms on hosts that do not report check counts keep the previous goal-only behavior rather than polling indefinitely."
+          },
+          {
+            "title": "One-Time Repair For Rooms Marked Complete Too Early",
+            "description": "A migration revives rooms that were marked complete while still holding items, limited to rooms that are not suspended and had activity within the last thirty days. Rooms that really were finished are re-marked complete on their next poll, and genuinely abandoned ones are caught by the existing thirty-day inactivity check."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Archipelago Alerts Server v1.9.1**\n\n**Fixed**\n• **Release-off rooms keep updating**: a room where everyone has goaled but items are still being sent no longer stops polling. Previously the last goal marked the room complete and notifications went silent for a room people were still playing. Rooms already stuck this way have been revived.\n• **You always hear about a finish**: the \"Player(s) Finished!\" notification now arrives even with \"Keep notifying finished slots\" turned off. That setting only controls the items and hints that come *after* a slot finishes.",
+        "play_store": "",
+        "github": "### Changed\n- The \"Player(s) Finished!\" notification is no longer gated on `notify_finished`. That preference now governs only the item and hint stream for a slot that has already finished, which is what the in-app copy already described. Users with the preference off will begin receiving finish notifications.\n\n### Fixed\n- `is_complete` now requires all-goaled **and** all-drained (#263). With release disabled, goaling leaves a player's locations unchecked while they keep playing so others still receive items; marking the room complete dropped it from every poll query permanently, and the column is never reset. Falls back to goal-only when check counts are unknown, so hosts that do not serve `player_checks_done` are unaffected.\n- Migration `b2e75c4a19d8` performs a one-off revival of rooms already stuck in that state, scoped to unsuspended rooms with remote activity inside the 30-day stale window. Nothing would ever have polled them again otherwise."
+      }
+    },
     {
       "version": "1.9.0",
       "component": "server",
