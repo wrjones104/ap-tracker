@@ -58,8 +58,12 @@ interface ApiService {
     @GET("users/me")
     suspend fun getUserProfile(): UserProfile
 
+    /**
+     * Values are Any because preferences are no longer all booleans: finished_definition
+     * is a string enum. The server validates each field by name.
+     */
     @PUT("users/me/preferences")
-    suspend fun updateUserPreferences(@Body request: Map<String, Boolean>): Response<Unit>
+    suspend fun updateUserPreferences(@Body request: Map<String, @JvmSuppressWildcards Any>): Response<Unit>
 
     @PUT("rooms/{id}/slots/{slot_id}/preferences")
     suspend fun updateSlotPreferences(
@@ -292,7 +296,15 @@ data class Player(
     val alias: String? = null,
     val game: String? = null,
     val is_tracked: Boolean = false,
+    /** Goaled. Keeps its original name because it is also the long-standing wire field. */
     val is_finished: Boolean = false,
+    /**
+     * Nothing left to send from this world. Null when the server has no check counts
+     * for the room at all, which degrades every definition to goal-only.
+     */
+    val has_all_checks: Boolean? = null,
+    val checks_done: Int? = null,
+    val total_locations: Int? = null,
     val notify_progression: Boolean? = null,
     val notify_useful: Boolean? = null,
     val notify_hints: Boolean? = null
@@ -312,7 +324,10 @@ data class HistoryItem(
     val senderAlias: String?,
     val senderGame: String?,
     val locationName: String?,
+    /** Goaled, as it has always meant. */
     val isPlayerFinished: Boolean,
+    /** Null when the server has no check counts for the room. */
+    val playerHasAllChecks: Boolean? = null,
     val itemFlags: Int,
     val timestamp: String,
     val tracker_id: String?,
@@ -362,6 +377,7 @@ data class UserProfile(
     val use_condensed_messages_default: Boolean,
     val suppress_connected_default: Boolean,
     val ui_show_finished_default: Boolean = true,
+    val finished_definition_default: String = "goal",
     val ui_show_found_hints_default: Boolean = false,
     val ui_show_progression_default: Boolean = true,
     val ui_show_useful_default: Boolean = true,
@@ -405,7 +421,38 @@ data class UpdateSlotPrefsRequest(
     val suppress_self_found: Boolean? = null,
     val notify_finished: Boolean? = null,
     val use_condensed_messages: Boolean? = null,
-    val suppress_connected: Boolean? = null
+    val suppress_connected: Boolean? = null,
+    val finished_definition: String? = null
+)
+
+/**
+ * Build a slot-preferences request carrying this slot's complete current state.
+ *
+ * The endpoint is a full-state write, not a patch: Retrofit is configured with
+ * `serializeNulls()`, and the server keys off field *presence*, so any field left off
+ * the request still arrives as an explicit null and clears that slot's override.
+ *
+ * Both callers -- the single-toggle path and "copy settings to all slots" -- used to
+ * enumerate the fields separately, and "copy to all" silently dropped
+ * `suppress_connected`, wiping that override on every target slot (issue #261).
+ * Building the request in one place from the slot object is what keeps a newly added
+ * preference from reintroducing that bug: add the field here and both paths carry it.
+ */
+fun TrackedSlotDetail.toPrefsRequest(): UpdateSlotPrefsRequest = UpdateSlotPrefsRequest(
+    notify_progression = notify_progression,
+    notify_useful = notify_useful,
+    notify_filler = notify_filler,
+    notify_trap = notify_trap,
+    notify_hints = notify_hints,
+    notify_hints_remote_items = notify_hints_remote_items,
+    combine_notifications = combine_notifications,
+    suppress_own_events = suppress_own_events,
+    remove_emojis = remove_emojis,
+    suppress_self_found = suppress_self_found,
+    notify_finished = notify_finished,
+    use_condensed_messages = use_condensed_messages,
+    suppress_connected = suppress_connected,
+    finished_definition = finished_definition
 )
 
 data class RoomWithTrackedSlots(
@@ -423,7 +470,12 @@ data class TrackedSlotDetail(
     val slot_id: Int,
     val player_name: String,
     val player_alias: String?,
+    /** Goaled. Keeps its original name because it is also the long-standing wire field. */
     val is_finished: Boolean = false,
+    /** Null when the server has no check counts for the room. */
+    val has_all_checks: Boolean? = null,
+    val checks_done: Int? = null,
+    val total_locations: Int? = null,
     val game: String? = null,
     val last_activity: String? = null,
     val item_count: Int = 0,
@@ -442,6 +494,8 @@ data class TrackedSlotDetail(
     val use_condensed_messages: Boolean?,
     val snooze_until: String? = null,
     val suppress_connected: Boolean?,
+    /** Per-slot override of the user's finished definition. Null inherits the default. */
+    val finished_definition: String? = null,
     val cheese: CheeseSlotState? = null
 )
 

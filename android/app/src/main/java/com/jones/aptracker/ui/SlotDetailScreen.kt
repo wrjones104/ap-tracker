@@ -555,6 +555,9 @@ fun SlotDetailScreen(
                 onUpdate = { key: String, value: Boolean? ->
                     userViewModel.updateSlotPreferences(roomDbId, slotId, key, value)
                 },
+                onUpdateFinishedDefinition = { definition ->
+                    userViewModel.updateSlotFinishedDefinition(roomDbId, slotId, definition)
+                },
                 onApplyToAll = {
                     userViewModel.applySlotSettingsToAll(roomDbId, slotId)
                     showSettingsSheet = false

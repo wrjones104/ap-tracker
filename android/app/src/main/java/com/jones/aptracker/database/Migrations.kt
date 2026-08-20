@@ -307,3 +307,23 @@ val MIGRATION_22_23 = object : Migration(22, 23) {
         """.trimIndent())
     }
 }
+
+/**
+ * Adds the "nothing left to send" completion fact alongside the existing goaled flag.
+ *
+ * Both columns are nullable on purpose. Null means "the server has no check counts for
+ * this room", which is a genuinely different state from "this slot still has locations
+ * out" -- every finished definition degrades to goal-only when it is unknown, so
+ * collapsing the two would make goaled slots reappear for users on stricter settings.
+ * Existing rows correctly become unknown until the next sync refreshes them.
+ *
+ * The history column exists so the standalone widget can filter without the app: it
+ * reads its rows straight out of SQLite and has no live slot data to consult.
+ */
+val MIGRATION_23_24 = object : Migration(23, 24) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE history_items ADD COLUMN playerHasAllChecks INTEGER")
+        db.execSQL("ALTER TABLE cached_tracked_slots ADD COLUMN isFinished INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE cached_tracked_slots ADD COLUMN hasAllChecks INTEGER")
+    }
+}

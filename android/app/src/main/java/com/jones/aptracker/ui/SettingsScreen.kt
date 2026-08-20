@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Tune
@@ -25,7 +26,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jones.aptracker.data.FinishedDefinition
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,10 +163,27 @@ fun SettingsScreen(
                         HorizontalDivider()
 
                         NotificationToggle(
-                            text = "Finished slots",
-                            description = "Notify for events after a slot has goaled.",
+                            text = "Keep notifying finished slots",
+                            description = "Items and hints for a slot that has already finished. " +
+                                "You always get the finish notification itself.",
                             checked = profile.notify_finished_default,
                             onCheckedChange = { userViewModel.updateGlobalPreferences(finished = it) }
+                        )
+                        HorizontalDivider()
+
+                        // Sits directly under the finished-slot toggle because it defines
+                        // what that toggle -- and every "show finished" filter -- acts on.
+                        val currentDefinition = remember(profile.finished_definition_default) {
+                            FinishedDefinition.fromWire(profile.finished_definition_default)
+                        }
+
+                        SettingsDropdownRow(
+                            title = "Finished means",
+                            description = currentDefinition.description,
+                            selected = currentDefinition,
+                            options = FinishedDefinition.entries,
+                            optionLabel = { it.label },
+                            onSelect = { userViewModel.setFinishedDefinition(it) }
                         )
 
                         // 2. BEHAVIOR SECTION
@@ -222,55 +240,109 @@ fun SettingsScreen(
                         HorizontalDivider()
 
                         // Date Format Setting
-                        var dropdownExpanded by remember { mutableStateOf(false) }
                         val dateFormatPresetKey by userViewModel.dateFormatPreset.collectAsState()
                         val currentPreset = remember(dateFormatPresetKey) { DateFormatPreset.fromKey(dateFormatPresetKey) }
 
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Date format", style = MaterialTheme.typography.bodyLarge)
-                                Text(
-                                    text = "Choose how timestamps are displayed.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Box {
-                                OutlinedButton(onClick = { dropdownExpanded = true }) {
-                                    Text(currentPreset.label)
-                                }
-                                DropdownMenu(
-                                    expanded = dropdownExpanded,
-                                    onDismissRequest = { dropdownExpanded = false }
-                                ) {
-                                    DateFormatPreset.values().forEach { preset ->
-                                        DropdownMenuItem(
-                                            text = { Text(preset.label) },
-                                            onClick = {
-                                                userViewModel.setDateFormatPreset(preset.key)
-                                                dropdownExpanded = false
-                                            },
-                                            trailingIcon = {
-                                                if (preset == currentPreset) {
-                                                    Icon(Icons.Default.Check, null)
-                                                }
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        SettingsDropdownRow(
+                            title = "Date format",
+                            // The live sample goes on its own line rather than inside the
+                            // value. DateFormatPreset.label bakes it in ("Friendly (Jun 8,
+                            // 2026 12:05 PM)"), which is far too long for an inline value.
+                            description = currentPreset.sample,
+                            selected = currentPreset,
+                            options = DateFormatPreset.entries,
+                            // Name only in the row; the menu keeps the full sample, which is
+                            // where seeing the format actually helps you choose.
+                            valueLabel = { it.description },
+                            optionLabel = { it.label },
+                            onSelect = { userViewModel.setDateFormatPreset(it.key) }
+                        )
                     }
 
                 } ?: Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
+            }
+        }
+    }
+}
+
+/**
+ * A settings row whose value is chosen from a dropdown.
+ *
+ * The value gets its own full-width line under the title rather than sitting beside it.
+ * Trailing-value layouts work for short values, but these are phrases -- "Goaled or all
+ * checks", a formatted date sample -- and squeezing one into the right-hand column
+ * crushes the label into a narrow ragged block. Giving it a line costs nothing vertically
+ * (the wrapped version was taller anyway) and stops the layout depending on how long the
+ * selected option happens to be.
+ *
+ * The whole row is the touch target, matching the toggle rows above it.
+ *
+ * [valueLabel] defaults to [optionLabel]; override it when the menu should show more than
+ * the row does.
+ */
+@Composable
+fun <T> SettingsDropdownRow(
+    title: String,
+    description: String?,
+    selected: T,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onSelect: (T) -> Unit,
+    valueLabel: (T) -> String = optionLabel
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true }
+                .padding(vertical = 12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = "Change $title",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            Text(
+                text = valueLabel(selected),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            if (!description.isNullOrBlank()) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(optionLabel(option)) },
+                    onClick = {
+                        onSelect(option)
+                        expanded = false
+                    },
+                    trailingIcon = {
+                        if (option == selected) {
+                            Icon(Icons.Default.Check, null)
+                        }
+                    }
+                )
             }
         }
     }

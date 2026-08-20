@@ -21,7 +21,13 @@ data class HistoryItemEntity(
     val senderAlias: String?,
     val senderGame: String?,
     val locationName: String?,
+    /** Goaled. Named for what it has always meant; renaming would churn every call site. */
     val isPlayerFinished: Boolean,
+    /**
+     * Nothing left to send from this world. Null means the server has no check counts
+     * for the room, which degrades every finished definition to goal-only.
+     */
+    val playerHasAllChecks: Boolean? = null,
     val itemFlags: Int,
     val tracker_id: String?,
     val slot_id: Int?,

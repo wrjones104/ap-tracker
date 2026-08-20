@@ -6,6 +6,8 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.database.CachedMilestoneGroupEntity
+import com.jones.aptracker.data.FinishedDefinitionStore
+import com.jones.aptracker.data.ShowFinishedPreference
 import com.jones.aptracker.database.CachedTrackedSlotEntity
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomItemCount
@@ -205,6 +207,8 @@ object MilestonesRepository {
                         playerName = slot.player_name,
                         playerAlias = slot.player_alias,
                         isArchived = room.is_archived,
+                        isFinished = slot.is_finished,
+                        hasAllChecks = slot.has_all_checks,
                         updatedAt = now
                     )
                 }
@@ -303,10 +307,32 @@ object MilestonesRepository {
                 emptyList()
             }
 
-            val targetSlots = if (isAllRooms) {
+            val roomScoped = if (isAllRooms) {
                 cachedSlots.filter { it.roomDbId in activeRoomIds }
             } else {
                 cachedSlots
+            }
+
+            // Hide finished slots when the user has that toggle off (issue #268). The
+            // milestone widget used to ignore it entirely and kept showing progress for
+            // slots the rest of the app had already hidden.
+            //
+            // Evaluated against the user's own definition, same as every other surface,
+            // so a user on "Both" keeps seeing a goaled slot that still has items to send
+            // rather than having its milestones disappear out from under them.
+            val showFinished = ShowFinishedPreference.get(context)
+            val targetSlots = if (showFinished) {
+                roomScoped
+            } else {
+                val resolver = FinishedDefinitionStore.resolver(context)
+                roomScoped.filterNot { slot ->
+                    resolver.isFinished(
+                        roomDbId = slot.roomDbId,
+                        slotId = slot.slotId,
+                        isGoaled = slot.isFinished,
+                        hasAllChecks = slot.hasAllChecks
+                    )
+                }
             }
 
             if (targetSlots.isEmpty()) {

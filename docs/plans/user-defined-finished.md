@@ -1,7 +1,8 @@
 # User-Defined "Finished" — Implementation Plan
 
 **Status:** Phase 1 (server) complete, tested, and validated against a live release-off room
-(PR #260). Phase 2 (Android) not started.
+(PR #260). Phase 2 (Android) implemented, along with issues #261, #262, #263, and #268 --
+see §10 for what changed relative to this plan.
 **Origin:** Discord request (ChromaNyan, 2026-08-16) — slots that have goaled but not sent all
 their locations are treated as "finished" and hidden, which is wrong for release-off worlds.
 
@@ -272,12 +273,20 @@ here; worth sweeping the UI layer for other hardcoded emoji in the same pass.
 
 ### 6.7 Copy
 
-Use AP-native vocabulary, not Cheese's:
+Use AP-native vocabulary, not Cheese's. The community says "all checks" for a world with
+nothing left to send, so the options use that term directly:
 
 - **Goaled**
-- **No items left to send**
-- **Goaled + no items left to send**
-- **Goaled or no items left to send**
+- **All checks**
+- **Goaled + all checks**
+- **Goaled or all checks**
+
+Each option's description unpacks the jargon for anyone who has not met it yet -- "all
+checks" is not literally "this player did all their own checks", since another player
+collecting raises the count too.
+
+The setting is labelled **"Finished means"**, which reads as a sentence with its value
+("Finished means: goaled or all checks") and is short enough not to crowd the row.
 
 Mentioning "this is what Cheese calls done" belongs in the Discord release post — ephemeral, buys
 recognition — not in durable in-app strings.
@@ -356,7 +365,175 @@ silently disable it.
   meaningfully worse than today.
 - **Multi-team rooms** are out of scope and consistent with existing behavior. If anyone is
   running multi-team, finished detection is already wrong for them today.
-- **Release-off rooms stop polling once everyone goals** (issue #263). Pre-existing and untouched
-  here, but it interacts badly with this feature: a user who picks "Both" specifically to keep
-  seeing release-off slots may find the room stops polling entirely. Worth fixing before Phase 2
-  ships the setting.
+- ~~**Release-off rooms stop polling once everyone goals** (issue #263).~~ Fixed before Phase 2
+  shipped the setting, as this section recommended. See §10.1.
+
+---
+
+## 10. Phase 2 as built
+
+Phase 2 shipped together with the four issues that turned out to touch the same code.
+
+### 10.1 Issue #263 -- release-off rooms stopping polling (server)
+
+`is_complete` now requires all-goaled **and** all-drained, extracted into
+`_room_is_complete` (`poller.py:657`) so the condition is testable rather than inline.
+
+When `checks_known` is false -- a host that never serves `player_checks_done` -- it falls
+back to goal-only. Requiring a fact the host cannot supply would keep those rooms polling
+until `db_check_stale_rooms` suspends them, for no correctness gain.
+
+Rooms already stuck are unreachable by any code path, since nothing will ever poll them
+again, so migration `b2e75c4a19d8` revives them once. Scope is deliberately narrow: not
+suspended, and remote activity inside the 30-day stale window. Rooms cached before the
+completion facts existed carry no `has_all_checks` key and are revived too -- one poll
+recomputes the facts and immediately re-completes the room if it really was drained.
+
+This had to land before the setting ships: a user picking "Both" specifically to keep
+release-off slots visible would otherwise find the room stopped polling entirely.
+
+### 10.2 Getting definitions to the widgets
+
+The plan did not settle how per-slot definitions reach code with no ViewModel. They are
+mirrored into the same SharedPreferences file the widgets already read for view toggles
+(`FinishedDefinitionStore`) -- the global default as a string, the overrides as a small
+JSON map, rewritten wholesale after every tracked-slot fetch.
+
+Mirrored rather than denormalized onto each history row: changing the setting re-filters
+everything already cached on the next read, with no table rewrite and no resync.
+
+`FinishedDefinitionStore.resolverFlow` and `ShowFinishedPreference` are process-wide
+holders rather than per-ViewModel state. Two independent flows over the same key drift the
+moment one screen writes -- changing the definition in Settings would leave an already
+loaded History screen filtering on the old one until it happened to refetch.
+
+### 10.3 Issue #261 -- fixed structurally, not just patched
+
+Adding `finished_definition` to `UpdateSlotPrefsRequest` would have reproduced #261
+immediately: Retrofit uses `serializeNulls()` and the server keys off field *presence*, so
+any field a caller omits arrives as an explicit null and clears that override.
+
+Both write paths now build the request from one `TrackedSlotDetail.toPrefsRequest()`
+extension instead of enumerating fields separately. Adding a preference is one edit, and
+"copy to all slots" cannot silently skip it again.
+
+### 10.4 Issue #262 -- vector icons
+
+All four hardcoded 🏁 literals are gone. `remove_emojis` keeps its notification-only
+meaning -- vector icons are not emoji, they render consistently, and they carry a
+`contentDescription`, so nothing depends on color alone.
+
+The history row uses `InlineTextContent` rather than a leading icon in a Row, which keeps
+the existing inline text flow exactly. `MilestonesWidget`'s 🚩 was left alone: it has its
+own per-widget config toggle and is outside #262's scope.
+
+### 10.5 Issue #268 -- milestone widget
+
+`cached_tracked_slots` gained `isFinished` and `hasAllChecks`, so
+`MilestonesRepository.loadSnapshot` can filter offline against the user's own definition.
+This is why the Room migration adds columns to two tables rather than one.
+
+### 10.6 Toggle unification (§6.4)
+
+`slots_show_finished` is retired. `SettingsManager` still exposes the flow, read once so
+`ShowFinishedPreference.migrateLegacyValue` can carry the user's choice onto the unified
+key; the setter is gone so the two cannot diverge again.
+
+### 10.7 Deviations from §6.2
+
+The history column is `INTEGER` **nullable**, not `INTEGER NOT NULL DEFAULT 0` as drafted.
+Unknown is a real third state (§8a) and collapsing it into false would make goaled slots
+reappear for users on stricter definitions. Existing rows correctly read as unknown until
+the next sync.
+
+### 10.8 Testing
+
+`FinishedDefinitionTest` mirrors the Python truth table in
+`backend/tests/test_finished_definition.py`. The two evaluators disagreeing is not
+cosmetic: the server suppresses notifications for slots it considers finished while the
+client decides what to show, so drift means either a hidden slot that still notifies or a
+visible slot that has gone silent.
+
+Server side, `TestRoomIsComplete` covers the #263 condition and `TestUndrainedRoomRevival`
+covers the migration's revival predicate.
+
+### 10.9 Settings row layout
+
+Both dropdown-backed settings share `SettingsDropdownRow`. The selected value gets its own
+full-width line under the title instead of sitting beside it in a button.
+
+Trailing-value layouts are fine for short values, but these are phrases, and a long one
+crushes the label into a narrow ragged block -- "Counts as finished" was wrapping to two
+lines to make room for "Goaled or no items left to send". Giving the value a line costs no
+vertical space (the wrapped version was taller) and stops the layout depending on which
+option happens to be selected.
+
+`DateFormatPreset` gained a `sample` property so the same row can show the preset name as
+the value and the live example as the description. `label` still carries both, and the
+picker keeps using it -- seeing the format is the whole point when choosing.
+
+### 10.10 notify_finished no longer silences the finish itself
+
+The "Player(s) Finished!" announcement now fires regardless of `notify_finished`
+(`poller.py:424`). The preference governs only the item and hint stream for a slot that has
+already finished -- the two suppression checks in `_resolve_names_and_notify`.
+
+The old behavior silenced both, which meant a user who turned the preference off to stop
+the ongoing noise after a slot goaled also never learned that it had. The one-off event and
+the ongoing stream are different things, and only the second is what anyone is trying to
+turn off.
+
+Worth noting the in-app copy already described the new behavior -- "Notify for events
+*after* a slot has finished" -- so this brought the code in line with what the setting
+claimed, rather than changing the contract. The label is now "Keep notifying finished
+slots", with the description saying outright that the finish notification always arrives.
+
+The transition edge is untouched: the announcement still fires exactly once, on the
+false -> true edge of the user's own evaluation. `test_finish_announcement_still_fires_once_only`
+pins that, since removing a gate from inside a loop is an easy way to turn a one-off into a
+repeat.
+
+### 10.11 A finished room must not vanish from the slots list
+
+The slots list dropped a room entirely once every one of its slots was filtered out
+(`mapNotNull` in `SlotsScreen.kt`). With finished slots hidden, a room disappeared the
+moment its last slot completed. The Rooms tab still listed it, so it looked like the app
+had half-lost the room.
+
+Pre-existing, but this work made it far easier to reach: more slots now correctly read as
+finished, and rooms actually survive to a fully-complete state instead of being archived
+first.
+
+The fix splits the two filters, which were never equivalent:
+
+- **Search** emptying a room still removes it. That is what searching means.
+- **The finished filter** emptying a room never removes it. The room keeps its header and
+  gains an inline "N finished slots hidden in this room / Show" row.
+
+That row appears for any expanded room with hidden slots, not only rooms with nothing left
+to show. Restricting it to the all-hidden case made the count read as a screen-wide total --
+there was no visible slot list to read it against, and with two rooms each hiding a slot
+the one row shown said "1" when two were hidden. It is worded "in this room" for the same
+reason.
+
+A room leaving the list should only ever be a user action -- archive or delete.
+
+Each room header now also carries a permanent `RoomSlotProgress` line -- a proportional bar
+plus "5 active - 3 finished" -- under the alias and host. The old count badge could not do
+this job: it only ever described what was on screen, so it could not tell the user that
+hidden slots existed. Laid out under the name rather than beside it, because a trailing
+indicator competes with the alias for width and truncates long room names.
+
+`buildRoomSlotGroups` is extracted from the composable specifically so the search/finished
+asymmetry is covered by tests (`RoomSlotGroupTest`). Collapsing the two filters back into
+one is the regression that caused this bug, and it is an easy one to reintroduce while
+tidying.
+
+### 10.12 Legacy toggle migration must not invent a false
+
+`SettingsManager.slotsShowFinished` defaulted to `false` while the unified `ui_show_finished`
+defaults to `true`, and the flow collapsed "never set" into that false. The migration would
+then carry a phantom `false` onto the unified key and silently hide finished slots for users
+who had never touched the old toggle -- exactly the flip the migration exists to prevent.
+
+The flow is now `Flow<Boolean?>` and the migration no-ops on null.

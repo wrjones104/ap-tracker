@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -25,7 +26,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -45,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.jones.aptracker.data.FinishedDefinition
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -183,6 +188,11 @@ fun SlotOverridesScreen(
                 onUpdate = { key, value ->
                     userViewModel.updateSlotPreferences(selectedSlotRoomId!!, selectedSlotDetail.slot_id, key, value)
                 },
+                onUpdateFinishedDefinition = { definition ->
+                    userViewModel.updateSlotFinishedDefinition(
+                        selectedSlotRoomId!!, selectedSlotDetail.slot_id, definition
+                    )
+                },
                 onApplyToAll = { showApplyAllDialog = true }
             )
         }
@@ -243,6 +253,8 @@ fun SlotSettingsSheet(
     slot: TrackedSlotDetail,
     profile: UserProfile,
     onUpdate: (String, Boolean?) -> Unit,
+    /** Null clears the override so the slot inherits the global default again. */
+    onUpdateFinishedDefinition: (FinishedDefinition?) -> Unit,
     onApplyToAll: () -> Unit
 ) {
     Column(
@@ -336,7 +348,7 @@ fun SlotSettingsSheet(
                 Spacer(Modifier.height(16.dp))
 
                 OverrideToggle(
-                    title = "Finished slots",
+                    title = "Keep notifying finished slots",
                     currentValue = slot.notify_finished,
                     defaultValue = profile.notify_finished_default,
                     onValueChange = { onUpdate("notify_finished", it) }
@@ -368,6 +380,15 @@ fun SlotSettingsSheet(
                     currentValue = slot.suppress_own_events,
                     defaultValue = profile.suppress_own_events_default,
                     onValueChange = { onUpdate("suppress_own_events", it) }
+                )
+            }
+
+            item {
+                Spacer(Modifier.height(16.dp))
+                FinishedDefinitionOverride(
+                    currentValue = slot.finished_definition,
+                    defaultValue = profile.finished_definition_default,
+                    onValueChange = onUpdateFinishedDefinition
                 )
             }
 
@@ -460,6 +481,81 @@ fun OverrideToggle(
                     shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size)
                 ) {
                     Text(label)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Per-slot override of what counts as finished.
+ *
+ * Follows [OverrideToggle]'s contract -- null means "inherit the global default", and
+ * Reset clears back to it -- but the value is a four-way enum rather than a boolean, so
+ * it gets a dropdown instead of a two-state segmented control.
+ */
+@Composable
+fun FinishedDefinitionOverride(
+    currentValue: String?,
+    defaultValue: String,
+    onValueChange: (FinishedDefinition?) -> Unit
+) {
+    val isOverridden = currentValue != null
+    val effective = FinishedDefinition.fromWire(currentValue ?: defaultValue)
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "Finished means", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = if (isOverridden) {
+                        effective.description
+                    } else {
+                        "Using default (${FinishedDefinition.fromWire(defaultValue).label})"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            if (isOverridden) {
+                TextButton(
+                    onClick = { onValueChange(null) },
+                    modifier = Modifier.padding(end = 8.dp)
+                ) {
+                    Text("Reset")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Box {
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(effective.label)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                FinishedDefinition.entries.forEach { definition ->
+                    DropdownMenuItem(
+                        text = { Text(definition.label) },
+                        onClick = {
+                            onValueChange(definition)
+                            expanded = false
+                        },
+                        trailingIcon = {
+                            if (isOverridden && definition == effective) {
+                                Icon(Icons.Default.Check, null)
+                            }
+                        }
+                    )
                 }
             }
         }

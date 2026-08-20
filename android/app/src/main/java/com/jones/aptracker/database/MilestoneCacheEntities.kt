@@ -18,6 +18,10 @@ data class CachedTrackedSlotEntity(
     val playerName: String,
     val playerAlias: String?,
     val isArchived: Boolean = false,
+    /** Goaled. Cached so the Milestones widget can hide finished slots offline (issue #268). */
+    val isFinished: Boolean = false,
+    /** Nothing left to send. Null when the server has no check counts for the room. */
+    val hasAllChecks: Boolean? = null,
     val updatedAt: Long = System.currentTimeMillis()
 )
 

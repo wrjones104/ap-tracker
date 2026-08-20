@@ -55,6 +55,7 @@ import androidx.glance.text.TextStyle
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.jones.aptracker.MainActivity
+import com.jones.aptracker.data.FinishedDefinitionStore
 import com.jones.aptracker.R
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.HistoryItemEntity
@@ -225,6 +226,9 @@ private suspend fun loadWidgetState(context: Context, widgetId: Int): RecentItem
         val showFiller = prefs.getBoolean("ui_show_filler", false)
         val showTrap = prefs.getBoolean("ui_show_trap", false)
         val showFinished = prefs.getBoolean("ui_show_finished", true)
+        // Snapshotted once per load, not per row: the JSON parse behind it is not free
+        // and this filter runs across every cached item.
+        val finishedResolver = FinishedDefinitionStore.resolver(context)
         val showIgnoredItems = prefs.getBoolean("ui_show_ignored_items", false)
 
         val rooms = try {
@@ -254,9 +258,17 @@ private suspend fun loadWidgetState(context: Context, widgetId: Int): RecentItem
             } else {
                 item.roomId == null || activeRoomIds.isEmpty() || item.roomId in activeRoomIds
             }
-            // Architectural note: Standalone widget uses item.isPlayerFinished stored in SQLite;
-            // the full in-app feed derives finished status from live slot data (HistoryScreen.kt:990).
-            val matchesFinished = showFinished || !item.isPlayerFinished
+            // Architectural note: Standalone widget evaluates the facts stored in SQLite;
+            // the full in-app feed derives them from live slot data (HistoryScreen.kt:990).
+            // Storing both facts on the row is what lets this work with no overlay --
+            // the widget has no ViewModel and no network call on its load path.
+            val isFinished = finishedResolver.isFinished(
+                roomDbId = item.roomId,
+                slotId = item.slot_id,
+                isGoaled = item.isPlayerFinished,
+                hasAllChecks = item.playerHasAllChecks
+            )
+            val matchesFinished = showFinished || !isFinished
 
             // --- TYPE CHECK (Prioritized to match visual colors and in-app feed verbatim) ---
             val isProgression = (item.itemFlags and 1) != 0

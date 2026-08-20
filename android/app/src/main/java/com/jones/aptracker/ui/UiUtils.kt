@@ -14,12 +14,21 @@ enum class DateFormatPreset(val key: String, val description: String, val patter
     DE_24H("DE_24H", "Germany", "dd.MM.yyyy HH:mm"),
     FRIENDLY_12H("FRIENDLY_12H", "Friendly", "MMM d, yyyy h:mm a");
 
-    val label: String
+    /**
+     * A formatted example of this preset, e.g. "Jun 8, 2026 12:05 PM".
+     *
+     * Exposed separately from [label] so a caller can show the name and the example on
+     * their own lines. Combined, they are too long to sit in a settings row's value column.
+     */
+    val sample: String
         get() {
-            val sample = java.time.ZonedDateTime.of(2026, 6, 8, 12, 5, 0, 0, java.time.ZoneId.systemDefault())
-            val formatted = sample.format(getFormatter(isDetail = true))
-            return if (this == SYSTEM_DEFAULT) description else "$description ($formatted)"
+            val at = java.time.ZonedDateTime.of(2026, 6, 8, 12, 5, 0, 0, java.time.ZoneId.systemDefault())
+            return at.format(getFormatter(isDetail = true))
         }
+
+    /** Name plus example, for the picker, where seeing the format is the point. */
+    val label: String
+        get() = if (this == SYSTEM_DEFAULT) description else "$description ($sample)"
 
     fun getFormatter(isDetail: Boolean = false): DateTimeFormatter {
         return if (pattern != null) {
