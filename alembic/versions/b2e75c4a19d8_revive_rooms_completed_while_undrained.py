@@ -19,6 +19,10 @@ finished or already abandoned, and `db_check_stale_rooms` is the backstop for
 whatever this revives in error -- a revived room that sees no further activity
 is suspended on the next stale sweep.
 
+Revived rooms also get `needs_backfill` set on their tracked slots, so the first
+poll after revival ingests the backlog silently instead of notifying on every
+item sent while the room was dark.
+
 Rooms completed before the completion facts existed carry no `has_all_checks`
 key at all. Those are revived too: one poll computes the facts and immediately
 re-completes the room if it really was drained, which is both self-correcting
@@ -90,6 +94,17 @@ def upgrade() -> None:
             chunk = revive_ids[start:start + 500]
             bind.execute(
                 sa.text("UPDATE tracked_rooms SET is_complete = false WHERE id IN :ids")
+                .bindparams(sa.bindparam('ids', expanding=True)),
+                {'ids': chunk},
+            )
+            # Make the catch-up poll silent. These rooms have been dark for up to 30
+            # days, so the first poll after revival sees every item sent in the
+            # meantime as brand new and would notify on all of it. needs_backfill is
+            # the existing mechanism for exactly this -- the poller suppresses item,
+            # hint, milestone, and finish notifications for a flagged slot and clears
+            # the flag at the end of that poll, so this costs one quiet cycle.
+            bind.execute(
+                sa.text("UPDATE user_tracked_slots SET needs_backfill = true WHERE room_id IN :ids")
                 .bindparams(sa.bindparam('ids', expanding=True)),
                 {'ids': chunk},
             )

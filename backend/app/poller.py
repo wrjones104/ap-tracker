@@ -378,6 +378,7 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
     # Evaluated per user against their own definition, so two users tracking the
     # same slot can legitimately be notified on different polls.
     if changed_slots:
+        now_utc = datetime.now(timezone.utc)
         for user_id, tracked_slots in tracked_slots_by_user.items():
             user_prefs = users_by_id.get(user_id)
             if not user_prefs: continue
@@ -419,6 +420,13 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
 
                 if (user_id, slot_id) in backfill_check_set:
                     logging.debug(f"[NOTIFY_SKIP][RoomDBID:{room_db_id}] User {user_id} tracking Slot {slot_id} is backfilling. Suppressing 'Finished' notification.")
+                    continue
+
+                # Snooze still applies. notify_finished is no longer the escape hatch
+                # (see below), so without this a globally snoozed user -- or one who
+                # snoozed this exact slot -- would have no way at all to stay quiet.
+                # The item, hint, and milestone paths all check this already.
+                if is_snoozed(user_prefs, slot_prefs, now_utc, user_id, slot_id, "finish"):
                     continue
 
                 # Deliberately NOT gated on notify_finished. That preference governs
@@ -657,7 +665,7 @@ def _slot_is_finished_for_user(slot_id, goaled_ids, all_checks_ids, user_prefs, 
     return evaluate_finished(slot_id in goaled_ids, has_all_checks, definition)
 
 
-def _room_is_complete(total_players, goaled_ids, all_checks_ids, checks_known):
+def _room_is_complete(total_players, goaled_ids, all_checks_ids, checks_known, totals_known=True):
     """
     Whether a room should stop being polled entirely.
 
@@ -678,12 +686,21 @@ def _room_is_complete(total_players, goaled_ids, all_checks_ids, checks_known):
     -- this falls back to goal-only. Requiring a fact the host cannot supply
     would keep those rooms polling until db_check_stale_rooms suspends them, for
     no correctness gain.
+
+    totals_known is the same escape hatch for the other half of the comparison.
+    has_all_checks is checks_done >= total_locations, so a slot whose
+    total_locations is 0 -- the sentinel for a static-tracker fetch that came back
+    without player_locations_total -- can never satisfy it. Those rooms are not
+    self-healing either: the re-setup guard only tests that the total_locations
+    key is present, not that it holds a real number. Without this, such a room
+    would be permanently ineligible for completion even though its checks are
+    perfectly well known, and would poll until the stale sweep suspended it.
     """
     if total_players <= 0:
         return False
     if len(goaled_ids) < total_players:
         return False
-    if not checks_known:
+    if not (checks_known and totals_known):
         return True
     return len(all_checks_ids) >= total_players
 
@@ -1446,7 +1463,11 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                 room.cached_checks_json = new_checks_json
 
         total_players = len(players)
-        if _room_is_complete(total_players, goaled_ids, all_checks_ids, checks_known):
+        # A slot with no total_locations can never register as drained, so treat the
+        # room's totals as unusable and fall back to goal-only rather than pinning it
+        # open forever. See _room_is_complete.
+        totals_known = all((p.get('total_locations', 0) or 0) > 0 for p in players)
+        if _room_is_complete(total_players, goaled_ids, all_checks_ids, checks_known, totals_known):
             if not is_complete_status:
                 room.is_complete = True
                 logging.info(f"[POLLER_ACTION][RoomDBID:{db_id}] Room marked as complete.")

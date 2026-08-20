@@ -3,6 +3,7 @@ import io
 import json
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app.utils import (
@@ -40,21 +41,23 @@ def _load_revival_migration():
     return module
 
 
-def user(definition='goal', notify_finished_default=True):
+def user(definition='goal', notify_finished_default=True, global_snooze_until=None):
     return SimpleNamespace(
         finished_definition_default=definition,
         notify_finished_default=notify_finished_default,
         use_condensed_messages_default=False,
         remove_emojis_default=True,
+        global_snooze_until=global_snooze_until,
     )
 
 
-def slot(definition=None, notify_finished=None):
+def slot(definition=None, notify_finished=None, snooze_until=None):
     return SimpleNamespace(
         finished_definition=definition,
         notify_finished=notify_finished,
         use_condensed_messages=None,
         remove_emojis=None,
+        snooze_until=snooze_until,
     )
 
 
@@ -316,6 +319,36 @@ class TestFinishNotificationTransitions(unittest.TestCase):
 
         self.assertIn(1, notifs)
 
+    def test_slot_snooze_suppresses_the_finish_announcement(self):
+        # notify_finished no longer silences this, so snooze is the only way left to
+        # stay quiet. It has to work, or a snoozed slot still pings.
+        self.prefs_by_user_slot[1][5] = slot(
+            snooze_until=datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+
+        notifs = self._poll(status=30, checks_done=100)
+
+        self.assertNotIn(1, notifs)
+        self.assertIn(2, notifs)
+
+    def test_global_snooze_suppresses_the_finish_announcement(self):
+        self.users_by_id[1] = user(
+            'goal', global_snooze_until=datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+
+        notifs = self._poll(status=30, checks_done=100)
+
+        self.assertNotIn(1, notifs)
+
+    def test_expired_snooze_does_not_suppress(self):
+        self.prefs_by_user_slot[1][5] = slot(
+            snooze_until=datetime.now(timezone.utc) - timedelta(hours=1)
+        )
+
+        notifs = self._poll(status=30, checks_done=100)
+
+        self.assertIn(1, notifs)
+
     def test_finish_announcement_still_fires_once_only(self):
         # Removing the gate must not turn the transition edge into a repeat.
         self.prefs_by_user_slot[1][5] = slot(notify_finished=False)
@@ -500,6 +533,24 @@ class TestRoomIsComplete(unittest.TestCase):
 
     def test_unknown_checks_still_require_all_goaled(self):
         self.assertFalse(_room_is_complete(3, {1, 2}, set(), checks_known=False))
+
+    def test_unknown_totals_fall_back_to_goal_only(self):
+        # has_all_checks is checks_done >= total_locations, so a slot with no
+        # total_locations can never register as drained. Requiring it anyway would
+        # pin the room open permanently even though its checks are well known.
+        self.assertTrue(
+            _room_is_complete(3, {1, 2, 3}, set(), checks_known=True, totals_known=False)
+        )
+
+    def test_unknown_totals_still_require_all_goaled(self):
+        self.assertFalse(
+            _room_is_complete(3, {1, 2}, set(), checks_known=True, totals_known=False)
+        )
+
+    def test_known_totals_are_the_default(self):
+        # The parameter is opt-out; callers without total_locations trouble behave
+        # exactly as before it existed.
+        self.assertFalse(_room_is_complete(3, {1, 2, 3}, {1, 2}, checks_known=True))
 
     def test_empty_room_never_completes(self):
         # total_players 0 is the failed-setup sentinel, not an instantly-done room.

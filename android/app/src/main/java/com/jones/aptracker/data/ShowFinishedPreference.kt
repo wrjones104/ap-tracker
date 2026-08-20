@@ -66,25 +66,35 @@ object ShowFinishedPreference {
     /**
      * Carry the old slots-screen-only value over, once.
      *
-     * Only applies when the unified key has never been written, so a user who had the
-     * shared toggle set already keeps it. Without this, anyone who had turned finished
-     * slots on (or off) just for the slots list would see it silently flip on upgrade.
+     * Deliberately NOT gated on `contains(KEY)`. HistoryViewModel seeds that key from
+     * `ui_show_finished_default` on its first successful profile fetch, and it does so for
+     * every user, so the key's presence says nothing about the user having chosen the
+     * value -- it only says the app has been online once. Gating on it made this migration
+     * unreachable for the entire existing install base, and since the old slots flag
+     * defaulted to hiding finished slots while the unified one defaults to showing them,
+     * that silently flipped My Slots on upgrade. Exactly the flip this exists to prevent.
      *
-     * [legacyValue] comes from the DataStore flow, which is why this takes it as a
-     * parameter rather than reading it here -- DataStore reads are suspending.
+     * [legacyValue] is non-null only when the user explicitly tapped the old slots-screen
+     * switch (the DataStore flow is `Flow<Boolean?>` and null no-ops upstream), so it is
+     * a real choice and wins over a server-seeded default.
+     *
+     * It comes in as a parameter rather than being read here because DataStore reads are
+     * suspending.
+     *
+     * @return true when the legacy value was applied, so the caller can sync it to the
+     *   server -- the unified toggle is account-wide and would otherwise stay device-local
+     *   until the user next touched it by hand.
      */
-    fun migrateLegacyValue(context: Context, legacyValue: Boolean) {
+    fun migrateLegacyValue(context: Context, legacyValue: Boolean): Boolean {
         val p = prefs(context)
-        if (p.getBoolean(KEY_LEGACY_MIGRATED, false)) return
-        if (!p.contains(KEY)) {
-            p.edit {
-                putBoolean(KEY, legacyValue)
-                putBoolean(KEY_LEGACY_MIGRATED, true)
-            }
-            _value.value = legacyValue
-        } else {
-            p.edit { putBoolean(KEY_LEGACY_MIGRATED, true) }
+        if (p.getBoolean(KEY_LEGACY_MIGRATED, false)) return false
+
+        p.edit {
+            putBoolean(KEY, legacyValue)
+            putBoolean(KEY_LEGACY_MIGRATED, true)
         }
+        _value.value = legacyValue
         initialized = true
+        return true
     }
 }

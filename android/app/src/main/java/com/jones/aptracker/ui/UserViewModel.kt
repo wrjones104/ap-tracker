@@ -88,7 +88,19 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             // never set it, in which case there is nothing to carry and the unified
             // default stands.
             settingsManager.slotsShowFinished.first()?.let { legacyValue ->
-                ShowFinishedPreference.migrateLegacyValue(application, legacyValue)
+                if (ShowFinishedPreference.migrateLegacyValue(application, legacyValue)) {
+                    // The unified toggle is account-wide, so a carried-over value has to
+                    // reach the server or it stays on this device only and the next
+                    // profile fetch on another device disagrees with this one.
+                    try {
+                        RetrofitClient.instance.updateUserPreferences(
+                            mapOf("ui_show_finished" to legacyValue)
+                        )
+                    } catch (e: Exception) {
+                        // Local value stands; the user can still change it by hand.
+                        e.printStackTrace()
+                    }
+                }
             }
         }
     }
@@ -114,6 +126,11 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
      * one builds a Map<String, Boolean>, and this value is a string enum.
      */
     fun setFinishedDefinition(definition: FinishedDefinition) {
+        // Rolled back on failure, matching updateSlotFinishedDefinition. Without it a
+        // failed save leaves every surface -- slots, history, both widgets -- filtering on
+        // a definition the server does not have, and nothing corrects it until the next
+        // profile fetch.
+        val previous = FinishedDefinition.fromWire(_userProfile.value?.finished_definition_default)
         FinishedDefinitionStore.writeDefault(getApplication(), definition)
         viewModelScope.launch {
             try {
@@ -122,6 +139,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 fetchUserProfile()
             } catch (e: Exception) {
+                FinishedDefinitionStore.writeDefault(getApplication(), previous)
                 _errorMessage.value = "Failed to save finished definition."
                 e.printStackTrace()
             }

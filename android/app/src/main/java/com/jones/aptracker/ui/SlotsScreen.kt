@@ -260,13 +260,6 @@ fun SlotsScreen(
 }
 
 /**
- * One room's row in the slots list, with its slots already filtered.
- *
- * Carries [hiddenFinishedCount] so the list can tell "this room has nothing to show"
- * apart from "this room's slots are all finished and currently hidden" -- the second is
- * worth explaining to the user rather than silently rendering an empty room.
- */
-/**
  * Group each room's slots for display, applying the search and finished filters.
  *
  * The two filters are deliberately not equivalent, and that asymmetry is the point:
@@ -317,6 +310,13 @@ internal fun buildRoomSlotGroups(
     )
 }
 
+/**
+ * One room's row in the slots list, with its slots already filtered.
+ *
+ * Carries [hiddenFinishedCount] so the list can tell "this room has nothing to show"
+ * apart from "this room's slots are all finished and currently hidden" -- the second is
+ * worth explaining to the user rather than silently rendering an empty room.
+ */
 internal data class RoomSlotGroup(
     val room: RoomWithTrackedSlots,
     val visibleSlots: List<TrackedSlotDetail>,
@@ -328,21 +328,15 @@ internal data class RoomSlotGroup(
     /** Slots the finished filter is currently holding back. Zero when they are shown. */
     val hiddenFinishedCount: Int get() = totalCount - visibleSlots.size
 
-    /** Every slot the room has is finished, and finished slots are hidden. */
+    /**
+     * Every slot the room has is finished, and finished slots are hidden.
+     *
+     * The list itself keys off [hiddenFinishedCount]; this exists so the tests can state
+     * the "all finished" case directly, which is the one that used to drop the room.
+     */
     val isAllFinished: Boolean get() = visibleSlots.isEmpty() && finishedCount > 0
 }
 
-/**
- * Accounts for the slots the finished filter is holding back in one room.
- *
- * Scoped to its room, which is why the copy says so outright -- the count is easy to read
- * as a screen-wide total otherwise, and it will not match one when several rooms each have
- * finished slots hidden.
- *
- * When the room has nothing else left to show, this row is also what keeps it from
- * rendering as an empty room: it used to vanish from the list entirely the moment its last
- * slot completed.
- */
 /**
  * A room's active/finished makeup: a proportional bar and a plain-language count.
  *
@@ -393,6 +387,18 @@ private fun RoomSlotProgress(activeCount: Int, finishedCount: Int) {
     }
 }
 
+/**
+ * Accounts for the slots the finished filter is holding back in one room.
+ *
+ * Scoped to its room, which is why the copy says so outright -- the count is easy to read
+ * as a screen-wide total otherwise, and it will not match one when several rooms each have
+ * finished slots hidden.
+ *
+ * Sits directly under the room header, above the slots that did survive the filter, so the
+ * explanation is next to the header count it accounts for. When the room has nothing else
+ * left to show, this row is also what keeps it from rendering as an empty room: it used to
+ * vanish from the list entirely the moment its last slot completed.
+ */
 @Composable
 private fun HiddenFinishedSlotsRow(count: Int, onShowFinished: () -> Unit) {
     Row(
