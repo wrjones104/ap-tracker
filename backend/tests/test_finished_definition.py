@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 import unittest
@@ -550,6 +551,61 @@ class TestUndrainedRoomRevival(unittest.TestCase):
         for payload in ('', None, '[]', 'not json', '{}', '[null]'):
             with self.subTest(payload=payload):
                 self.assertFalse(self.is_drained(payload))
+
+class TestHistoryUnknownChecksContract(unittest.TestCase):
+    """
+    History rows must serialize has_all_checks as null when a room's counts were
+    never fetched, exactly as the players and tracked-slot endpoints do.
+
+    Emitting False there is the original complaint inverted: the client would read
+    "still has checks out" and, under 'both' or 'all_checks', show every goaled slot
+    in that room as unfinished -- flooding filtered views with slots that finished
+    weeks ago.
+    """
+
+    def _derive(self, receiver_obj, checks_known):
+        # Mirrors the derivation in history_routes.py.
+        return (receiver_obj.get('has_all_checks', False) if receiver_obj else False)             if checks_known else None
+
+    def test_unknown_counts_yield_none(self):
+        self.assertIsNone(self._derive({'has_all_checks': True}, checks_known=False))
+        self.assertIsNone(self._derive({'has_all_checks': False}, checks_known=False))
+        self.assertIsNone(self._derive(None, checks_known=False))
+
+    def test_known_counts_yield_the_fact(self):
+        self.assertTrue(self._derive({'has_all_checks': True}, checks_known=True))
+        self.assertFalse(self._derive({'has_all_checks': False}, checks_known=True))
+
+    def test_none_and_false_diverge_under_strict_definitions(self):
+        # Why the distinction earns its keep.
+        for definition in ('both', 'all_checks'):
+            self.assertFalse(evaluate_finished(True, False, definition))
+            self.assertTrue(evaluate_finished(True, None, definition))
+
+    def test_all_three_history_sites_use_checks_known(self):
+        # Three derivation sites; a new one added without the guard would regress.
+        source = io.open(
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                'app', 'routes', 'history_routes.py',
+            ),
+            encoding='utf-8',
+        ).read()
+
+        self.assertEqual(3, source.count("has_all_checks = (receiver_obj.get("))
+        self.assertNotIn("has_all_checks = receiver_obj.get('has_all_checks', False)", source)
+
+    def test_passthroughs_do_not_default_to_false(self):
+        source = io.open(
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                'app', 'routes', 'history_routes.py',
+            ),
+            encoding='utf-8',
+        ).read()
+
+        self.assertNotIn("temp_item.get(\"playerHasAllChecks\", False)", source)
+        self.assertNotIn("temp_item.get('playerHasAllChecks', False)", source)
 
 if __name__ == '__main__':
     unittest.main()
