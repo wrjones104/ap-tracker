@@ -1,4 +1,6 @@
+import importlib.util
 import json
+import os
 import unittest
 from types import SimpleNamespace
 
@@ -10,7 +12,31 @@ from app.utils import (
     VALID_FINISHED_DEFINITIONS,
     DEFAULT_FINISHED_DEFINITION,
 )
-from app.poller import _check_player_completion, _parse_player_checks_done, _slot_is_finished_for_user
+from app.poller import (
+    _check_player_completion,
+    _parse_player_checks_done,
+    _slot_is_finished_for_user,
+    _room_is_complete,
+)
+
+
+def _load_revival_migration():
+    """
+    Load the one-off revival migration as a module.
+
+    Alembic versions are not an importable package, so this goes through the
+    file path. Pinning the revision id here means renaming or dropping the
+    migration fails loudly instead of silently skipping these tests.
+    """
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        'alembic', 'versions',
+        'b2e75c4a19d8_revive_rooms_completed_while_undrained.py',
+    )
+    spec = importlib.util.spec_from_file_location('revival_migration', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def user(definition='goal', notify_finished_default=True):
@@ -270,13 +296,34 @@ class TestFinishNotificationTransitions(unittest.TestCase):
             notifs = self._poll(status=30, checks_done=checks)
             self.assertNotIn(2, notifs)
 
-    def test_notify_finished_disabled_suppresses_the_notification(self):
+    def test_notify_finished_disabled_still_announces_the_finish(self):
+        # notify_finished governs the item/hint stream *after* a slot finishes, not
+        # the one-off announcement. Gating the announcement on it meant users who
+        # turned it off to stop the ongoing noise never learned a slot was done.
         self.prefs_by_user_slot[1][5] = slot(notify_finished=False)
 
         notifs = self._poll(status=30, checks_done=100)
 
-        self.assertNotIn(1, notifs)
+        self.assertIn(1, notifs)
         self.assertIn(2, notifs)
+
+    def test_finish_announcement_ignores_the_user_level_default_too(self):
+        # Same rule at the global level, not just the per-slot override.
+        self.users_by_id[1] = user('goal', notify_finished_default=False)
+
+        notifs = self._poll(status=30, checks_done=100)
+
+        self.assertIn(1, notifs)
+
+    def test_finish_announcement_still_fires_once_only(self):
+        # Removing the gate must not turn the transition edge into a repeat.
+        self.prefs_by_user_slot[1][5] = slot(notify_finished=False)
+
+        first = self._poll(status=30, checks_done=100)
+        second = self._poll(status=30, checks_done=100)
+
+        self.assertIn(1, first)
+        self.assertNotIn(1, second)
 
     def test_backfilling_slot_is_suppressed(self):
         notifs, _, _, _, _, _ = run_completion(
@@ -428,6 +475,81 @@ class TestCompletionFactMarker(unittest.TestCase):
 
         self.assertIn(self.MARKER, json.dumps(players))
 
+
+class TestRoomIsComplete(unittest.TestCase):
+    """
+    is_complete stops a room from ever being polled again and is never reset, so
+    the cost of firing it early is total and silent (issue #263).
+    """
+
+    def test_all_goaled_and_all_drained_completes(self):
+        self.assertTrue(_room_is_complete(3, {1, 2, 3}, {1, 2, 3}, checks_known=True))
+
+    def test_all_goaled_but_still_sending_does_not_complete(self):
+        # The release-off case: everyone goaled, one player still holds locations.
+        self.assertFalse(_room_is_complete(3, {1, 2, 3}, {1, 2}, checks_known=True))
+
+    def test_all_drained_but_not_all_goaled_does_not_complete(self):
+        self.assertFalse(_room_is_complete(3, {1, 2}, {1, 2, 3}, checks_known=True))
+
+    def test_unknown_checks_fall_back_to_goal_only(self):
+        # A host that never serves player_checks_done must behave as it always
+        # has, rather than polling until the 30-day stale sweep suspends it.
+        self.assertTrue(_room_is_complete(3, {1, 2, 3}, set(), checks_known=False))
+
+    def test_unknown_checks_still_require_all_goaled(self):
+        self.assertFalse(_room_is_complete(3, {1, 2}, set(), checks_known=False))
+
+    def test_empty_room_never_completes(self):
+        # total_players 0 is the failed-setup sentinel, not an instantly-done room.
+        self.assertFalse(_room_is_complete(0, set(), set(), checks_known=True))
+        self.assertFalse(_room_is_complete(0, set(), set(), checks_known=False))
+
+    def test_extra_goaled_ids_do_not_break_the_comparison(self):
+        # goaled_ids is built from the tracker payload and can outrun the cached
+        # player list after a re-setup; >= keeps that from stalling completion.
+        self.assertTrue(_room_is_complete(2, {1, 2, 3}, {1, 2, 3}, checks_known=True))
+
+
+class TestUndrainedRoomRevival(unittest.TestCase):
+    """
+    The one-off reconciliation in b2e75c4a19d8 decides which stuck rooms to
+    revive by reading cached_players_json. Rooms already stuck are unreachable
+    any other way -- nothing will ever poll them again on its own.
+    """
+
+    def setUp(self):
+        self.is_drained = _load_revival_migration()._is_drained
+
+    def test_fully_drained_room_stays_complete(self):
+        self.assertTrue(self.is_drained(json.dumps([
+            {'slot_id': 1, 'has_all_checks': True},
+            {'slot_id': 2, 'has_all_checks': True},
+        ])))
+
+    def test_room_with_one_slot_still_sending_is_revived(self):
+        self.assertFalse(self.is_drained(json.dumps([
+            {'slot_id': 1, 'has_all_checks': True},
+            {'slot_id': 2, 'has_all_checks': False},
+        ])))
+
+    def test_room_cached_before_completion_facts_existed_is_revived(self):
+        # No has_all_checks key at all: unknown, not drained. One poll computes
+        # the facts and re-completes the room if it really was done.
+        self.assertFalse(self.is_drained(json.dumps([
+            {'slot_id': 1, 'is_finished': True},
+        ])))
+
+    def test_partially_backfilled_cache_is_revived(self):
+        self.assertFalse(self.is_drained(json.dumps([
+            {'slot_id': 1, 'has_all_checks': True},
+            {'slot_id': 2, 'is_finished': True},
+        ])))
+
+    def test_malformed_or_empty_cache_is_revived_not_fatal(self):
+        for payload in ('', None, '[]', 'not json', '{}', '[null]'):
+            with self.subTest(payload=payload):
+                self.assertFalse(self.is_drained(payload))
 
 if __name__ == '__main__':
     unittest.main()
