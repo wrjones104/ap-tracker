@@ -59,6 +59,14 @@ interface ApiService {
     suspend fun getUserProfile(): UserProfile
 
     /**
+     * Global preferences are written as a sparse map on purpose: this endpoint has no
+     * request data class, unlike [UpdateSlotPrefsRequest] for the slot-level one.
+     *
+     * The sparseness is load-bearing. Retrofit is configured with `serializeNulls()`
+     * (`RetrofitClient.kt`) and the server keys off field *presence*, so a fully populated
+     * request object would send an explicit null for every preference the caller did not
+     * set and clear each one. Callers send only what changed -- often a single key.
+     *
      * Values are Any because preferences are no longer all booleans: finished_definition
      * is a string enum. The server validates each field by name.
      */
@@ -387,25 +395,6 @@ data class UserProfile(
     val cheese_default_ping: String? = null,
     val global_snooze_until: String? = null,
     val is_syncing_cheese: Boolean = false
-)
-
-data class UpdateGlobalPrefsRequest(
-    val notify_progression: Boolean? = null,
-    val notify_useful: Boolean? = null,
-    val notify_filler: Boolean? = null,
-    val notify_trap: Boolean? = null,
-    val notify_hints: Boolean? = null,
-    val notify_hints_remote_items: Boolean? = null,
-    val combine_notifications: Boolean? = null,
-    val suppress_own_events: Boolean? = null,
-    val remove_emojis: Boolean? = null,
-    val suppress_self_found: Boolean? = null,
-    val notify_finished: Boolean? = null,
-    val use_condensed_messages: Boolean? = null,
-    val ui_show_finished: Boolean? = null,
-    val ui_show_found_hints: Boolean? = null,
-    val ui_show_filler: Boolean? = null,
-    val ui_show_trap: Boolean? = null
 )
 
 data class UpdateSlotPrefsRequest(
