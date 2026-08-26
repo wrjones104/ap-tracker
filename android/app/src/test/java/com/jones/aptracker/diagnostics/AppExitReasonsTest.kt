@@ -68,12 +68,90 @@ class AppExitReasonsTest {
 
     @Test
     fun `importance buckets separate cached deaths from foreground deaths`() {
+        assertEquals("UNKNOWN", AppExitReasons.importanceName(0))
         assertEquals("FOREGROUND", AppExitReasons.importanceName(100))
         assertEquals("FOREGROUND", AppExitReasons.importanceName(125))
         assertEquals("VISIBLE", AppExitReasons.importanceName(200))
         assertEquals("PERCEPTIBLE", AppExitReasons.importanceName(230))
         assertEquals("SERVICE", AppExitReasons.importanceName(300))
+        assertEquals("TOP_SLEEPING", AppExitReasons.importanceName(325))
+        assertEquals("CANT_SAVE_STATE", AppExitReasons.importanceName(350))
         assertEquals("CACHED", AppExitReasons.importanceName(400))
-        assertEquals("UNKNOWN", AppExitReasons.importanceName(0))
+        assertEquals("EMPTY", AppExitReasons.importanceName(500))
+        assertEquals("GONE", AppExitReasons.importanceName(1000))
+    }
+}
+
+/**
+ * Guards [selectExitsToReport], which decides what gets reported and how far the watermark
+ * moves. Both failure modes are silent: too low a watermark re-reports old deaths on every
+ * launch and inflates the very counts this telemetry exists to produce, too high a watermark
+ * loses a termination permanently.
+ */
+class ExitSelectionTest {
+
+    private fun select(records: List<ExitRecord>, watermark: Long) =
+        selectExitsToReport(records, watermark, ExitRecord::timestamp, ExitRecord::reason)
+
+    private val lowMemory = 3
+    private val userRequested = 10
+
+    @Test
+    fun `only exits newer than the watermark are reported`() {
+        val result = select(
+            listOf(
+                ExitRecord(100L, lowMemory),
+                ExitRecord(200L, lowMemory),
+                ExitRecord(300L, lowMemory)
+            ),
+            watermark = 200L
+        )
+        assertEquals(listOf(ExitRecord(300L, lowMemory)), result.toReport)
+        assertEquals(300L, result.newWatermark)
+    }
+
+    @Test
+    fun `watermark advances past ignorable exits so they are not rescanned`() {
+        val result = select(
+            listOf(ExitRecord(500L, userRequested), ExitRecord(400L, userRequested)),
+            watermark = 100L
+        )
+        assertTrue("nothing reportable", result.toReport.isEmpty())
+        assertEquals("but the watermark still moves", 500L, result.newWatermark)
+    }
+
+    @Test
+    fun `watermark does not move when everything is already seen`() {
+        val result = select(listOf(ExitRecord(100L, lowMemory)), watermark = 250L)
+        assertTrue(result.toReport.isEmpty())
+        assertEquals(250L, result.newWatermark)
+    }
+
+    @Test
+    fun `a batch is returned newest first`() {
+        val result = select(
+            listOf(
+                ExitRecord(300L, lowMemory),
+                ExitRecord(500L, lowMemory),
+                ExitRecord(400L, lowMemory)
+            ),
+            watermark = 0L
+        )
+        assertEquals(listOf(500L, 400L, 300L), result.toReport.map { it.timestamp })
+        assertEquals(500L, result.newWatermark)
+    }
+
+    @Test
+    fun `an exit exactly on the watermark is not reported twice`() {
+        val result = select(listOf(ExitRecord(200L, lowMemory)), watermark = 200L)
+        assertTrue(result.toReport.isEmpty())
+        assertEquals(200L, result.newWatermark)
+    }
+
+    @Test
+    fun `an empty batch leaves the watermark alone`() {
+        val result = select(emptyList(), watermark = 750L)
+        assertTrue(result.toReport.isEmpty())
+        assertEquals(750L, result.newWatermark)
     }
 }

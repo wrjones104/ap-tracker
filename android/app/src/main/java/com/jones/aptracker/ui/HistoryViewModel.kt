@@ -378,8 +378,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 // lifetime of the ViewModel -- which spans backgrounding, where Play samples
                 // dynamic memory. Recorded so a report from a device that died cached carries the
                 // row count that produced it, and so the effect of paging this can be measured.
+                // A key rather than a breadcrumb because reloadHistory() runs on every filter
+                // change and would otherwise churn the fixed-size breadcrumb log.
+                // TODO(#277): remove once this path is paged -- this is a probe, not permanent.
                 CrashReporter.setKey("history_rows_loaded", rawItemEntities.size)
-                CrashReporter.log("Loaded ${rawItemEntities.size} history rows in one shot")
 
                 _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
                 currentPageOffset = rawItemEntities.size

@@ -12,10 +12,15 @@ import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.repository.HistorySyncWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 class MyApplication : Application() {
+
+    /** Outlives every screen; for one-shot startup work that must not block onCreate. */
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         // First, so that a failure in anything below is itself reportable.
@@ -31,7 +36,7 @@ class MyApplication : Application() {
      * SharedPreferences and an ActivityManager binder call, and nothing on screen waits on it.
      */
     private fun reportPreviousProcessDeath() {
-        CoroutineScope(Dispatchers.IO).launch {
+        applicationScope.launch {
             AppExitReporter.reportSinceLastLaunch(this@MyApplication)
         }
     }

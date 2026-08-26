@@ -79,11 +79,58 @@ internal object AppExitReasons {
      */
     fun importanceName(importance: Int): String = when {
         importance <= 0 -> "UNKNOWN"
-        importance <= 125 -> "FOREGROUND"
+        importance <= 125 -> "FOREGROUND"   // FOREGROUND, FOREGROUND_SERVICE
         importance <= 200 -> "VISIBLE"
         importance <= 230 -> "PERCEPTIBLE"
-        importance <= 325 -> "SERVICE"
+        importance <= 300 -> "SERVICE"
+        importance <= 325 -> "TOP_SLEEPING"
+        importance <= 350 -> "CANT_SAVE_STATE"
         importance <= 400 -> "CACHED"
+        importance <= 500 -> "EMPTY"        // deprecated, still emitted by some OEM forks
+        importance <= 1000 -> "GONE"
         else -> "IMPORTANCE_$importance"
     }
+}
+
+/** One process death, reduced to the two fields the triage below needs. */
+internal data class ExitRecord(val timestamp: Long, val reason: Int)
+
+/**
+ * What [AppExitReporter] should do with a batch of historical exits.
+ *
+ * [toReport] is newest first, so the caller can describe the most recent termination without
+ * re-sorting. [newWatermark] advances past everything *examined*, not just what is reported --
+ * otherwise a run of ignorable exits (a few app updates, a force-stop) would be re-scanned on
+ * every launch forever.
+ */
+internal data class ExitSelection<T>(val toReport: List<T>, val newWatermark: Long)
+
+/**
+ * Picks the exits worth reporting out of a raw platform batch.
+ *
+ * Pure, and generic over the record type, so the real `ApplicationExitInfo` list can be passed
+ * straight in while the tests use a plain data class and stay off Robolectric.
+ *
+ * Note the strict `>` against the watermark: [ExitRecord.timestamp] is wall-clock
+ * (`System.currentTimeMillis()`-based), so a backwards NTP correction can leave an exit stamped
+ * at or before a watermark written earlier and it will be skipped. Accepted rather than worked
+ * around -- the alternative is re-reporting old deaths every launch, which corrupts the counts
+ * this exists to produce, and a lost report costs far less than a duplicated one.
+ */
+internal fun <T> selectExitsToReport(
+    records: List<T>,
+    watermark: Long,
+    timestampOf: (T) -> Long,
+    reasonOf: (T) -> Int
+): ExitSelection<T> {
+    var newWatermark = watermark
+    val fresh = ArrayList<T>()
+    for (record in records) {
+        val timestamp = timestampOf(record)
+        if (timestamp <= watermark) continue
+        if (timestamp > newWatermark) newWatermark = timestamp
+        if (AppExitReasons.isReportable(reasonOf(record))) fresh.add(record)
+    }
+    fresh.sortByDescending { timestampOf(it) }
+    return ExitSelection(fresh, newWatermark)
 }

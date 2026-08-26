@@ -3,6 +3,7 @@ package com.jones.aptracker.diagnostics
 import android.app.ActivityManager
 import android.content.Context
 import android.util.Log
+import com.google.firebase.crashlytics.CustomKeysAndValues
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.jones.aptracker.BuildConfig
 
@@ -25,23 +26,31 @@ object CrashReporter {
     /** False in the debug build only; the minified build reports so the release path is exercised. */
     val isEnabled: Boolean get() = BuildConfig.CRASH_REPORTING_ENABLED
 
-    private val crashlytics: FirebaseCrashlytics?
-        get() = try {
-            FirebaseCrashlytics.getInstance()
-        } catch (e: IllegalStateException) {
-            // Firebase not initialized -- happens if google-services.json has no matching client.
-            Log.w(TAG, "Crashlytics unavailable", e)
-            null
-        }
+    /**
+     * Resolved once in [init] rather than per call. Null means Firebase never came up -- most
+     * likely a google-services.json with no client matching this variant's application id --
+     * in which case every entry point below quietly no-ops.
+     */
+    @Volatile
+    private var crashlytics: FirebaseCrashlytics? = null
 
     fun init(context: Context) {
-        val instance = crashlytics ?: return
+        val instance = try {
+            FirebaseCrashlytics.getInstance()
+        } catch (e: Exception) {
+            Log.w(TAG, "Crashlytics unavailable; reporting disabled for this process", e)
+            return
+        }
+        crashlytics = instance
+
         // Set explicitly rather than relying on the manifest default, so that flipping
         // CRASH_REPORTING_ENABLED is the single source of truth for whether we upload.
         instance.isCrashlyticsCollectionEnabled = isEnabled
         if (!isEnabled) return
 
         instance.setCustomKey("flavor", BuildConfig.FLAVOR)
+        // Distinguishes minified from release, which otherwise differ only by application id.
+        instance.setCustomKey("build_type", BuildConfig.BUILD_TYPE)
         instance.setCustomKey("version_name", BuildConfig.VERSION_NAME)
         recordDeviceMemoryProfile(context, instance)
     }
@@ -60,7 +69,12 @@ object CrashReporter {
         }
     }
 
-    /** Breadcrumb attached to any report that follows it. */
+    /**
+     * Breadcrumb attached to any report that follows it.
+     *
+     * The breadcrumb log is a fixed 64KB ring, so this is for events that happen a bounded
+     * number of times per session. Anything on a hot path belongs in a custom key instead.
+     */
     fun log(message: String) {
         if (!isEnabled) return
         crashlytics?.log(message)
@@ -71,14 +85,16 @@ object CrashReporter {
         crashlytics?.setCustomKey(key, value)
     }
 
-    fun setKey(key: String, value: String) {
+    /**
+     * Records a non-fatal with [keys] bound to this specific event.
+     *
+     * Session-level keys are read by Crashlytics on its own worker at write time, so events
+     * reported in a batch would all land carrying the last event's values. Per-event keys are
+     * still filterable in the console and cannot cross-attribute.
+     */
+    fun recordNonFatal(throwable: Throwable, keys: CustomKeysAndValues) {
         if (!isEnabled) return
-        crashlytics?.setCustomKey(key, value)
-    }
-
-    fun recordNonFatal(throwable: Throwable) {
-        if (!isEnabled) return
-        crashlytics?.recordException(throwable)
+        crashlytics?.recordException(throwable, keys)
     }
 
     private const val BYTES_PER_MB = 1024L * 1024L
