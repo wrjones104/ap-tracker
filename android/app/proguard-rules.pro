@@ -20,6 +20,13 @@
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
 
+# Crashlytics can only deobfuscate a release stack trace if R8 retains line numbers,
+# and the retained source file names are collapsed to a single token so the uploaded
+# mapping file stays the only thing that can resolve them. Without these two, every
+# release report arrives as method names with no line information.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
+
 -keepattributes *Annotation*,Signature,Exception,InnerClasses,EnclosingMethod
 -keep class kotlin.coroutines.jvm.internal.BaseContinuationImpl { *; }
 -keep class * extends kotlin.coroutines.jvm.internal.SuspendLambda { *; }

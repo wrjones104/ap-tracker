@@ -12,6 +12,7 @@ import com.jones.aptracker.data.FinishedDefinitionStore
 import com.jones.aptracker.data.FinishedResolver
 import com.jones.aptracker.data.ShowFinishedPreference
 import com.jones.aptracker.database.AppDatabase
+import com.jones.aptracker.diagnostics.CrashReporter
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
@@ -373,6 +374,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
                 
+                // This path loads the whole table and then holds a second, mapped copy for the
+                // lifetime of the ViewModel -- which spans backgrounding, where Play samples
+                // dynamic memory. Recorded so a report from a device that died cached carries the
+                // row count that produced it, and so the effect of paging this can be measured.
+                CrashReporter.setKey("history_rows_loaded", rawItemEntities.size)
+                CrashReporter.log("Loaded ${rawItemEntities.size} history rows in one shot")
+
                 _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
                 currentPageOffset = rawItemEntities.size
             } catch (e: Exception) {
