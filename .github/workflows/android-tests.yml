@@ -1,0 +1,94 @@
+name: Android Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-tests.yml'
+
+jobs:
+  android-unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # Both files are gitignored, and Gradle configuration hard-fails without them:
+      # the prod and uat flavors throw if their API_BASE_URL is absent, and the
+      # google-services plugin throws if no client matches the variant's application id.
+      # Unit tests never dial out, so placeholders are enough -- these values only ever
+      # reach BuildConfig constants and a generated values.xml.
+      # Read by app/build.gradle.kts via project.file(), which resolves relative to the
+      # module -- so this belongs in android/app, not android. The android/local.properties
+      # that Android Studio writes is only the SDK location, which the runner already has
+      # via ANDROID_HOME.
+      - name: Write placeholder local.properties
+        working-directory: android/app
+        run: |
+          cat > local.properties <<'PROPS'
+          DISCORD_CLIENT_ID=ci-placeholder
+          DEV_API_BASE_URL=http://10.0.2.2:5000/
+          UAT_API_BASE_URL=https://uat.invalid/
+          PROD_API_BASE_URL=https://prod.invalid/
+          PROPS
+
+      # prodDebug resolves to application id com.jones.aptracker.debug, so that is the
+      # only client entry the tested variant needs.
+      - name: Write placeholder google-services.json
+        working-directory: android/app
+        run: |
+          cat > google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "ci-placeholder",
+              "storage_bucket": "ci-placeholder.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.jones.aptracker.debug"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  { "current_key": "AIzaSyCIplaceholderplaceholderplaceholder0" }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": []
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          JSON
+
+      # One flavor is enough: dev/uat/prod differ only in BuildConfig constants, so
+      # running all three would execute identical tests three times.
+      - name: Run Android unit tests
+        working-directory: android
+        run: ./gradlew :app:testProdDebugUnitTest
+
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-test-report
+          path: android/app/build/reports/tests/testProdDebugUnitTest/
+          retention-days: 7
