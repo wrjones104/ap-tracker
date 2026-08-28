@@ -154,6 +154,13 @@ interface ApiService {
     @GET("rooms/{id}/datapackage")
     suspend fun getRoomDatapackage(@Path("id") roomId: Int): RoomDatapackage
 
+    /**
+     * One game's id -> name tables, addressed by datapackage checksum. The response is
+     * immutable for a given checksum, so callers cache it on disk indefinitely.
+     */
+    @GET("datapackage/checksum/{checksum}")
+    suspend fun getChecksumDatapackage(@Path("checksum") checksum: String): GameDatapackage
+
     @GET("rooms/{id}/slots/{slot_id}/locations")
     suspend fun getAvailableLocations(
         @Path("id") roomId: Int,
@@ -606,10 +613,26 @@ data class CreateMilestoneTemplateRequest(
 
 data class RoomDatapackage(
     val players: Map<String, String> = emptyMap(),
+    /** Item name by "<checksum>_<itemId>". */
     val items: Map<String, String> = emptyMap(),
     val item_flags: Map<String, Int> = emptyMap(),
+    /** Location name by "<checksum>_<locationId>". */
     val locations: Map<String, String> = emptyMap(),
-    val slot_to_checksum: Map<String, String> = emptyMap()
+    val slot_to_checksum: Map<String, String> = emptyMap(),
+    /**
+     * Checksum of the generic "Archipelago" game, when the room has one. Its ids are
+     * valid in every world -- location -1 is Cheat Console and -2 is Server -- so a
+     * lookup that misses in a slot's own game falls back here before giving up.
+     */
+    val generic_checksum: String? = null
+)
+
+/** One game's id -> name tables, as served by /datapackage/checksum/{checksum}. */
+data class GameDatapackage(
+    val checksum: String = "",
+    val game: String? = null,
+    val items: Map<String, String> = emptyMap(),
+    val locations: Map<String, String> = emptyMap()
 )
 
 data class HistorySyncRequest(

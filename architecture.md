@@ -71,7 +71,7 @@ The authenticated REST API is decomposed into 9 domain-driven Flask blueprints, 
 * **[thresholds_routes.py](backend/app/routes/thresholds_routes.py):** Milestone threshold group CRUD. `GET` returns an `acquired` count per requirement, read from `SlotItemCount`, so item-group requirements report real progress the client cannot compute locally.
 * **[templates_routes.py](backend/app/routes/templates_routes.py):** Milestone template CRUD, backing the template picker and export/import.
 * **[history_routes.py](backend/app/routes/history_routes.py):** Item and hint feeds, delta history synchronization (`POST /history/sync`).
-* **[game_routes.py](backend/app/routes/game_routes.py):** Game item & location datapackage inspection.
+* **[game_routes.py](backend/app/routes/game_routes.py):** Game item & location datapackage inspection, plus `GET /datapackage/checksum/<checksum>` -- one game's id -> name tables, served immutable with an ETag so the Android text client can cache it on disk permanently.
 * **[whats_new_routes.py](backend/app/routes/whats_new_routes.py):** Serves `GET /api/whats_new` from `app/data/changelog.json`.
 
 Four more blueprints are registered directly in `create_app()`:
