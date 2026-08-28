@@ -10,6 +10,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.9.1] - 2026-08-28
+
+_The Console Shows Names, Not Numbers_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Archipelago Alerts v1.9.1 is out!**
+>
+> 🔤 **The console shows names again** — items, locations and players were printing as raw ID numbers. They resolve properly now, and player names appear the moment you connect.
+>
+> ⚡ **Faster, and it works offline** — each game's name list is stored on your device now. Reopening a room you have visited before needs no download at all, so the console is readable even on a bad connection.
+>
+> 🔧 **Show Finished stays put** — upgrading to 1.9.0 could quietly flip My Slots over to showing finished slots. Your choice now carries across properly and follows your account, not just one device.
+>
+> Grab it on Google Play: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> Fixed: the console was showing raw ID numbers instead of item, location and player names. Names now appear as soon as you connect.
+>
+> Improved: each game's name list is stored on your device, so reopening a room you have visited before loads instantly and works without a connection.
+>
+> Fixed: upgrading could silently switch My Slots to showing finished slots. Your Show Finished choice now carries over correctly and follows your account.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - On-device datapackage cache (`cached_game_datapackages`, Room migration 24 → 25), keyed by Archipelago's per-game checksum. Because a checksum is a content hash, rows never expire and two rooms running the same game share one entry.
+>
+> ### Changed
+> - Player names and slot → game mapping are now built from the Archipelago handshake (`RoomInfo.datapackage_checksums`, `Connected.players`, `Connected.slot_info`) instead of a separate API call, so player names render before any ID table loads. `Connected.players` is filtered to the connecting client's own team, since slot numbers restart at 1 per team.
+> - ID tables are fetched from the new `GET /datapackage/checksum/<checksum>` endpoint, cache first. Failures retry with backoff and partial results are published rather than discarded; the map is never reset to null.
+> - Autocomplete no longer carries the console's ID tables as a passenger.
+>
+> ### Fixed
+> - Console rendered raw IDs for items, locations and players. `_datapackage` was only populated by `fetchAutocompleteData`, whose call sites are all milestone/hint dialog `LaunchedEffect`s; `e8f56c5` (1.6.19) removed the eager load from `SlotDetailScreen`, leaving no path that ran on connect.
+> - IDs from the generic `Archipelago` world (location -1 Cheat Console, -2 Server) now resolve via a fallback lookup against that package.
+> - `migrateLegacyValue` was gated on `prefs.contains("ui_show_finished")`, which `HistoryViewModel` seeds from the server default on first profile fetch, making the migration unreachable for the existing install base and silently flipping My Slots on upgrade. The legacy value now wins, and `UserViewModel` syncs the carried-over value to the server.
+> - `setFinishedDefinition` now rolls back the local store on a failed save, matching `updateSlotFinishedDefinition`.
+>
+> ### Internal
+> - Kotlin unit tests run in CI; new `DatapackageLookupTest` covers per-team slot scoping, per-game ID uniqueness, and generic-world fallback.
+> - Removed the dead `UpdateGlobalPrefsRequest` model.
+> ```
+
+### Changed
+- **On-Device Game Data Cache**: Item and location name tables are stored on the device, keyed by the checksum Archipelago assigns each game. Because that checksum is a content hash, a stored table can never go out of date, and two rooms running the same game share one copy. The console no longer waits on the network to become readable.
+- **Names Resolve From The Room Connection**: Player names and each slot's game now come from the Archipelago handshake itself rather than a separate request, so they are current and appear with no delay. Multi-team rooms are handled correctly: slot numbers restart at 1 for each team, and only your own team's players are used.
+
+### Fixed
+- **Console Printed IDs Instead Of Names**: Nothing loaded the ID-to-name tables when the console connected. They were only fetched as a side effect of opening a milestone or hint dialog, so anyone who never opened one saw raw numbers for the entire session. Connecting now loads them directly, and a failed load is retried instead of leaving the console unreadable.
+- **Show Finished Flipped On Upgrade**: The migration that carries your old slots-only “show finished” choice into the unified setting could not run, because the new key was already being filled in from the server before the migration looked for it. Since the old flag defaulted to hiding finished slots and the new one defaults to showing them, upgrading silently reversed the setting for anyone who had not touched it.
+- **Finished Setting Could Drift From Your Account**: Changing the account-wide “Finished means” setting kept the new value on the device even when the save failed, so every screen filtered on a definition the server did not have. A failed save now rolls back.
+- **Generic Archipelago Locations Showed As Numbers**: Locations belonging to Archipelago itself rather than to a game -- Cheat Console and Server -- were never resolvable, because they live in their own data package. The console now falls back to it.
+
+---
+
 ## [1.9.0] - 2026-08-20
 
 _You Decide What “Finished” Means_

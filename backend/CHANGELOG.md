@@ -10,6 +10,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.10.0] - 2026-08-28
+
+_Game Data On Demand, And Quieter Notifications_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Server v1.10.0 is live.**
+>
+> 🔕 **Snooze now silences finish announcements** — last release made the “Player(s) Finished!” notification independent of your finished-slot setting, which accidentally left no way to quiet it at all. Snooze applies to it now, the same as items, hints and milestones.
+>
+> ✅ **Rooms that could never finish, can** — if a room’s host never reported how many locations a slot has in total, that room stayed on the polling schedule forever no matter how obviously done it was. Those now fall back to goals alone.
+>
+> ⚡ **Faster name loading for the app** — each game’s item and location names can now be fetched on their own and kept by the app permanently, instead of re-sending the whole room’s data every time you open a slot.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - `GET /datapackage/checksum/<checksum>` — one game's item and location ID → name tables, served with an ETag and `Cache-Control: private, max-age=31536000, immutable`. Checksums are content hashes, so clients cache the response indefinitely. Only `item` and `location` rows are served; group rows carry synthetic negative IDs from `generate_negative_id()` that share an ID space with real negative IDs (the generic world uses location -1 and -2) and are never referenced by ID in `PrintJSON`.
+> - A checksum with only a `_metadata` completion marker returns 200 with empty tables rather than 404, so clients can cache the empty result.
+>
+> ### Changed
+> - `_room_is_complete` takes `totals_known` and falls back to goal-only when a slot's `total_locations` is 0, matching the existing `checks_known` escape hatch. Previously such rooms were permanently ineligible for completion and polled until `db_check_stale_rooms` suspended them.
+> - `_check_player_completion` honours snooze. `notify_finished` is deliberately not a gate on the finish announcement, so snooze was the only remaining way to quiet it and was not being checked.
+> - `alembic b2e75c4a19d8` sets `needs_backfill` on revived rooms' tracked slots so the catch-up poll is silent. This was amended after 1.9.1 had already applied the migration in production, so it affects environments that had not yet run it; the rooms revived by the 1.9.1 deploy did not get it.
+>
+> ### Fixed
+> - `playerHasAllChecks` is emitted as `null` rather than `false` in `GET /history/<room_db_id>` and `POST /history/sync` when a room's check counts were never fetched. `false` reported goaled slots as still sending.
+>
+> ### Notes
+> - `alembic upgrade heads` required for a fresh environment. No new revision in this release; `b2e75c4a19d8` is unchanged for anyone who has already applied it.
+> - Deploy before or alongside app 1.9.1. An app build hitting an older backend gets 404s per checksum, retries with backoff, then falls back to `GET /rooms/<id>/datapackage`; degraded, not broken.
+> ```
+
+### Added
+- **Per-Checksum Datapackage Endpoint**: `GET /datapackage/checksum/<checksum>` returns one game's item and location ID-to-name tables, with an ETag and a long-lived immutable Cache-Control. A checksum is a content hash, so the response can be cached by the client indefinitely without revalidation. Group rows are excluded: their synthetic negative IDs share an ID space with real negative IDs, and they are never referenced by ID in room messages.
+
+### Changed
+- **Empty Datapackages Answer 200, Not 404**: A game whose datapackage is genuinely empty returns empty tables with a 200 rather than a 404, so the client can record “nothing to resolve here” permanently instead of asking again on every connect.
+- **Snooze Honoured On Finish Notifications**: `_check_player_completion` now checks snooze before announcing a finish. The finished-slot preference is intentionally not an escape hatch for this notification, so without a snooze check there was no way for a user to quiet it.
+- **Silent Backfill For Rooms Revived From Here On**: The room revival migration sets `needs_backfill` on the tracked slots it revives, so the first poll after revival ingests the backlog instead of notifying on every item sent while the room was dark. This was added after the migration had already run in production, so it applies to environments that had not yet applied it, not to the rooms revived by the 1.9.1 deploy.
+
+### Fixed
+- **Rooms With Unknown Location Totals Never Completed**: `has_all_checks` is `checks_done >= total_locations`, so a slot whose `total_locations` is 0 -- the sentinel for a static-tracker fetch that returned no `player_locations_total` -- could never satisfy it, and the re-setup guard only tested that the key was present. `_room_is_complete` now takes `totals_known` and falls back to goal-only, matching the existing `checks_known` behaviour.
+- **History Reported Unknown Check State As False**: `playerHasAllChecks` was emitted as `false` for rooms whose check counts had never been fetched, which is categorically different from a slot that genuinely still has checks out and made goaled slots look like they were still sending. It is now `null` in that case, which every finished definition already handles by falling back to goal-only.
+
+---
+
 ## [1.9.1] - 2026-08-20
 
 _Release-Off Rooms Keep Polling_
