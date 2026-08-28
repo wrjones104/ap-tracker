@@ -29,7 +29,8 @@ _Game Data On Demand, And Quieter Notifications_
 > ```markdown
 > ### Added
 > - `GET /datapackage/checksum/<checksum>` — one game's item and location ID → name tables, served with an ETag and `Cache-Control: private, max-age=31536000, immutable`. Checksums are content hashes, so clients cache the response indefinitely. Only `item` and `location` rows are served; group rows carry synthetic negative IDs from `generate_negative_id()` that share an ID space with real negative IDs (the generic world uses location -1 and -2) and are never referenced by ID in `PrintJSON`.
-> - A checksum with only a `_metadata` completion marker returns 200 with empty tables rather than 404, so clients can cache the empty result.
+> - A checksum with only a `_metadata` completion marker returns 200 with empty tables rather than 404, so clients can cache the empty result. Both markers the writers emit (`_completed_v2` and `_empty_datapackage`) behave the same way.
+> - `GET /rooms/<id>/datapackage` now emits `generic_checksum`. Without it, a client on that fallback path cannot resolve Archipelago's own location IDs (-1 Cheat Console, -2 Server) and renders them as raw numbers.
 >
 > ### Changed
 > - `_room_is_complete` takes `totals_known` and falls back to goal-only when a slot's `total_locations` is 0, matching the existing `checks_known` escape hatch. Previously such rooms were permanently ineligible for completion and polled until `db_check_stale_rooms` suspended them.
@@ -41,7 +42,7 @@ _Game Data On Demand, And Quieter Notifications_
 >
 > ### Notes
 > - `alembic upgrade heads` required for a fresh environment. No new revision in this release; `b2e75c4a19d8` is unchanged for anyone who has already applied it.
-> - Deploy before or alongside app 1.9.1. An app build hitting an older backend gets 404s per checksum, retries with backoff, then falls back to `GET /rooms/<id>/datapackage`; degraded, not broken.
+> - Deploy before or alongside app 1.9.1. An app build hitting an older backend gets a 404 per checksum and falls back to `GET /rooms/<id>/datapackage` immediately -- a 404 is read as "the backend does not hold this" rather than as a transient failure, so it does not sit through the backoff first. Degraded, not broken.
 > ```
 
 ### Added

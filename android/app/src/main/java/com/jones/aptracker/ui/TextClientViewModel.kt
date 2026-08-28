@@ -61,6 +61,7 @@ class TextClientViewModel : ViewModel() {
     private var gameChecksums: Map<String, String> = emptyMap()
     private var playerNames: Map<String, String> = emptyMap()
     private var slotToChecksum: Map<String, String> = emptyMap()
+    private var ourSlot: Int? = null
     private var genericChecksum: String? = null
     private val resolvedItems = mutableMapOf<String, String>()
     private val resolvedLocations = mutableMapOf<String, String>()
@@ -113,13 +114,14 @@ class TextClientViewModel : ViewModel() {
 
                 override fun onConnected(
                     team: Int,
+                    slot: Int,
                     players: List<ApNetworkPlayer>,
                     slotInfo: Map<String, ApNetworkSlot>
                 ) {
                     // RoomInfo always precedes Connected on the same reader thread, so
                     // the launch above is already queued ahead of this one and
                     // gameChecksums is populated by the time this runs.
-                    viewModelScope.launch { onHandshakeComplete(team, players, slotInfo) }
+                    viewModelScope.launch { onHandshakeComplete(team, slot, players, slotInfo) }
                 }
             }
         )
@@ -132,9 +134,11 @@ class TextClientViewModel : ViewModel() {
      */
     private fun onHandshakeComplete(
         team: Int,
+        slot: Int,
         players: List<ApNetworkPlayer>,
         slotInfo: Map<String, ApNetworkSlot>
     ) {
+        ourSlot = slot
         playerNames = buildPlayerNames(team, players)
         slotToChecksum = buildSlotChecksums(slotInfo, gameChecksums)
         genericChecksum = gameChecksums[GENERIC_GAME]
@@ -174,61 +178,102 @@ class TextClientViewModel : ViewModel() {
 
         datapackageJob?.cancel()
         datapackageJob = viewModelScope.launch {
-            var pending = absorb(repo.readCache(checksums))
+            // One query for everything already on disk, published before any request
+            // goes out, so a room the user has opened before names itself with no
+            // network at all.
+            val cached = repo.readCache(checksums)
+            absorb(cached)
 
-            var attempt = 0
-            while (pending.isNotEmpty() && isActive) {
-                pending = absorb(repo.fetch(pending))
-                if (pending.isEmpty() || attempt >= MAX_DATAPACKAGE_RETRIES) break
-                attempt++
-                delay(RETRY_BASE_DELAY_MS shl (attempt - 1))
-            }
+            val priority = cached.missing intersect
+                priorityChecksums(ourSlot, slotToChecksum, genericChecksum)
+            val unresolved = fetchWithRetry(repo, priority) +
+                fetchWithRetry(repo, cached.missing - priority)
 
-            if (pending.isNotEmpty()) {
-                Log.w(TAG, "Gave up resolving " + pending.size + " datapackage checksum(s)")
+            if (unresolved.isNotEmpty()) {
+                // Last resort, and the reason the room-scoped endpoint is still called:
+                // it predates the per-checksum one, so a backend too old to serve these
+                // still answers it. This is what covers the window where the app ships
+                // ahead of the server.
+                Log.w(TAG, "Unresolved after retries: " + unresolved.size + "; trying room endpoint")
+                mergeLegacyDatapackage()
             }
         }
     }
 
     /**
-     * Fold one batch of resolved names into the published datapackage, and report back
-     * what the batch could not supply.
+     * Fetch [checksums], retrying with backoff, and report what is still unresolved.
+     *
+     * A 404 is dropped from the retry set immediately. That is the server saying it does
+     * not hold the package rather than the request going wrong, so backing off and asking
+     * again would only delay the fallback -- which is the whole point when the backend is
+     * simply older than this build.
      */
-    private fun absorb(resolved: DatapackageRepository.Resolved): Set<String> {
+    private suspend fun CoroutineScope.fetchWithRetry(
+        repo: DatapackageRepository,
+        checksums: Set<String>
+    ): Set<String> {
+        if (checksums.isEmpty()) return emptySet()
+
+        var pending = checksums
+        var absent = emptySet<String>()
+        var attempt = 0
+        while (pending.isNotEmpty() && isActive) {
+            val resolved = repo.fetch(pending)
+            absorb(resolved)
+            absent = absent + resolved.unavailable
+            pending = resolved.missing - resolved.unavailable
+            if (pending.isEmpty() || attempt >= MAX_DATAPACKAGE_RETRIES) break
+            attempt++
+            delay(RETRY_BASE_DELAY_MS shl (attempt - 1))
+        }
+        return pending + absent
+    }
+
+    /** Fold one batch of resolved names into the published datapackage. */
+    private fun absorb(resolved: DatapackageRepository.Resolved) {
         if (resolved.items.isNotEmpty() || resolved.locations.isNotEmpty()) {
             resolvedItems.putAll(resolved.items)
             resolvedLocations.putAll(resolved.locations)
             publishDatapackage()
         }
-        return resolved.missing
     }
 
     /**
-     * Fallback for servers that do not advertise datapackage checksums. Merges instead
-     * of replacing, and leaves the existing maps alone on failure -- raw ids for part of
-     * a room beat wiping names that are already on screen.
+     * Fallback for servers that do not advertise datapackage checksums at all. Runs the
+     * merge in its own job; use [mergeLegacyDatapackage] directly from inside a job that
+     * is already running, since cancelling datapackageJob from within it would cancel the
+     * caller.
      */
     private fun loadLegacyDatapackage() {
+        datapackageJob?.cancel()
+        datapackageJob = viewModelScope.launch { mergeLegacyDatapackage() }
+    }
+
+    /**
+     * Merge the room-scoped datapackage into whatever is already resolved.
+     *
+     * Merges instead of replacing, and leaves the existing maps alone on failure -- raw
+     * ids for part of a room beat wiping names that are already on screen.
+     */
+    private suspend fun mergeLegacyDatapackage() {
         val roomDbId = connectedRoomDbId
         if (roomDbId == null) {
             Log.w(TAG, "No room id available; console will show raw ids")
             return
         }
 
-        datapackageJob?.cancel()
-        datapackageJob = viewModelScope.launch {
-            try {
-                val legacy = RetrofitClient.instance.getRoomDatapackage(roomDbId)
-                resolvedItems.putAll(legacy.items)
-                resolvedLocations.putAll(legacy.locations)
-                // Player names already came from the handshake and are more current
-                // than the poller cache behind this endpoint, so only the checksum
-                // mapping -- the part the old server did not send -- is taken.
-                if (slotToChecksum.isEmpty()) slotToChecksum = legacy.slot_to_checksum
-                publishDatapackage()
-            } catch (e: Exception) {
-                Log.e(TAG, "Legacy room datapackage fetch failed", e)
-            }
+        try {
+            val legacy = RetrofitClient.instance.getRoomDatapackage(roomDbId)
+            resolvedItems.putAll(legacy.items)
+            resolvedLocations.putAll(legacy.locations)
+            // Player names already came from the handshake and are more current than the
+            // poller cache behind this endpoint, so only the parts the handshake could
+            // not supply are taken.
+            if (slotToChecksum.isEmpty()) slotToChecksum = legacy.slot_to_checksum
+            if (genericChecksum == null) genericChecksum = legacy.generic_checksum
+            publishDatapackage()
+        } catch (e: Exception) {
+            Log.e(TAG, "Legacy room datapackage fetch failed", e)
         }
     }
 

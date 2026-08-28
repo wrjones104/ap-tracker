@@ -6,6 +6,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.database.CachedGameDatapackageEntity
+import com.jones.aptracker.network.GameDatapackage
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.datapackageKey
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +16,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 /**
  * Supplies Archipelago datapackages -- the item and location id -> name tables -- for a
@@ -42,8 +44,27 @@ class DatapackageRepository(application: Application) {
     data class Resolved(
         val items: Map<String, String>,
         val locations: Map<String, String>,
-        val missing: Set<String>
+        val missing: Set<String>,
+        /**
+         * The subset of [missing] the server answered 404 for. That is the server
+         * saying it does not hold the package, not that the request went wrong, so
+         * asking again on a backoff only delays whatever the caller does instead.
+         */
+        val unavailable: Set<String> = emptySet()
     )
+
+    /** What one checksum's fetch turned into. */
+    private sealed interface FetchResult {
+        val checksum: String
+
+        data class Ok(override val checksum: String, val pkg: GameDatapackage) : FetchResult
+
+        /** The server has no package here (404). Retrying will not change that. */
+        data class Absent(override val checksum: String) : FetchResult
+
+        /** Went wrong in transit. Worth another attempt. */
+        data class Failed(override val checksum: String) : FetchResult
+    }
 
     /**
      * Whatever is already on device. Never touches the network, so a room the user has
@@ -63,8 +84,14 @@ class DatapackageRepository(application: Application) {
             emptyList()
         }
         for (entity in cached) {
-            merge(entity.checksum, entity.itemsJson, entity.locationsJson, items, locations)
-            found.add(entity.checksum)
+            // A row that will not parse is treated as absent rather than as resolved.
+            // Nothing expires these rows and the checksum is the primary key, so
+            // counting a corrupt one as done would leave that game showing raw ids on
+            // this device forever. Leaving it missing sends it back through fetch,
+            // which overwrites the bad row.
+            if (merge(entity.checksum, entity.itemsJson, entity.locationsJson, items, locations)) {
+                found.add(entity.checksum)
+            }
         }
 
         Resolved(items, locations, checksums - found)
@@ -91,64 +118,86 @@ class DatapackageRepository(application: Application) {
                 async {
                     gate.withPermit {
                         try {
-                            checksum to RetrofitClient.instance.getChecksumDatapackage(checksum)
+                            FetchResult.Ok(
+                                checksum,
+                                RetrofitClient.instance.getChecksumDatapackage(checksum)
+                            )
+                        } catch (e: HttpException) {
+                            if (e.code() == HTTP_NOT_FOUND) {
+                                Log.w(TAG, "Backend has no datapackage for $checksum")
+                                FetchResult.Absent(checksum)
+                            } else {
+                                Log.w(TAG, "Datapackage fetch failed for $checksum: ${e.message}")
+                                FetchResult.Failed(checksum)
+                            }
                         } catch (e: Exception) {
                             Log.w(TAG, "Datapackage fetch failed for $checksum: ${e.message}")
-                            null
+                            FetchResult.Failed(checksum)
                         }
                     }
                 }
             }.awaitAll()
         }
 
+        val unavailable = HashSet<String>()
         for (result in results) {
-            if (result == null) continue
-            // File it under the checksum that was asked for, not the one echoed back, so
-            // a confused response can never shadow a good package under another key.
-            val (checksum, pkg) = result
-            val itemsJson = gson.toJson(pkg.items)
-            val locationsJson = gson.toJson(pkg.locations)
-            merge(checksum, itemsJson, locationsJson, items, locations)
-            found.add(checksum)
-            try {
-                dao.insert(
-                    CachedGameDatapackageEntity(
-                        checksum = checksum,
-                        game = pkg.game,
-                        itemsJson = itemsJson,
-                        locationsJson = locationsJson
-                    )
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed caching datapackage $checksum", e)
+            when (result) {
+                is FetchResult.Absent -> unavailable.add(result.checksum)
+                is FetchResult.Failed -> Unit
+                is FetchResult.Ok -> {
+                    // File it under the checksum that was asked for, not the one echoed
+                    // back, so a confused response can never shadow a good package under
+                    // another key.
+                    val checksum = result.checksum
+                    val itemsJson = gson.toJson(result.pkg.items)
+                    val locationsJson = gson.toJson(result.pkg.locations)
+                    if (!merge(checksum, itemsJson, locationsJson, items, locations)) continue
+                    found.add(checksum)
+                    try {
+                        dao.insert(
+                            CachedGameDatapackageEntity(
+                                checksum = checksum,
+                                game = result.pkg.game,
+                                itemsJson = itemsJson,
+                                locationsJson = locationsJson
+                            )
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed caching datapackage $checksum", e)
+                    }
+                }
             }
         }
 
-        Resolved(items, locations, checksums - found)
+        Resolved(items, locations, checksums - found, unavailable)
     }
 
+    /** Returns false if the JSON would not parse, leaving [checksum] unresolved. */
     private fun merge(
         checksum: String,
         itemsJson: String,
         locationsJson: String,
         items: MutableMap<String, String>,
         locations: MutableMap<String, String>
-    ) {
-        try {
+    ): Boolean {
+        return try {
             gson.fromJson<Map<String, String>>(itemsJson, mapType)?.forEach { (id, name) ->
                 items[datapackageKey(checksum, id)] = name
             }
             gson.fromJson<Map<String, String>>(locationsJson, mapType)?.forEach { (id, name) ->
                 locations[datapackageKey(checksum, id)] = name
             }
+            true
         } catch (e: Exception) {
-            Log.e(TAG, "Malformed cached datapackage for $checksum", e)
+            Log.e(TAG, "Malformed datapackage for $checksum", e)
+            false
         }
     }
 
     private companion object {
         const val TAG = "DatapackageRepo"
         const val MAX_CONCURRENT_FETCHES = 4
+        const val HTTP_NOT_FOUND = 404
         val EMPTY = Resolved(emptyMap(), emptyMap(), emptySet())
     }
 }

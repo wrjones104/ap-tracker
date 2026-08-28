@@ -11,7 +11,7 @@ os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app import create_app, Session, engine
-from app.models import Base, User, DatapackageCache
+from app.models import Base, User, DatapackageCache, TrackedRoom
 from app.utils import generate_negative_id
 
 
@@ -122,18 +122,26 @@ class TestDatapackageByChecksum(unittest.TestCase):
 
     def test_empty_datapackage_answers_200_not_404(self):
         """
-        A game whose datapackage is genuinely empty caches only its completion marker.
+        A game whose datapackage is genuinely empty caches only a metadata marker.
         Answering 200-with-nothing lets the client record "nothing to resolve here"
         permanently; a 404 would send it back to re-ask on every single connect.
+
+        Both markers are covered because the writers emit '_empty_datapackage' for a
+        genuinely empty package and '_completed_v2' for one that had entries, and the
+        endpoint must not start caring which it sees.
         """
-        self._cache('chk_empty', 'Archipelago', [('_metadata', 0, '_completed_v2')])
+        for marker in ('_empty_datapackage', '_completed_v2'):
+            with self.subTest(marker=marker):
+                checksum = 'chk' + marker
+                self._cache(checksum, 'Archipelago', [('_metadata', 0, marker)])
 
-        res = self.client.get('/datapackage/checksum/chk_empty', headers=self._auth())
-        self.assertEqual(res.status_code, 200)
+                res = self.client.get(
+                    '/datapackage/checksum/' + checksum, headers=self._auth())
+                self.assertEqual(res.status_code, 200)
 
-        body = json.loads(res.data)
-        self.assertEqual(body['items'], {})
-        self.assertEqual(body['locations'], {})
+                body = json.loads(res.data)
+                self.assertEqual(body['items'], {})
+                self.assertEqual(body['locations'], {})
 
     def test_uncached_checksum_is_404(self):
         res = self.client.get('/datapackage/checksum/chk_unknown', headers=self._auth())
@@ -182,6 +190,41 @@ class TestDatapackageByChecksum(unittest.TestCase):
         self.assertEqual(b['items']['40'], 'Totally Different')
         self.assertEqual(a['locations']['40'], 'Boss Chest')
         self.assertEqual(b['locations']['40'], 'Minigame Prize')
+
+
+    def test_legacy_room_route_emits_generic_checksum(self):
+        """
+        The room-scoped route is the fallback for a client whose backend cannot serve
+        per-checksum packages. It has to carry generic_checksum too, or Cheat Console
+        and Server render as -1 and -2 on exactly the path that exists to avoid raw ids.
+        """
+        session = Session()
+        try:
+            room = TrackedRoom(
+                room_id='room-uuid-1',
+                cached_players_json=json.dumps([
+                    {'slot_id': 1, 'name': 'Hyper', 'game': 'shapez'},
+                ]),
+                game_checksums_json=json.dumps({
+                    'shapez': 'chk_shapez',
+                    'Archipelago': 'chk_generic',
+                }),
+            )
+            session.add(room)
+            session.commit()
+            room_db_id = room.id
+        finally:
+            Session.remove()
+
+        self._cache('chk_generic', 'Archipelago', [('location', -1, 'Cheat Console')])
+
+        res = self.client.get(
+            f'/rooms/{room_db_id}/datapackage', headers=self._auth())
+        self.assertEqual(res.status_code, 200)
+
+        body = json.loads(res.data)
+        self.assertEqual(body['generic_checksum'], 'chk_generic')
+        self.assertEqual(body['locations']['chk_generic_-1'], 'Cheat Console')
 
 
 if __name__ == '__main__':

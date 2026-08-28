@@ -58,6 +58,24 @@ fun buildSlotChecksums(
 }
 
 /**
+ * The checksums worth fetching before all the others.
+ *
+ * A thirty-game async needs thirty packages, fetched a few at a time, and every batch
+ * that lands makes more of the console readable. The connecting player's own game names
+ * most of what their own lines refer to, and the generic world covers Cheat Console and
+ * Server, so those two go first rather than landing last by accident -- the fetch set is
+ * otherwise unordered.
+ */
+fun priorityChecksums(
+    ourSlot: Int?,
+    slotToChecksum: Map<String, String>,
+    genericChecksum: String?
+): Set<String> = setOfNotNull(
+    ourSlot?.let { slotToChecksum[it.toString()] },
+    genericChecksum
+)
+
+/**
  * Look up one item or location name, falling back to Archipelago's generic world.
  *
  * The slot's own [checksum] is tried first. Generic ids -- location -1 is Cheat Console,

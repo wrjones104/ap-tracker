@@ -43,7 +43,8 @@ _The Console Shows Names, Not Numbers_
 >
 > ### Changed
 > - Player names and slot → game mapping are now built from the Archipelago handshake (`RoomInfo.datapackage_checksums`, `Connected.players`, `Connected.slot_info`) instead of a separate API call, so player names render before any ID table loads. `Connected.players` is filtered to the connecting client's own team, since slot numbers restart at 1 per team.
-> - ID tables are fetched from the new `GET /datapackage/checksum/<checksum>` endpoint, cache first. Failures retry with backoff and partial results are published rather than discarded; the map is never reset to null.
+> - ID tables are fetched from the new `GET /datapackage/checksum/<checksum>` endpoint, cache first. Transient failures retry with backoff and partial results are published rather than discarded; the map is never reset to null. A 404 is not retried -- it means the backend does not hold that package -- and anything still unresolved after that falls back to `GET /rooms/<id>/datapackage`, which covers a backend older than this build.
+> - The connecting slot's own game and the generic `Archipelago` package are fetched in the first batch, so in a large async the lines about your own slot become readable before the rest of the room lands.
 > - Autocomplete no longer carries the console's ID tables as a passenger.
 >
 > ### Fixed
@@ -51,6 +52,8 @@ _The Console Shows Names, Not Numbers_
 > - IDs from the generic `Archipelago` world (location -1 Cheat Console, -2 Server) now resolve via a fallback lookup against that package.
 > - `migrateLegacyValue` was gated on `prefs.contains("ui_show_finished")`, which `HistoryViewModel` seeds from the server default on first profile fetch, making the migration unreachable for the existing install base and silently flipping My Slots on upgrade. The legacy value now wins, and `UserViewModel` syncs the carried-over value to the server.
 > - `setFinishedDefinition` now rolls back the local store on a failed save, matching `updateSlotFinishedDefinition`.
+>
+> - A cached datapackage row that will not parse is treated as absent rather than as resolved, so it is refetched and overwritten. Counting it as done would have left that game showing raw IDs on that device permanently, since nothing expires these rows.
 >
 > ### Internal
 > - Kotlin unit tests run in CI; new `DatapackageLookupTest` covers per-team slot scoping, per-game ID uniqueness, and generic-world fallback.

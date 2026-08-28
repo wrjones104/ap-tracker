@@ -39,9 +39,15 @@ class ArchipelagoWebSocketManager(
          * Connected carries everything room-specific needed to read a PrintJSON line:
          * who each slot is, and which game each slot plays. [team] is our own team --
          * slot numbers in PrintJSON are scoped to it, so players on other teams must
-         * not be folded into the same map.
+         * not be folded into the same map. [slot] is our own slot, which decides whose
+         * game is worth resolving first.
          */
-        fun onConnected(team: Int, players: List<ApNetworkPlayer>, slotInfo: Map<String, ApNetworkSlot>)
+        fun onConnected(
+            team: Int,
+            slot: Int,
+            players: List<ApNetworkPlayer>,
+            slotInfo: Map<String, ApNetworkSlot>
+        )
     }
 
     private fun isLocalHost(host: String): Boolean {
@@ -126,6 +132,7 @@ class ArchipelagoWebSocketManager(
                     "Connected" -> {
                         listener.onConnected(
                             team = packet.team ?: 0,
+                            slot = packet.slot ?: 0,
                             players = packet.players ?: emptyList(),
                             slotInfo = packet.slotInfo ?: emptyMap()
                         )

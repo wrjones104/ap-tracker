@@ -104,6 +104,42 @@ class DatapackageLookupTest {
     }
 
     // ---------------------------------------------------------------
+    // priorityChecksums
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `our own game and the generic package are fetched first`() {
+        val priority = priorityChecksums(
+            ourSlot = 2,
+            slotToChecksum = mapOf("1" to "chk_shapez", "2" to "chk_ff", "3" to "chk_other"),
+            genericChecksum = "chk_generic"
+        )
+
+        assertEquals(setOf("chk_ff", "chk_generic"), priority)
+    }
+
+    @Test
+    fun `priority survives a room with no generic package`() {
+        val priority = priorityChecksums(
+            ourSlot = 1,
+            slotToChecksum = mapOf("1" to "chk_shapez"),
+            genericChecksum = null
+        )
+
+        assertEquals(setOf("chk_shapez"), priority)
+    }
+
+    @Test
+    fun `priority is empty when our own slot is unknown`() {
+        // Nothing to prioritise is fine -- the caller just fetches everything in one
+        // batch, which is what it did before ordering existed.
+        assertEquals(
+            emptySet<String>(),
+            priorityChecksums(null, mapOf("1" to "chk_shapez"), null)
+        )
+    }
+
+    // ---------------------------------------------------------------
     // resolveEntityName
     // ---------------------------------------------------------------
 
