@@ -19,3 +19,12 @@ interface DatapackageDao {
     @Query("DELETE FROM cached_datapackages WHERE cacheKey = :key")
     suspend fun deleteDatapackage(key: String)
 }
+
+@Dao
+interface GameDatapackageDao {
+    @Query("SELECT * FROM cached_game_datapackages WHERE checksum IN (:checksums)")
+    suspend fun getByChecksums(checksums: List<String>): List<CachedGameDatapackageEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entity: CachedGameDatapackageEntity)
+}

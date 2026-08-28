@@ -49,6 +49,7 @@ import com.jones.aptracker.network.ChatMessage
 import com.jones.aptracker.network.CheeseSlotState
 import com.jones.aptracker.network.ConnectionStatus
 import com.jones.aptracker.network.RoomDatapackage
+import com.jones.aptracker.network.resolveEntityName
 import com.jones.aptracker.network.TrackedSlotDetail
 import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.network.ThresholdGroup
@@ -432,7 +433,9 @@ fun SlotDetailScreen(
                                                     host = host,
                                                     slotName = slot.player_name,
                                                     game = slot.game ?: "",
-                                                    password = password
+                                                    password = password,
+                                                    roomDbId = roomDbId,
+                                                    application = context.applicationContext as? android.app.Application
                                                 )
                                             },
                                             shape = RoundedCornerShape(24.dp)
@@ -1630,7 +1633,6 @@ fun SearchableSelectDialog(
     )
 }
 
-// ... Existing ChatMessageRow remains the same ...
 @Composable
 fun ChatMessageRow(message: ChatMessage, datapackage: RoomDatapackage? = null) {
     val clipboardManager = LocalClipboardManager.current
@@ -1659,7 +1661,7 @@ fun ChatMessageRow(message: ChatMessage, datapackage: RoomDatapackage? = null) {
                             val flags = segment.flags ?: (if (checksum != null) datapackage.item_flags["${checksum}_${segment.text}"] else null) ?: 0
                             
                             if (checksum != null && segment.type == "item_id") {
-                                text = datapackage.items["${checksum}_${segment.text}"] ?: segment.text
+                                text = resolveEntityName(datapackage.items, checksum, datapackage.generic_checksum, segment.text)
                             }
                             
                             // Archipelago Standards: 0=Cyan, 1=Plum, 2=SlateBlue, 4=Salmon
@@ -1675,7 +1677,7 @@ fun ChatMessageRow(message: ChatMessage, datapackage: RoomDatapackage? = null) {
                             val slotKey = segment.player?.toString() ?: message.slot?.toString()
                             val checksum = slotKey?.let { datapackage.slot_to_checksum[it] }
                             if (checksum != null && segment.type == "location_id") {
-                                text = datapackage.locations["${checksum}_${segment.text}"] ?: segment.text
+                                text = resolveEntityName(datapackage.locations, checksum, datapackage.generic_checksum, segment.text)
                             }
                         }
                     }

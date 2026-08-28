@@ -327,3 +327,26 @@ val MIGRATION_23_24 = object : Migration(23, 24) {
         db.execSQL("ALTER TABLE cached_tracked_slots ADD COLUMN hasAllChecks INTEGER")
     }
 }
+
+/**
+ * Adds the on-device store for Archipelago datapackages, keyed by checksum.
+ *
+ * Before this, the text client held id -> name tables only in memory and refetched them
+ * over the network on every screen open, so every console line printed raw ids until
+ * that call returned -- and stayed raw forever if it failed. Checksums are content
+ * hashes, so these rows never need invalidating.
+ */
+val MIGRATION_24_25 = object : Migration(24, 25) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `cached_game_datapackages` (
+                `checksum` TEXT NOT NULL,
+                `game` TEXT,
+                `itemsJson` TEXT NOT NULL,
+                `locationsJson` TEXT NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`checksum`)
+            )
+        """.trimIndent())
+    }
+}

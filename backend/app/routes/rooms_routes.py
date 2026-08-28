@@ -448,7 +448,12 @@ def get_room_datapackage(current_user, room_db_id):
             'items': items_map,
             'item_flags': item_flags,
             'locations': locations_map,
-            'slot_to_checksum': slot_to_checksum
+            'slot_to_checksum': slot_to_checksum,
+            # Archipelago's generic world. Its ids -- location -1 is Cheat Console,
+            # -2 is Server -- are valid inside every game, so a client resolving an
+            # id needs to know which checksum to fall back to. Without this, clients
+            # on this route render those as raw numbers.
+            'generic_checksum': game_checksums.get('Archipelago')
         })
     finally:
         Session.remove()

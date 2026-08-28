@@ -27,6 +27,27 @@ class ArchipelagoWebSocketManager(
         fun onStatusChanged(status: ConnectionStatus)
         fun onMessageReceived(message: ChatMessage)
         fun onError(error: String)
+
+        /**
+         * RoomInfo carries the checksum of every game in the room. Those checksums are
+         * the cache keys for the id -> name tables, so they arrive before any PrintJSON
+         * line does and give the client a head start on resolving them.
+         */
+        fun onRoomInfo(datapackageChecksums: Map<String, String>)
+
+        /**
+         * Connected carries everything room-specific needed to read a PrintJSON line:
+         * who each slot is, and which game each slot plays. [team] is our own team --
+         * slot numbers in PrintJSON are scoped to it, so players on other teams must
+         * not be folded into the same map. [slot] is our own slot, which decides whose
+         * game is worth resolving first.
+         */
+        fun onConnected(
+            team: Int,
+            slot: Int,
+            players: List<ApNetworkPlayer>,
+            slotInfo: Map<String, ApNetworkSlot>
+        )
     }
 
     private fun isLocalHost(host: String): Boolean {
@@ -105,9 +126,16 @@ class ArchipelagoWebSocketManager(
                 when (packet.cmd) {
                     "RoomInfo" -> {
                         // Handshake part 1: Send Connect
+                        packet.datapackageChecksums?.let { listener.onRoomInfo(it) }
                         sendConnectPacket()
                     }
                     "Connected" -> {
+                        listener.onConnected(
+                            team = packet.team ?: 0,
+                            slot = packet.slot ?: 0,
+                            players = packet.players ?: emptyList(),
+                            slotInfo = packet.slotInfo ?: emptyMap()
+                        )
                         listener.onStatusChanged(ConnectionStatus.CONNECTED)
                     }
                     "PrintJSON" -> {

@@ -557,3 +557,73 @@ def get_slot_available_locations(current_user, room_db_id, slot_id):
         return jsonify(results)
     finally:
         Session.remove()
+
+
+@game_bp.route('/datapackage/checksum/<string:checksum>', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_datapackage_by_checksum(current_user, checksum):
+    """
+    Serve one game's id -> name tables, addressed by its Archipelago datapackage checksum.
+
+    A checksum is a content hash: the same checksum always describes exactly the same
+    item and location tables, forever. That makes this response immutable, so clients
+    store it on disk and never revalidate it. Room-scoped facts (player names, which
+    slot plays which game) are deliberately not included -- they change whenever
+    somebody joins or sets an alias, and folding them in here would make the whole
+    payload uncacheable. Clients read those from the Archipelago handshake instead.
+
+    Only 'item' and 'location' rows are served. Group rows carry synthetic negative ids
+    from generate_negative_id() which can collide with real negative ids -- Archipelago's
+    generic world uses location -1 and -2 -- and PrintJSON never refers to a group by id,
+    so including them could only corrupt a lookup.
+    """
+    session = Session()
+    try:
+        # The checksum comes straight off the wire from RoomInfo, so reject anything
+        # that cannot be one before it reaches the database.
+        if not checksum or len(checksum) > 128:
+            return jsonify({'error': 'Invalid checksum'}), 400
+
+        rows = session.query(
+            DatapackageCache.entity_type,
+            DatapackageCache.entity_id,
+            DatapackageCache.entity_name,
+            DatapackageCache.game
+        ).filter(
+            DatapackageCache.checksum == checksum,
+            DatapackageCache.entity_type.in_(['item', 'location', '_metadata'])
+        ).all()
+
+        if not rows:
+            logging.info(f"[DATAPACKAGE] 404: checksum {checksum} not cached.")
+            return jsonify({'error': 'Datapackage not cached for this checksum'}), 404
+
+        items = {}
+        locations = {}
+        game = None
+        for entity_type, entity_id, entity_name, row_game in rows:
+            if game is None:
+                game = row_game
+            if entity_type == 'item':
+                items[str(entity_id)] = entity_name
+            elif entity_type == 'location':
+                locations[str(entity_id)] = entity_name
+
+        # A game with a genuinely empty datapackage caches only its _metadata marker.
+        # Answering 200-with-nothing lets the client record "nothing to resolve here"
+        # permanently; a 404 would send it back to re-ask on every connect.
+        response = jsonify({
+            'checksum': checksum,
+            'game': game,
+            'items': items,
+            'locations': locations,
+        })
+        # Private, not public: the body is not user-specific but the route is
+        # authenticated, so shared caches must not retain it.
+        response.headers['Cache-Control'] = 'private, max-age=31536000, immutable'
+        response.set_etag(checksum)
+        return response.make_conditional(request)
+    finally:
+        Session.remove()
