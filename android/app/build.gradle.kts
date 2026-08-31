@@ -84,13 +84,20 @@ android {
             }
         }
 
-        // Runs the exact R8 pipeline as release, but debuggable and debug-signed.
-        // Exists so minification faults -- stripped reflective constructors, missing
-        // keep rules, obfuscated Gson models -- surface during testing rather than in
-        // the Play Store build, where they are only visible as runtime failures.
+        // Runs the exact R8 pipeline as release, debug-signed so it is installable
+        // without the upload key. Exists so minification faults -- stripped
+        // reflective constructors, missing keep rules, obfuscated Gson models --
+        // surface during testing rather than in the Play Store build, where they
+        // are only visible as runtime failures.
+        //
+        // Deliberately NOT debuggable. AGP runs R8 in debug mode for a debuggable
+        // variant, which skips obfuscation and optimization entirely -- shrinking
+        // still runs, so the variant caught classes being *removed*, but nothing
+        // caused by classes being *renamed*. That is most of the list above. A
+        // debugger cannot say much about an R8-renamed stack anyway; use prodDebug
+        // for that.
         create("minified") {
             initWith(getByName("release"))
-            isDebuggable = true
             signingConfig = signingConfigs.getByName("debug")
             // google-services.json only declares clients for com.jones.aptracker and
             // com.jones.aptracker.debug, so this reuses the debug application id
