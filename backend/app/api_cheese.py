@@ -257,11 +257,16 @@ def setup_cheese_user_task(app, user_id):
                 for slot_id in slots_found:
                     existing = existing_by_id.get(slot_id)
                     if existing is None:
+                        # notify_finished is deliberately left NULL so the slot
+                        # inherits User.notify_finished_default and keeps
+                        # following it. Stamping the default in here would write
+                        # a permanent per-slot override, so CT-created slots
+                        # would stop tracking the global setting while
+                        # picker-created ones kept following it.
                         session.add(UserTrackedSlot(
                             user_id=user.id,
                             room_id=room.id,
                             slot_id=slot_id,
-                            notify_finished=user.notify_finished_default,
                             track_mode=TRACK_MODE_PLAY
                         ))
                         stats['slots_synced'] += 1

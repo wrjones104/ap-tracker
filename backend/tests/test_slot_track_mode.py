@@ -6,6 +6,7 @@ Cheese Tracker ("this is mine") are separate. Losing a claim demotes a slot to
 watch; it never deletes it. Watch slots are never written to Cheese and are
 never touched by the sync.
 """
+import json
 import os
 import unittest
 from datetime import datetime
@@ -25,7 +26,7 @@ os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='  #
 # invisible to the code under test -- which surfaced on Linux CI as spurious
 # "first sync" reads and disk I/O errors, while passing on Windows.
 from app import create_app, Session, engine
-from app.models import Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
+from app.models import Base, Device, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
 from app.services.cheese_service import process_cheese_update
 from app.api_cheese import setup_cheese_user_task
 from app.encryption import encrypt_api_key
@@ -601,6 +602,201 @@ class TestSetupDemotesOnMidAsyncConnect(TrackModeTestBase):
             {1: TRACK_MODE_WATCH},
         )
         self.assertEqual(modes, {1: TRACK_MODE_WATCH})
+
+
+class TestCheeseSyncLeavesNotifyFinishedInherited(TrackModeTestBase):
+    """
+    Slots the CT sync creates must inherit User.notify_finished_default, exactly
+    as picker-created slots do. Stamping the default in as a concrete value
+    writes a permanent per-slot override, so the slot silently stops following
+    the global setting the user later changes.
+    """
+
+    @patch('app.api_cheese.requests.Session')
+    def test_synced_slot_leaves_notify_finished_null(self, mock_session_cls):
+        mock_session = MagicMock()
+        mock_session_cls.return_value.__enter__.return_value = mock_session
+
+        me_resp = MagicMock(ok=True)
+        me_resp.json.return_value = {'id': MY_CT_ID, 'discord_username': 'me'}
+
+        dash_resp = MagicMock(ok=True)
+        dash_resp.json.return_value = [{
+            'tracker_id': 'ct_room_1',
+            'room_link': 'https://archipelago.gg/room/room_uuid',
+            'title': 'Test Room',
+            'dashboard_override_visibility': True,
+        }]
+
+        detail_resp = MagicMock(ok=True)
+        detail_resp.json.return_value = {
+            'updated_at': '2026-06-23T10:00:00Z',
+            'games': [{'id': 901, 'position': 1, 'claimed_by_ct_user_id': MY_CT_ID}],
+        }
+
+        def mock_get(url, *args, **kwargs):
+            if '/user/self' in url:
+                return me_resp
+            if '/dashboard/tracker' in url:
+                return dash_resp
+            if '/tracker/ct_room_1' in url:
+                return detail_resp
+            return MagicMock()
+
+        mock_session.get.side_effect = mock_get
+
+        # Default ON, so a stamped override would be indistinguishable from
+        # inheritance until the user flips the global setting off.
+        user = self.make_user(is_syncing_cheese=True, notify_finished_default=True)
+        user_id = user.id
+
+        room = TrackedRoom(room_id="room_uuid")
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=room.id, alias="Test Room"
+        ))
+        self.session.commit()
+        room_id = room.id
+
+        setup_cheese_user_task(self.app, user_id)
+
+        slot = self.get_slot(user_id, room_id, 1)
+        self.assertIsNotNone(slot, "the sync must create the claimed slot")
+        self.assertIsNone(
+            slot.notify_finished,
+            "CT-synced slots must inherit notify_finished_default, not pin it",
+        )
+
+
+class TestPollerSyncNotifiesOnDemotion(TrackModeTestBase):
+    """
+    run_cheese_poll's push loop is fed by process_cheese_update's return value.
+    It returned {} on every path for as long as it existed, so the poller could
+    never tell a user their slot had been demoted -- they found out by noticing
+    the badge change.
+    """
+
+    def _tracker_payload(self, games):
+        return {'games': games, 'room_link': None}
+
+    def add_device(self, user_id, token='tok_a', platform='android'):
+        self.session.add(Device(
+            user_id=user_id, fcm_token=token, android_id=token, platform=platform
+        ))
+        self.session.commit()
+
+    def set_players(self, room_id, players):
+        fresh = Session()
+        try:
+            room = fresh.get(TrackedRoom, room_id)
+            room.cached_players_json = json.dumps(players)
+            fresh.commit()
+        finally:
+            fresh.close()
+
+    def test_other_user_claim_returns_a_conflict_push(self):
+        user_id = self.make_user().id
+        room_id = self.make_room_with_slot_for(user_id, cheese_updated_at=NOT_FIRST_SYNC)
+        self.add_device(user_id)
+        self.set_players(room_id, [{'slot_id': 1, 'name': 'Rando', 'alias': 'Zelda'}])
+
+        payload = process_cheese_update(room_id, self._tracker_payload([
+            {'position': 1, 'claimed_by_ct_user_id': OTHER_CT_ID}
+        ]), '2026-06-23T10:00:00Z')
+
+        self.assertIn(user_id, payload, "a demoted user must get a push payload")
+        notifications = payload[user_id]['notifications']
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[0]['title'], "Slot Already Claimed")
+        self.assertIn('Zelda', notifications[0]['body'], "alias beats raw slot number")
+        self.assertIn('Test Room', notifications[0]['body'])
+        self.assertEqual(payload[user_id]['tokens'], {'android': ['tok_a']})
+
+    def test_auto_release_is_not_reported_as_a_conflict(self):
+        """
+        The host's tracker releasing a slot is not someone taking it. Telling the
+        user it was 'claimed by someone else' would be plainly wrong.
+        """
+        user_id = self.make_user().id
+        room_id = self.make_room_with_slot_for(user_id, cheese_updated_at=NOT_FIRST_SYNC)
+        self.add_device(user_id)
+
+        payload = process_cheese_update(room_id, self._tracker_payload([
+            {'position': 1, 'claimed_by_ct_user_id': None}
+        ]), '2026-06-23T10:00:00Z')
+
+        notifications = payload[user_id]['notifications']
+        self.assertEqual(notifications[0]['title'], "Slot Released")
+        self.assertNotIn('someone else', notifications[0]['body'])
+
+    def test_no_demotion_returns_nothing_to_send(self):
+        user_id = self.make_user().id
+        room_id = self.make_room_with_slot_for(user_id, cheese_updated_at=NOT_FIRST_SYNC)
+        self.add_device(user_id)
+
+        payload = process_cheese_update(room_id, self._tracker_payload([
+            {'position': 1, 'claimed_by_ct_user_id': MY_CT_ID}
+        ]), '2026-06-23T10:00:00Z')
+
+        self.assertEqual(payload, {})
+
+    def test_user_without_devices_is_skipped(self):
+        user_id = self.make_user().id
+        room_id = self.make_room_with_slot_for(user_id, cheese_updated_at=NOT_FIRST_SYNC)
+
+        payload = process_cheese_update(room_id, self._tracker_payload([
+            {'position': 1, 'claimed_by_ct_user_id': OTHER_CT_ID}
+        ]), '2026-06-23T10:00:00Z')
+
+        self.assertEqual(payload, {}, "no devices means nothing to send")
+        self.assertEqual(
+            self.get_slot(user_id, room_id, 1).track_mode, TRACK_MODE_WATCH,
+            "the demotion itself must still happen",
+        )
+
+    def test_first_sync_grace_period_sends_nothing(self):
+        user_id = self.make_user().id
+        room_id = self.make_room_with_slot_for(user_id, cheese_updated_at=None)
+        self.add_device(user_id)
+
+        payload = process_cheese_update(room_id, self._tracker_payload([
+            {'position': 1, 'claimed_by_ct_user_id': None}
+        ]), '2026-06-23T10:00:00Z')
+
+        self.assertEqual(payload, {})
+
+    def test_tokens_are_grouped_by_platform(self):
+        """
+        send_push_notifications is called once per platform with that platform's
+        Firebase app, so the payload must keep them apart.
+        """
+        user_id = self.make_user().id
+        room_id = self.make_room_with_slot_for(user_id, cheese_updated_at=NOT_FIRST_SYNC)
+        self.add_device(user_id, token='tok_android', platform='android')
+        self.add_device(user_id, token='tok_ios', platform='ios')
+
+        payload = process_cheese_update(room_id, self._tracker_payload([
+            {'position': 1, 'claimed_by_ct_user_id': OTHER_CT_ID}
+        ]), '2026-06-23T10:00:00Z')
+
+        self.assertEqual(
+            payload[user_id]['tokens'],
+            {'android': ['tok_android'], 'ios': ['tok_ios']},
+        )
+
+    def test_watch_slot_never_produces_a_push(self):
+        user_id = self.make_user().id
+        room_id = self.make_room_with_slot_for(
+            user_id, track_mode=TRACK_MODE_WATCH, cheese_updated_at=NOT_FIRST_SYNC
+        )
+        self.add_device(user_id)
+
+        payload = process_cheese_update(room_id, self._tracker_payload([
+            {'position': 1, 'claimed_by_ct_user_id': OTHER_CT_ID}
+        ]), '2026-06-23T10:00:00Z')
+
+        self.assertEqual(payload, {})
 
 
 if __name__ == '__main__':
