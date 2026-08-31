@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 
 from app import Session
 from app.models import TrackedRoom, UserRoomSubscription, UserTrackedSlot
-from app.utils import extract_ap_room_id
+from app.utils import extract_ap_room_id, TRACK_MODE_WATCH, normalize_track_mode
 
 def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
     """
@@ -107,34 +107,52 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         ).filter_by(room_id=room.id).all()
 
         for ts in current_tracked_slots:
-            user = ts.user 
+            user = ts.user
             if not user or not user.cheese_user_id:
                 continue
 
+            # Watch slots are alerts-only. Who owns the slot on Cheese is
+            # explicitly not their concern, so the sync never demotes, unclaims
+            # or drops them -- including the vanished-slot branch below, since a
+            # watch slot's alerts come from the AP room, not from Cheese.
+            #
+            # Note this is one-way: once a slot lands here the poller skips it
+            # forever, and a manual sync will not re-promote it either. Only an
+            # explicit switch back to Playing in the picker restores the claim.
+            if normalize_track_mode(ts.track_mode) == TRACK_MODE_WATCH:
+                continue
+
             game_data = new_games_map.get(ts.slot_id)
-            
+
             if game_data:
                 remote_owner_id = game_data.get('claimed_by_ct_user_id')
                 claim_discord = game_data.get('effective_discord_username') or game_data.get('discord_username')
                 claim_discord_clean = claim_discord.strip().lower() if claim_discord else None
                 my_discord_clean = user.discord_username.strip().lower() if user.discord_username else None
-                
+
                 is_other_auth_claim = (remote_owner_id is not None and remote_owner_id != user.cheese_user_id)
                 is_other_unauth_claim = (remote_owner_id is None and claim_discord_clean is not None and (my_discord_clean is None or claim_discord_clean != my_discord_clean))
-                
+
+                # Losing a claim demotes the slot to watch; it never deletes it.
+                # The user keeps their alerts, thresholds and per-slot prefs and
+                # simply stops owning the slot on Cheese.
                 if is_other_auth_claim or is_other_unauth_claim:
-                    logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Owner mismatch: remote_owner_id={remote_owner_id}, claim_discord={claim_discord})")
-                    session.delete(ts)
+                    logging.info(f"[POLLER_SYNC] Demoting Slot {ts.slot_id} to watch (Owner mismatch: remote_owner_id={remote_owner_id}, claim_discord={claim_discord})")
+                    ts.track_mode = TRACK_MODE_WATCH
                 elif remote_owner_id is None and claim_discord_clean is None:
                     if is_first_sync:
                         logging.info(f"[POLLER_SYNC] GRACE PERIOD: Keeping Slot {ts.slot_id} (First Sync).")
                         continue
-                    logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Remote is unclaimed).")
-                    session.delete(ts)
+                    # Covers auto-release: the host's tracker released the slot
+                    # out from under a player who still wants to watch it.
+                    logging.info(f"[POLLER_SYNC] Demoting Slot {ts.slot_id} to watch (Remote is unclaimed).")
+                    ts.track_mode = TRACK_MODE_WATCH
             else:
                 if is_first_sync:
                     logging.info(f"[POLLER_SYNC] GRACE PERIOD: Keeping Slot {ts.slot_id} (Slot missing - First Sync).")
                     continue
+                # The slot no longer exists on the tracker at all -- there is
+                # nothing left to own or to watch.
                 logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Slot vanished from Cheese)")
                 session.delete(ts)
 

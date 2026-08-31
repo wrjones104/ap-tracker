@@ -11,6 +11,7 @@ import com.jones.aptracker.network.AddRoomRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.Room
 import com.jones.aptracker.network.UpdateRoomRequest
+import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.repository.RoomsRepository
 import com.jones.aptracker.repository.UserRepository // Import this!
 import kotlinx.coroutines.delay
@@ -259,17 +260,34 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
                 // 2. Poll until backend says "Done"
                 var retries = 0
+                var finishedProfile: UserProfile? = null
                 while (retries < 15) { // Check for 30 seconds
                     delay(2000)
                     val currentProfile = userRepository.getUserProfile()
                     if (!currentProfile.is_syncing_cheese) {
+                        finishedProfile = currentProfile
                         break // Sync complete
                     }
                     retries++
                 }
 
                 fetchRooms(force = true)
-                Toast.makeText(getApplication(), "Cheese Sync Complete!", Toast.LENGTH_SHORT).show()
+
+                // Connecting or re-syncing mid-async can move slots from Playing
+                // to Watching. Say so: the alerts survive, but the Cheese claim
+                // did not, and silently changing that would be a nasty surprise.
+                val demoted = finishedProfile?.cheese_last_sync_demoted ?: 0
+                val message = if (demoted > 0) {
+                    // "aren't claimed by you", not "claimed by someone else":
+                    // the sync also demotes slots that are simply unclaimed.
+                    val slotWord = if (demoted == 1) "slot isn't" else "slots aren't"
+                    "Cheese Sync Complete! $demoted $slotWord claimed by you on " +
+                        "Cheese Tracker - switched to Watching. You'll still get alerts."
+                } else {
+                    "Cheese Sync Complete!"
+                }
+                val duration = if (demoted > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                Toast.makeText(getApplication(), message, duration).show()
 
             } catch (e: kotlinx.coroutines.CancellationException) {
                 Log.i("RoomsViewModel", "Background sync cancelled by user.")

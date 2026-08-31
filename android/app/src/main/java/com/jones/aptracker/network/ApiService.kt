@@ -322,11 +322,40 @@ data class Player(
     val total_locations: Int? = null,
     val notify_progression: Boolean? = null,
     val notify_useful: Boolean? = null,
-    val notify_hints: Boolean? = null
+    val notify_hints: Boolean? = null,
+    /** "play" | "watch". Null when the slot is not tracked. See [TrackMode]. */
+    val track_mode: String? = null,
+    /**
+     * Cheese Tracker claim state for this slot. Non-null only when the user is
+     * connected to Cheese and the room is linked to a tracker, which is exactly
+     * when the picker should offer the Playing/Watching choice at all.
+     */
+    val cheese_claim: CheeseClaim? = null
+)
+
+/**
+ * Whether a tracked slot is claimed on Cheese Tracker ("Playing") or is
+ * alerts-only ("Watching"). Watching never writes to Cheese, so it works for
+ * shared slots, async hosts, and slots that were auto-released.
+ */
+object TrackMode {
+    const val PLAY = "play"
+    const val WATCH = "watch"
+}
+
+data class CheeseClaim(
+    val is_claimed: Boolean = false,
+    val is_mine: Boolean = false,
+    /** Display name of the holder, or null if they are anonymous to us. */
+    val claimed_by: String? = null,
+    /** False when someone else holds the slot: the picker must force Watching. */
+    val can_claim: Boolean = true
 )
 
 data class UpdateSlotsRequest(
-    val tracked_slot_ids: List<Int>
+    val tracked_slot_ids: List<Int>,
+    /** {slot_id: "play"|"watch"}. Omitted by older builds; the server then keeps existing modes. */
+    val slot_modes: Map<String, String>? = null
 )
 
 data class HistoryItem(
@@ -401,7 +430,10 @@ data class UserProfile(
     val is_cheese_connected: Boolean = false,
     val cheese_default_ping: String? = null,
     val global_snooze_until: String? = null,
-    val is_syncing_cheese: Boolean = false
+    val is_syncing_cheese: Boolean = false,
+    /** Slots the last Cheese sync moved from Playing to Watching. */
+    val cheese_last_sync_demoted: Int = 0,
+    val cheese_last_sync: String? = null
 )
 
 data class UpdateSlotPrefsRequest(
@@ -492,6 +524,8 @@ data class TrackedSlotDetail(
     val suppress_connected: Boolean?,
     /** Per-slot override of the user's finished definition. Null inherits the default. */
     val finished_definition: String? = null,
+    /** "play" | "watch". See [TrackMode]. */
+    val track_mode: String = TrackMode.PLAY,
     val cheese: CheeseSlotState? = null
 )
 

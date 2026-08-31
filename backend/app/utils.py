@@ -453,3 +453,29 @@ def parse_cached_checks(cached_checks_json):
         except (TypeError, ValueError):
             continue
     return counts
+
+
+# --- Slot track modes -------------------------------------------------------
+#
+# A tracked slot answers two independent questions: "should this slot send me
+# alerts?" (the row existing at all) and "is this slot mine on Cheese Tracker?"
+# (track_mode). Splitting them lets a user watch a slot someone else owns --
+# shared slots, async hosts, and auto-released slots in a ghosted async.
+#
+# TRACK_MODE_PLAY is the default and reproduces the historical behavior: the
+# slot is claimed on Cheese and kept in sync with it. TRACK_MODE_WATCH is
+# alerts-only: never pushed to Cheese, and never unclaimed by the poller.
+
+TRACK_MODE_PLAY = 'play'
+TRACK_MODE_WATCH = 'watch'
+
+VALID_TRACK_MODES = {TRACK_MODE_PLAY, TRACK_MODE_WATCH}
+
+DEFAULT_TRACK_MODE = TRACK_MODE_PLAY
+
+
+def normalize_track_mode(value):
+    """Coerces any stored/wire value to a valid mode, defaulting to 'play'."""
+    if isinstance(value, str) and value in VALID_TRACK_MODES:
+        return value
+    return DEFAULT_TRACK_MODE

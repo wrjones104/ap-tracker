@@ -91,7 +91,7 @@ The poller handles background polling and event detection across active Archipel
 * **[threshold_service.py](backend/app/services/threshold_service.py):** Evaluates AND-logic milestone threshold groups for tracked slots.
 * **[filtering_service.py](backend/app/services/filtering_service.py):** Resolves ignore and whitelist rules server-side, expanding item-group rules against the exact datapackage checksum an item arrived under.
 * **[notification_service.py](backend/app/services/notification_service.py):** Aggregates and dispatches FCM push payloads, including the Android channel id and priority for each event category.
-* **[cheese_service.py](backend/app/services/cheese_service.py):** Handles Cheese Tracker background sync and grace-period unclaim logic.
+* **[cheese_service.py](backend/app/services/cheese_service.py):** Handles Cheese Tracker background sync and grace-period unclaim logic. Lost claims demote a slot from `play` to `watch` rather than untracking it; only a slot that vanishes from the tracker is deleted.
 * **[datapackage_service.py](backend/app/services/datapackage_service.py):** Datapackage caching, healing, and group name expansion.
 * **[retention_service.py](backend/app/services/retention_service.py):** Runs automated 90-day retention purges for event logs and inactive guest accounts, plus expiry of the JWT blocklist.
 

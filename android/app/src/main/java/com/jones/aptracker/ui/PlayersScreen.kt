@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -25,6 +26,9 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -41,6 +45,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jones.aptracker.network.Player
+import com.jones.aptracker.network.TrackMode
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -186,6 +192,21 @@ fun PlayersScreen(
                                             style = MaterialTheme.typography.bodySmall,
                                             color = Color.Gray
                                         )
+
+                                        // The Playing/Watching choice only exists for
+                                        // Cheese-linked rooms, and only once the slot is
+                                        // actually selected -- an unchecked row has no mode.
+                                        if (isChecked && playersViewModel.showsTrackMode(player)) {
+                                            Spacer(Modifier.height(8.dp))
+                                            TrackModeSelector(
+                                                mode = playersViewModel.modeFor(player),
+                                                claimLocked = playersViewModel.isClaimLocked(player),
+                                                claimedBy = player.cheese_claim?.claimed_by,
+                                                onModeSelected = { mode ->
+                                                    playersViewModel.onTrackModeChanged(player, mode)
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -194,5 +215,63 @@ fun PlayersScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Playing vs Watching for one slot.
+ *
+ * Playing claims the slot on Cheese Tracker; Watching only sends alerts and
+ * never writes to Cheese. When someone else already holds the slot, Playing is
+ * disabled and the caption names the holder, so a claim that would collide is
+ * never offered in the first place.
+ *
+ * The labels stay plain text: SegmentedButton already draws a check in its own
+ * icon slot for the selected option, and adding a second icon inside the label
+ * makes the two collide on narrow rows.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TrackModeSelector(
+    mode: String,
+    claimLocked: Boolean,
+    claimedBy: String?,
+    onModeSelected: (String) -> Unit
+) {
+    Column {
+        SingleChoiceSegmentedButtonRow {
+            SegmentedButton(
+                selected = mode == TrackMode.PLAY,
+                onClick = { onModeSelected(TrackMode.PLAY) },
+                enabled = !claimLocked,
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+            ) {
+                Text("Playing", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            }
+            SegmentedButton(
+                selected = mode == TrackMode.WATCH,
+                onClick = { onModeSelected(TrackMode.WATCH) },
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+            ) {
+                Text("Watching", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            }
+        }
+
+        Text(
+            text = if (claimLocked) {
+                if (claimedBy.isNullOrBlank()) {
+                    "Claimed by someone else on Cheese Tracker"
+                } else {
+                    "Claimed by $claimedBy on Cheese Tracker"
+                }
+            } else if (mode == TrackMode.WATCH) {
+                "Alerts only. Not claimed on Cheese Tracker."
+            } else {
+                "Claimed by you on Cheese Tracker."
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.Gray,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }

@@ -265,7 +265,9 @@ class TestRefreshTrackerCache(unittest.TestCase):
         result = refresh_tracker_cache(self.app, 1, 10)
         self.assertEqual(result['status'], 'no_tracker')
 
-    @patch('app.poller.process_cheese_update')
+    # Patched at the definition site: refresh_tracker_cache imports it inside the
+    # function, and app.poller only re-exports it.
+    @patch('app.services.cheese_service.process_cheese_update')
     @patch('backend.app.api_cheese.requests.get')
     def test_ok_invokes_processing(self, mock_get, mock_process):
         resp = MagicMock()

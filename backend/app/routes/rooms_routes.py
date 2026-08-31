@@ -12,8 +12,11 @@ from flask import Blueprint, request, jsonify, current_app
 
 from app import Session
 from app.models import TrackedRoom, UserRoomSubscription, UserTrackedSlot, DatapackageCache
-from app.utils import verify_ap_server, get_web_base_url, parse_cached_checks
+from app.utils import (
+    verify_ap_server, get_web_base_url, parse_cached_checks, normalize_track_mode
+)
 from app.routes.common import log_api_call, token_required, handle_db_errors
+from app.routes.slots_routes import build_cheese_claim_summary
 
 from sqlalchemy import func
 
@@ -358,8 +361,27 @@ def get_room_players(current_user, room_db_id):
             user_id=current_user.id,
             room_id=room_db_id
         ).all()
-        
+
         tracked_slots_map = {ts.slot_id: ts for ts in tracked_slots_query}
+
+        # Per-slot Cheese claim state, read from the room's cached tracker JSON
+        # so the picker can pre-resolve claims without any extra Cheese calls.
+        # Only built for users who have connected a key to a linked room; every
+        # other caller sees `cheese_claim: null` and the plain checkbox.
+        cheese_games_map = {}
+        room_has_cheese = bool(current_user.cheese_api_key) and bool(room.cheese_tracker_id)
+        if room_has_cheese and room.cached_cheese_json:
+            try:
+                cheese_data = json.loads(room.cached_cheese_json)
+                if isinstance(cheese_data, dict):
+                    for g in cheese_data.get('games', []):
+                        pos = g.get('position')
+                        if pos is not None:
+                            cheese_games_map[pos] = g
+            except (json.JSONDecodeError, TypeError):
+                cheese_games_map = {}
+
+        my_discord_clean = current_user.discord_username.strip().lower() if current_user.discord_username else None
 
         response_players = []
         for p in players_list:
@@ -371,6 +393,15 @@ def get_room_players(current_user, room_db_id):
             
             tracked_slot_entry = tracked_slots_map.get(slot_id_int) if slot_id_int is not None else None
             is_tracked = tracked_slot_entry is not None
+
+            cheese_claim = None
+            cheese_game = cheese_games_map.get(slot_id_int) if slot_id_int is not None else None
+            if cheese_game is not None:
+                cheese_claim = build_cheese_claim_summary(
+                    cheese_game,
+                    current_user.cheese_user_id,
+                    my_discord_clean
+                )
 
             response_players.append({
                 'slot_id': slot_id_int if slot_id_int is not None else slot_id,
@@ -385,6 +416,8 @@ def get_room_players(current_user, room_db_id):
                 'checks_done': checks_map.get(slot_id_int) if checks_known else None,
                 'total_locations': p.get('total_locations', 0),
                 'is_tracked': is_tracked,
+                'track_mode': normalize_track_mode(tracked_slot_entry.track_mode) if tracked_slot_entry else None,
+                'cheese_claim': cheese_claim,
                 'needs_backfill': tracked_slot_entry.needs_backfill if tracked_slot_entry else False,
                 'notify_progression': tracked_slot_entry.notify_progression if tracked_slot_entry else None,
                 'notify_useful': tracked_slot_entry.notify_useful if tracked_slot_entry else None,

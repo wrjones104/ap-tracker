@@ -49,6 +49,7 @@ import com.jones.aptracker.network.ChatMessage
 import com.jones.aptracker.network.CheeseSlotState
 import com.jones.aptracker.network.ConnectionStatus
 import com.jones.aptracker.network.RoomDatapackage
+import com.jones.aptracker.network.TrackMode
 import com.jones.aptracker.network.resolveEntityName
 import com.jones.aptracker.network.TrackedSlotDetail
 import com.jones.aptracker.network.UserProfile
@@ -255,6 +256,7 @@ fun SlotDetailScreen(
                     Spacer(Modifier.height(24.dp))
                     CheeseSlotCard(
                         cheese = cheeseState,
+                        trackMode = slot.track_mode,
                         isSaving = isSavingCheese,
                         isRefreshing = isRefreshingCheese,
                         onRefresh = { userViewModel.refreshCheeseFromServer(roomDbId) },
@@ -832,6 +834,8 @@ private val CHEESE_COMPLETE_IDS = setOf("done", "released")
 @Composable
 fun CheeseSlotCard(
     cheese: CheeseSlotState,
+    /** "play" | "watch". Watching is read-only on Cheese; see [TrackMode]. */
+    trackMode: String,
     isSaving: Boolean,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
@@ -841,7 +845,11 @@ fun CheeseSlotCard(
     onStillBk: () -> Unit,
     onSaveNotes: (String) -> Unit
 ) {
-    val canEdit = cheese.is_mine
+    // Watching is read-only on Cheese by definition, so the controls stay
+    // disabled even in the window where Cheese still reports the slot as ours
+    // (a release that has not landed yet). The server enforces the same rule.
+    val isWatching = trackMode == TrackMode.WATCH
+    val canEdit = cheese.is_mine && !isWatching
     var isExpanded by remember { mutableStateOf(false) }
     var showForfeitConfirm by remember { mutableStateOf(false) }
 
@@ -873,6 +881,21 @@ fun CheeseSlotCard(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    if (isWatching) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                "Watching",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
 
                     if (currentProgressionOption != null && currentProgressionOption.id != "unknown") {
                         Surface(

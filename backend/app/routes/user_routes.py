@@ -144,7 +144,10 @@ def get_current_user(current_user):
             'ui_show_trap_default': current_user.ui_show_trap_default,
             'is_guest': True,
             'global_snooze_until': format_iso_z(current_user.global_snooze_until),
-            'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False)
+            'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False),
+            # Slots the last Cheese sync moved from Playing to Watching.
+            'cheese_last_sync_demoted': getattr(current_user, 'cheese_last_sync_demoted', 0) or 0,
+            'cheese_last_sync': format_iso_z(getattr(current_user, 'cheese_last_sync', None))
         })
     else:
         base_url = "https://cdn.discordapp.com"
@@ -186,7 +189,10 @@ def get_current_user(current_user):
             'ui_show_trap_default': current_user.ui_show_trap_default,
             'is_guest': False,
             'global_snooze_until': format_iso_z(current_user.global_snooze_until),
-            'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False)
+            'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False),
+            # Slots the last Cheese sync moved from Playing to Watching.
+            'cheese_last_sync_demoted': getattr(current_user, 'cheese_last_sync_demoted', 0) or 0,
+            'cheese_last_sync': format_iso_z(getattr(current_user, 'cheese_last_sync', None))
         })
 
 @user_bp.route('/users/me/preferences', methods=['PUT'])

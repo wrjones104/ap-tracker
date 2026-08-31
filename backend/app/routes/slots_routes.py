@@ -12,7 +12,10 @@ from app.models import (
     UserIgnoreItem, UserWhitelistItem, NotifiedItem
 )
 from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z
-from app.utils import parse_cached_checks, VALID_FINISHED_DEFINITIONS
+from app.utils import (
+    parse_cached_checks, VALID_FINISHED_DEFINITIONS,
+    VALID_TRACK_MODES, TRACK_MODE_PLAY, DEFAULT_TRACK_MODE, normalize_track_mode
+)
 
 slots_bp = Blueprint('slots_routes', __name__)
 
@@ -57,11 +60,50 @@ def build_cheese_slot_state(game, global_ping_policy, cheese_user_id, discord_us
         'global_ping_policy': global_ping_policy,
     }
 
+def build_cheese_claim_summary(game, cheese_user_id, discord_username_clean):
+    """
+    Compact per-slot claim state for the slot picker: enough for the client to
+    decide whether the user may claim a slot, and to name the holder if not.
+
+    This is what lets the picker refuse to offer a claim that would collide,
+    instead of letting the user select it and resolving the collision after the
+    fact with a push notification.
+    """
+    is_mine = game_is_owned_by(game, cheese_user_id, discord_username_clean)
+    claim_discord = game.get('effective_discord_username') or game.get('discord_username')
+    claimed_by = claim_discord.strip() if claim_discord else None
+    is_claimed = game.get('claimed_by_ct_user_id') is not None or claimed_by is not None
+    return {
+        'is_claimed': is_claimed,
+        'is_mine': is_mine,
+        # Null when the holder is an authenticated Cheese user with no Discord
+        # name attached; the client falls back to a generic "someone else".
+        'claimed_by': None if is_mine else claimed_by,
+        'can_claim': is_mine or not is_claimed,
+    }
+
+
 @slots_bp.route('/rooms/<int:room_db_id>/slots', methods=['PUT'])
 @handle_db_errors
 @log_api_call
 @token_required
 def update_tracked_slots(current_user, room_db_id):
+    """
+    Replaces the user's tracked slots for a room.
+
+    Tracking and claiming are separate axes. `tracked_slot_ids` decides which
+    slots send alerts; the optional `slot_modes` map ({slot_id: 'play'|'watch'})
+    decides which of those are claimed on Cheese Tracker. Cheese writes are
+    driven by transitions in track_mode, NOT by tracking alone:
+
+        -> tracked as play, or watch -> play   ... claim on Cheese
+        play -> watch, or play -> untracked    ... release on Cheese
+        anything involving only watch          ... Cheese is never touched
+
+    Clients that omit `slot_modes` (older app builds) get 'play' for newly
+    tracked slots and keep the existing mode on slots they already track, so an
+    old build re-saving the picker cannot silently re-claim watched slots.
+    """
     data = request.json or {}
     if 'tracked_slot_ids' not in data or not isinstance(data['tracked_slot_ids'], list):
         return jsonify({'error': 'Missing or invalid tracked_slot_ids'}), 400
@@ -82,11 +124,35 @@ def update_tracked_slots(current_user, room_db_id):
         except (ValueError, TypeError):
             pass
 
-    current_slots_query = session.query(UserTrackedSlot.slot_id).filter_by(user_id=current_user.id, room_id=room_db_id)
-    current_tracked_ids = {slot.slot_id for slot in current_slots_query.all()}
-    
+    raw_modes = data.get('slot_modes') or {}
+    if not isinstance(raw_modes, dict):
+        return jsonify({'error': 'slot_modes must be an object'}), 400
+    requested_modes = {}
+    for sid, mode in raw_modes.items():
+        try:
+            slot_key = int(sid)
+        except (ValueError, TypeError):
+            continue
+        if mode not in VALID_TRACK_MODES:
+            return jsonify({'error': f'Invalid track_mode for slot {slot_key}.'}), 400
+        requested_modes[slot_key] = mode
+
+    current_slots = session.query(UserTrackedSlot).filter_by(
+        user_id=current_user.id, room_id=room_db_id
+    ).all()
+    current_by_id = {slot.slot_id: slot for slot in current_slots}
+    current_tracked_ids = set(current_by_id.keys())
+
     slots_to_add = requested_ids - current_tracked_ids
     slots_to_remove = current_tracked_ids - requested_ids
+
+    # Cheese claim/release transitions, accumulated across all three cases.
+    cheese_claims = set()
+    cheese_releases = set()
+
+    for slot_id in slots_to_remove:
+        if normalize_track_mode(current_by_id[slot_id].track_mode) == TRACK_MODE_PLAY:
+            cheese_releases.add(slot_id)
 
     if slots_to_remove:
         session.query(UserTrackedSlot).filter(
@@ -96,16 +162,39 @@ def update_tracked_slots(current_user, room_db_id):
         ).delete(synchronize_session=False)
         logging.info(f"[API] User {current_user.id} untracked {len(slots_to_remove)} slots in room {room_db_id}.")
 
+    # Mode flips on slots the user already tracks.
+    for slot_id in requested_ids & current_tracked_ids:
+        if slot_id not in requested_modes:
+            continue
+        existing = current_by_id[slot_id]
+        old_mode = normalize_track_mode(existing.track_mode)
+        new_mode = requested_modes[slot_id]
+        if new_mode == old_mode:
+            continue
+        existing.track_mode = new_mode
+        if new_mode == TRACK_MODE_PLAY:
+            cheese_claims.add(slot_id)
+        else:
+            cheese_releases.add(slot_id)
+        logging.info(
+            f"[API] User {current_user.id} set slot {slot_id} in room {room_db_id} to '{new_mode}'."
+        )
+
     if slots_to_add:
-        objects_to_add = [
-            UserTrackedSlot(
-                user_id=current_user.id, 
-                room_id=room_db_id, 
+        objects_to_add = []
+        for slot_id in slots_to_add:
+            if not isinstance(slot_id, int) or slot_id <= 0:
+                continue
+            mode = requested_modes.get(slot_id, DEFAULT_TRACK_MODE)
+            objects_to_add.append(UserTrackedSlot(
+                user_id=current_user.id,
+                room_id=room_db_id,
                 slot_id=slot_id,
-                added_at=datetime.utcnow()
-            )
-            for slot_id in slots_to_add if isinstance(slot_id, int) and slot_id > 0
-        ]
+                added_at=datetime.utcnow(),
+                track_mode=mode
+            ))
+            if mode == TRACK_MODE_PLAY:
+                cheese_claims.add(slot_id)
         session.bulk_save_objects(objects_to_add)
         logging.info(f"[API] User {current_user.id} tracked {len(objects_to_add)} new slots in room {room_db_id}.")
 
@@ -118,17 +207,17 @@ def update_tracked_slots(current_user, room_db_id):
         except Exception as e:
             logging.error(f"[API_ERROR] Failed to trigger immediate room poll: {e}", exc_info=True)
 
-    if current_user.cheese_api_key and (slots_to_add or slots_to_remove):
+    if current_user.cheese_api_key and (cheese_claims or cheese_releases):
         try:
             import threading
             from app.api_cheese import push_slot_changes_to_cheese
             app_context = current_app._get_current_object()
             threading.Thread(target=push_slot_changes_to_cheese, args=(
-                app_context, 
+                app_context,
                 current_user.id,
-                room_db_id, 
-                slots_to_add, 
-                slots_to_remove
+                room_db_id,
+                cheese_claims,
+                cheese_releases
             )).start()
         except Exception as e:
             logging.error(f"[API_ERROR] Failed to trigger Cheese push thread: {e}", exc_info=True)
@@ -307,6 +396,7 @@ def update_slot_cheese(current_user, room_db_id, slot_id):
         'not_connected': ('Not connected to Cheese Tracker.', 400),
         'no_tracker': ('This room is not linked to Cheese Tracker.', 400),
         'not_tracked': ('You are not tracking this slot.', 403),
+        'watching': ("You're watching this slot, not playing it. Switch it to Playing to edit its Cheese Tracker state.", 403),
         'not_found': ('Slot not found on Cheese Tracker.', 404),
         'forbidden': ('This slot is claimed by someone else on Cheese Tracker.', 403),
         'conflict': ('This slot changed on Cheese Tracker. Please refresh and try again.', 409),
@@ -431,6 +521,7 @@ def get_user_tracked_slots(current_user):
                     'last_activity': format_iso_z(slot_last_activity),
                     'item_count': slot_item_count,
                     'needs_backfill': slot.needs_backfill,
+                    'track_mode': normalize_track_mode(slot.track_mode),
                     'notify_progression': slot.notify_progression,
                     'notify_useful': slot.notify_useful,
                     'notify_filler': slot.notify_filler,

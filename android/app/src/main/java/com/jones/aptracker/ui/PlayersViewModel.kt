@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.Player
 import com.jones.aptracker.network.RetrofitClient
+import com.jones.aptracker.network.TrackMode
 import com.jones.aptracker.network.UpdateSlotsRequest
 import com.jones.aptracker.repository.HistoryRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +22,13 @@ import kotlinx.coroutines.launch
 class PlayersViewModel(application: Application) : AndroidViewModel(application) {
     val allPlayers = mutableStateOf<List<Player>>(emptyList())
     val selections = mutableStateMapOf<Int, Boolean>()
+
+    /**
+     * Per-slot "play" vs "watch" for the currently checked slots. Only slots in
+     * a Cheese-linked room ever diverge from [TrackMode.PLAY]; everywhere else
+     * this stays at the default and the picker hides the control entirely.
+     */
+    val slotModes = mutableStateMapOf<Int, String>()
 
     val isLoading = mutableStateOf(true)
     val showSaveConfirmation = mutableStateOf(false)
@@ -63,9 +71,11 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                 Log.d("SLOTS_DEBUG", "Received playerList of size ${playerList.size} from server.")
                 allPlayers.value = playerList
                 selections.clear()
+                slotModes.clear()
                 val trackedSlots = mutableSetOf<Int>()
                 playerList.forEach { player ->
                     selections[player.slot_id] = player.is_tracked
+                    slotModes[player.slot_id] = resolveInitialMode(player)
                     if (player.is_tracked) {
                         trackedSlots.add(player.slot_id)
                         Log.d("SLOTS_DEBUG", "  Detected already tracked slot: id=${player.slot_id}, name=${player.name}")
@@ -82,9 +92,55 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * The mode a slot should start in.
+     *
+     * Already-tracked slots keep whatever the server says. For an untracked
+     * slot the answer comes from Cheese: a slot someone else holds can only be
+     * watched, so the picker starts it there rather than offering a claim that
+     * would collide and then be undone.
+     */
+    private fun resolveInitialMode(player: Player): String {
+        player.track_mode?.let { return it }
+        val claim = player.cheese_claim ?: return TrackMode.PLAY
+        return if (claim.can_claim) TrackMode.PLAY else TrackMode.WATCH
+    }
+
+    /** True when this slot is claimed on Cheese by someone other than the user. */
+    fun isClaimLocked(player: Player): Boolean {
+        val claim = player.cheese_claim ?: return false
+        return !claim.can_claim
+    }
+
+    /** The Playing/Watching control only makes sense for Cheese-linked rooms. */
+    fun showsTrackMode(player: Player): Boolean = player.cheese_claim != null
+
+    fun modeFor(player: Player): String =
+        slotModes[player.slot_id] ?: resolveInitialMode(player)
+
     fun onPlayerSelectionChanged(playerId: Int, isSelected: Boolean) {
         Log.d("SLOTS_DEBUG", "onPlayerSelectionChanged: slotId=$playerId, isSelected=$isSelected")
         selections[playerId] = isSelected
+    }
+
+    fun onTrackModeChanged(player: Player, mode: String) {
+        // A slot held by someone else can never be set to Playing; the server
+        // would refuse the claim and bounce it straight back to Watching.
+        if (mode == TrackMode.PLAY && isClaimLocked(player)) {
+            _errorMessage.value = claimedByMessage(player)
+            return
+        }
+        Log.d("SLOTS_DEBUG", "onTrackModeChanged: slotId=${player.slot_id}, mode=$mode")
+        slotModes[player.slot_id] = mode
+    }
+
+    fun claimedByMessage(player: Player): String {
+        val holder = player.cheese_claim?.claimed_by
+        return if (holder.isNullOrBlank()) {
+            "That slot is claimed by someone else on Cheese Tracker. You can still watch it."
+        } else {
+            "That slot is claimed by $holder on Cheese Tracker. You can still watch it."
+        }
     }
 
     fun saveSelections(roomId: Int) {
@@ -108,8 +164,20 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                     Log.d("SLOTS_DEBUG", "  No slots to prune locally.")
                 }
 
-                val request = UpdateSlotsRequest(tracked_slot_ids = newTrackedSlots.toList())
-                Log.d("SLOTS_DEBUG", "  Sending updateTrackedSlots to server: $newTrackedSlots")
+                // Only send modes for slots that can actually have one. Rooms
+                // with no Cheese link have nothing to claim, so sending "play"
+                // for every slot would just be noise on the wire.
+                val modesToSend = newTrackedSlots
+                    .filter { slotId -> allPlayers.value.any { it.slot_id == slotId && it.cheese_claim != null } }
+                    .associate { slotId ->
+                        slotId.toString() to (slotModes[slotId] ?: TrackMode.PLAY)
+                    }
+
+                val request = UpdateSlotsRequest(
+                    tracked_slot_ids = newTrackedSlots.toList(),
+                    slot_modes = modesToSend.ifEmpty { null }
+                )
+                Log.d("SLOTS_DEBUG", "  Sending updateTrackedSlots to server: $newTrackedSlots modes=$modesToSend")
                 RetrofitClient.instance.updateTrackedSlots(roomId, request)
                 showSaveConfirmation.value = true
 
