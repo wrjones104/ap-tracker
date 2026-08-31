@@ -75,3 +75,8 @@ Thumbs.db
 backend/tests/__pycache__/
 backend/tests/*.db
 backend/tests/*.db-*
+
+# --- CLAUDE CODE ---
+# Per-machine permission allowlist, not project configuration. Everything else
+# under .claude/ (CLAUDE.md, skills/) is shared and tracked.
+.claude/settings.local.json
