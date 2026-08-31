@@ -649,7 +649,6 @@ data class RoomDatapackage(
     val players: Map<String, String> = emptyMap(),
     /** Item name by "<checksum>_<itemId>". */
     val items: Map<String, String> = emptyMap(),
-    val item_flags: Map<String, Int> = emptyMap(),
     /** Location name by "<checksum>_<locationId>". */
     val locations: Map<String, String> = emptyMap(),
     val slot_to_checksum: Map<String, String> = emptyMap(),

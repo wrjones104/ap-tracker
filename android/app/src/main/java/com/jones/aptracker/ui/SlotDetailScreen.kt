@@ -1697,9 +1697,12 @@ fun ChatMessageRow(message: ChatMessage, datapackage: RoomDatapackage? = null) {
                             val slotKey = segment.player?.toString() ?: message.slot?.toString()
                             val checksum = slotKey?.let { datapackage.slot_to_checksum[it] }
                             
-                            // Prioritize flags from the segment itself, fallback to datapackage
-                            val flags = segment.flags ?: (if (checksum != null) datapackage.item_flags["${checksum}_${segment.text}"] else null) ?: 0
-                            
+                            // Flags come from the PrintJSON segment. There is no
+                            // datapackage fallback: flags belong to an item
+                            // instance, not to an item type, so the datapackage
+                            // has nothing to fall back to.
+                            val flags = segment.flags ?: 0
+
                             if (checksum != null && segment.type == "item_id") {
                                 text = resolveEntityName(datapackage.items, checksum, datapackage.generic_checksum, segment.text)
                             }

@@ -453,7 +453,6 @@ def get_room_datapackage(current_user, room_db_id):
         player_map["0"] = "Archipelago"
 
         items_map = {}
-        item_flags = {}
         locations_map = {}
         slot_to_checksum = {}
 
@@ -479,7 +478,9 @@ def get_room_datapackage(current_user, room_db_id):
         return jsonify({
             'players': player_map,
             'items': items_map,
-            'item_flags': item_flags,
+            # No item_flags here: in Archipelago, flags are a property of an item
+            # *instance* (NetworkItem.flags), not of an item type, so the
+            # datapackage cannot carry them. PrintJSON segments supply them.
             'locations': locations_map,
             'slot_to_checksum': slot_to_checksum,
             # Archipelago's generic world. Its ids -- location -1 is Cheat Console,
