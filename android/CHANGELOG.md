@@ -10,6 +10,89 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.10.0] - 2026-08-31
+
+_Rooms And Slots Are One Place Now_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **App v1.10.0 is out.**
+>
+> 📂 **Rooms and Slots are one tab** — tap a room to expand it to its slots. Manage Slots is right there, and Room Activity moved to the overflow menu.
+>
+> 👀 **Playing or Watching, per slot** — follow a slot you don't own without claiming it on Cheese Tracker, and never take one out from under someone by accident.
+>
+> 📐 **Comfortable or Compact** — a new density setting, and slot rows down from four lines to two.
+>
+> 🐛 **Crash reporting** — on by default, off in Settings > Privacy.
+>
+> Also fixed: the widget refresh buttons (dead in every release build until now), shared milestone templates that would not import into a different build, and the Triggered badge collapsing into a vertical strip.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> New: Rooms and Slots are one tab. Tap a room to expand it to its slots.
+>
+> New: Playing or Watching per slot, so you can follow a slot without claiming it on Cheese Tracker.
+>
+> New: Comfortable or Compact layout density, and shorter slot rows.
+>
+> New: crash reporting, with an off switch in Settings > Privacy.
+>
+> Fixed: widget refresh buttons, the Triggered badge wrapping vertically, cramped Slot Details columns, and back arrows in right-to-left languages.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - Per-slot `Playing` / `Watching` control in Cheese-linked rooms. Watching is alerts-only: never written to Cheese, never unclaimed by the sync. A slot held by someone else starts on Watching with Playing disabled and the holder named.
+> - Layout density setting (Comfortable / Compact), stored per device and applied through the app's layout metrics. Honoured by the rooms screen today.
+> - Firebase Crashlytics, plus reporting of process terminations Crashlytics cannot see — a process killed while cached throws nothing, so the reason is read back on the next launch. Reports carry the device's RAM class. `Settings > Privacy > Send crash reports` gates all of it and clears unsent reports when switched off.
+>
+> ### Changed
+> - The Slots tab is gone; a room card expands to its slots in place. Three tabs instead of four. The old slots destination is still accepted and routed to Rooms.
+> - Slot rows are two lines instead of four. Only the word 'checks' left the visible text, and it is restored for screen readers.
+> - A suspended room expands like any other, with the revive prompt at the top instead of a dialog.
+> - Connect and manual sync wait for the sync to finish before reporting.
+> - The `minified` build type is no longer `isDebuggable`. AGP ran R8 in debug mode for it, which skipped obfuscation entirely, so the variant could catch classes being removed but nothing caused by renaming — most of what it exists for.
+>
+> ### Fixed
+> - Both Glance widget refresh buttons were dead in every minified build. `glance-appwidget` ships a member-less `-keep public class * extends ...ActionCallback`, so R8 kept the class name and stripped the constructor `Class.forName(...).getDeclaredConstructor()` needs. Third occurrence of this pattern after `InputMerger` and `ComponentRegistrar`; see #296.
+> - Milestone template share strings were built from obfuscated field names, and the format-version field was deleted outright — R8 constant-folded it from the single construction site. The DTOs are private, so the blanket keep over `network.**` (public classes only) never covered them. Fixed with `@SerializedName` plus a keep rule for annotated fields; gson 2.8.5 arrives transitively via `converter-gson:2.9.0` and ships no consumer rules of its own.
+> - `ThresholdGroupRow` measured the milestone name unweighted, so it claimed the row and wrapped the Triggered badge one character per line.
+> - The Slot Details hero columns had no `horizontalArrangement`.
+> - `Icons.Filled.ArrowBack` → `Icons.AutoMirrored.Filled.ArrowBack` across 7 call sites in 6 files, plus OpenInNew, ViewList, KeyboardArrowRight, Help and Send. `LocalLifecycleOwner` moved to `androidx.lifecycle.compose`; `lifecycle-runtime-compose` added at 2.8.7.
+> - Reordering is disabled while a search is active — reorder writes back by position into the unfiltered list.
+> - The rooms hero banner is pinned above the list rather than being its first item, which also removed an off-by-one from the reorder maths.
+> - The datapackage fallback for a backend without per-game name tables was effectively unreachable, so the app retried for ~14s and then showed raw IDs for the session.
+> ```
+
+### Added
+- **Playing And Watching, Per Slot**: Watching means alerts only: the slot is never written to Cheese and the sync never unclaims it. A slot someone else holds starts on Watching.
+- **Layout Density**: Comfortable or Compact, under Settings, stored per device. The rooms screen honours it today, the rest to follow.
+- **Crash And Memory Reporting, With An Opt-Out**: Crash reports plus the process kills Crashlytics cannot see, tagged with the device's RAM class. One switch in Settings > Privacy gates all of it.
+
+### Changed
+- **Rooms Absorbs Slots**: Three tabs instead of four. A room card expands to its slots rather than linking away, and the rename dialog is rename and icon only.
+- **Two-Line Slot Rows**: Game and last activity share a line; check progress moved to a column you can scan straight down.
+- **A Suspended Room Opens Instead Of Interrupting**: It expands like any other room now, with the revive prompt at the top rather than in a dialog that hijacks the tap.
+- **Connect And Sync Report Only When They Are Done**: Both wait for the sync to finish before reporting, instead of reading the profile while the counts are still moving.
+
+### Fixed
+- **Widget Refresh Buttons Did Nothing**: Both widgets' refresh buttons were dead in every released build and the tap was silently dropped. Debug builds were fine, which is why it went unseen.
+- **Shared Milestone Templates Were Not Portable**: A template share string only imported into the exact build that wrote it. The format is stable now and survives an app update.
+- **Triggered Badge Collapsed Into A Vertical Line**: A long milestone name claimed the whole row and squeezed the badge to one character per line. The name now ellipsizes instead.
+- **Slot Details Columns Ran Together**: The GAME/ROOM and STATUS/LAST ACTIVITY pairs had no gap, so a value filling its half ran straight into the next column.
+- **Back Arrows Pointed The Wrong Way In RTL Layouts**: Six screens used the non-mirrored arrow. Swept those and every other icon with the same problem.
+- **Reordering While Searching Moved The Wrong Rooms**: Reorder writes back by position into the unfiltered list, so on a filtered list it moved the wrong rooms. Disabled while a search is active.
+- **The Hero Banner Scrolled Away And Vanished On No Results**: It was the first list item rather than pinned above the list, so it scrolled off and disappeared when a search matched nothing.
+- **Raw IDs After A Backend Rollback Or Staged Rollout**: The fallback for a backend without per-game name tables was unreachable, so item names stayed raw ID numbers for the rest of the session.
+
+---
+
 ## [1.9.1] - 2026-08-28
 
 _The Console Shows Names, Not Numbers_
