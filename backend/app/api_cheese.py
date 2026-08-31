@@ -1160,12 +1160,48 @@ def refresh_tracker_cache(app, user_id, room_db_id):
         # to a poll cycle (cache update + claim reconciliation).
         from app.services.cheese_service import process_cheese_update
         with app.app_context():
-            process_cheese_update(room_db_id, data, remote_updated_at)
+            payload = process_cheese_update(room_db_id, data, remote_updated_at)
+            _send_demotion_pushes(payload)
     except Exception as e:
         logging.error(f"[CHEESE_REFRESH] Processing failed for room {room_db_id}: {e}", exc_info=True)
         return {'status': 'error'}
 
     return {'status': 'ok'}
+
+
+def _send_demotion_pushes(payload):
+    """
+    Sends the demotion payload process_cheese_update returns.
+
+    A manual refresh reconciles claims for the whole room, not just the caller's
+    slots, so it can demote someone else's slot from Playing to Watching. Dropping
+    the payload here left that as silent as the poller's unreachable loop was
+    before #289 -- the owner would find out by noticing the badge change.
+
+    Failures are logged rather than raised: the refresh itself succeeded, and the
+    caller should not see an error because a push did not go out.
+    """
+    if not payload:
+        return
+
+    from app.services.notification_service import send_fcm_notifications
+
+    for user_id, entry in payload.items():
+        notifications = entry.get('notifications')
+        if not notifications:
+            continue
+        for platform, tokens in (entry.get('tokens') or {}).items():
+            if not tokens:
+                continue
+            try:
+                logging.info(
+                    f"[CHEESE_NOTIFY] Refresh sending {len(notifications)} to user {user_id} ({platform})"
+                )
+                send_fcm_notifications(tokens, notifications, platform=platform)
+            except Exception as e:
+                logging.error(
+                    f"[CHEESE_NOTIFY] Push failed for user {user_id} ({platform}): {e}", exc_info=True
+                )
 
 
 def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):

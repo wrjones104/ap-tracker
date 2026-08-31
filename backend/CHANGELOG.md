@@ -10,6 +10,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.11.0] - 2026-08-31
+
+_Watch Mode, And Settings That Stay Yours_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Server v1.11.0 is live.**
+>
+> 👀 **Losing a claim no longer loses the slot** — when someone else takes a slot you were tracking, or the host's tracker releases it, it drops to Watching instead of being untracked. You keep its alerts, thresholds and settings.
+>
+> 🔔 **And you're actually told** — the notification path for that could never run, so demotions were silent and you found out by spotting the badge. It notifies now, and distinguishes 'someone claimed it' from 'it was released on the tracker'.
+>
+> 🧀 **Cheese-added slots follow your global settings again** — 'notify about finished slots' was being frozen in per-slot. Both paths inherit now, and existing slots are repaired.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - `UserTrackedSlot.track_mode` (`'play' | 'watch'`), splitting "alert me about this slot" from "this slot is mine on Cheese Tracker". Migration `a7c3e91b45d2` makes every existing row `play`, so it is behaviour-neutral. Also adds `users.cheese_last_sync_demoted`.
+> - Cheese writes derive from `track_mode` transitions rather than from tracking alone, so a client that omits `slot_modes` keeps existing modes and an older build re-saving the picker cannot silently re-claim a watched slot.
+> - `process_cheese_update` returns a demotion push payload: `{user_id: {'notifications': [...], 'tokens': {platform: [...]}}}`. "Slot Already Claimed" and "Slot Released" are separate messages.
+> - `GET /rooms/<id>/players` returns `track_mode` and `cheese_claim` from the cached tracker JSON.
+> - `GET /rooms/<id>/datapackage` emits `generic_checksum` so the legacy fallback path can resolve the generic world's location IDs (-1 Cheat Console, -2 Server).
+> - `send_fcm_notifications` takes a `platform` argument and selects the matching Firebase app; it defaults to `'android'`, which is what every prior caller passed.
+>
+> ### Changed
+> - Claim collisions and remote unclaims demote `play → watch` instead of untracking. Deletion survives only when the slot vanishes from the Cheese tracker entirely.
+> - Connecting mid-async demotes anything Cheese will not confirm as yours and reports the count.
+> - `poller.py` carried a duplicate `process_cheese_update`, and that copy was what actually ran for the background poll and for `refresh_tracker_cache`, so fixes to `cheese_service` did nothing on those paths. `cheese_service` is now the single definition, with an AST test that fails if a second reappears.
+>
+> ### Fixed
+> - `setup_cheese_user_task` stamped `User.notify_finished_default` into `UserTrackedSlot.notify_finished`, while `update_tracked_slots` left it NULL to inherit. Migration `c4f8a1e07b3d` clears the rows already written, but only where the override still equals the owning user's current default. `downgrade()` is a documented no-op.
+> - `refresh_tracker_cache` discarded `process_cheese_update`'s return value, leaving the manual-refresh path as silent as the poller's unreachable loop had been — and it reconciles the whole room, so one user's refresh could demote another user's slot.
+> - Removed the dead `item_flags` map from `GET /rooms/<id>/datapackage`. Always `{}` and unpopulatable by construction: `DatapackageCache` has no flags column, correctly, because flags belong to a `NetworkItem` instance rather than an item type. Older clients parse it with a default empty map.
+> ```
+
+### Added
+- **Slot Track Mode**: `UserTrackedSlot.track_mode` ('play' | 'watch') splits alerting from ownership. Watch slots are skipped by the sync. Migration a7c3e91b45d2 is behaviour-neutral.
+- **Demotion Notifications**: `process_cheese_update` returns a push payload for slots it demotes, keyed by user and grouped by platform. Claim-taken and auto-release are separate messages.
+- **Track Mode And Claim State On The Players Route**: `GET /rooms/<id>/players` returns track_mode and cheese_claim from the cached tracker JSON, so no extra Cheese calls are made.
+
+### Changed
+- **Connecting Mid-Async Stops Costing You Slots**: Unconfirmed slots are demoted to Watching and the count is reported back, instead of being pruned by the poller.
+- **One Definition Of The Cheese Sync**: poller.py's duplicate copy of process_cheese_update was the one actually running. cheese_service is the single definition now, with tests that fail on a second.
+
+### Fixed
+- **Cheese Sync Pinned notify_finished As A Per-Slot Override**: The sync stamped the user's default into a field where NULL means inherit. Migration c4f8a1e07b3d clears those rows, sparing any set to something else.
+- **A Manual Refresh Demoted Slots Silently**: `refresh_tracker_cache` threw away the same push payload the poller now sends, so a refresh could demote another user's slot with no notification.
+- **Dead item_flags In The Room Datapackage**: Always empty and unpopulatable by construction: in Archipelago, flags belong to an item instance, not an item type. Removed; older clients default it.
+- **generic_checksum Missing From The Room Datapackage**: Without it a client on the legacy fallback path renders the generic-world locations (-1 Cheat Console, -2 Server) as raw numbers.
+
+---
+
 ## [1.10.0] - 2026-08-28
 
 _Game Data On Demand, And Quieter Notifications_

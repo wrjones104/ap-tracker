@@ -1,6 +1,108 @@
 {
   "app_releases": [
     {
+      "version": "1.10.0",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-08-31",
+      "title": "Rooms And Slots Are One Place Now",
+      "highlights": [
+        {
+          "title": "Tap A Room, See Its Slots",
+          "description": "Rooms and Slots are one tab now. Tap a room to expand it to its slots, with Manage Slots right there and Room Activity in the overflow menu."
+        },
+        {
+          "title": "Watch A Slot Without Claiming It",
+          "description": "Every slot in a Cheese-linked room is Playing or Watching, so you can follow a slot you don't own and never take one out from under someone by accident."
+        },
+        {
+          "title": "Comfortable Or Compact",
+          "description": "A new layout density setting, and slot rows down from four lines to two without losing a fact."
+        },
+        {
+          "title": "Crash Reporting, And A Switch To Turn It Off",
+          "description": "The app reports its own crashes now, including the memory kills nothing could see before. Settings > Privacy turns it off and discards anything unsent."
+        },
+        {
+          "title": "Fixes Worth Naming",
+          "description": "Both home-screen widget refresh buttons work again, the Triggered badge no longer collapses to a vertical strip, and back arrows work in right-to-left languages."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Playing And Watching, Per Slot",
+            "description": "Watching means alerts only: the slot is never written to Cheese and the sync never unclaims it. A slot someone else holds starts on Watching."
+          },
+          {
+            "title": "Layout Density",
+            "description": "Comfortable or Compact, under Settings, stored per device. The rooms screen honours it today, the rest to follow."
+          },
+          {
+            "title": "Crash And Memory Reporting, With An Opt-Out",
+            "description": "Crash reports plus the process kills Crashlytics cannot see, tagged with the device's RAM class. One switch in Settings > Privacy gates all of it."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Rooms Absorbs Slots",
+            "description": "Three tabs instead of four. A room card expands to its slots rather than linking away, and the rename dialog is rename and icon only."
+          },
+          {
+            "title": "Two-Line Slot Rows",
+            "description": "Game and last activity share a line; check progress moved to a column you can scan straight down."
+          },
+          {
+            "title": "A Suspended Room Opens Instead Of Interrupting",
+            "description": "It expands like any other room now, with the revive prompt at the top rather than in a dialog that hijacks the tap."
+          },
+          {
+            "title": "Connect And Sync Report Only When They Are Done",
+            "description": "Both wait for the sync to finish before reporting, instead of reading the profile while the counts are still moving."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Widget Refresh Buttons Did Nothing",
+            "description": "Both widgets' refresh buttons were dead in every released build and the tap was silently dropped. Debug builds were fine, which is why it went unseen."
+          },
+          {
+            "title": "Shared Milestone Templates Were Not Portable",
+            "description": "A template share string only imported into the exact build that wrote it. The format is stable now and survives an app update."
+          },
+          {
+            "title": "Triggered Badge Collapsed Into A Vertical Line",
+            "description": "A long milestone name claimed the whole row and squeezed the badge to one character per line. The name now ellipsizes instead."
+          },
+          {
+            "title": "Slot Details Columns Ran Together",
+            "description": "The GAME/ROOM and STATUS/LAST ACTIVITY pairs had no gap, so a value filling its half ran straight into the next column."
+          },
+          {
+            "title": "Back Arrows Pointed The Wrong Way In RTL Layouts",
+            "description": "Six screens used the non-mirrored arrow. Swept those and every other icon with the same problem."
+          },
+          {
+            "title": "Reordering While Searching Moved The Wrong Rooms",
+            "description": "Reorder writes back by position into the unfiltered list, so on a filtered list it moved the wrong rooms. Disabled while a search is active."
+          },
+          {
+            "title": "The Hero Banner Scrolled Away And Vanished On No Results",
+            "description": "It was the first list item rather than pinned above the list, so it scrolled off and disappeared when a search matched nothing."
+          },
+          {
+            "title": "Raw IDs After A Backend Rollback Or Staged Rollout",
+            "description": "The fallback for a backend without per-game name tables was unreachable, so item names stayed raw ID numbers for the rest of the session."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**App v1.10.0 is out.**\n\n📂 **Rooms and Slots are one tab** — tap a room to expand it to its slots. Manage Slots is right there, and Room Activity moved to the overflow menu.\n\n👀 **Playing or Watching, per slot** — follow a slot you don't own without claiming it on Cheese Tracker, and never take one out from under someone by accident.\n\n📐 **Comfortable or Compact** — a new density setting, and slot rows down from four lines to two.\n\n🐛 **Crash reporting** — on by default, off in Settings > Privacy.\n\nAlso fixed: the widget refresh buttons (dead in every release build until now), shared milestone templates that would not import into a different build, and the Triggered badge collapsing into a vertical strip.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "New: Rooms and Slots are one tab. Tap a room to expand it to its slots.\n\nNew: Playing or Watching per slot, so you can follow a slot without claiming it on Cheese Tracker.\n\nNew: Comfortable or Compact layout density, and shorter slot rows.\n\nNew: crash reporting, with an off switch in Settings > Privacy.\n\nFixed: widget refresh buttons, the Triggered badge wrapping vertically, cramped Slot Details columns, and back arrows in right-to-left languages.",
+        "github": "### Added\n- Per-slot `Playing` / `Watching` control in Cheese-linked rooms. Watching is alerts-only: never written to Cheese, never unclaimed by the sync. A slot held by someone else starts on Watching with Playing disabled and the holder named.\n- Layout density setting (Comfortable / Compact), stored per device and applied through the app's layout metrics. Honoured by the rooms screen today.\n- Firebase Crashlytics, plus reporting of process terminations Crashlytics cannot see — a process killed while cached throws nothing, so the reason is read back on the next launch. Reports carry the device's RAM class. `Settings > Privacy > Send crash reports` gates all of it and clears unsent reports when switched off.\n\n### Changed\n- The Slots tab is gone; a room card expands to its slots in place. Three tabs instead of four. The old slots destination is still accepted and routed to Rooms.\n- Slot rows are two lines instead of four. Only the word 'checks' left the visible text, and it is restored for screen readers.\n- A suspended room expands like any other, with the revive prompt at the top instead of a dialog.\n- Connect and manual sync wait for the sync to finish before reporting.\n- The `minified` build type is no longer `isDebuggable`. AGP ran R8 in debug mode for it, which skipped obfuscation entirely, so the variant could catch classes being removed but nothing caused by renaming — most of what it exists for.\n\n### Fixed\n- Both Glance widget refresh buttons were dead in every minified build. `glance-appwidget` ships a member-less `-keep public class * extends ...ActionCallback`, so R8 kept the class name and stripped the constructor `Class.forName(...).getDeclaredConstructor()` needs. Third occurrence of this pattern after `InputMerger` and `ComponentRegistrar`; see #296.\n- Milestone template share strings were built from obfuscated field names, and the format-version field was deleted outright — R8 constant-folded it from the single construction site. The DTOs are private, so the blanket keep over `network.**` (public classes only) never covered them. Fixed with `@SerializedName` plus a keep rule for annotated fields; gson 2.8.5 arrives transitively via `converter-gson:2.9.0` and ships no consumer rules of its own.\n- `ThresholdGroupRow` measured the milestone name unweighted, so it claimed the row and wrapped the Triggered badge one character per line.\n- The Slot Details hero columns had no `horizontalArrangement`.\n- `Icons.Filled.ArrowBack` → `Icons.AutoMirrored.Filled.ArrowBack` across 7 call sites in 6 files, plus OpenInNew, ViewList, KeyboardArrowRight, Help and Send. `LocalLifecycleOwner` moved to `androidx.lifecycle.compose`; `lifecycle-runtime-compose` added at 2.8.7.\n- Reordering is disabled while a search is active — reorder writes back by position into the unfiltered list.\n- The rooms hero banner is pinned above the list rather than being its first item, which also removed an off-by-one from the reorder maths.\n- The datapackage fallback for a backend without per-game name tables was effectively unreachable, so the app retried for ~14s and then showed raw IDs for the session."
+      }
+    },
+    {
       "version": "1.9.1",
       "component": "app",
       "component_label": "App",
@@ -617,6 +719,76 @@
     }
   ],
   "server_releases": [
+    {
+      "version": "1.11.0",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-08-31",
+      "title": "Watch Mode, And Settings That Stay Yours",
+      "highlights": [
+        {
+          "title": "Losing A Claim No Longer Loses The Slot",
+          "description": "When a claim goes away the slot drops to Watching instead of being untracked. You keep its alerts, thresholds and per-slot settings."
+        },
+        {
+          "title": "You Are Told When A Slot Stops Being Yours",
+          "description": "The notification path for a demotion could never run, so it happened in silence. You get a notification now, saying whether someone claimed the slot or it was released."
+        },
+        {
+          "title": "Cheese-Added Slots Follow Your Global Settings Again",
+          "description": "Slots created by the Cheese sync had 'notify about finished slots' frozen in as a per-slot override. Both paths inherit now, and existing slots are repaired."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Slot Track Mode",
+            "description": "`UserTrackedSlot.track_mode` ('play' | 'watch') splits alerting from ownership. Watch slots are skipped by the sync. Migration a7c3e91b45d2 is behaviour-neutral."
+          },
+          {
+            "title": "Demotion Notifications",
+            "description": "`process_cheese_update` returns a push payload for slots it demotes, keyed by user and grouped by platform. Claim-taken and auto-release are separate messages."
+          },
+          {
+            "title": "Track Mode And Claim State On The Players Route",
+            "description": "`GET /rooms/<id>/players` returns track_mode and cheese_claim from the cached tracker JSON, so no extra Cheese calls are made."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Connecting Mid-Async Stops Costing You Slots",
+            "description": "Unconfirmed slots are demoted to Watching and the count is reported back, instead of being pruned by the poller."
+          },
+          {
+            "title": "One Definition Of The Cheese Sync",
+            "description": "poller.py's duplicate copy of process_cheese_update was the one actually running. cheese_service is the single definition now, with tests that fail on a second."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Cheese Sync Pinned notify_finished As A Per-Slot Override",
+            "description": "The sync stamped the user's default into a field where NULL means inherit. Migration c4f8a1e07b3d clears those rows, sparing any set to something else."
+          },
+          {
+            "title": "A Manual Refresh Demoted Slots Silently",
+            "description": "`refresh_tracker_cache` threw away the same push payload the poller now sends, so a refresh could demote another user's slot with no notification."
+          },
+          {
+            "title": "Dead item_flags In The Room Datapackage",
+            "description": "Always empty and unpopulatable by construction: in Archipelago, flags belong to an item instance, not an item type. Removed; older clients default it."
+          },
+          {
+            "title": "generic_checksum Missing From The Room Datapackage",
+            "description": "Without it a client on the legacy fallback path renders the generic-world locations (-1 Cheat Console, -2 Server) as raw numbers."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Server v1.11.0 is live.**\n\n👀 **Losing a claim no longer loses the slot** — when someone else takes a slot you were tracking, or the host's tracker releases it, it drops to Watching instead of being untracked. You keep its alerts, thresholds and settings.\n\n🔔 **And you're actually told** — the notification path for that could never run, so demotions were silent and you found out by spotting the badge. It notifies now, and distinguishes 'someone claimed it' from 'it was released on the tracker'.\n\n🧀 **Cheese-added slots follow your global settings again** — 'notify about finished slots' was being frozen in per-slot. Both paths inherit now, and existing slots are repaired.",
+        "play_store": "",
+        "github": "### Added\n- `UserTrackedSlot.track_mode` (`'play' | 'watch'`), splitting \"alert me about this slot\" from \"this slot is mine on Cheese Tracker\". Migration `a7c3e91b45d2` makes every existing row `play`, so it is behaviour-neutral. Also adds `users.cheese_last_sync_demoted`.\n- Cheese writes derive from `track_mode` transitions rather than from tracking alone, so a client that omits `slot_modes` keeps existing modes and an older build re-saving the picker cannot silently re-claim a watched slot.\n- `process_cheese_update` returns a demotion push payload: `{user_id: {'notifications': [...], 'tokens': {platform: [...]}}}`. \"Slot Already Claimed\" and \"Slot Released\" are separate messages.\n- `GET /rooms/<id>/players` returns `track_mode` and `cheese_claim` from the cached tracker JSON.\n- `GET /rooms/<id>/datapackage` emits `generic_checksum` so the legacy fallback path can resolve the generic world's location IDs (-1 Cheat Console, -2 Server).\n- `send_fcm_notifications` takes a `platform` argument and selects the matching Firebase app; it defaults to `'android'`, which is what every prior caller passed.\n\n### Changed\n- Claim collisions and remote unclaims demote `play → watch` instead of untracking. Deletion survives only when the slot vanishes from the Cheese tracker entirely.\n- Connecting mid-async demotes anything Cheese will not confirm as yours and reports the count.\n- `poller.py` carried a duplicate `process_cheese_update`, and that copy was what actually ran for the background poll and for `refresh_tracker_cache`, so fixes to `cheese_service` did nothing on those paths. `cheese_service` is now the single definition, with an AST test that fails if a second reappears.\n\n### Fixed\n- `setup_cheese_user_task` stamped `User.notify_finished_default` into `UserTrackedSlot.notify_finished`, while `update_tracked_slots` left it NULL to inherit. Migration `c4f8a1e07b3d` clears the rows already written, but only where the override still equals the owning user's current default. `downgrade()` is a documented no-op.\n- `refresh_tracker_cache` discarded `process_cheese_update`'s return value, leaving the manual-refresh path as silent as the poller's unreachable loop had been — and it reconciles the whole room, so one user's refresh could demote another user's slot.\n- Removed the dead `item_flags` map from `GET /rooms/<id>/datapackage`. Always `{}` and unpopulatable by construction: `DatapackageCache` has no flags column, correctly, because flags belong to a `NetworkItem` instance rather than an item type. Older clients parse it with a default empty map."
+      }
+    },
     {
       "version": "1.10.0",
       "component": "server",

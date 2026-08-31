@@ -2,6 +2,7 @@ package com.jones.aptracker.network
 
 import android.util.Base64
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 
 private const val FORMAT_PREFIX = "APMT1:"
 private const val FORMAT_VERSION = 1
@@ -9,21 +10,30 @@ private const val FORMAT_VERSION = 1
 // Wire DTOs. Fields are nullable because Gson can populate a Kotlin non-null
 // property with null when deserializing untrusted/malformed input, silently
 // bypassing the type system — every field here must be validated before use.
+//
+// Every field carries @SerializedName because these classes are private, so the
+// blanket keep rule over this package (which only matches public classes) does not
+// cover them. Without the annotation R8 renamed each field to a/b/c and deleted `v`
+// outright -- it constant-folded the version from the single construction site,
+// not knowing Gson writes the field reflectively. Release builds therefore emitted
+// {"a":[{"a":...}]} instead of the documented format, share strings did not survive
+// a version bump (R8 naming is not stable across builds), and the format-version
+// gate below could never reject anything.
 private data class TemplateShareItemDto(
-    val item_name: String? = null,
-    val quantity: Int = 0,
-    val is_group: Boolean = false
+    @SerializedName("item_name") val item_name: String? = null,
+    @SerializedName("quantity") val quantity: Int = 0,
+    @SerializedName("is_group") val is_group: Boolean = false
 )
 
 private data class TemplateShareEntryDto(
-    val game: String? = null,
-    val name: String? = null,
-    val items: List<TemplateShareItemDto>? = null
+    @SerializedName("game") val game: String? = null,
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("items") val items: List<TemplateShareItemDto>? = null
 )
 
 private data class TemplateShareEnvelopeDto(
-    val v: Int = 0,
-    val templates: List<TemplateShareEntryDto>? = null
+    @SerializedName("v") val v: Int = 0,
+    @SerializedName("templates") val templates: List<TemplateShareEntryDto>? = null
 )
 
 // Validated domain model, safe to act on.

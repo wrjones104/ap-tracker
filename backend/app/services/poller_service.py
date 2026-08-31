@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 from app.utils import fetch_json_with_status, fetch_json, get_cheese_headers, db_suspend_room
-from app.services.cheese_service import process_cheese_update
 from app.services.notification_service import send_fcm_notifications
 
 AP_POLL_SEMAPHORE_LIMIT = 5

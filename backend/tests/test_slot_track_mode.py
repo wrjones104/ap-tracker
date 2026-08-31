@@ -799,5 +799,52 @@ class TestPollerSyncNotifiesOnDemotion(TrackModeTestBase):
         self.assertEqual(payload, {})
 
 
+class TestManualRefreshSendsDemotionPushes(unittest.TestCase):
+    """
+    refresh_tracker_cache reconciles claims for the whole room, not just the
+    caller's slots, so a manual refresh can demote someone else's slot. It threw
+    process_cheese_update's payload away, which left that path exactly as silent
+    as the poller's unreachable loop was before the fix on the other caller.
+    """
+
+    def _payload(self, tokens):
+        return {7: {'notifications': [{'title': 'Slot Released', 'body': 'b', 'type': 'conflict'}],
+                    'tokens': tokens}}
+
+    @patch('app.services.notification_service.send_fcm_notifications')
+    def test_each_platform_is_sent_through_its_own_app(self, mock_send):
+        from app.api_cheese import _send_demotion_pushes
+
+        _send_demotion_pushes(self._payload({'android': ['tok_a'], 'ios': ['tok_i']}))
+
+        self.assertEqual(mock_send.call_count, 2)
+        by_platform = {c.kwargs['platform']: c.args[0] for c in mock_send.call_args_list}
+        self.assertEqual(by_platform, {'android': ['tok_a'], 'ios': ['tok_i']})
+
+    @patch('app.services.notification_service.send_fcm_notifications')
+    def test_nothing_to_send_makes_no_calls(self, mock_send):
+        from app.api_cheese import _send_demotion_pushes
+
+        _send_demotion_pushes({})
+        _send_demotion_pushes(None)
+        _send_demotion_pushes({7: {'notifications': [], 'tokens': {'android': ['t']}}})
+        _send_demotion_pushes({7: {'notifications': [{'title': 't', 'body': 'b'}], 'tokens': {'android': []}}})
+
+        mock_send.assert_not_called()
+
+    @patch('app.services.notification_service.send_fcm_notifications')
+    def test_a_failed_push_does_not_abort_the_refresh(self, mock_send):
+        """
+        The refresh itself succeeded. A push that could not go out must not turn
+        that into an error for the caller.
+        """
+        from app.api_cheese import _send_demotion_pushes
+        mock_send.side_effect = RuntimeError("FCM down")
+
+        _send_demotion_pushes(self._payload({'android': ['tok_a']}))
+
+        mock_send.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main()
