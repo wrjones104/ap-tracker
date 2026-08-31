@@ -5,9 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -50,7 +50,7 @@ fun CreditsScreen(
                 title = { Text("About & Credits") },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -174,7 +174,7 @@ fun SourceCodeCard(
                 )
             }
             Icon(
-                imageVector = Icons.Default.OpenInNew,
+                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.size(20.dp)
@@ -219,7 +219,7 @@ fun CreditItem(
                 )
             }
             Icon(
-                imageVector = Icons.Default.OpenInNew,
+                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                 contentDescription = "Open License",
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp)
