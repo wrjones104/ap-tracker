@@ -7,7 +7,7 @@
 
 The project is a monorepo containing a Python backend (Flask API + background poller) and a native Android app (Kotlin / Jetpack Compose).
 
-📱 [Google Play](https://play.google.com/store/apps/details?id=com.jones.aptracker) · 📦 [APK downloads (GitHub Releases)](https://github.com/wrjones104/ap-tracker/releases) · 💬 [Discord thread](https://discord.com/channels/731205301247803413/1434905244890038466)
+📱 [Google Play](https://play.google.com/store/apps/details?id=com.jones.aptracker) · 📦 [APK downloads (GitHub Releases)](https://github.com/wrjones104/ap-tracker/releases) · 💬 [Discord thread](https://discord.com/channels/731205301247803413/1483881181933211838)
 
 ---
 
