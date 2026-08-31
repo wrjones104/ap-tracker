@@ -1,5 +1,6 @@
 package com.jones.aptracker.data
 
+import androidx.compose.runtime.Immutable
 import android.content.Context
 import android.util.Log
 import androidx.core.content.edit
@@ -129,6 +130,13 @@ object FinishedDefinitionStore {
  * Every "is this slot finished for this user" decision in the app goes through here,
  * so the answer cannot drift between the slot list, the history feed, and the widgets.
  */
+/**
+ * Marked immutable so Compose can skip composables that take one. Both fields are vals
+ * assigned at construction and never mutated -- a new resolver is built rather than an
+ * existing one edited. Without this, Compose treats the type as unstable and every
+ * composable holding one recomposes unconditionally.
+ */
+@Immutable
 class FinishedResolver(
     private val default: FinishedDefinition,
     private val overrides: Map<String, FinishedDefinition>

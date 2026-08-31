@@ -15,7 +15,7 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.NotificationsPaused
 
 import androidx.compose.material.icons.filled.Person
@@ -62,7 +62,7 @@ import java.time.Instant
  */
 sealed class BottomNavItem(val route: String, val icon: ImageVector, val label: String) {
     object Rooms : BottomNavItem("rooms_tab", Icons.Default.Home, "Rooms")
-    object Activity : BottomNavItem("activity_tab", Icons.Default.List, "Activity")
+    object Activity : BottomNavItem("activity_tab", Icons.AutoMirrored.Filled.List, "Activity")
     object Profile : BottomNavItem("profile_tab", Icons.Default.Person, "Me")
 }
 

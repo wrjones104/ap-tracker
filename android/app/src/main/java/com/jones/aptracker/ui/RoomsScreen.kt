@@ -113,6 +113,9 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 
+/** Matches the cooldown RoomsViewModel already applies to its own resume fetch. */
+private const val SLOT_FETCH_COOLDOWN_MS = 10_000L
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomsScreen(
@@ -125,6 +128,7 @@ fun RoomsScreen(
     val rooms by roomsViewModel.rooms.collectAsState()
     val isLoading by roomsViewModel.isLoading.collectAsState()
     val errorMessage by roomsViewModel.errorMessage.collectAsState()
+    val slotErrorMessage by userViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -137,11 +141,23 @@ fun RoomsScreen(
     var searchQuery by remember { mutableStateOf("") }
 
     // --- Lifecycle & Data Loading ---
+    //
+    // The slots have to refresh on resume, not just on first composition: the room counts
+    // beside them do, and a card whose header updated while its slot list did not is a
+    // card contradicting itself. The cooldown is here rather than in fetchTrackedSlots
+    // because roughly a dozen callers -- saving a slot selection, most of all -- depend
+    // on that call refetching immediately, and a ViewModel-level cooldown would silently
+    // swallow those.
+    var lastSlotFetch by remember { mutableStateOf(0L) }
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             roomsViewModel.fetchRooms()
             userViewModel.fetchUserProfile()
-            userViewModel.fetchTrackedSlots()
+            val now = System.currentTimeMillis()
+            if (now - lastSlotFetch > SLOT_FETCH_COOLDOWN_MS) {
+                lastSlotFetch = now
+                userViewModel.fetchTrackedSlots()
+            }
         }
     }
 
@@ -151,6 +167,19 @@ fun RoomsScreen(
             .collect { message ->
                 snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
                 roomsViewModel.clearErrorMessage()
+            }
+    }
+
+    // The slots come from a different ViewModel than the rooms do, and this screen now
+    // shows both. Without this, a failed tracked-slots load left every room looking
+    // untracked with nothing on screen to say why -- the error was being written to a
+    // flow nobody here was reading.
+    LaunchedEffect(snackbarHostState, userViewModel) {
+        snapshotFlow { slotErrorMessage }
+            .filterNotNull()
+            .collect { message ->
+                snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
+                userViewModel.clearErrorMessage()
             }
     }
 
@@ -220,7 +249,10 @@ fun RoomsScreen(
                 // nothing -- the one moment the screen looked broken and most needed to
                 // still look like the app. It is chrome, so it lives with the chrome.
                 HeroBanner(
-                    isWelcome = rooms.isEmpty(),
+                    // Not merely "no rooms": on a cold start that is also true while the
+                    // first load is still running, which flashed "add a new room!" above
+                    // a spinner at someone who has plenty of rooms.
+                    isWelcome = rooms.isEmpty() && !isLoading,
                     metrics = metrics
                 )
 
@@ -309,7 +341,9 @@ fun RoomsScreen(
                     }
                 }
 
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                // weight rather than fillMaxSize: this takes whatever the pinned chrome
+                // above it leaves, and stays correct if that chrome grows.
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     if (isLoading && rooms.isEmpty()) {
                         CircularProgressIndicator()
                     } else if (rooms.isEmpty()) {
@@ -412,12 +446,27 @@ fun RoomsScreen(
                                     group = slotGroupsByRoomId[room.id],
                                     // Searching implies you want to see what matched, so a
                                     // matching room opens regardless of its saved state.
-                                    isExpanded = isSearching || room.id in expandedRoomIds,
+                                    //
+                                    // A card being dragged collapses to its header, whatever
+                                    // its saved state. The reorder gesture below measures
+                                    // against item height -- it auto-scrolls on
+                                    // `endOffset > viewportEnd` and only swaps once you have
+                                    // dragged half the item's own height. An expanded room
+                                    // with eight slots is taller than the viewport, which
+                                    // makes the first condition true before you have moved
+                                    // and the second unreachable. Collapsing restores the
+                                    // uniform-height assumption the algorithm needs, and you
+                                    // are dragging a room, not a room and its contents.
+                                    isExpanded = (isSearching || room.id in expandedRoomIds) && !isDragging,
                                     isReorderEnabled = !isSearching,
                                     isDragging = isDragging,
                                     elevation = elevation,
                                     scale = scale,
-                                    dragOffset = draggingItemOffset,
+                                    // Passed as a lambda, not a Float: read here it would be
+                                    // a composition-phase read, recomposing every visible
+                                    // card on every frame of the gesture. Called inside
+                                    // graphicsLayer it stays a draw-phase read.
+                                    dragOffset = { draggingItemOffset },
                                     finishedResolver = finishedResolver,
                                     onToggleExpand = {
                                         userViewModel.setRoomExpanded(room.id, room.id !in expandedRoomIds)
@@ -662,7 +711,7 @@ private fun RoomCard(
     isDragging: Boolean,
     elevation: Dp,
     scale: Float,
-    dragOffset: Float,
+    dragOffset: () -> Float,
     finishedResolver: FinishedResolver,
     onToggleExpand: () -> Unit,
     onReviveClick: () -> Unit,
@@ -681,7 +730,7 @@ private fun RoomCard(
             .padding(vertical = metrics.cardSpacing)
             .zIndex(if (isDragging) 1f else 0f)
             .graphicsLayer {
-                translationY = if (isDragging) dragOffset else 0f
+                translationY = if (isDragging) dragOffset() else 0f
                 scaleX = scale
                 scaleY = scale
                 alpha = if (isDragging) 0.9f else 1f

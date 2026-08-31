@@ -201,9 +201,9 @@ internal fun HiddenFinishedSlotsRow(count: Int, onShowFinished: () -> Unit) {
         )
         Spacer(Modifier.width(8.dp))
         Text(
-            // "in this room" is doing real work: the row is room-scoped but sits at the
-            // bottom of a room's slots, where an unqualified count reads as a total for
-            // the whole screen.
+            // "in this room" is doing real work: the row is room-scoped but sits in a
+            // list of rooms, where an unqualified count reads as a total for the whole
+            // screen.
             text = if (count == 1) {
                 "1 finished slot hidden in this room"
             } else {
@@ -213,8 +213,10 @@ internal fun HiddenFinishedSlotsRow(count: Int, onShowFinished: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
+        // Named for the chip it flips, which is screen-wide. "Show" beside room-scoped
+        // copy reads as though it would reveal this room's slots only.
         TextButton(onClick = onShowFinished) {
-            Text("Show")
+            Text("Show finished")
         }
     }
 }
