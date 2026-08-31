@@ -15,7 +15,10 @@ from . import Session
 from .models import User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
 from .api import token_required, log_api_call, handle_db_errors
 from .encryption import encrypt_api_key, decrypt_api_key
-from .utils import get_cheese_headers, extract_ap_room_id
+from .utils import (
+    get_cheese_headers, extract_ap_room_id,
+    TRACK_MODE_PLAY, TRACK_MODE_WATCH, normalize_track_mode
+)
 
 load_dotenv()
 
@@ -131,7 +134,7 @@ def setup_cheese_user_task(app, user_id):
 
             my_cheese_id = user.cheese_user_id
 
-            stats = {'linked': 0, 'created': 0, 'slots_synced': 0, 'pruned': 0}
+            stats = {'linked': 0, 'created': 0, 'slots_synced': 0, 'pruned': 0, 'demoted': 0}
             found_cheese_tracker_ids = set()
             processed_room_ids = set()
 
@@ -213,21 +216,43 @@ def setup_cheese_user_task(app, user_id):
                                 user.cheese_user_id = found_ct_id
                                 my_cheese_id = found_ct_id
 
-                if slots_found:
-                    existing_slots = session.query(UserTrackedSlot.slot_id).filter_by(
-                        user_id=user.id, room_id=room.id
-                    ).all()
-                    existing_set = {s[0] for s in existing_slots}
+                slots_found.discard(None)
 
-                    for slot_id in slots_found:
-                        if slot_id not in existing_set:
-                            session.add(UserTrackedSlot(
-                                user_id=user.id,
-                                room_id=room.id,
-                                slot_id=slot_id,
-                                notify_finished=user.notify_finished_default
-                            ))
-                            stats['slots_synced'] += 1
+                existing_slots = session.query(UserTrackedSlot).filter_by(
+                    user_id=user.id, room_id=room.id
+                ).all()
+                existing_by_id = {s.slot_id: s for s in existing_slots}
+
+                # Connecting mid-async must not cost the user slots they were
+                # already tracking. Anything Cheese does not confirm as theirs
+                # is demoted to watch instead: alerts survive, the claim does
+                # not, and the demotion is reversible from the app.
+                for slot_id, existing in existing_by_id.items():
+                    if slot_id in slots_found:
+                        continue
+                    if normalize_track_mode(existing.track_mode) != TRACK_MODE_PLAY:
+                        continue
+                    logging.info(
+                        f"[CHEESE_DEBUG] Demoting slot {slot_id} in room {room.id} to watch "
+                        f"(not claimed by user {user.id} on Cheese)."
+                    )
+                    existing.track_mode = TRACK_MODE_WATCH
+                    stats['demoted'] += 1
+
+                for slot_id in slots_found:
+                    existing = existing_by_id.get(slot_id)
+                    if existing is None:
+                        session.add(UserTrackedSlot(
+                            user_id=user.id,
+                            room_id=room.id,
+                            slot_id=slot_id,
+                            notify_finished=user.notify_finished_default,
+                            track_mode=TRACK_MODE_PLAY
+                        ))
+                        stats['slots_synced'] += 1
+                    elif normalize_track_mode(existing.track_mode) != TRACK_MODE_PLAY:
+                        # Cheese says this one really is theirs; restore the claim.
+                        existing.track_mode = TRACK_MODE_PLAY
 
             # 3. Prune stale subscriptions
             # A subscription is stale if it is linked to a Cheese tracker that is no longer present on the user's dashboard.
@@ -316,6 +341,9 @@ def setup_cheese_user_task(app, user_id):
             if fresh_user:
                 fresh_user.is_syncing_cheese = False
                 fresh_user.cheese_last_sync = datetime.utcnow()
+                # Surfaced by the app as a post-sync summary so a mid-async
+                # connect never silently changes slots out from under the user.
+                fresh_user.cheese_last_sync_demoted = stats.get('demoted', 0)
                 session.commit()
             logging.info(f"[CHEESE_DEBUG] User {user_id} unlocked.")
 
@@ -748,10 +776,14 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                         slot_id=ap_position
                     ).first()
                     
-                    if local_slot:
-                        logging.info(f"[CHEESE_DEBUG] Collision: Untracking slot {ap_position} locally.")
-                        session.delete(local_slot)
-                        
+                    # Demote to watch rather than deleting. The user keeps their
+                    # alerts, thresholds and per-slot prefs; they just stop
+                    # owning the slot on Cheese. Losing a claim is never a
+                    # reason to throw away tracking state.
+                    if local_slot and normalize_track_mode(local_slot.track_mode) == TRACK_MODE_PLAY:
+                        logging.info(f"[CHEESE_DEBUG] Collision: Demoting slot {ap_position} to watch.")
+                        local_slot.track_mode = TRACK_MODE_WATCH
+
                         player_name = f"Slot {ap_position}"
                         try:
                             players = json.loads(room.cached_players_json or '[]')
@@ -786,8 +818,8 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                                 messages = [
                                     messaging.Message(
                                         notification=messaging.Notification(
-                                            title="Slot Sync Conflict",
-                                            body=f"Slot '{player_name}' in room '{room_alias}' is already claimed by another user on Cheese Tracker. Untracked slot."
+                                            title="Slot Already Claimed",
+                                            body=f"'{player_name}' in '{room_alias}' is claimed by someone else on Cheese Tracker. Switched to Watching — you'll still get alerts."
                                         ),
                                         token=token,
                                         android=messaging.AndroidConfig(
@@ -879,7 +911,7 @@ def apply_cheese_slot_update(app, user_id, room_db_id, slot_id, updates):
 
     Returns a result dict:
         {'status': 'ok', 'game': <updated game dict>, 'global_ping_policy': ...}
-        {'status': 'not_connected' | 'no_tracker' | 'not_tracked' |
+        {'status': 'not_connected' | 'no_tracker' | 'not_tracked' | 'watching' |
                    'not_found' | 'forbidden' | 'conflict' | 'error'}
     """
     # === 1. PRE-FLIGHT (DB) ===
@@ -903,6 +935,13 @@ def apply_cheese_slot_update(app, user_id, room_db_id, slot_id, updates):
             ).first()
             if not local_slot:
                 return {'status': 'not_tracked'}
+
+            # Watch slots are read-only on Cheese by definition. The remote
+            # ownership check below would usually catch this too, but not when
+            # the slot happens to be unclaimed -- editing someone else's
+            # unclaimed slot is still not ours to do.
+            if normalize_track_mode(local_slot.track_mode) != TRACK_MODE_PLAY:
+                return {'status': 'watching'}
 
             api_key = decrypt_api_key(user.cheese_api_key)
             if not api_key:
@@ -1096,7 +1135,7 @@ def refresh_tracker_cache(app, user_id, room_db_id):
     try:
         # Reuse the poller's processing so a manual refresh behaves identically
         # to a poll cycle (cache update + claim reconciliation).
-        from app.poller import process_cheese_update
+        from app.services.cheese_service import process_cheese_update
         with app.app_context():
             process_cheese_update(room_db_id, data, remote_updated_at)
     except Exception as e:

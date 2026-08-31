@@ -21,6 +21,11 @@ class User(Base):
     cheese_api_key = Column(String, nullable=True)
     cheese_user_id = Column(Integer, nullable=True)
     cheese_last_sync = Column(DateTime, nullable=True)
+    # How many slots the most recent Cheese sync demoted from play to watch
+    # because Cheese did not confirm them as this user's. Surfaced by the app
+    # as a post-sync summary; the client decides when it has been seen by
+    # comparing against cheese_last_sync.
+    cheese_last_sync_demoted = Column(Integer, nullable=False, default=0, server_default='0')
     is_syncing_cheese = Column(Boolean, nullable=False, default=False, server_default='f')
     cheese_sync_started_at = Column(DateTime, nullable=True)
     # Default Cheese Tracker ping preference applied at claim time. Null = leave
@@ -118,8 +123,16 @@ class UserTrackedSlot(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     room_id = Column(Integer, ForeignKey('tracked_rooms.id'), nullable=False)
     slot_id = Column(Integer, nullable=False)
-    added_at = Column(DateTime, default=datetime.utcnow) 
+    added_at = Column(DateTime, default=datetime.utcnow)
     needs_backfill = Column(Boolean, default=True, nullable=False)
+    # Separates "alert me about this slot" from "this slot is mine on Cheese
+    # Tracker". One of:
+    #   play  -- I am playing this slot. Claimed on Cheese, kept in sync.
+    #   watch -- Alerts only. Never written to Cheese, never unclaimed by sync.
+    # Only meaningful when the user is connected to Cheese and the room is
+    # linked to a tracker; otherwise every slot is 'play' and nothing is pushed.
+    # See TRACK_MODES in app/utils.py.
+    track_mode = Column(String(16), nullable=False, default='play', server_default='play')
     notify_progression = Column(Boolean, nullable=True, default=None)
     notify_useful = Column(Boolean, nullable=True, default=None)
     notify_hints = Column(Boolean, nullable=True, default=None)

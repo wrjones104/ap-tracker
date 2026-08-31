@@ -34,6 +34,7 @@ import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.UserRepository
 import com.jones.aptracker.widget.MilestonesWidgetUpdater
 import com.jones.aptracker.widget.RecentItemsWidgetUpdater
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -457,8 +458,13 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 val response = RetrofitClient.instance.connectCheeseTracker(request)
 
                 _integrationMessage.value = response.message
+                // The connect call only *starts* the sync, so the profile is not
+                // meaningful yet. Connecting mid-async is exactly the case where
+                // slots get demoted, so wait for the real result before reporting.
+                val finished = awaitCheeseSync()
                 fetchUserProfile()
                 fetchTrackedSlots()
+                demotionMessage(finished)?.let { _integrationMessage.value = it }
             } catch (e: Exception) {
                 e.printStackTrace()
                 _errorMessage.value = "Failed to connect. Check your key."
@@ -471,12 +477,46 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val response = RetrofitClient.instance.syncCheeseTracker()
                 _integrationMessage.value = response.message
+                val finished = awaitCheeseSync()
                 fetchTrackedSlots()
+                demotionMessage(finished)?.let { _integrationMessage.value = it }
             } catch (e: Exception) {
                 e.printStackTrace()
                 _errorMessage.value = "Sync failed. Are you connected?"
             }
         }
+    }
+
+    /**
+     * Polls the profile until the backend reports the Cheese sync finished.
+     * Returns the settled profile, or null if it was still running when we gave
+     * up (in which case we say nothing rather than report a stale count).
+     */
+    private suspend fun awaitCheeseSync(maxAttempts: Int = 15): UserProfile? {
+        repeat(maxAttempts) {
+            delay(2000)
+            val profile = try {
+                RetrofitClient.instance.getUserProfile()
+            } catch (e: Exception) {
+                Log.w("UserViewModel", "Profile poll during Cheese sync failed: ${e.message}")
+                return@repeat
+            }
+            if (!profile.is_syncing_cheese) return profile
+        }
+        return null
+    }
+
+    /**
+     * Says plainly what the sync changed. Slots demoted to Watching keep their
+     * alerts, but the user did lose the Cheese claim and should hear it from us
+     * rather than notice later.
+     */
+    private fun demotionMessage(profile: UserProfile?): String? {
+        val demoted = profile?.cheese_last_sync_demoted ?: 0
+        if (demoted <= 0) return null
+        val slotWord = if (demoted == 1) "slot is" else "slots are"
+        return "Sync complete. $demoted $slotWord claimed by someone else on " +
+            "Cheese Tracker - switched to Watching. You'll still get alerts."
     }
 
     fun disconnectCheese() {
