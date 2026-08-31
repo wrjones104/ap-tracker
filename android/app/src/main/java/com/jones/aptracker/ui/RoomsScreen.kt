@@ -209,6 +209,14 @@ fun RoomsScreen(
     // back to how the user left it when the finger lifts. A long-press must not cost
     // someone their layout.
     val isReorderInProgress = draggingItemIndex != null
+
+    // Where the pressed card sat before everything collapsed under it.
+    //
+    // Collapsing on long-press moves the pressed card up by the combined height of every
+    // expanded room above it, so it re-lays-out somewhere the finger is not. Holding its
+    // pre-collapse position lets the first drag frame put it back under the press point.
+    // Consumed once, then cleared.
+    var dragAnchorOffset by remember { mutableStateOf<Int?>(null) }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -392,6 +400,9 @@ fun RoomsScreen(
                                                     }?.let { item ->
                                                         draggingItemIndex = item.index
                                                         draggingItemOffset = 0f
+                                                        // Read before the collapse this
+                                                        // assignment is about to trigger.
+                                                        dragAnchorOffset = item.offset
                                                     }
                                             },
                                             onDrag = { change, dragAmount ->
@@ -401,6 +412,19 @@ fun RoomsScreen(
                                                 val currentDraggingIndex = draggingItemIndex ?: return@detectDragGesturesAfterLongPress
                                                 val currentItemInfo = listState.layoutInfo.visibleItemsInfo
                                                     .firstOrNull { it.index == currentDraggingIndex } ?: return@detectDragGesturesAfterLongPress
+
+                                                // First frame after the collapse, which by
+                                                // now has reached layout: shift the card
+                                                // back to where it was actually pressed.
+                                                // Applied before the offsets below are
+                                                // derived, so the swap math sees the
+                                                // corrected position rather than chasing it
+                                                // a frame later. A no-op when nothing above
+                                                // the card was expanded.
+                                                dragAnchorOffset?.let { anchor ->
+                                                    draggingItemOffset += (anchor - currentItemInfo.offset).toFloat()
+                                                    dragAnchorOffset = null
+                                                }
 
                                                 val startOffset = currentItemInfo.offset + draggingItemOffset
                                                 val centerOffset = (startOffset + (currentItemInfo.size / 2)).toInt()
@@ -436,10 +460,12 @@ fun RoomsScreen(
                                             onDragEnd = {
                                                 draggingItemIndex = null
                                                 draggingItemOffset = 0f
+                                                dragAnchorOffset = null
                                             },
                                             onDragCancel = {
                                                 draggingItemIndex = null
                                                 draggingItemOffset = 0f
+                                                dragAnchorOffset = null
                                             }
                                         )
                                     }
