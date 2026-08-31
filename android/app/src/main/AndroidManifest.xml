@@ -74,6 +74,17 @@
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="channel_general" />
 
+        <!--
+            Crash reporting is off until CrashReporter.init reads the user's choice and
+            enables it explicitly. Without this, Crashlytics auto-collects from process
+            start, which would upload against a consent value nobody has read yet.
+            The runtime setter overrides this and persists, so the switch in Settings
+            still wins.
+        -->
+        <meta-data
+            android:name="firebase_crashlytics_collection_enabled"
+            android:value="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

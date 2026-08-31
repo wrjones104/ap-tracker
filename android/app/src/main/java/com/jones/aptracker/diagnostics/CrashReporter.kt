@@ -3,9 +3,13 @@ package com.jones.aptracker.diagnostics
 import android.app.ActivityManager
 import android.content.Context
 import android.util.Log
+import androidx.core.content.edit
 import com.google.firebase.crashlytics.CustomKeysAndValues
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.jones.aptracker.BuildConfig
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Thin front door onto Crashlytics.
@@ -23,8 +27,42 @@ object CrashReporter {
 
     private const val TAG = "CrashReporter"
 
-    /** False in the debug build only; the minified build reports so the release path is exercised. */
-    val isEnabled: Boolean get() = BuildConfig.CRASH_REPORTING_ENABLED
+    /** Shared with [AppExitReporter]; both are diagnostics state that must survive reinstall-free upgrades. */
+    private const val PREFS_NAME = "ap_tracker_diagnostics"
+    private const val KEY_USER_CONSENT = "crash_reporting_enabled"
+
+    /**
+     * Opt-out, not opt-in: reporting is on until the user turns it off.
+     *
+     * This has to match what the Play Console Data safety form declares. It says collection
+     * is optional, which is what obliges us to honour [setUserConsent] at all -- but nothing
+     * there requires an up-front prompt, and a consent wall on first launch for crash
+     * diagnostics would be a worse experience than a switch in Settings.
+     */
+    private const val DEFAULT_USER_CONSENT = true
+
+    /**
+     * The user's choice, surfaced to Settings.
+     *
+     * Backed by SharedPreferences rather than the app's DataStore because [init] runs in
+     * Application.onCreate and has to decide before anything can report; DataStore reads are
+     * suspending and would leave a window where collection state is simply unknown.
+     */
+    private val _userConsent = MutableStateFlow(DEFAULT_USER_CONSENT)
+    val userConsent: StateFlow<Boolean> = _userConsent.asStateFlow()
+
+    /**
+     * False in the debug build only; the minified build reports so the release path is exercised.
+     *
+     * Every entry point below checks this, and so do [AppExitReporter] and the callers that
+     * set custom keys, so revoking consent silences the whole surface -- not just Crashlytics'
+     * own uploads.
+     */
+    val isEnabled: Boolean
+        get() = BuildConfig.CRASH_REPORTING_ENABLED && _userConsent.value
+
+    private fun prefs(context: Context) =
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /**
      * Resolved once in [init] rather than per call. Null means Firebase never came up -- most
@@ -35,6 +73,11 @@ object CrashReporter {
     private var crashlytics: FirebaseCrashlytics? = null
 
     fun init(context: Context) {
+        // Before touching Firebase: the manifest disables collection by default, so an early
+        // crash between process start and this line is dropped rather than uploaded against
+        // a consent value we have not read yet.
+        _userConsent.value = prefs(context).getBoolean(KEY_USER_CONSENT, DEFAULT_USER_CONSENT)
+
         val instance = try {
             FirebaseCrashlytics.getInstance()
         } catch (e: Exception) {
@@ -43,8 +86,34 @@ object CrashReporter {
         }
         crashlytics = instance
 
-        // Set explicitly rather than relying on the manifest default, so that flipping
-        // CRASH_REPORTING_ENABLED is the single source of truth for whether we upload.
+        applyCollectionState(context, instance)
+    }
+
+    /**
+     * Records the user's choice and acts on it immediately.
+     *
+     * Turning it off also drops anything Crashlytics has queued but not yet sent. A report
+     * captured before the user opted out would otherwise still be uploaded on the next
+     * launch, which is not what "off" means to the person who chose it.
+     */
+    fun setUserConsent(context: Context, enabled: Boolean) {
+        prefs(context).edit { putBoolean(KEY_USER_CONSENT, enabled) }
+        _userConsent.value = enabled
+
+        val instance = crashlytics ?: return
+        applyCollectionState(context, instance)
+        if (!isEnabled) {
+            try {
+                instance.deleteUnsentReports()
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not drop unsent reports", e)
+            }
+        }
+    }
+
+    private fun applyCollectionState(context: Context, instance: FirebaseCrashlytics) {
+        // Set explicitly rather than relying on the manifest default, so that the build flag
+        // and the user's choice together are the single source of truth for whether we upload.
         instance.isCrashlyticsCollectionEnabled = isEnabled
         if (!isEnabled) return
 

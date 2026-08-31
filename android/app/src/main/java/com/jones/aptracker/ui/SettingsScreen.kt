@@ -41,10 +41,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jones.aptracker.data.FinishedDefinition
+import com.jones.aptracker.diagnostics.CrashReporter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -262,6 +264,33 @@ fun SettingsScreen(
                 } ?: Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
+            }
+
+            // Deliberately outside the userProfile block above. This one is stored on the
+            // device, not on the account -- Crashlytics reporting is per install -- so it
+            // must stay reachable when the profile fetch is still in flight or has failed.
+            // Someone turning reporting off is quite likely to be doing it *because* the
+            // app is misbehaving.
+            item {
+                val context = LocalContext.current
+                val crashReportingEnabled by CrashReporter.userConsent.collectAsState()
+
+                SectionHeader("Privacy")
+
+                NotificationToggle(
+                    text = "Send crash reports",
+                    description = "Share crash and performance diagnostics so problems can " +
+                        "be found and fixed. No account details or game data are included.",
+                    checked = crashReportingEnabled,
+                    onCheckedChange = { CrashReporter.setUserConsent(context, it) }
+                )
+                Text(
+                    text = "Applies to this device only. Turning this off also discards " +
+                        "any reports waiting to be sent.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
             }
         }
     }
