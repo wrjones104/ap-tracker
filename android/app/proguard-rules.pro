@@ -65,6 +65,20 @@
 -keep interface okhttp3.** { *; }
 -keep class com.google.gson.** { *; }
 
+# Gson maps JSON keys to field names reflectively, which R8 cannot see. The blanket
+# keep over this package matches public classes only, so private DTOs -- the milestone
+# template share format -- had every field renamed to a/b/c and the version field
+# deleted outright (R8 constant-folded it from the single construction site). Release
+# builds emitted {"a":[{"a":...}]} and the format-version gate could never reject.
+#
+# gson 2.8.5 comes in transitively via converter-gson 2.9.0 and ships no consumer
+# rules of its own, so this is the rule newer Gson would have supplied. Renaming
+# stays allowed: @SerializedName carries the wire name, so only removal is the
+# problem. Annotating a DTO field is therefore enough to make it safe from here on.
+-keepclassmembers,allowobfuscation class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
+
 -keep class net.openid.appauth.** { *; }
 
 -keep,allowobfuscation,allowshrinking interface com.jones.aptracker.network.ApiService
@@ -83,6 +97,16 @@
     @androidx.room.Embedded <fields>;
     @androidx.room.Relation <fields>;
     @androidx.room.ForeignKey <fields>;
+}
+
+# Glance instantiates an ActionCallback reflectively by class name
+# (RunCallbackAction$Companion.run -> Class.forName(name).getDeclaredConstructor().newInstance()).
+# glance-appwidget 1.1.1 ships "-keep public class * extends ...ActionCallback", a member-less
+# keep, so R8 kept the class name -- which is why Class.forName still resolved -- and stripped
+# the constructor. Both widget refresh buttons were dead in every release build: the receiver
+# caught NoSuchMethodException, logged it, and returned, so the tap simply did nothing.
+-keepclassmembers class * extends androidx.glance.appwidget.action.ActionCallback {
+    public <init>();
 }
 
 # WorkManager reflectively instantiates InputMerger implementations by class name
