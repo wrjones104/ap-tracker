@@ -22,6 +22,7 @@ class SettingsManager(context: Context) {
         val DATE_FORMAT_PRESET_KEY = stringPreferencesKey("date_format_preset")
         val SLOTS_SHOW_FINISHED_KEY = booleanPreferencesKey("slots_show_finished")
         val EXPANDED_ROOM_IDS_KEY = stringPreferencesKey("expanded_room_ids")
+        val LAYOUT_DENSITY_KEY = stringPreferencesKey("layout_density")
     }
 
     /**
@@ -68,6 +69,17 @@ class SettingsManager(context: Context) {
         }
 
     /**
+     * A flow that emits the current layout density.
+     * It defaults to 'COMFORTABLE' if not set, which is the layout that shipped before
+     * the setting existed -- an existing user must not have their spacing change under
+     * them just because the option appeared.
+     */
+    val layoutDensity: Flow<String> = dataStore.data
+        .map { preferences ->
+            preferences[LAYOUT_DENSITY_KEY] ?: "COMFORTABLE"
+        }
+
+    /**
      * A flow that emits the set of expanded room DB IDs.
      */
     val expandedRoomIds: Flow<Set<Int>> = dataStore.data
@@ -105,6 +117,15 @@ class SettingsManager(context: Context) {
     suspend fun setDateFormatPreset(preset: String) {
         dataStore.edit { preferences ->
             preferences[DATE_FORMAT_PRESET_KEY] = preset
+        }
+    }
+
+    /**
+     * Saves the new layout density preference.
+     */
+    suspend fun setLayoutDensity(density: String) {
+        dataStore.edit { preferences ->
+            preferences[LAYOUT_DENSITY_KEY] = density
         }
     }
 

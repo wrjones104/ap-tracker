@@ -15,10 +15,9 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.NotificationsPaused
 
-import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -56,10 +55,14 @@ import androidx.navigation.compose.rememberNavController
 import coil.compose.AsyncImage
 import java.time.Instant
 
+/**
+ * There is no longer a separate Slots tab. It and Rooms rendered the same rooms with the
+ * same details and then disagreed about what tapping one meant, so Rooms absorbed it:
+ * a room expands in place to its slots, and activity moved to the room's overflow sheet.
+ */
 sealed class BottomNavItem(val route: String, val icon: ImageVector, val label: String) {
     object Rooms : BottomNavItem("rooms_tab", Icons.Default.Home, "Rooms")
-    object Slots : BottomNavItem("slots_tab", Icons.Default.ViewList, "Slots")
-    object Activity : BottomNavItem("activity_tab", Icons.Default.List, "Activity")
+    object Activity : BottomNavItem("activity_tab", Icons.AutoMirrored.Filled.List, "Activity")
     object Profile : BottomNavItem("profile_tab", Icons.Default.Person, "Me")
 }
 
@@ -118,8 +121,10 @@ fun MainScreen(
             }
             val route = when (initialTab) {
                 "activity" -> BottomNavItem.Activity.route
-                "slots" -> BottomNavItem.Slots.route
                 "profile" -> BottomNavItem.Profile.route
+                // "slots" is kept as an accepted value: the Slots tab is gone, but its
+                // content now lives on Rooms, so anything still asking for it lands in
+                // the right place rather than falling through to a wrong default.
                 else -> BottomNavItem.Rooms.route
             }
             bottomNavController.navigate(route) {
@@ -205,15 +210,14 @@ fun MainScreen(
         )
     }
 
-    val items = listOf(BottomNavItem.Rooms, BottomNavItem.Slots, BottomNavItem.Activity, BottomNavItem.Profile)
+    val items = listOf(BottomNavItem.Rooms, BottomNavItem.Activity, BottomNavItem.Profile)
     val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
     Scaffold(
         topBar = {
             val titleText = when (currentRoute) {
-                BottomNavItem.Rooms.route -> "Tracked Rooms"
-                BottomNavItem.Slots.route -> "My Slots"
+                BottomNavItem.Rooms.route -> "Rooms & Slots"
                 BottomNavItem.Activity.route -> {
                     when (val filter = historyFilter) {
                         HistoryFilter.Active -> "Active Rooms"
@@ -242,67 +246,70 @@ fun MainScreen(
                         }
 
 
-                        if (currentRoute == BottomNavItem.Rooms.route) {
-                            val profile = userProfile
-                            val isCheeseConnected = profile?.is_cheese_connected == true
+                        // Not gated to the Rooms tab any more. The guide button was
+                        // already on every tab, and having the avatar and the cheese
+                        // controls appear and vanish beside it as you moved between tabs
+                        // made the bar look unstable and put the sync button out of reach
+                        // from the two screens whose data it refreshes.
+                        val profile = userProfile
+                        val isCheeseConnected = profile?.is_cheese_connected == true
 
-                            // 1. AVATAR
-                            if (profile != null && !profile.is_guest) {
-                                if (profile.avatar_url != null) {
-                                    AsyncImage(
-                                        model = profile.avatar_url,
-                                        contentDescription = "Profile",
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clip(CircleShape)
-                                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Default.AccountCircle,
-                                        null,
-                                        modifier = Modifier.size(32.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                            }
-
-                            // 2. CHEESE ICONS
-                            if (isCheeseConnected) {
-                                Text(
-                                    text = "🧀",
-                                    style = MaterialTheme.typography.titleMedium,
+                        // 1. AVATAR
+                        if (profile != null && !profile.is_guest) {
+                            if (profile.avatar_url != null) {
+                                AsyncImage(
+                                    model = profile.avatar_url,
+                                    contentDescription = "Profile",
                                     modifier = Modifier
-                                        .clickable { uriHandler.openUri("https://cheesetrackers.theincrediblewheelofchee.se/") }
-                                        .padding(1.dp)
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+                                    contentScale = ContentScale.Crop
                                 )
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                val infiniteTransition = rememberInfiniteTransition(label = "spin")
-                                val angle by infiniteTransition.animateFloat(
-                                    initialValue = 0f,
-                                    targetValue = 360f,
-                                    animationSpec = infiniteRepeatable(
-                                        animation = tween(1000, easing = LinearEasing)
-                                    ),
-                                    label = "spinAngle"
-                                )
-
+                            } else {
                                 Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Sync",
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .then(if (isSyncingCheese) Modifier.rotate(angle) else Modifier)
-                                        .clickable(enabled = !isSyncingCheese) {
-                                            roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = true)
-                                        }
-                                        .padding(2.dp)
+                                    Icons.Default.AccountCircle,
+                                    null,
+                                    modifier = Modifier.size(32.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+
+                        // 2. CHEESE ICONS
+                        if (isCheeseConnected) {
+                            Text(
+                                text = "🧀",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier
+                                    .clickable { uriHandler.openUri("https://cheesetrackers.theincrediblewheelofchee.se/") }
+                                    .padding(1.dp)
+                            )
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            val infiniteTransition = rememberInfiniteTransition(label = "spin")
+                            val angle by infiniteTransition.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 360f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1000, easing = LinearEasing)
+                                ),
+                                label = "spinAngle"
+                            )
+
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Sync",
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .then(if (isSyncingCheese) Modifier.rotate(angle) else Modifier)
+                                    .clickable(enabled = !isSyncingCheese) {
+                                        roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = true)
+                                    }
+                                    .padding(2.dp)
+                            )
                         }
                     }
                 }
@@ -363,7 +370,7 @@ fun MainScreen(
                 RoomsScreen(
                     roomsViewModel = roomsViewModel,
                     userViewModel = userViewModel,
-                    onRoomClick = { roomId, _ ->
+                    onRoomActivityClick = { roomId, _ ->
                         historyViewModel.loadHistoryFor(roomId, null, null)
                         bottomNavController.navigate(BottomNavItem.Activity.route) {
                             popUpTo(bottomNavController.graph.findStartDestination().id) { saveState = true }
@@ -372,11 +379,6 @@ fun MainScreen(
                         }
                     },
                     onManageSlotsClick = onNavigateToPlayers,
-                )
-            }
-            composable(BottomNavItem.Slots.route) {
-                SlotsScreen(
-                    userViewModel = userViewModel,
                     onSlotClick = onNavigateToSlotDetail
                 )
             }

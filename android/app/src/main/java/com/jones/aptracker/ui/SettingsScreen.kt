@@ -257,6 +257,23 @@ fun SettingsScreen(
                             optionLabel = { it.label },
                             onSelect = { userViewModel.setDateFormatPreset(it.key) }
                         )
+                        HorizontalDivider()
+
+                        // Layout Density Setting
+                        val layoutDensityKey by userViewModel.layoutDensity.collectAsState()
+                        val currentDensity = remember(layoutDensityKey) {
+                            LayoutDensity.fromKey(layoutDensityKey)
+                        }
+
+                        SettingsDropdownRow(
+                            title = "Layout density",
+                            description = currentDensity.summary,
+                            selected = currentDensity,
+                            options = LayoutDensity.entries,
+                            valueLabel = { it.description },
+                            optionLabel = { "${it.description} - ${it.summary}" },
+                            onSelect = { userViewModel.setLayoutDensity(it.key) }
+                        )
                     }
 
                 } ?: Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {

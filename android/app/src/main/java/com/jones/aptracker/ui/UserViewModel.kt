@@ -161,9 +161,20 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Expand or collapse exactly [roomDbIds], leaving every other room's state alone.
+     *
+     * Set arithmetic rather than "write the list" / "write empty". Those were equivalent
+     * only while the caller could be relied on to pass every room -- true today, because
+     * the expand-all control hides during a search. The moment any filter narrows the
+     * list with that control still visible, the blunt version silently collapses rooms
+     * the user never touched and cannot see.
+     */
     fun setAllRoomsExpanded(roomDbIds: List<Int>, expand: Boolean) {
         viewModelScope.launch {
-            val next = if (expand) roomDbIds.toSet() else emptySet()
+            val affected = roomDbIds.toSet()
+            val current = expandedRoomIds.value
+            val next = if (expand) current + affected else current - affected
             settingsManager.setExpandedRoomIds(next)
         }
     }
@@ -199,6 +210,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope,
         SharingStarted.Eagerly,
         "SYSTEM_DEFAULT"
+    )
+
+    val layoutDensity = settingsManager.layoutDensity.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        "COMFORTABLE"
     )
 
     // --- Ignore List & Sorting State ---
@@ -245,6 +262,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun setDateFormatPreset(preset: String) {
         viewModelScope.launch {
             settingsManager.setDateFormatPreset(preset)
+        }
+    }
+
+    fun setLayoutDensity(density: String) {
+        viewModelScope.launch {
+            settingsManager.setLayoutDensity(density)
         }
     }
 
@@ -311,9 +334,17 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 }.toMap()
             )
         } catch (e: Exception) {
+            // Deliberately does not clear the slots. The rooms themselves come from the
+            // local DB cache and survive a failed request, so emptying this list renders
+            // every room on the home screen as "no slots tracked" -- which reads as data
+            // loss, not as a refresh that did not land. Stale slots are wrong by however
+            // long the outage lasted; an empty list is wrong outright.
+            //
+            // This matters more than it used to: the load now runs on every resume of the
+            // start destination, so a phone waking on a weak connection is the ordinary
+            // case rather than the edge one.
             _errorMessage.value = "Failed to load tracked slots."
             e.printStackTrace()
-            _trackedSlotsByRoom.value = emptyList()
         }
     }
 
