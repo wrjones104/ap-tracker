@@ -27,6 +27,27 @@
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
 
+# Firebase discovers each SDK by reflectively instantiating the ComponentRegistrar
+# named for it in the merged manifest. The consumer rule shipped by
+# firebase-components 18.0.0 is
+#
+#     -keep class * implements com.google.firebase.components.ComponentRegistrar
+#
+# which keeps the class but says nothing about its members, so R8 strips the no-arg
+# constructor that ComponentDiscovery calls. Verified from usage.txt: `public void
+# <init>()` was removed from CrashlyticsRegistrar in both prodRelease and
+# prodMinified. At runtime that surfaces as
+#
+#     NoSuchMethodException: CrashlyticsRegistrar.<init> []
+#     NullPointerException: FirebaseCrashlytics component is not present.
+#
+# and FirebaseCrashlytics.getInstance() throws, so crash reporting is silently
+# dead in every minified build. Keep the constructor for all registrars rather
+# than Crashlytics' alone, so adding another Firebase SDK cannot hit this again.
+-keepclassmembers class * implements com.google.firebase.components.ComponentRegistrar {
+    public <init>();
+}
+
 -keepattributes *Annotation*,Signature,Exception,InnerClasses,EnclosingMethod
 -keep class kotlin.coroutines.jvm.internal.BaseContinuationImpl { *; }
 -keep class * extends kotlin.coroutines.jvm.internal.SuspendLambda { *; }
