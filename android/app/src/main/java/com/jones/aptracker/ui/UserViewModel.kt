@@ -514,8 +514,11 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private fun demotionMessage(profile: UserProfile?): String? {
         val demoted = profile?.cheese_last_sync_demoted ?: 0
         if (demoted <= 0) return null
-        val slotWord = if (demoted == 1) "slot is" else "slots are"
-        return "Sync complete. $demoted $slotWord claimed by someone else on " +
+        // Deliberately "aren't claimed by you" rather than "claimed by someone
+        // else": the sync demotes anything Cheese does not confirm as yours,
+        // which includes slots that are simply unclaimed.
+        val slotWord = if (demoted == 1) "slot isn't" else "slots aren't"
+        return "Sync complete. $demoted $slotWord claimed by you on " +
             "Cheese Tracker - switched to Watching. You'll still get alerts."
     }
 

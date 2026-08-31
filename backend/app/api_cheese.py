@@ -202,6 +202,21 @@ def setup_cheese_user_task(app, user_id):
                     session.flush() 
 
                 games = full_data.get('games', [])
+
+                # A tracker with no games carries no ownership information, so
+                # it is not evidence that anything is unclaimed. Without this,
+                # an `ok` response with an empty games array demotes every
+                # claim in the room in one pass -- a brand-new tracker with no
+                # games yet is enough to trigger it. The fetch-failure case is
+                # already covered: a room whose detail request raised never
+                # reaches detailed_trackers.
+                if not games:
+                    logging.warning(
+                        f"[CHEESE_DEBUG] Tracker {ct_id} returned no games; "
+                        f"skipping claim reconciliation for room {room.id}."
+                    )
+                    continue
+
                 slots_found = set()
 
                 for game in games:
@@ -250,9 +265,12 @@ def setup_cheese_user_task(app, user_id):
                             track_mode=TRACK_MODE_PLAY
                         ))
                         stats['slots_synced'] += 1
-                    elif normalize_track_mode(existing.track_mode) != TRACK_MODE_PLAY:
-                        # Cheese says this one really is theirs; restore the claim.
-                        existing.track_mode = TRACK_MODE_PLAY
+                    # Watch is sticky: a slot the user already tracks is left in
+                    # whatever mode they put it in, even when Cheese still shows
+                    # them as the owner. That happens when a play -> watch
+                    # release failed to land, and silently re-claiming would
+                    # revert an explicit choice. The picker shows "Claimed by you
+                    # on Cheese Tracker" so they can switch back deliberately.
 
             # 3. Prune stale subscriptions
             # A subscription is stale if it is linked to a Cheese tracker that is no longer present on the user's dashboard.

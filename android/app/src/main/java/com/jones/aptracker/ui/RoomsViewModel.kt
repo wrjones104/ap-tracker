@@ -278,9 +278,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 // did not, and silently changing that would be a nasty surprise.
                 val demoted = finishedProfile?.cheese_last_sync_demoted ?: 0
                 val message = if (demoted > 0) {
-                    val slotWord = if (demoted == 1) "slot is" else "slots are"
-                    "Cheese Sync Complete! $demoted $slotWord claimed by someone else " +
-                        "- switched to Watching. You'll still get alerts."
+                    // "aren't claimed by you", not "claimed by someone else":
+                    // the sync also demotes slots that are simply unclaimed.
+                    val slotWord = if (demoted == 1) "slot isn't" else "slots aren't"
+                    "Cheese Sync Complete! $demoted $slotWord claimed by you on " +
+                        "Cheese Tracker - switched to Watching. You'll still get alerts."
                 } else {
                     "Cheese Sync Complete!"
                 }

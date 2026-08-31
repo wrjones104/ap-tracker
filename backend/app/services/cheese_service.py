@@ -113,7 +113,12 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
 
             # Watch slots are alerts-only. Who owns the slot on Cheese is
             # explicitly not their concern, so the sync never demotes, unclaims
-            # or drops them.
+            # or drops them -- including the vanished-slot branch below, since a
+            # watch slot's alerts come from the AP room, not from Cheese.
+            #
+            # Note this is one-way: once a slot lands here the poller skips it
+            # forever, and a manual sync will not re-promote it either. Only an
+            # explicit switch back to Playing in the picker restores the claim.
             if normalize_track_mode(ts.track_mode) == TRACK_MODE_WATCH:
                 continue
 

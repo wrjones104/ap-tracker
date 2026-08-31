@@ -25,10 +25,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MultiChoiceSegmentedButtonRow
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -239,18 +239,18 @@ private fun TrackModeSelector(
     onModeSelected: (String) -> Unit
 ) {
     Column {
-        MultiChoiceSegmentedButtonRow {
+        SingleChoiceSegmentedButtonRow {
             SegmentedButton(
-                checked = mode == TrackMode.PLAY,
-                onCheckedChange = { onModeSelected(TrackMode.PLAY) },
+                selected = mode == TrackMode.PLAY,
+                onClick = { onModeSelected(TrackMode.PLAY) },
                 enabled = !claimLocked,
                 shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
             ) {
                 Text("Playing", style = MaterialTheme.typography.labelMedium, maxLines = 1)
             }
             SegmentedButton(
-                checked = mode == TrackMode.WATCH,
-                onCheckedChange = { onModeSelected(TrackMode.WATCH) },
+                selected = mode == TrackMode.WATCH,
+                onClick = { onModeSelected(TrackMode.WATCH) },
                 shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
             ) {
                 Text("Watching", style = MaterialTheme.typography.labelMedium, maxLines = 1)
