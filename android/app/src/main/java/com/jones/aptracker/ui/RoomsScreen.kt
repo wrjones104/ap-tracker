@@ -1,5 +1,23 @@
 package com.jones.aptracker.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.material.icons.filled.UnfoldMore
+import androidx.compose.material3.FilterChip
+import androidx.compose.ui.unit.Dp
+import com.jones.aptracker.data.FinishedResolver
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
@@ -28,13 +46,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
@@ -48,7 +62,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -85,12 +98,10 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.R
 import com.jones.aptracker.network.Room
-import com.jones.aptracker.network.UserProfile
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Info
@@ -107,23 +118,30 @@ import androidx.compose.ui.platform.LocalContext
 fun RoomsScreen(
     roomsViewModel: RoomsViewModel = viewModel(),
     userViewModel: UserViewModel = viewModel(),
-    onRoomClick: (Int, String) -> Unit,
-    onManageSlotsClick: (Int, String) -> Unit
+    onRoomActivityClick: (Int, String) -> Unit,
+    onManageSlotsClick: (Int, String) -> Unit,
+    onSlotClick: (roomDbId: Int, slotId: Int) -> Unit
 ) {
     val rooms by roomsViewModel.rooms.collectAsState()
     val isLoading by roomsViewModel.isLoading.collectAsState()
-    val userProfile by userViewModel.userProfile.collectAsState()
-    val isSyncingCheese by roomsViewModel.isSyncingCheese.collectAsState()
-    val isAutoSyncEnabled by roomsViewModel.isAutoSyncEnabled.collectAsState(initial = true)
     val errorMessage by roomsViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    // --- Slot state (absorbed from the former Slots tab) ---
+    val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
+    val showFinished by userViewModel.slotsShowFinished.collectAsState()
+    val finishedResolver by userViewModel.finishedResolver.collectAsState()
+    val expandedRoomIds by userViewModel.expandedRoomIds.collectAsState()
+    val layoutDensityKey by userViewModel.layoutDensity.collectAsState()
+    var searchQuery by remember { mutableStateOf("") }
 
     // --- Lifecycle & Data Loading ---
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             roomsViewModel.fetchRooms()
             userViewModel.fetchUserProfile()
+            userViewModel.fetchTrackedSlots()
         }
     }
 
@@ -149,6 +167,39 @@ fun RoomsScreen(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
+    // The two sources have to be joined here because neither is a superset: the ordered
+    // `rooms` list owns sort order, suspension and the room's total slot count, while
+    // `trackedSlotsByRoom` owns the slots themselves. They share a primary key.
+    val slotGroupsByRoomId = remember(trackedSlotsByRoom, searchQuery, showFinished, finishedResolver) {
+        buildRoomSlotGroups(
+            trackedSlotsByRoom.filter { !it.is_archived },
+            searchQuery,
+            showFinished,
+            finishedResolver
+        ).associateBy { it.room.room_db_id }
+    }
+
+    // A blank query shows every room, including one with nothing tracked yet -- that room
+    // is precisely the one you opened the screen to fix, and buildRoomSlotGroups drops it
+    // (no slots means no matches). Once you are actually searching, a room with no hit is
+    // noise and goes.
+    val displayRooms = remember(rooms, slotGroupsByRoomId, searchQuery) {
+        if (searchQuery.isBlank()) rooms
+        else rooms.filter { it.id in slotGroupsByRoomId }
+    }
+
+    // Searching changes what the list is, not just what it shows: rooms drop out, and
+    // every survivor is force-expanded. Two controls have to stand down for that.
+    // Reordering writes back by index into the *unfiltered* list, so it would shuffle the
+    // wrong rooms; and expand-all cannot collapse what the search is holding open.
+    val isSearching = searchQuery.isNotBlank()
+
+    val allExpanded = remember(expandedRoomIds, displayRooms) {
+        displayRooms.isNotEmpty() && displayRooms.all { it.id in expandedRoomIds }
+    }
+
+    val metrics = remember(layoutDensityKey) { LayoutDensity.fromKey(layoutDensityKey).metrics }
+
     Scaffold(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         contentWindowInsets = WindowInsets(0.dp)
@@ -162,294 +213,227 @@ fun RoomsScreen(
             },
             modifier = Modifier.padding(innerPadding)
         ) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (isLoading && rooms.isEmpty()) {
-                    CircularProgressIndicator()
-                } else if (rooms.isEmpty()) {
-                    // --- Empty State Banner ---
-                    Box(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(0.95f)
-                                .height(200.dp)
-                                .padding(bottom = 8.dp)
-                                .align(Alignment.TopCenter)
-                                .clip(RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center
+          CompositionLocalProvider(LocalLayoutMetrics provides metrics) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Pinned above everything, and outside the list on purpose. As a list item
+                // it scrolled away, and it vanished outright whenever a search matched
+                // nothing -- the one moment the screen looked broken and most needed to
+                // still look like the app. It is chrome, so it lives with the chrome.
+                HeroBanner(
+                    isWelcome = rooms.isEmpty(),
+                    metrics = metrics
+                )
+
+                // Search and the finished filter reach across every room, so scrolling
+                // them away with the rooms would put them out of view exactly when a long
+                // list makes them useful.
+                if (rooms.isNotEmpty()) {
+                    TextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = metrics.chromeVertical),
+                        label = { Text("Search by player, alias, or game") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear search")
+                                }
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = metrics.chromeVertical / 2),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.bg_banner_gradient),
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 16.dp)
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.ap_alerts_icon_3),
-                                    contentDescription = "AP Alerts Icon",
-                                    modifier = Modifier.size(80.dp)
-                                )
-                                Spacer(Modifier.width(16.dp))
-                                Column {
-                                    Box {
-                                        Text(
-                                            text = "Archipelago Alerts",
-                                            style = MaterialTheme.typography.headlineMedium.copy(
-                                                color = Color.Black,
-                                                drawStyle = Stroke(width = with(androidx.compose.ui.platform.LocalDensity.current) { 2.dp.toPx() }, join = StrokeJoin.Round)
-                                            )
-                                        )
-                                        Text(
-                                            text = "Archipelago Alerts",
-                                            style = MaterialTheme.typography.headlineMedium.copy(
-                                                color = Color.White
-                                            )
+                            FilterChip(
+                                selected = showFinished,
+                                onClick = { userViewModel.setSlotsShowFinished(!showFinished) },
+                                label = { Text("Show Finished") },
+                                leadingIcon = if (showFinished) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Default.Flag,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     }
-                                    Text(
-                                        text = "Click the + button below to add a new room!",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = Color.White
-                                    )
-                                }
+                                } else null
+                            )
+
+                            val totalSlots = displayRooms.sumOf {
+                                slotGroupsByRoomId[it.id]?.visibleSlots?.size ?: 0
+                            }
+                            Text(
+                                text = if (totalSlots == 1) "1 slot" else "$totalSlots slots",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        // A search forces every matching room open, so the toggle would
+                        // claim to do something it cannot. It comes back when you clear.
+                        if (!isSearching) {
+                            IconButton(onClick = {
+                                userViewModel.setAllRoomsExpanded(displayRooms.map { it.id }, !allExpanded)
+                            }) {
+                                Icon(
+                                    imageVector = if (allExpanded) Icons.Default.UnfoldLess else Icons.Default.UnfoldMore,
+                                    contentDescription = if (allExpanded) "Collapse All" else "Expand All"
+                                )
                             }
                         }
                     }
-                } else {
-                    // --- List with Drag & Drop ---
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(Unit) {
-                                detectDragGesturesAfterLongPress(
-                                    onDragStart = { offset ->
-                                        listState.layoutInfo.visibleItemsInfo
-                                            .firstOrNull { item ->
-                                                offset.y.toInt() in item.offset..(item.offset + item.size)
-                                            }?.let { item ->
-                                                if (item.index > 0) { // Prevent dragging Banner (Index 0)
-                                                    draggingItemIndex = item.index
-                                                    draggingItemOffset = 0f
-                                                }
-                                            }
-                                    },
-                                    onDrag = { change, dragAmount ->
-                                        change.consume()
-                                        draggingItemOffset += dragAmount.y
 
-                                        val currentDraggingIndex = draggingItemIndex ?: return@detectDragGesturesAfterLongPress
-                                        val currentItemInfo = listState.layoutInfo.visibleItemsInfo
-                                            .firstOrNull { it.index == currentDraggingIndex } ?: return@detectDragGesturesAfterLongPress
+                    if (!isSearching && metrics.showsReorderHint) {
+                        Text(
+                            text = "Tap a room for its slots - long-press to reorder",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 4.dp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
 
-                                        val startOffset = currentItemInfo.offset + draggingItemOffset
-                                        val centerOffset = (startOffset + (currentItemInfo.size / 2)).toInt()
-
-                                        val targetItem = listState.layoutInfo.visibleItemsInfo
-                                            .firstOrNull {
-                                                it.index != currentDraggingIndex &&
-                                                        it.index > 0 && // Cannot swap with Banner
-                                                        centerOffset in it.offset..(it.offset + it.size)
-                                            }
-
-                                        if (targetItem != null) {
-                                            val fromDataIndex = currentDraggingIndex - 1
-                                            val toDataIndex = targetItem.index - 1
-
-                                            if (fromDataIndex >= 0 && toDataIndex >= 0) {
-                                                val newLogicalOffset = if (targetItem.index > currentDraggingIndex) {
-                                                    currentItemInfo.offset + targetItem.size
-                                                } else {
-                                                    targetItem.offset
-                                                }
-                                                val adjustment = currentItemInfo.offset - newLogicalOffset
-
-                                                roomsViewModel.reorderRooms(fromDataIndex, toDataIndex)
-                                                draggingItemIndex = targetItem.index
-                                                draggingItemOffset += adjustment
-                                            }
-                                        }
-
-                                        // Auto-scroll
-                                        val overscrollThreshold = 150f
-                                        val endOffset = startOffset + currentItemInfo.size
-                                        if (startOffset < 0) {
-                                            coroutineScope.launch { listState.scrollBy(-overscrollThreshold / 5) }
-                                        } else if (endOffset > listState.layoutInfo.viewportEndOffset) {
-                                            coroutineScope.launch { listState.scrollBy(overscrollThreshold / 5) }
-                                        }
-                                    },
-                                    onDragEnd = {
-                                        draggingItemIndex = null
-                                        draggingItemOffset = 0f
-                                    },
-                                    onDragCancel = {
-                                        draggingItemIndex = null
-                                        draggingItemOffset = 0f
-                                    }
-                                )
-                            },
-                        contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, 80.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // --- Banner (Index 0) ---
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(0.95f)
-                                    .height(84.dp)
-                                    .padding(bottom = 8.dp)
-                                    .clip(RoundedCornerShape(8.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.bg_banner_gradient),
-                                    contentDescription = null,
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.ap_alerts_icon_3),
-                                        contentDescription = "AP Alerts Icon",
-                                        modifier = Modifier.size(56.dp)
-                                    )
-                                    Spacer(Modifier.width(16.dp))
-                                    Box {
-                                        Text(
-                                            text = "Archipelago Alerts",
-                                            style = MaterialTheme.typography.headlineSmall.copy(
-                                                color = Color.Black,
-                                                drawStyle = Stroke(width = with(androidx.compose.ui.platform.LocalDensity.current) { 2.dp.toPx() }, join = StrokeJoin.Round)
-                                            )
-                                        )
-                                        Text(
-                                            text = "Archipelago Alerts",
-                                            style = MaterialTheme.typography.headlineSmall.copy(
-                                                color = Color.White
-                                            )
-                                        )
-                                    }
-                                }
-                            }
-                            Text(
-                                text = "Long-press a room to reorder",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                        }
-
-                        // --- Rooms (Index 1+) ---
-                        itemsIndexed(rooms) { index, room ->
-                            val listIndex = index + 1
-                            val isDragging = listIndex == draggingItemIndex
-                            val elevation by animateDpAsState(if (isDragging) 8.dp else 2.dp, label = "elevation")
-                            val scale by animateFloatAsState(if (isDragging) 1.05f else 1.0f, label = "scale")
-
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .zIndex(if (isDragging) 1f else 0f)
-                                    .graphicsLayer {
-                                        translationY = if (isDragging) draggingItemOffset else 0f
-                                        scaleX = scale
-                                        scaleY = scale
-                                        alpha = if (isDragging) 0.9f else 1f
-                                    }
-                                    .clickable {
-                                        if (room.is_suspended) {
-                                            roomToRevive = room
-                                        } else {
-                                            onRoomClick(room.id, room.alias)
-                                        }
-                                    },
-                                elevation = CardDefaults.cardElevation(defaultElevation = elevation)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = getIconByName(room.icon_name),
-                                        contentDescription = "Icon",
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                    Spacer(Modifier.width(16.dp))
-                                    Column(modifier = Modifier.weight(1f).padding(vertical = 12.dp)) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(text = room.alias, style = MaterialTheme.typography.titleMedium)
-                                            if (room.is_suspended) {
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Box(
-                                                    modifier = Modifier
-                                                        .background(
-                                                            color = MaterialTheme.colorScheme.errorContainer,
-                                                            shape = RoundedCornerShape(4.dp)
-                                                        )
-                                                        .border(
-                                                            width = 0.5.dp,
-                                                            color = MaterialTheme.colorScheme.error,
-                                                            shape = RoundedCornerShape(4.dp)
-                                                        )
-                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                                ) {
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Warning,
-                                                            contentDescription = null,
-                                                            modifier = Modifier.size(10.dp),
-                                                            tint = MaterialTheme.colorScheme.error
-                                                        )
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Text(
-                                                            text = "Suspended",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.onErrorContainer
-                                                        )
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (isLoading && rooms.isEmpty()) {
+                        CircularProgressIndicator()
+                    } else if (rooms.isEmpty()) {
+                        // Nothing here on purpose: the welcome banner above already carries
+                        // the "add a room" call to action, and repeating it below just
+                        // says the same thing twice on the emptiest screen in the app.
+                    } else if (displayRooms.isEmpty()) {
+                        Text(
+                            text = "No slots match your search.",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        // --- List with Drag & Drop ---
+                        //
+                        // Every item in this list is a room, one to one. The banner used to
+                        // sit at index 0, which is why the reorder math below no longer
+                        // carries the off-by-one it used to: list index *is* room index.
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .then(
+                                    if (isSearching) Modifier else Modifier.pointerInput(Unit) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = { offset ->
+                                                listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { item ->
+                                                        offset.y.toInt() in item.offset..(item.offset + item.size)
+                                                    }?.let { item ->
+                                                        draggingItemIndex = item.index
+                                                        draggingItemOffset = 0f
                                                     }
+                                            },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                draggingItemOffset += dragAmount.y
+
+                                                val currentDraggingIndex = draggingItemIndex ?: return@detectDragGesturesAfterLongPress
+                                                val currentItemInfo = listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.index == currentDraggingIndex } ?: return@detectDragGesturesAfterLongPress
+
+                                                val startOffset = currentItemInfo.offset + draggingItemOffset
+                                                val centerOffset = (startOffset + (currentItemInfo.size / 2)).toInt()
+
+                                                val targetItem = listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull {
+                                                        it.index != currentDraggingIndex &&
+                                                                centerOffset in it.offset..(it.offset + it.size)
+                                                    }
+
+                                                if (targetItem != null) {
+                                                    val newLogicalOffset = if (targetItem.index > currentDraggingIndex) {
+                                                        currentItemInfo.offset + targetItem.size
+                                                    } else {
+                                                        targetItem.offset
+                                                    }
+                                                    val adjustment = currentItemInfo.offset - newLogicalOffset
+
+                                                    roomsViewModel.reorderRooms(currentDraggingIndex, targetItem.index)
+                                                    draggingItemIndex = targetItem.index
+                                                    draggingItemOffset += adjustment
                                                 }
+
+                                                // Auto-scroll
+                                                val overscrollThreshold = 150f
+                                                val endOffset = startOffset + currentItemInfo.size
+                                                if (startOffset < 0) {
+                                                    coroutineScope.launch { listState.scrollBy(-overscrollThreshold / 5) }
+                                                } else if (endOffset > listState.layoutInfo.viewportEndOffset) {
+                                                    coroutineScope.launch { listState.scrollBy(overscrollThreshold / 5) }
+                                                }
+                                            },
+                                            onDragEnd = {
+                                                draggingItemIndex = null
+                                                draggingItemOffset = 0f
+                                            },
+                                            onDragCancel = {
+                                                draggingItemIndex = null
+                                                draggingItemOffset = 0f
                                             }
-                                        }
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = room.host ?: "Connecting...",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray
-                                        )
-                                        Text(
-                                            text = "${room.tracked_slots_count} / ${room.total_slots_count} slots tracked",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray
                                         )
                                     }
-                                    IconButton(onClick = { roomForOptions = room }) {
-                                        Icon(
-                                            imageVector = Icons.Default.MoreVert,
-                                            contentDescription = "Options",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Icon(
-                                        imageVector = Icons.Default.DragHandle,
-                                        contentDescription = "Reorder",
-                                        tint = MaterialTheme.colorScheme.outlineVariant,
-                                        modifier = Modifier.padding(horizontal = 8.dp)
-                                    )
-                                }
+                                ),
+                            contentPadding = PaddingValues(
+                                start = 8.dp,
+                                top = metrics.cardSpacing,
+                                end = 8.dp,
+                                bottom = 80.dp
+                            ),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            itemsIndexed(displayRooms, key = { _, room -> room.id }) { index, room ->
+                                val isDragging = index == draggingItemIndex
+                                val elevation by animateDpAsState(if (isDragging) 8.dp else 2.dp, label = "elevation")
+                                val scale by animateFloatAsState(if (isDragging) 1.05f else 1.0f, label = "scale")
+
+                                RoomCard(
+                                    room = room,
+                                    group = slotGroupsByRoomId[room.id],
+                                    // Searching implies you want to see what matched, so a
+                                    // matching room opens regardless of its saved state.
+                                    isExpanded = isSearching || room.id in expandedRoomIds,
+                                    isReorderEnabled = !isSearching,
+                                    isDragging = isDragging,
+                                    elevation = elevation,
+                                    scale = scale,
+                                    dragOffset = draggingItemOffset,
+                                    finishedResolver = finishedResolver,
+                                    onToggleExpand = {
+                                        userViewModel.setRoomExpanded(room.id, room.id !in expandedRoomIds)
+                                    },
+                                    onReviveClick = { roomToRevive = room },
+                                    onOptionsClick = { roomForOptions = room },
+                                    onSlotClick = { slotId -> onSlotClick(room.id, slotId) },
+                                    onManageSlotsClick = { onManageSlotsClick(room.id, room.alias) },
+                                    onShowFinished = { userViewModel.setSlotsShowFinished(true) }
+                                )
                             }
                         }
                     }
                 }
             }
+          }
         }
 
         // --- Dialogs & Sheets ---
@@ -459,6 +443,14 @@ fun RoomsScreen(
                 RoomOptionsSheet(
                     room = roomForOptions!!,
                     onDismiss = { roomForOptions = null },
+                    onViewActivity = { r ->
+                        roomForOptions = null
+                        onRoomActivityClick(r.id, r.alias)
+                    },
+                    onManageSlots = { r ->
+                        roomForOptions = null
+                        onManageSlotsClick(r.id, r.alias)
+                    },
                     onEdit = { r ->
                         roomForOptions = null
                         roomToEdit = r
@@ -485,10 +477,6 @@ fun RoomsScreen(
                 onDismiss = { roomToEdit = null },
                 onConfirm = { newAlias, newIcon ->
                     roomsViewModel.updateRoom(room.id, newAlias, newIcon)
-                    roomToEdit = null
-                },
-                onManageSlotsClick = {
-                    onManageSlotsClick(room.id, room.alias)
                     roomToEdit = null
                 }
             )
@@ -560,7 +548,7 @@ fun RoomsScreen(
                     Row {
                         TextButton(onClick = {
                             roomToRevive = null
-                            onRoomClick(room.id, room.alias)
+                            onRoomActivityClick(room.id, room.alias)
                         }) {
                             Text("View History")
                         }
@@ -577,11 +565,312 @@ fun RoomsScreen(
 
 // --- Sub-Composables ---
 
+/**
+ * The Archipelago Alerts mark, pinned to the top of the rooms screen.
+ *
+ * One banner for both states rather than two. It used to be two: a tall welcome panel when
+ * you had no rooms, and a short strip as the first item of the room list otherwise. That
+ * meant the branding scrolled away in normal use and disappeared completely whenever a
+ * search matched nothing, which made an ordinary empty result look like a broken screen.
+ *
+ * [isWelcome] only grows it and adds the call to action; it is the same banner either way.
+ */
+@Composable
+private fun HeroBanner(isWelcome: Boolean, metrics: LayoutMetrics) {
+    val height = if (isWelcome) 160.dp else metrics.bannerHeight
+    val iconSize = if (isWelcome) 72.dp else metrics.bannerIconSize
+    val titleStyle = if (isWelcome) {
+        MaterialTheme.typography.headlineMedium
+    } else {
+        MaterialTheme.typography.headlineSmall
+    }
+    val outlineWidth = with(LocalDensity.current) { 2.dp.toPx() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .height(height)
+            .clip(RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            painter = painterResource(id = R.drawable.bg_banner_gradient),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.ap_alerts_icon_3),
+                contentDescription = "AP Alerts Icon",
+                modifier = Modifier.size(iconSize)
+            )
+            Spacer(Modifier.width(16.dp))
+            Column {
+                // Drawn twice: a stroked pass behind a filled one, so the wordmark keeps
+                // its edge wherever it lands on the gradient.
+                Box {
+                    Text(
+                        text = "Archipelago Alerts",
+                        style = titleStyle.copy(
+                            color = Color.Black,
+                            drawStyle = Stroke(width = outlineWidth, join = StrokeJoin.Round)
+                        )
+                    )
+                    Text(
+                        text = "Archipelago Alerts",
+                        style = titleStyle.copy(color = Color.White)
+                    )
+                }
+                if (isWelcome) {
+                    Text(
+                        text = "Click the + button below to add a new room!",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One room, and — when expanded — the slots it tracks.
+ *
+ * This card is the whole of the old Rooms and Slots tabs in one place. It exists because
+ * those two screens each rendered the same room with the same name, host and a slot count,
+ * and then hardwired the tap to a different destination: Rooms went to the activity feed,
+ * Slots expanded. Neither guess was reliably the one you wanted, so the tap now does the
+ * thing the room *contains* (its slots) and everything else is an explicit control.
+ *
+ * The two counts are kept side by side on purpose. They answer different questions:
+ * "3 of 12 tracked" is about how much of the room you have opted into and is the one that
+ * tells you there is more to add; the active/finished bar is about how the slots you did
+ * opt into are going.
+ */
+@Composable
+private fun RoomCard(
+    room: Room,
+    /** Null when the room has no tracked slots at all, or none survived the search. */
+    group: RoomSlotGroup?,
+    isExpanded: Boolean,
+    isReorderEnabled: Boolean,
+    isDragging: Boolean,
+    elevation: Dp,
+    scale: Float,
+    dragOffset: Float,
+    finishedResolver: FinishedResolver,
+    onToggleExpand: () -> Unit,
+    onReviveClick: () -> Unit,
+    onOptionsClick: () -> Unit,
+    onSlotClick: (slotId: Int) -> Unit,
+    onManageSlotsClick: () -> Unit,
+    onShowFinished: () -> Unit
+) {
+    val visibleSlots = group?.visibleSlots.orEmpty()
+    val hiddenFinishedCount = group?.hiddenFinishedCount ?: 0
+    val metrics = LocalLayoutMetrics.current
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = metrics.cardSpacing)
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                translationY = if (isDragging) dragOffset else 0f
+                scaleX = scale
+                scaleY = scale
+                alpha = if (isDragging) 0.9f else 1f
+            },
+        elevation = CardDefaults.cardElevation(defaultElevation = elevation)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggleExpand)
+                    .padding(start = 16.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = getIconByName(room.icon_name),
+                    contentDescription = "Icon",
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f).padding(vertical = metrics.cardHeaderVertical)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = room.alias, style = MaterialTheme.typography.titleMedium)
+                        if (room.is_suspended) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .background(
+                                        color = MaterialTheme.colorScheme.errorContainer,
+                                        shape = RoundedCornerShape(4.dp)
+                                    )
+                                    .border(
+                                        width = 0.5.dp,
+                                        color = MaterialTheme.colorScheme.error,
+                                        shape = RoundedCornerShape(4.dp)
+                                    )
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(10.dp),
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Suspended",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = room.host ?: "Connecting...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    // Both slot counts on one line. They were a line each plus a bar on
+                    // a third, which is three lines to say two numbers -- and they are
+                    // closely enough related ("how much of the room am I watching" and
+                    // "how are those going") that reading them together is easier than
+                    // reading them stacked.
+                    RoomSlotProgress(
+                        trackedLabel = "${room.tracked_slots_count} of ${room.total_slots_count} tracked",
+                        activeCount = group?.activeCount ?: 0,
+                        finishedCount = group?.finishedCount ?: 0
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                IconButton(onClick = onOptionsClick) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "Options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                // Hidden while searching, where long-press reordering is switched off:
+                // a handle that does nothing is worse than no handle.
+                if (isReorderEnabled) {
+                    Icon(
+                        imageVector = Icons.Default.DragHandle,
+                        contentDescription = "Reorder",
+                        tint = MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
+            }
+
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    // A suspended room used to answer a tap with the revive dialog instead
+                    // of opening. That is the same hijacked tap this screen exists to undo,
+                    // and it left no way to look at the room's slots at all. The room opens
+                    // like any other now; the prompt sits at the top of what you opened.
+                    if (room.is_suspended) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(onClick = onReviveClick)
+                                .padding(
+                                    start = metrics.slotIndent,
+                                    end = 16.dp,
+                                    top = metrics.slotRowVertical,
+                                    bottom = metrics.slotRowVertical
+                                ),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Link,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Not being polled - tap to revive",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+
+                    if (hiddenFinishedCount > 0) {
+                        HiddenFinishedSlotsRow(
+                            count = hiddenFinishedCount,
+                            onShowFinished = onShowFinished
+                        )
+                    }
+
+                    visibleSlots.forEach { slot ->
+                        SlotRow(
+                            slot = slot,
+                            isFinished = finishedResolver.isFinished(
+                                roomDbId = room.id,
+                                slotId = slot.slot_id,
+                                isGoaled = slot.is_finished,
+                                hasAllChecks = slot.has_all_checks
+                            ),
+                            onClick = { onSlotClick(slot.slot_id) }
+                        )
+                    }
+
+                    // A room you have just added expands to nothing at all otherwise,
+                    // which reads as a failure rather than as work still to do.
+                    if (visibleSlots.isEmpty() && hiddenFinishedCount == 0) {
+                        Text(
+                            text = "No slots tracked in this room yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                start = metrics.slotIndent,
+                                end = 16.dp,
+                                top = metrics.slotRowVertical
+                            )
+                        )
+                    }
+
+                    ManageSlotsRow(
+                        hasTrackedSlots = room.tracked_slots_count > 0,
+                        onClick = onManageSlotsClick
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomOptionsSheet(
     room: Room,
     onDismiss: () -> Unit,
+    onViewActivity: (Room) -> Unit,
+    onManageSlots: (Room) -> Unit,
     onEdit: (Room) -> Unit,
     onArchive: (Room) -> Unit,
     onDelete: (Room) -> Unit,
@@ -599,10 +888,26 @@ fun RoomOptionsSheet(
                 modifier = Modifier.clickable { onRevive(room) }
             )
         }
+        // The two things people actually come here to do, above the fold and above the
+        // room-management actions. Tapping the room itself opens its slots, so this is
+        // the way to activity -- and the way to slot selection without expanding first.
+        ListItem(
+            headlineContent = { Text("Room Activity") },
+            supportingContent = { Text("Item and check history for this room") },
+            leadingContent = { Icon(Icons.AutoMirrored.Filled.List, null, tint = MaterialTheme.colorScheme.primary) },
+            modifier = Modifier.clickable { onViewActivity(room) }
+        )
+        ListItem(
+            headlineContent = { Text("Manage Slots") },
+            supportingContent = { Text("Choose which slots this room tracks") },
+            leadingContent = { Icon(Icons.Default.Tune, null, tint = MaterialTheme.colorScheme.primary) },
+            modifier = Modifier.clickable { onManageSlots(room) }
+        )
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         ListItem(
             headlineContent = { Text("Edit Room") },
-            supportingContent = { Text("Change room name, icon, or manage slots") },
-            leadingContent = { Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.primary) },
+            supportingContent = { Text("Change the room's name or icon") },
+            leadingContent = { Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.secondary) },
             modifier = Modifier.clickable { onEdit(room) }
         )
         ListItem(
@@ -768,12 +1073,18 @@ fun AddRoomDialog(isAdding: Boolean, onDismiss: () -> Unit, onAdd: (String, Stri
     }
 }
 
+/**
+ * Renaming and re-iconing a room. Nothing else.
+ *
+ * Slot selection used to hang off the bottom of this dialog, which is how it ended up
+ * three taps from anywhere and inside a form that has nothing to do with it. It now lives
+ * on the room card and in the room's overflow sheet.
+ */
 @Composable
 fun EditRoomDialog(
     room: Room,
     onDismiss: () -> Unit,
-    onConfirm: (String, String) -> Unit,
-    onManageSlotsClick: () -> Unit
+    onConfirm: (String, String) -> Unit
 ) {
     var alias by remember { mutableStateOf(room.alias) }
     var selectedIconName by remember { mutableStateOf(room.icon_name) }
@@ -787,10 +1098,6 @@ fun EditRoomDialog(
                 Spacer(Modifier.height(16.dp))
                 Text("Select Icon", style = MaterialTheme.typography.labelMedium)
                 IconPicker(selected = selectedIconName, onSelect = { selectedIconName = it })
-                Spacer(Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = onManageSlotsClick, modifier = Modifier.fillMaxWidth()) { Text("Manage Slots") }
             }
         },
         confirmButton = {

@@ -201,6 +201,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         "SYSTEM_DEFAULT"
     )
 
+    val layoutDensity = settingsManager.layoutDensity.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        "COMFORTABLE"
+    )
+
     // --- Ignore List & Sorting State ---
     private val _ignoreList = MutableStateFlow<List<IgnoreItem>>(emptyList())
     val ignoreList = _ignoreList.asStateFlow()
@@ -245,6 +251,12 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun setDateFormatPreset(preset: String) {
         viewModelScope.launch {
             settingsManager.setDateFormatPreset(preset)
+        }
+    }
+
+    fun setLayoutDensity(density: String) {
+        viewModelScope.launch {
+            settingsManager.setLayoutDensity(density)
         }
     }
 

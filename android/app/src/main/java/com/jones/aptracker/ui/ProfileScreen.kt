@@ -213,8 +213,12 @@ fun ProfileScreen(
 
             ProfileMenuItem(
                 icon = Icons.Default.Settings,
-                title = "Notification Settings",
-                subtitle = "Global defaults for new rooms",
+                // Mirrors the title of the screen it opens. It was "Notification
+                // Settings" back when that was all it held; it now also carries date
+                // format and layout density, and a link that names less than it opens
+                // is how a setting ends up impossible to find.
+                title = "Settings & Preferences",
+                subtitle = "Notifications, date format, and layout",
                 onClick = onNavigateToSettings
             )
 

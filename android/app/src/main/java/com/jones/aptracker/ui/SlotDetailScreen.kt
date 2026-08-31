@@ -206,12 +206,29 @@ fun SlotDetailScreen(
                         } else {
                             "${slot.player_alias} (${slot.player_name})"
                         }
-                        Text(
-                            text = displayName,
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        // Same eye, same leading position, same condition as the rooms
+                        // list, so a slot that reads as watched there still reads as
+                        // watched once you open it. The Cheese Tracker card further down
+                        // keeps its own "Watching" chip: that one is not a duplicate of
+                        // this, it is what explains why the controls beside it are locked.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (slot.track_mode == TrackMode.WATCH && slot.cheese != null) {
+                                Icon(
+                                    imageVector = Icons.Filled.Visibility,
+                                    contentDescription = "Watching, not claimed on Cheese Tracker",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(
+                                text = displayName,
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                        }
                         Spacer(Modifier.height(20.dp))
                         
                         // INFO GRID
