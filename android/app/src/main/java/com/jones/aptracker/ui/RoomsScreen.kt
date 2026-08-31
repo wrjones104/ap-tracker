@@ -193,6 +193,22 @@ fun RoomsScreen(
     // --- Drag and Drop State ---
     var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
     var draggingItemOffset by remember { mutableStateOf(0f) }
+
+    // Every card collapses for the duration of a drag, not just the one being dragged.
+    //
+    // The reorder algorithm assumes list items are uniform and short. It reads
+    // `currentItemInfo.size` for the auto-scroll trigger, and `targetItem.size` to work
+    // out where the dragged card lands after a swap. Collapsing only the dragged card
+    // fixed the first and left the second: dragging past a 600dp expanded neighbour
+    // feeds a 600dp `adjustment` back into draggingItemOffset and throws the card off
+    // screen. Worse, with rooms that tall only one or two are in `visibleItemsInfo` at
+    // once, so the dragged item can scroll out of it entirely and the gesture dies
+    // mid-drag. Uniform headers are the state the algorithm was written for.
+    //
+    // This is presentation only -- `expandedRoomIds` is untouched, so every room springs
+    // back to how the user left it when the finger lifts. A long-press must not cost
+    // someone their layout.
+    val isReorderInProgress = draggingItemIndex != null
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -447,19 +463,10 @@ fun RoomsScreen(
                                     // Searching implies you want to see what matched, so a
                                     // matching room opens regardless of its saved state.
                                     //
-                                    // A card being dragged collapses to its header, whatever
-                                    // its saved state. The reorder gesture below measures
-                                    // against item height -- it auto-scrolls on
-                                    // `endOffset > viewportEnd` and only swaps once you have
-                                    // dragged half the item's own height. An expanded room
-                                    // with eight slots is taller than the viewport, which
-                                    // makes the first condition true before you have moved
-                                    // and the second unreachable. Collapsing restores the
-                                    // uniform-height assumption the algorithm needs, and you
-                                    // are dragging a room, not a room and its contents.
-                                    isExpanded = (isSearching || room.id in expandedRoomIds) && !isDragging,
+                                    isExpanded = isSearching || room.id in expandedRoomIds,
                                     isReorderEnabled = !isSearching,
                                     isDragging = isDragging,
+                                    isReorderInProgress = isReorderInProgress,
                                     elevation = elevation,
                                     scale = scale,
                                     // Passed as a lambda, not a Float: read here it would be
@@ -709,6 +716,8 @@ private fun RoomCard(
     isExpanded: Boolean,
     isReorderEnabled: Boolean,
     isDragging: Boolean,
+    /** True while any card is being dragged, including this one. */
+    isReorderInProgress: Boolean,
     elevation: Dp,
     scale: Float,
     dragOffset: () -> Float,
@@ -723,6 +732,7 @@ private fun RoomCard(
     val visibleSlots = group?.visibleSlots.orEmpty()
     val hiddenFinishedCount = group?.hiddenFinishedCount ?: 0
     val metrics = LocalLayoutMetrics.current
+    val showsSlots = isExpanded && !isReorderInProgress
 
     Card(
         modifier = Modifier
@@ -805,8 +815,8 @@ private fun RoomCard(
                 }
                 Spacer(Modifier.width(4.dp))
                 Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    imageVector = if (showsSlots) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (showsSlots) "Collapse" else "Expand",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 IconButton(onClick = onOptionsClick) {
@@ -828,85 +838,90 @@ private fun RoomCard(
                 }
             }
 
-            AnimatedVisibility(
-                visible = isExpanded,
-                enter = expandVertically(),
-                exit = shrinkVertically()
-            ) {
-                Column {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            // Removed rather than animated away while reordering. A shrink animation
+            // reports a different height every frame, and those are the heights the drag
+            // math is reading -- the collapse has to be instant to be useful to it.
+            if (!isReorderInProgress) {
+                AnimatedVisibility(
+                    visible = isExpanded,
+                    enter = expandVertically(),
+                    exit = shrinkVertically()
+                ) {
+                    Column {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                    // A suspended room used to answer a tap with the revive dialog instead
-                    // of opening. That is the same hijacked tap this screen exists to undo,
-                    // and it left no way to look at the room's slots at all. The room opens
-                    // like any other now; the prompt sits at the top of what you opened.
-                    if (room.is_suspended) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable(onClick = onReviveClick)
-                                .padding(
-                                    start = metrics.slotIndent,
-                                    end = 16.dp,
-                                    top = metrics.slotRowVertical,
-                                    bottom = metrics.slotRowVertical
-                                ),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Link,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = "Not being polled - tap to revive",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.error
+                        // A suspended room used to answer a tap with the revive dialog instead
+                        // of opening. That is the same hijacked tap this screen exists to undo,
+                        // and it left no way to look at the room's slots at all. The room opens
+                        // like any other now; the prompt sits at the top of what you opened.
+                        if (room.is_suspended) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onReviveClick)
+                                    .padding(
+                                        start = metrics.slotIndent,
+                                        end = 16.dp,
+                                        top = metrics.slotRowVertical,
+                                        bottom = metrics.slotRowVertical
+                                    ),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Link,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Not being polled - tap to revive",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+
+                        if (hiddenFinishedCount > 0) {
+                            HiddenFinishedSlotsRow(
+                                count = hiddenFinishedCount,
+                                onShowFinished = onShowFinished
                             )
                         }
-                    }
 
-                    if (hiddenFinishedCount > 0) {
-                        HiddenFinishedSlotsRow(
-                            count = hiddenFinishedCount,
-                            onShowFinished = onShowFinished
-                        )
-                    }
-
-                    visibleSlots.forEach { slot ->
-                        SlotRow(
-                            slot = slot,
-                            isFinished = finishedResolver.isFinished(
-                                roomDbId = room.id,
-                                slotId = slot.slot_id,
-                                isGoaled = slot.is_finished,
-                                hasAllChecks = slot.has_all_checks
-                            ),
-                            onClick = { onSlotClick(slot.slot_id) }
-                        )
-                    }
-
-                    // A room you have just added expands to nothing at all otherwise,
-                    // which reads as a failure rather than as work still to do.
-                    if (visibleSlots.isEmpty() && hiddenFinishedCount == 0) {
-                        Text(
-                            text = "No slots tracked in this room yet.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(
-                                start = metrics.slotIndent,
-                                end = 16.dp,
-                                top = metrics.slotRowVertical
+                        visibleSlots.forEach { slot ->
+                            SlotRow(
+                                slot = slot,
+                                isFinished = finishedResolver.isFinished(
+                                    roomDbId = room.id,
+                                    slotId = slot.slot_id,
+                                    isGoaled = slot.is_finished,
+                                    hasAllChecks = slot.has_all_checks
+                                ),
+                                onClick = { onSlotClick(slot.slot_id) }
                             )
+                        }
+
+                        // A room you have just added expands to nothing at all otherwise,
+                        // which reads as a failure rather than as work still to do.
+                        if (visibleSlots.isEmpty() && hiddenFinishedCount == 0) {
+                            Text(
+                                text = "No slots tracked in this room yet.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(
+                                    start = metrics.slotIndent,
+                                    end = 16.dp,
+                                    top = metrics.slotRowVertical
+                                )
+                            )
+                        }
+
+                        ManageSlotsRow(
+                            hasTrackedSlots = room.tracked_slots_count > 0,
+                            onClick = onManageSlotsClick
                         )
                     }
-
-                    ManageSlotsRow(
-                        hasTrackedSlots = room.tracked_slots_count > 0,
-                        onClick = onManageSlotsClick
-                    )
                 }
             }
         }
