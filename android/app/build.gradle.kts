@@ -11,6 +11,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
     alias(libs.plugins.kotlin.ksp)
 }
 
@@ -62,6 +63,12 @@ android {
         getByName("debug") {
             applicationIdSuffix = ".debug"
             isDebuggable = true
+            // Local dev churn would drown the real signal, and there is no mapping file
+            // to upload for an unminified build.
+            buildConfigField("boolean", "CRASH_REPORTING_ENABLED", "false")
+            configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
+                mappingFileUploadEnabled = false
+            }
         }
 
         getByName("release") {
@@ -70,6 +77,10 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             ndk {
                 debugSymbolLevel = "FULL"
+            }
+            buildConfigField("boolean", "CRASH_REPORTING_ENABLED", "true")
+            configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
+                mappingFileUploadEnabled = true
             }
         }
 
@@ -85,6 +96,10 @@ android {
             // com.jones.aptracker.debug, so this reuses the debug application id
             // instead of taking a suffix of its own. It installs over prodDebug.
             applicationIdSuffix = ".debug"
+            // Reporting stays on here (unlike debug) because the point of this variant is to
+            // prove the release pipeline works end to end -- including that Crashlytics can
+            // deobfuscate an R8-mangled stack trace before the Play build depends on it.
+            buildConfigField("boolean", "CRASH_REPORTING_ENABLED", "true")
         }
     }
 
@@ -131,6 +146,7 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     implementation(platform("com.google.firebase:firebase-bom:33.9.0"))
     implementation("com.google.firebase:firebase-messaging-ktx")
+    implementation("com.google.firebase:firebase-crashlytics")
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
