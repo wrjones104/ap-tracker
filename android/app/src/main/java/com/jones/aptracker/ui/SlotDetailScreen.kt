@@ -15,6 +15,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.*
@@ -39,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -170,7 +174,7 @@ fun SlotDetailScreen(
                     title = { Text("Slot Details", style = MaterialTheme.typography.titleMedium) },
                     navigationIcon = {
                         IconButton(onClick = onBackClick) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     }
                 )
@@ -233,11 +237,20 @@ fun SlotDetailScreen(
                         
                         // INFO GRID
                         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth()) {
+                            // Both columns are weight(1f), so a value that fills its
+                            // half runs straight into the next one with nothing
+                            // between them. Mirror the Column's vertical spacing.
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
                                 InfoItem(Modifier.weight(1f), "GAME", slot.game ?: "Unknown")
                                 InfoItem(Modifier.weight(1f), "ROOM", currentRoom.room_alias)
                             }
-                            Row(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
                                 InfoItem(Modifier.weight(1f), "STATUS", if (slot.is_finished) "Finished" else "In Progress")
                                 InfoItem(Modifier.weight(1f), "LAST ACTIVITY", formatTimestamp(slot.last_activity))
                             }
@@ -511,7 +524,7 @@ fun SlotDetailScreen(
                                         AssistChip(
                                             onClick = { showHintDialog = true },
                                             label = { Text("!hint", style = MaterialTheme.typography.labelSmall) },
-                                            leadingIcon = { Icon(Icons.Default.Help, null, modifier = Modifier.size(16.dp)) },
+                                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Help, null, modifier = Modifier.size(16.dp)) },
                                             colors = AssistChipDefaults.assistChipColors(labelColor = MaterialTheme.colorScheme.primary)
                                         )
                                         AssistChip(
@@ -541,7 +554,7 @@ fun SlotDetailScreen(
                                                     textClientViewModel.sendMessage(inputText)
                                                     inputText = ""
                                                 }
-                                            }) { Icon(Icons.Default.Send, null, tint = MaterialTheme.colorScheme.primary) }
+                                            }) { Icon(Icons.AutoMirrored.Filled.Send, null, tint = MaterialTheme.colorScheme.primary) }
                                         },
                                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                                         keyboardActions = KeyboardActions(onSend = {
@@ -1213,11 +1226,18 @@ fun ThresholdGroupRow(
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // The name is weighted and the badge is not, so Row measures the
+                // badge at its intrinsic width first and the name takes what is
+                // left. Unweighted, the name claimed the whole row and squeezed
+                // "Triggered" into a one-character-per-line vertical strip.
                 Text(
                     group.name ?: "Unnamed Milestone",
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
                 if (group.is_triggered) {
                     Spacer(Modifier.width(8.dp))
@@ -1230,7 +1250,9 @@ fun ThresholdGroupRow(
                             "Triggered",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
