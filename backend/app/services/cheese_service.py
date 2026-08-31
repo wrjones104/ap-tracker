@@ -5,13 +5,88 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import selectinload
 
 from app import Session
-from app.models import TrackedRoom, UserRoomSubscription, UserTrackedSlot
+from app.models import Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot
 from app.utils import extract_ap_room_id, TRACK_MODE_WATCH, normalize_track_mode
+
+
+def _build_player_name_map(room):
+    """Slot id -> display name, from the room's cached AP player list."""
+    names = {}
+    try:
+        for p in json.loads(room.cached_players_json or '[]'):
+            slot_id = p.get('slot_id')
+            if slot_id is not None:
+                names[slot_id] = p.get('alias') or p.get('name')
+    except (TypeError, json.JSONDecodeError, AttributeError) as err:
+        logging.debug(
+            "[POLLER_SYNC] Failed to parse cached players for room %s: %s", room.id, err
+        )
+    return names
+
+
+def _build_demotion_payload(session, room, demotions):
+    """
+    Turns the demotions collected during a sync into the payload shape
+    run_cheese_poll's push loop expects: {user_id: {'notifications': [...],
+    'tokens': {platform: [token]}}}.
+    """
+    if not demotions:
+        return {}
+
+    user_ids = list(demotions.keys())
+
+    tokens_by_user = {}
+    for device in session.query(Device).filter(Device.user_id.in_(user_ids)).all():
+        platform = (device.platform or 'android').lower().strip()
+        if platform not in ['android', 'ios']:
+            platform = 'android'
+        tokens_by_user.setdefault(device.user_id, {}).setdefault(platform, []).append(
+            device.fcm_token
+        )
+
+    aliases_by_user = {
+        sub.user_id: sub.alias
+        for sub in session.query(UserRoomSubscription)
+        .filter(UserRoomSubscription.room_id == room.id)
+        .filter(UserRoomSubscription.user_id.in_(user_ids))
+        .all()
+    }
+
+    payload = {}
+    for user_id, events in demotions.items():
+        tokens = tokens_by_user.get(user_id)
+        if not tokens or not any(tokens.values()):
+            continue
+
+        room_alias = aliases_by_user.get(user_id) or room.room_id
+        notifications = []
+        for player_name, reason in events:
+            if reason == 'claimed':
+                title = "Slot Already Claimed"
+                body = (
+                    f"'{player_name}' in '{room_alias}' is claimed by someone else on "
+                    "Cheese Tracker. Switched to Watching — you'll still get alerts."
+                )
+            else:
+                title = "Slot Released"
+                body = (
+                    f"'{player_name}' in '{room_alias}' is no longer claimed on Cheese "
+                    "Tracker. Switched to Watching — you'll still get alerts."
+                )
+            notifications.append({'title': title, 'body': body, 'type': 'conflict'})
+
+        payload[user_id] = {'notifications': notifications, 'tokens': tokens}
+
+    return payload
+
 
 def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
     """
     Compares new Cheese Tracker data against local DB state, handles merging pending rooms,
     and performs bidirectional claim/unclaim synchronization with grace periods.
+
+    Returns the push payload for any slots this sync demoted from play to watch,
+    keyed by user id. Empty when nothing was demoted.
     """
     session = Session()
     try:
@@ -103,8 +178,14 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         # 3. UNCLAIM SYNC
         new_games_map = {g['position']: g for g in new_tracker_data.get('games', [])}
         current_tracked_slots = session.query(UserTrackedSlot).options(
-            selectinload(UserTrackedSlot.user) 
+            selectinload(UserTrackedSlot.user)
         ).filter_by(room_id=room.id).all()
+
+        # {user_id: [(player_name, reason)]} for slots this sync demotes.
+        # 'claimed' and 'released' are kept apart because an auto-release the
+        # user opted into should not read as someone taking their slot.
+        demotions = {}
+        player_names = _build_player_name_map(room)
 
         for ts in current_tracked_slots:
             user = ts.user
@@ -139,6 +220,9 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                 if is_other_auth_claim or is_other_unauth_claim:
                     logging.info(f"[POLLER_SYNC] Demoting Slot {ts.slot_id} to watch (Owner mismatch: remote_owner_id={remote_owner_id}, claim_discord={claim_discord})")
                     ts.track_mode = TRACK_MODE_WATCH
+                    demotions.setdefault(ts.user_id, []).append(
+                        (player_names.get(ts.slot_id) or f"Slot {ts.slot_id}", 'claimed')
+                    )
                 elif remote_owner_id is None and claim_discord_clean is None:
                     if is_first_sync:
                         logging.info(f"[POLLER_SYNC] GRACE PERIOD: Keeping Slot {ts.slot_id} (First Sync).")
@@ -147,6 +231,9 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                     # out from under a player who still wants to watch it.
                     logging.info(f"[POLLER_SYNC] Demoting Slot {ts.slot_id} to watch (Remote is unclaimed).")
                     ts.track_mode = TRACK_MODE_WATCH
+                    demotions.setdefault(ts.user_id, []).append(
+                        (player_names.get(ts.slot_id) or f"Slot {ts.slot_id}", 'released')
+                    )
             else:
                 if is_first_sync:
                     logging.info(f"[POLLER_SYNC] GRACE PERIOD: Keeping Slot {ts.slot_id} (Slot missing - First Sync).")
@@ -156,8 +243,12 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                 logging.info(f"[POLLER_SYNC] Untracking Slot {ts.slot_id} (Slot vanished from Cheese)")
                 session.delete(ts)
 
+        # Built before the commit so the room and subscription rows are still
+        # loaded; the poller only sends after this function returns.
+        payload = _build_demotion_payload(session, room, demotions)
+
         session.commit()
-        return {}
+        return payload
 
     except Exception as e:
         logging.error(f"[POLLER_CHEESE_ERROR] DB Update failed: {e}", exc_info=True)
