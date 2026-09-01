@@ -11,11 +11,37 @@ from app.models import (
     User, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, SlotItemCount
 )
-from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z
+from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z, chunked_iterable
 from app.utils import parse_cached_checks
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 
 history_bp = Blueprint('history_routes', __name__)
+
+# Postgres rejects a statement carrying more than 65535 bind parameters. This
+# lookup binds three per key, so the IN list is chunked well below that ceiling.
+DATAPACKAGE_LOOKUP_CHUNK_SIZE = 1000
+
+
+def fetch_datapackage_names(session, cache_keys):
+    """Resolves (checksum, entity_type, entity_id) keys to their entity names."""
+    name_cache_map = {}
+    for chunk in chunked_iterable(cache_keys, DATAPACKAGE_LOOKUP_CHUNK_SIZE):
+        cache_query = session.query(
+            DatapackageCache.checksum,
+            DatapackageCache.entity_type,
+            DatapackageCache.entity_id,
+            DatapackageCache.entity_name
+        ).filter(
+            tuple_(
+                DatapackageCache.checksum,
+                DatapackageCache.entity_type,
+                DatapackageCache.entity_id
+            ).in_(chunk)
+        )
+        for c in cache_query.all():
+            name_cache_map[(c.checksum, c.entity_type, c.entity_id)] = c.entity_name
+    return name_cache_map
+
 
 def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=None, include_found=False):
     tracked_slots_query = session.query(UserTrackedSlot.room_id, UserTrackedSlot.slot_id).filter_by(user_id=user_id)
@@ -45,9 +71,27 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
     if not relevant_room_uuids:
         return {"hints_for_you": [], "hints_by_you": []}
 
-    hints_query = session.query(NotifiedHint).filter(
-        NotifiedHint.room_id.in_(relevant_room_uuids)
-    )
+    # Only fetch hints that touch a slot this user actually tracks. Fetching every
+    # hint in every relevant room and discarding most of them below is what let the
+    # datapackage name lookup grow without bound on heavy accounts.
+    tracked_slots_by_room_uuid = {}
+    for tracked_room_db_id, tracked_slot_id in user_tracked_tuples:
+        room_uuid = room_id_to_uuid.get(tracked_room_db_id)
+        if room_uuid:
+            tracked_slots_by_room_uuid.setdefault(room_uuid, set()).add(tracked_slot_id)
+
+    if not tracked_slots_by_room_uuid:
+        return {"hints_for_you": [], "hints_by_you": []}
+
+    room_slot_filters = [
+        (NotifiedHint.room_id == room_uuid) & (
+            NotifiedHint.item_owner_id.in_(sorted(slot_ids)) |
+            NotifiedHint.location_owner_id.in_(sorted(slot_ids))
+        )
+        for room_uuid, slot_ids in tracked_slots_by_room_uuid.items()
+    ]
+
+    hints_query = session.query(NotifiedHint).filter(or_(*room_slot_filters))
 
     if not include_found:
         hints_query = hints_query.filter(NotifiedHint.is_found == False)
@@ -148,24 +192,7 @@ def process_hints_for_user(session, user_id, room_db_id=None, since_timestamp=No
             "item_checksum": item_checksum
         })
 
-    name_cache_map = {}
-    if cache_keys_to_find:
-        cache_query = session.query(
-            DatapackageCache.checksum,
-            DatapackageCache.entity_type,
-            DatapackageCache.entity_id,
-            DatapackageCache.entity_name
-        ).filter(
-            tuple_(
-                DatapackageCache.checksum,
-                DatapackageCache.entity_type,
-                DatapackageCache.entity_id
-            ).in_(cache_keys_to_find)
-        )
-        name_cache_map = {
-            (c.checksum, c.entity_type, c.entity_id): c.entity_name
-            for c in cache_query.all()
-        }
+    name_cache_map = fetch_datapackage_names(session, cache_keys_to_find)
 
     group_members_lookup = fetch_group_members_lookup(
         session, (t["item_checksum"] for t in temp_hint_data if t.get("item_checksum"))
@@ -369,24 +396,7 @@ def get_item_history(current_user, room_db_id):
             "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
         })
 
-    name_cache_map = {}
-    if cache_keys_to_find:
-        cache_query = session.query(
-            DatapackageCache.checksum,
-            DatapackageCache.entity_type,
-            DatapackageCache.entity_id,
-            DatapackageCache.entity_name
-        ).filter(
-            tuple_(
-                DatapackageCache.checksum,
-                DatapackageCache.entity_type,
-                DatapackageCache.entity_id
-            ).in_(cache_keys_to_find)
-        )
-        name_cache_map = {
-            (c.checksum, c.entity_type, c.entity_id): c.entity_name
-            for c in cache_query.all()
-        }
+    name_cache_map = fetch_datapackage_names(session, cache_keys_to_find)
 
     group_members_lookup = fetch_group_members_lookup(
         session, (t["_game_checksum"] for t in history_pre_cache if t.get("_game_checksum"))
@@ -677,24 +687,7 @@ def sync_history(current_user):
         if lo_game and lo_checksum:
             cache_keys_to_find.add((lo_checksum, 'location', hint.location_id))
 
-    name_cache_map = {}
-    if cache_keys_to_find:
-        cache_query = session.query(
-            DatapackageCache.checksum,
-            DatapackageCache.entity_type,
-            DatapackageCache.entity_id,
-            DatapackageCache.entity_name
-        ).filter(
-            tuple_(
-                DatapackageCache.checksum,
-                DatapackageCache.entity_type,
-                DatapackageCache.entity_id
-            ).in_(cache_keys_to_find)
-        )
-        name_cache_map = {
-            (c.checksum, c.entity_type, c.entity_id): c.entity_name
-            for c in cache_query.all()
-        }
+    name_cache_map = fetch_datapackage_names(session, cache_keys_to_find)
 
     filter_checksums = set()
     for item in items:
@@ -1115,25 +1108,7 @@ def get_global_item_history(current_user):
             "receivedCount": item_counts.get((item.room_id, item.receiving_slot_id, item.item_id), 0)
         })
 
-    name_cache_map = {}
-    if cache_keys_to_find:
-        cache_query = session.query(
-            DatapackageCache.checksum,
-            DatapackageCache.entity_type,
-            DatapackageCache.entity_id,
-            DatapackageCache.entity_name
-        ).filter(
-            tuple_(
-                DatapackageCache.checksum,
-                DatapackageCache.entity_type,
-                DatapackageCache.entity_id
-            ).in_(cache_keys_to_find)
-        )
-
-        name_cache_map = {
-            (c.checksum, c.entity_type, c.entity_id): c.entity_name
-            for c in cache_query.all()
-        }
+    name_cache_map = fetch_datapackage_names(session, cache_keys_to_find)
 
     group_members_lookup = fetch_group_members_lookup(
         session, (t["_game_checksum"] for t in history_pre_cache if t.get("_game_checksum"))
