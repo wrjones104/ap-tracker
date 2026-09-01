@@ -128,13 +128,21 @@ class AuthViewModel : ViewModel() {
             return
         }
 
-        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-            if (!task.isSuccessful) {
-                Log.w("AuthViewModel", "Fetching FCM registration token failed", task.exception)
-                return@addOnCompleteListener
+        viewModelScope.launch {
+            // A forced logout invalidates the FCM token on a detached coroutine. Fetching
+            // before that finishes would hand the server the very token the pending delete
+            // is about to destroy, leaving the device silently unreachable. Wait it out.
+            SessionManager.awaitTokenInvalidation()
+
+            val fcmToken = try {
+                FirebaseMessaging.getInstance().token.await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("AuthViewModel", "Fetching FCM registration token failed", e)
+                return@launch
             }
 
-            val fcmToken = task.result
             Log.d("AuthViewModel", "FCM Token retrieved: $fcmToken. Sending to server...")
 
             val androidId = Settings.Secure.getString(
@@ -142,22 +150,22 @@ class AuthViewModel : ViewModel() {
                 Settings.Secure.ANDROID_ID
             )
 
-            viewModelScope.launch {
-                try {
-                    val request = RegisterDeviceRequest(
-                        fcm_token = fcmToken,
-                        android_id = androidId
-                    )
+            try {
+                val request = RegisterDeviceRequest(
+                    fcm_token = fcmToken,
+                    android_id = androidId
+                )
 
-                    val response = RetrofitClient.instance.registerDevice(request)
-                    if (response.isSuccessful) {
-                        Log.i("AuthViewModel", "FCM token and Android ID registered with backend successfully.")
-                    } else {
-                        Log.e("AuthViewModel", "Backend FCM registration failed: ${response.code()} - ${response.errorBody()?.string()}")
-                    }
-                } catch (e: Exception) {
-                    Log.e("AuthViewModel", "Error sending FCM token to server", e)
+                val response = RetrofitClient.instance.registerDevice(request)
+                if (response.isSuccessful) {
+                    Log.i("AuthViewModel", "FCM token and Android ID registered with backend successfully.")
+                } else {
+                    Log.e("AuthViewModel", "Backend FCM registration failed: ${response.code()} - ${response.errorBody()?.string()}")
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("AuthViewModel", "Error sending FCM token to server", e)
             }
         }
     }
