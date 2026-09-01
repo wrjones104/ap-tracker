@@ -16,6 +16,7 @@ import com.jones.aptracker.diagnostics.CrashReporter
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
+import com.jones.aptracker.network.isWatched
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.HistorySyncManager
 import com.jones.aptracker.repository.SyncProgressState
@@ -154,6 +155,20 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
      * history rows supply the same facts when a slot is not in the live roster.
      */
     private val _liveFinishState = MutableStateFlow<Map<Pair<Int, String>, SlotFinishState>>(emptyMap())
+
+    /**
+     * Slots the user is watching rather than playing, keyed by (roomDbId, playerName).
+     *
+     * Live roster only, with no cached-row fallback like [_liveFinishState] has: track
+     * mode is state on the Cheese side that can change between refreshes, and a stale
+     * "watched" would mark a row the user has since claimed. Empty before the first
+     * roster fetch, so nothing is marked until the facts are in -- the rooms list is
+     * blank the same way, and for the same reason.
+     */
+    private val _watchedPlayerKeys = MutableStateFlow<Set<Pair<Int, String>>>(emptySet())
+
+    /** Consumed by the activity feed to mark watched slots with the same eye as the rooms list. */
+    val watchedPlayerKeys: StateFlow<Set<Pair<Int, String>>> = _watchedPlayerKeys
 
     /** Shared, so changing the setting anywhere re-filters this feed without a resync. */
     private val _finishedResolver = FinishedDefinitionStore.resolverFlow
@@ -546,6 +561,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
                 val liveIcons = mutableMapOf<Int, String>()
                 val liveFinishState = mutableMapOf<Pair<Int, String>, SlotFinishState>()
+                val watchedKeys = mutableSetOf<Pair<Int, String>>()
                 val slotDefinitions = mutableMapOf<Pair<Int, Int>, String?>()
                 val roomNameMap = mutableMapOf<Int, String>()
                 val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
@@ -585,6 +601,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                             hasAllChecks = slot.has_all_checks
                         )
                         slotDefinitions[room.room_db_id to slot.slot_id] = slot.finished_definition
+                        if (slot.isWatched) {
+                            watchedKeys.add(room.room_db_id to slot.player_name)
+                        }
                     }
                 }
 
@@ -592,6 +611,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 _validTrackedSlots.value = validSlotsSet
                 _liveAliases.value = aliasMap
                 _liveFinishState.value = liveFinishState
+                _watchedPlayerKeys.value = watchedKeys
 
                 // Mirror the per-slot overrides so the widgets, which have no ViewModel
                 // and no network call on their load path, resolve them the same way.

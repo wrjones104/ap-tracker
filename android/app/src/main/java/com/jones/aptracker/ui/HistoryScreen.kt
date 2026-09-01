@@ -131,6 +131,9 @@ import java.time.format.FormatStyle
 /** Inline-content key for the finished-status icon in a history row's main text. */
 private const val STATUS_ICON_ID = "finishedStatusIcon"
 
+/** Inline-content key for the watched-slot eye in a history row's main text. */
+private const val WATCH_ICON_ID = "watchedSlotIcon"
+
 // --- 1. THE REUSABLE CONTENT ---
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -957,6 +960,7 @@ fun ItemHistoryTab(
     val selectedPlayer by historyViewModel.selectedPlayerFilter.collectAsState()
     val showFinished by historyViewModel.showFinished.collectAsState()
     val finishedKeys by historyViewModel.finishedPlayerKeys.collectAsState()
+    val watchedKeys by historyViewModel.watchedPlayerKeys.collectAsState()
     val useCondensed by historyViewModel.useCondensed.collectAsState()
 
     // Type Filters
@@ -1194,7 +1198,16 @@ fun ItemHistoryTab(
                                 val fullyDone = item.isPlayerFinished && item.playerHasAllChecks == true
                                 val statusIcon = if (fullyDone) Icons.Filled.CheckCircle else Icons.Filled.Flag
                                 val statusLabel = if (fullyDone) "Goaled, no items left to send" else "Goaled"
-                                val inlineStatusIcon = remember(statusIcon, statusLabel, finishedColor) {
+
+                                // Same eye, same leading position as the rooms list and the
+                                // slot detail header, so a slot that reads as watched there
+                                // still reads as watched in its activity. Only rows whose
+                                // slot is in the live roster can be marked; a cached row for
+                                // a slot the user no longer tracks simply is not.
+                                val isWatchedRow = item.room_db_id != null &&
+                                        watchedKeys.contains(item.room_db_id to item.playerName)
+                                val watchTint = MaterialTheme.colorScheme.onSurfaceVariant
+                                val inlineStatusIcon = remember(statusIcon, statusLabel, finishedColor, watchTint) {
                                     mapOf(
                                         STATUS_ICON_ID to InlineTextContent(
                                             Placeholder(
@@ -1208,6 +1221,19 @@ fun ItemHistoryTab(
                                                 contentDescription = statusLabel,
                                                 tint = finishedColor
                                             )
+                                        },
+                                        WATCH_ICON_ID to InlineTextContent(
+                                            Placeholder(
+                                                width = 1.2.em,
+                                                height = 1.2.em,
+                                                placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Visibility,
+                                                contentDescription = WATCHING_DESCRIPTION,
+                                                tint = watchTint
+                                            )
                                         }
                                     )
                                 }
@@ -1215,6 +1241,12 @@ fun ItemHistoryTab(
                                 // MAIN TEXT: "Player received Item"
                                 Text(
                                     buildAnnotatedString {
+                                        // Watch first, then goal: the rooms list orders them
+                                        // the same way.
+                                        if (isWatchedRow) {
+                                            appendInlineContent(WATCH_ICON_ID, WATCHING_DESCRIPTION)
+                                            append(" ")
+                                        }
                                         if (item.isPlayerFinished) {
                                             appendInlineContent(STATUS_ICON_ID, statusLabel)
                                             append(" ")

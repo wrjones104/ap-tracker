@@ -546,6 +546,25 @@ data class CheeseSlotState(
     val global_ping_policy: String? = null
 )
 
+/**
+ * Whether this slot should read as watched in the UI.
+ *
+ * Only Watching is ever marked, never Playing: play is the default for every slot
+ * and the only mode a user who is not on Cheese Tracker ever has, so a "playing"
+ * badge would sit on every row and tell them nothing. Marking the exception is what
+ * carries information.
+ *
+ * Gated on the Cheese state being present, not just on the mode: watch mode's entire
+ * effect is on Cheese claiming, so without a linked tracker a stored "watch"
+ * describes nothing the user can currently see.
+ *
+ * One property rather than the condition repeated per screen -- the rooms list, the
+ * slot detail header and the activity feed all have to agree on what "watched" means,
+ * and they drifted apart the moment each spelled it out for itself.
+ */
+val TrackedSlotDetail.isWatched: Boolean
+    get() = track_mode == TrackMode.WATCH && cheese != null
+
 data class UpdateCheeseSlotResponse(
     val message: String? = null,
     val cheese: CheeseSlotState? = null
