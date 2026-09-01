@@ -1,9 +1,14 @@
 import asyncio
+import os
 from threading import Thread
 from waitress import serve
 
 from app import create_app
 from app.poller import run_poller, close_aiohttp_session
+
+# See run_api_only.py: Waitress's default of 4 threads caps concurrent requests well
+# below what the I/O-bound handlers and the SQLAlchemy pool can support.
+WAITRESS_THREADS = int(os.environ.get('WAITRESS_THREADS', '8'))
 
 if __name__ == "__main__":
     print("[MAIN] AP Tracker Service starting...")
@@ -11,7 +16,7 @@ if __name__ == "__main__":
     app = create_app()
 
     api_thread = Thread(
-        target=lambda: serve(app, host='0.0.0.0', port=5000),
+        target=lambda: serve(app, host='0.0.0.0', port=5000, threads=WAITRESS_THREADS),
         daemon=True
     )
     api_thread.start()

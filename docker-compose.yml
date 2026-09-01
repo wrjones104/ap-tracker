@@ -24,6 +24,8 @@ services:
       - "5000:5000"
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      # Waitress worker threads. Tunable without a rebuild; keep <= SQLAlchemy pool_size (10).
+      - WAITRESS_THREADS=${WAITRESS_THREADS:-8}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -33,7 +35,7 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 1G
+          memory: 1.5G
         reservations:
           cpus: '0.40'
           memory: 256M
