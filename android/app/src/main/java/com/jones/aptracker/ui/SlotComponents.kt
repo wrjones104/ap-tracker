@@ -34,10 +34,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jones.aptracker.data.FinishedResolver
 import com.jones.aptracker.network.RoomWithTrackedSlots
-import com.jones.aptracker.network.TrackMode
 import com.jones.aptracker.network.TrackedSlotDetail
+import com.jones.aptracker.network.isWatched
 import java.time.Duration
 import java.time.Instant
+
+/**
+ * Screen-reader label for the watched-slot eye.
+ *
+ * Shared by every screen that shows the eye -- the rooms list, the slot detail header
+ * and the activity feed -- so the three cannot describe the same icon differently.
+ */
+internal const val WATCHING_DESCRIPTION = "Watching, not claimed on Cheese Tracker"
 
 /**
  * Group each room's slots for display, applying the search and finished filters.
@@ -302,19 +310,13 @@ fun SlotRow(
             // under some definitions the first stays visible. Icons carry a
             // contentDescription, so this no longer depends on color alone.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Only Watching is marked, never Playing. Play is the default for every
-                // slot and the only mode a user who is not on Cheese Tracker ever has, so
-                // a "playing" badge would sit on every row of most people's screens and
-                // tell them nothing. Marking the exception is what carries information.
-                //
-                // Gated on the Cheese state being present, not just on the mode: watch
-                // mode's entire effect is on Cheese claiming, so without a linked tracker
-                // a stored "watch" describes nothing the user can currently see. This is
-                // the same condition SlotDetailScreen's "Watching" badge lives behind.
-                if (slot.track_mode == TrackMode.WATCH && slot.cheese != null) {
+                // See [isWatched] for why only Watching is marked, and why the Cheese
+                // state has to be present. The slot detail header and the activity
+                // feed read the same property.
+                if (slot.isWatched) {
                     Icon(
                         imageVector = Icons.Filled.Visibility,
-                        contentDescription = "Watching, not claimed on Cheese Tracker",
+                        contentDescription = WATCHING_DESCRIPTION,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
