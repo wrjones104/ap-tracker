@@ -70,11 +70,11 @@ def token_required(f):
             try:
                 token = auth_header.split(" ")[1]
             except IndexError:
-                logging.warning(f"Malformed Authorization header from {request.remote_addr}.")
+                logging.warning(f"Malformed Authorization header for {request.method} {request.path}.")
                 return jsonify({'error': 'Malformed Authorization header'}), 401
 
         if not token:
-            logging.info(f"Missing auth token from {request.remote_addr}.")
+            logging.info(f"Missing auth token for {request.method} {request.path}.")
             return jsonify({'error': 'Authentication token is missing'}), 401
 
         session = None
