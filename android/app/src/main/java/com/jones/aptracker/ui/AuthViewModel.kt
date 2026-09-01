@@ -34,7 +34,10 @@ class AuthViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val tokenManager = TokenManager(context)
-                tokenManager.saveToken("")
+                // Actually clear it. Writing "" left a credential that is non-null to the
+                // client but empty to the server, so requests during the OAuth round trip
+                // were rejected as unauthenticated. See #311.
+                tokenManager.deleteToken()
             } catch (e: Exception) {
                 Log.e("AuthViewModel", "Failed to clear token", e)
             }
