@@ -112,7 +112,7 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
         return !claim.can_claim
     }
 
-    /** The Playing/Watching control only makes sense for Cheese-linked rooms. */
+    /** The Playing/Watching control makes sense for any Cheese-connected user. */
     fun showsTrackMode(player: Player): Boolean = player.cheese_claim != null
 
     fun modeFor(player: Player): String =
@@ -164,9 +164,11 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                     Log.d("SLOTS_DEBUG", "  No slots to prune locally.")
                 }
 
-                // Only send modes for slots that can actually have one. Rooms
-                // with no Cheese link have nothing to claim, so sending "play"
-                // for every slot would just be noise on the wire.
+                // Only send modes for slots that can actually have one. Without a
+                // Cheese key there is nothing to claim, so sending "play" for every
+                // slot would just be noise on the wire. A room that is not linked
+                // yet still gets modes: the user's choice has to reach the server
+                // before the link catch-up runs.
                 val modesToSend = newTrackedSlots
                     .filter { slotId -> allPlayers.value.any { it.slot_id == slotId && it.cheese_claim != null } }
                     .associate { slotId ->
