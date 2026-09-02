@@ -228,6 +228,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _isKnownGamesLoading = MutableStateFlow(false)
     val isKnownGamesLoading = _isKnownGamesLoading.asStateFlow()
 
+    private val _isGameItemsLoading = MutableStateFlow(false)
+    val isGameItemsLoading = _isGameItemsLoading.asStateFlow()
+
     private val _gameAvailableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val gameAvailableItems = _gameAvailableItems.asStateFlow()
 
@@ -769,47 +772,63 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchGameAvailableItems(gameName: String) {
         latestGameQuery = gameName
         fetchAvailableItemsJob?.cancel()
+        _isGameItemsLoading.value = true
         fetchAvailableItemsJob = viewModelScope.launch {
-            // 1. Instantly load local Room DB cache if available (0ms wait time)
-            val localCache = try {
-                val db = AppDatabase.getInstance(getApplication())
-                db.datapackageDao().getDatapackageForGame(gameName)
-            } catch (e: Exception) {
-                null
-            }
+            // A cancelled predecessor finishes after its replacement has already raised
+            // the flag, so only the job that is still the current one may lower it.
+            val thisJob = coroutineContext[kotlinx.coroutines.Job]
+            try {
+                // 1. Instantly load local Room DB cache if available (0ms wait time)
+                val localCache = try {
+                    val db = AppDatabase.getInstance(getApplication())
+                    db.datapackageDao().getDatapackageForGame(gameName)
+                } catch (e: Exception) {
+                    null
+                }
 
-            if (localCache != null && latestGameQuery == gameName) {
+                if (localCache != null && latestGameQuery == gameName) {
+                    try {
+                        val type = object : TypeToken<List<AutocompleteOption>>() {}.type
+                        val cachedItems: List<AutocompleteOption> = Gson().fromJson(localCache.itemsJson, type)
+                        if (cachedItems.isNotEmpty()) {
+                            _gameAvailableItems.value = cachedItems
+                        }
+                    } catch (e: Exception) {
+                        Log.e("UserViewModel", "Failed to parse local datapackage cache", e)
+                    }
+                }
+
+                // 2. Revalidate from API in background and update local Room DB cache
                 try {
-                    val type = object : TypeToken<List<AutocompleteOption>>() {}.type
-                    val cachedItems: List<AutocompleteOption> = Gson().fromJson(localCache.itemsJson, type)
-                    if (cachedItems.isNotEmpty()) {
-                        _gameAvailableItems.value = cachedItems
+                    val items = RetrofitClient.instance.getGameAvailableItems(gameName)
+                    if (latestGameQuery == gameName) {
+                        _gameAvailableItems.value = items
+                        val gson = Gson()
+                        val itemsJson = gson.toJson(items)
+                        val db = AppDatabase.getInstance(getApplication())
+                        val existing = db.datapackageDao().getDatapackageForGame(gameName)
+                        val updated = CachedDatapackageEntity(
+                            cacheKey = "game:$gameName",
+                            game = gameName,
+                            itemsJson = itemsJson,
+                            locationsJson = existing?.locationsJson ?: "[]",
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        db.datapackageDao().insertDatapackage(updated)
                     }
                 } catch (e: Exception) {
-                    Log.e("UserViewModel", "Failed to parse local datapackage cache", e)
+                    Log.e("UserViewModel", "Failed to fetch game available items from remote API", e)
+                    // A warm local cache still gives the user something to search. An empty
+                    // list means the editor opens with nothing at all, so say why. Games the
+                    // user has never played have no local cache, so this is their only signal.
+                    if (_gameAvailableItems.value.isEmpty() && latestGameQuery == gameName) {
+                        _errorMessage.value = "Could not load items for $gameName."
+                    }
                 }
-            }
-
-            // 2. Revalidate from API in background and update local Room DB cache
-            try {
-                val items = RetrofitClient.instance.getGameAvailableItems(gameName)
-                if (latestGameQuery == gameName) {
-                    _gameAvailableItems.value = items
-                    val gson = Gson()
-                    val itemsJson = gson.toJson(items)
-                    val db = AppDatabase.getInstance(getApplication())
-                    val existing = db.datapackageDao().getDatapackageForGame(gameName)
-                    val updated = CachedDatapackageEntity(
-                        cacheKey = "game:$gameName",
-                        game = gameName,
-                        itemsJson = itemsJson,
-                        locationsJson = existing?.locationsJson ?: "[]",
-                        updatedAt = System.currentTimeMillis()
-                    )
-                    db.datapackageDao().insertDatapackage(updated)
+            } finally {
+                if (fetchAvailableItemsJob == thisJob) {
+                    _isGameItemsLoading.value = false
                 }
-            } catch (e: Exception) {
-                Log.e("UserViewModel", "Failed to fetch game available items from remote API", e)
             }
         }
     }
@@ -817,6 +836,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     fun clearGameAvailableItems() {
         latestGameQuery = null
         fetchAvailableItemsJob?.cancel()
+        fetchAvailableItemsJob = null
+        _isGameItemsLoading.value = false
         _gameAvailableItems.value = emptyList()
     }
 

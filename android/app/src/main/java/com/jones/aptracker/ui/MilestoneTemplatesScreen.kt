@@ -92,6 +92,7 @@ fun MilestoneTemplatesScreen(
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
     val knownGames by userViewModel.knownGames.collectAsState()
     val isKnownGamesLoading by userViewModel.isKnownGamesLoading.collectAsState()
+    val isGameItemsLoading by userViewModel.isGameItemsLoading.collectAsState()
 
     // The games the user has a reason to care about: anything they track, plus anything
     // they already have a template for, so a game dropped from tracking can still take
@@ -100,7 +101,7 @@ fun MilestoneTemplatesScreen(
         (trackedSlotsByRoom.flatMap { room -> room.tracked_slots.mapNotNull { it.game } } +
             milestoneTemplates.map { it.game_name })
             .filter { it.isNotBlank() }
-            .distinct()
+            .distinctBy { it.lowercase() }
             .sortedBy { it.lowercase() }
     }
 
@@ -110,7 +111,7 @@ fun MilestoneTemplatesScreen(
         val mine = myGames.map { it.lowercase() }.toSet()
         knownGames
             .filter { it.isNotBlank() && it.lowercase() !in mine }
-            .distinct()
+            .distinctBy { it.lowercase() }
             .sortedBy { it.lowercase() }
     }
 
@@ -310,6 +311,7 @@ fun MilestoneTemplatesScreen(
             confirmLabel = "Create",
             initialItems = emptyList(),
             availableItems = gameAvailableItems,
+            isAutocompleteLoading = isGameItemsLoading,
             nameRequired = true,
             onDismiss = {
                 creatingForGame = null
@@ -400,6 +402,7 @@ fun MilestoneTemplatesScreen(
             initialName = toEdit.name,
             initialItems = initialItems,
             availableItems = gameAvailableItems,
+            isAutocompleteLoading = isGameItemsLoading,
             nameRequired = true,
             onDismiss = {
                 editingTemplate = null
@@ -570,16 +573,19 @@ fun GamePickerDialog(
     val filteredOthers = remember(query, otherGames) {
         if (query.isBlank()) otherGames else otherGames.filter { it.contains(query, ignoreCase = true) }
     }
+    // The bulk of the list comes from the server, so reaching this state with nothing
+    // to show and nothing still in flight means the fetch failed. Saying "track a slot
+    // first" would contradict the toast the failure already raised.
     val noGamesAtAll = myGames.isEmpty() && otherGames.isEmpty() && !isLoadingOtherGames
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (noGamesAtAll) "No Games Yet" else "Choose a Game") },
+        title = { Text(if (noGamesAtAll) "Game List Unavailable" else "Choose a Game") },
         text = {
             if (noGamesAtAll) {
                 Text(
-                    "Templates are tied to a game. Track a slot first, or import a template, " +
-                        "and the game will show up here."
+                    "The list of games could not be loaded. Check your connection, then " +
+                        "reopen this dialog."
                 )
             } else {
                 Column {
