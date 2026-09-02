@@ -326,9 +326,10 @@ data class Player(
     /** "play" | "watch". Null when the slot is not tracked. See [TrackMode]. */
     val track_mode: String? = null,
     /**
-     * Cheese Tracker claim state for this slot. Non-null only when the user is
-     * connected to Cheese and the room is linked to a tracker, which is exactly
-     * when the picker should offer the Playing/Watching choice at all.
+     * Cheese Tracker claim state for this slot. Non-null whenever the user is
+     * connected to Cheese, which is exactly when the picker should offer the
+     * Playing/Watching choice. A room not yet linked to a tracker reports
+     * nothing as claimed, so the choice is open rather than hidden.
      */
     val cheese_claim: CheeseClaim? = null
 )

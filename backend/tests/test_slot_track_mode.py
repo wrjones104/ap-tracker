@@ -937,3 +937,64 @@ class TestWatchOnlyRoomSurvivesCheeseSync(TrackModeTestBase):
         )
         self.assertIsNotNone(slot, "the watched slot must survive with it")
 
+class TestFreshRoomOffersTrackMode(TrackModeTestBase):
+    """
+    The picker shows the Playing/Watching control when the server sends a
+    cheese_claim for a slot. That was built only for rooms that already had a
+    cheese_tracker_id and cached tracker JSON -- which a brand-new room has
+    neither of, since it gets linked on the next sync. So the choice was hidden
+    at exactly the moment the user was first deciding what to track. See #314.
+    """
+
+    def _players(self, user, room_id):
+        from app.routes import rooms_routes
+        with self.app.test_request_context():
+            resp = rooms_routes.get_room_players.__wrapped__.__wrapped__.__wrapped__(
+                user, room_id
+            )
+        return json.loads(resp.get_data(as_text=True))
+
+    def _make_fresh_room(self, user_id):
+        """A room the user just added: no Cheese link, no cached tracker JSON."""
+        room = TrackedRoom(
+            room_id="fresh_uuid",
+            cached_players_json=json.dumps([
+                {'slot_id': 1, 'name': 'Link', 'game': 'A Link to the Past'},
+            ]),
+        )
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=room.id, alias="Fresh Room"
+        ))
+        self.session.commit()
+        return room.id
+
+    def test_cheese_user_gets_the_choice_on_a_fresh_room(self):
+        user = self.make_user()
+        room_id = self._make_fresh_room(user.id)
+
+        players = self._players(user, room_id)
+
+        self.assertEqual(len(players), 1)
+        claim = players[0]['cheese_claim']
+        self.assertIsNotNone(
+            claim,
+            "a Cheese-connected user must get the Playing/Watching choice on a "
+            "room that has not been linked to a tracker yet",
+        )
+        self.assertTrue(claim['can_claim'], "nothing holds a slot on an unlinked room")
+        self.assertFalse(claim['is_claimed'])
+        self.assertFalse(claim['is_mine'])
+
+    def test_user_without_cheese_still_gets_the_plain_checkbox(self):
+        user = self.make_user(cheese_api_key=None, cheese_user_id=None)
+        room_id = self._make_fresh_room(user.id)
+
+        players = self._players(user, room_id)
+
+        self.assertIsNone(
+            players[0]['cheese_claim'],
+            "without a Cheese key there is nothing to claim, so the picker must "
+            "stay a plain checkbox",
+        )

@@ -366,11 +366,11 @@ def get_room_players(current_user, room_db_id):
 
         # Per-slot Cheese claim state, read from the room's cached tracker JSON
         # so the picker can pre-resolve claims without any extra Cheese calls.
-        # Only built for users who have connected a key to a linked room; every
-        # other caller sees `cheese_claim: null` and the plain checkbox.
+        # Built for anyone with a Cheese key; callers without one see
+        # `cheese_claim: null` and the plain checkbox.
         cheese_games_map = {}
-        room_has_cheese = bool(current_user.cheese_api_key) and bool(room.cheese_tracker_id)
-        if room_has_cheese and room.cached_cheese_json:
+        user_has_cheese = bool(current_user.cheese_api_key)
+        if user_has_cheese and room.cheese_tracker_id and room.cached_cheese_json:
             try:
                 cheese_data = json.loads(room.cached_cheese_json)
                 if isinstance(cheese_data, dict):
@@ -394,11 +394,17 @@ def get_room_players(current_user, room_db_id):
             tracked_slot_entry = tracked_slots_map.get(slot_id_int) if slot_id_int is not None else None
             is_tracked = tracked_slot_entry is not None
 
+            # A fresh room has no tracker id and no cached JSON yet -- it gets
+            # linked on the next sync -- and gating on those hid the
+            # Playing/Watching choice at exactly the moment the user was first
+            # deciding what to track. An absent game resolves to "nothing holds
+            # this, you may claim it", which is the truth for an unlinked room.
+            # See #314.
             cheese_claim = None
-            cheese_game = cheese_games_map.get(slot_id_int) if slot_id_int is not None else None
-            if cheese_game is not None:
+            if user_has_cheese:
+                cheese_game = cheese_games_map.get(slot_id_int) if slot_id_int is not None else None
                 cheese_claim = build_cheese_claim_summary(
-                    cheese_game,
+                    cheese_game or {},
                     current_user.cheese_user_id,
                     my_discord_clean
                 )
