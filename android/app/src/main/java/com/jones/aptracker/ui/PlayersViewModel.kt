@@ -113,6 +113,15 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
      */
     fun isClaimKnown(player: Player): Boolean = player.cheese_claim?.is_known ?: true
 
+    /**
+     * True when Cheese already records this slot as the user's.
+     *
+     * The picker is a form: until it is saved, Playing is an intention, not a fact.
+     * This is what separates "you hold this" from "you are about to ask for it",
+     * which the caption had been conflating.
+     */
+    fun isClaimMine(player: Player): Boolean = player.cheese_claim?.is_mine == true
+
     /** True when this slot is claimed on Cheese by someone other than the user. */
     fun isClaimLocked(player: Player): Boolean {
         val claim = player.cheese_claim ?: return false
