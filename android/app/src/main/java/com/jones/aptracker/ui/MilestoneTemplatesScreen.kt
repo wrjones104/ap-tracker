@@ -702,7 +702,9 @@ fun TemplatesTips() {
             Spacer(modifier = Modifier.width(12.dp))
             Text(
                 "Tap + to build a template here, or save one from a slot's Milestone Groups " +
-                    "(tap Bookmark on a group). Use the upload icon to import a template someone shared with you.",
+                    "(tap Bookmark on a group). Use the upload icon to import a template someone shared with you. " +
+                    "Switch on \"Apply automatically\" and a template is added to new slots you play for its game; " +
+                    "slots you already track are left alone.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
@@ -815,11 +817,12 @@ fun MilestoneTemplateCard(
 
             // Deliberately a labelled switch rather than a fourth icon in the row above: this is
             // the screen where the setting is managed, and "automatically" needs saying in words.
+            // What it means is said once in the tips banner, not repeated on every card.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onAutoApplyChange(!template.auto_apply) }
-                    .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
+                    .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -829,19 +832,12 @@ fun MilestoneTemplateCard(
                     tint = if (template.auto_apply) MaterialTheme.colorScheme.primary else Color.Gray
                 )
                 Spacer(Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "Apply automatically",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        "Added to new ${template.game_name} slots you play. Slots you already " +
-                            "track are left alone.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
-                    )
-                }
+                Text(
+                    "Apply automatically",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
                 Switch(
                     checked = template.auto_apply,
                     onCheckedChange = onAutoApplyChange

@@ -103,6 +103,7 @@ fun SlotDetailScreen(
     var savingAsTemplateGroup by remember { mutableStateOf<ThresholdGroup?>(null) }
     var templateOverwriteConflict by remember { mutableStateOf<Pair<List<ThresholdGroupItemRequest>, String>?>(null) }
     var showApplyTemplatesSheet by remember { mutableStateOf(false) }
+    var showAddMilestoneMenu by remember { mutableStateOf(false) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val passwordManager = remember { com.jones.aptracker.network.PasswordManager(context) }
@@ -310,21 +311,39 @@ fun SlotDetailScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Milestone Groups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { showApplyTemplatesSheet = true }) {
-                            Icon(
-                                Icons.Default.Bookmarks,
-                                contentDescription = "Apply Templates",
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        TextButton(onClick = { showAddThresholdDialog = true }) {
+                    // Both ways in are labelled and one tap apart, behind a single Add. The
+                    // bookmark icon that used to sit here was the only door to templates once a
+                    // slot had groups, and an icon that previously meant "manage templates"
+                    // reads as anything but "apply several at once".
+                    Box {
+                        TextButton(onClick = { showAddMilestoneMenu = true }) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text("Add")
+                                Icon(Icons.Default.ArrowDropDown, null, modifier = Modifier.size(18.dp))
                             }
+                        }
+                        DropdownMenu(
+                            expanded = showAddMilestoneMenu,
+                            onDismissRequest = { showAddMilestoneMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("New milestone group") },
+                                leadingIcon = { Icon(Icons.Default.Add, null, modifier = Modifier.size(20.dp)) },
+                                onClick = {
+                                    showAddMilestoneMenu = false
+                                    showAddThresholdDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Apply templates") },
+                                leadingIcon = { Icon(Icons.Default.Bookmarks, null, modifier = Modifier.size(20.dp)) },
+                                onClick = {
+                                    showAddMilestoneMenu = false
+                                    showApplyTemplatesSheet = true
+                                }
+                            )
                         }
                     }
                 }
@@ -631,9 +650,6 @@ fun SlotDetailScreen(
             onManageTemplates = {
                 showApplyTemplatesSheet = false
                 onNavigateToMilestoneTemplates()
-            },
-            onToggleAutoApply = { template, enabled ->
-                userViewModel.setMilestoneTemplateAutoApply(template.id, enabled)
             },
             onDismiss = { showApplyTemplatesSheet = false },
             onApply = { groups ->
@@ -1665,7 +1681,6 @@ private fun ApplyTemplatesSheet(
     isAutocompleteLoading: Boolean,
     existingGroupNames: Set<String>,
     onManageTemplates: () -> Unit,
-    onToggleAutoApply: (MilestoneTemplate, Boolean) -> Unit,
     onDismiss: () -> Unit,
     onApply: (List<CreateThresholdGroupRequest>) -> Unit
 ) {
@@ -1753,29 +1768,10 @@ private fun ApplyTemplatesSheet(
                                 onCheckedChange = { checked ->
                                     if (checked) selectedIds.add(state.template.id)
                                     else selectedIds.remove(state.template.id)
-                                },
-                                onToggleAutoApply = {
-                                    onToggleAutoApply(state.template, !state.template.auto_apply)
                                 }
                             )
                             HorizontalDivider(color = Color.DarkGray.copy(alpha = 0.3f))
                         }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.Bolt,
-                            null,
-                            modifier = Modifier.size(16.dp),
-                            tint = Color.Gray
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "Tap the bolt to add a template automatically to new slots you play " +
-                                "for this game.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
-                        )
                     }
                 }
             }
@@ -1818,8 +1814,7 @@ private fun ApplyTemplatesSheet(
 private fun ApplyTemplateRow(
     state: TemplateApplyState,
     isChecked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    onToggleAutoApply: () -> Unit
+    onCheckedChange: (Boolean) -> Unit
 ) {
     val enabled = state.isSelectable
     Row(
@@ -1861,17 +1856,6 @@ private fun ApplyTemplateRow(
                             else MaterialTheme.colorScheme.error
                 )
             }
-        }
-        IconButton(onClick = onToggleAutoApply) {
-            Icon(
-                Icons.Default.Bolt,
-                contentDescription = if (state.template.auto_apply)
-                    "Stop applying ${state.template.name} to new slots automatically"
-                else "Apply ${state.template.name} to new slots automatically",
-                modifier = Modifier.size(20.dp),
-                tint = if (state.template.auto_apply) MaterialTheme.colorScheme.primary
-                       else Color.Gray.copy(alpha = 0.6f)
-            )
         }
     }
 }
