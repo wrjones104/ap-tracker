@@ -61,6 +61,7 @@ import com.jones.aptracker.network.UserProfile
 import com.jones.aptracker.network.ThresholdGroup
 import com.jones.aptracker.network.ThresholdGroupItem
 import com.jones.aptracker.network.ThresholdGroupItemRequest
+import com.jones.aptracker.network.CreateThresholdGroupRequest
 import com.jones.aptracker.network.AutocompleteOption
 import com.jones.aptracker.network.MilestoneTemplate
 import com.jones.aptracker.ui.theme.*
@@ -101,6 +102,7 @@ fun SlotDetailScreen(
     var password by remember { mutableStateOf<String?>(null) }
     var savingAsTemplateGroup by remember { mutableStateOf<ThresholdGroup?>(null) }
     var templateOverwriteConflict by remember { mutableStateOf<Pair<List<ThresholdGroupItemRequest>, String>?>(null) }
+    var showApplyTemplatesSheet by remember { mutableStateOf(false) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val passwordManager = remember { com.jones.aptracker.network.PasswordManager(context) }
@@ -309,10 +311,10 @@ fun SlotDetailScreen(
                 ) {
                     Text("Milestone Groups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onNavigateToMilestoneTemplates) {
+                        IconButton(onClick = { showApplyTemplatesSheet = true }) {
                             Icon(
                                 Icons.Default.Bookmarks,
-                                contentDescription = "Manage Templates",
+                                contentDescription = "Apply Templates",
                                 modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -345,12 +347,21 @@ fun SlotDetailScreen(
                 ) {
                     Column(modifier = Modifier.padding(vertical = 8.dp)) {
                         if (thresholdGroups.isEmpty()) {
-                            Text(
-                                "No milestone groups set",
-                                modifier = Modifier.padding(16.dp),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.Gray
-                            )
+                            // A fresh slot is where applying a saved set costs the least and
+                            // helps the most, so the sheet gets a second, larger door here.
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    "No milestone groups set",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.Gray
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedButton(onClick = { showApplyTemplatesSheet = true }) {
+                                    Icon(Icons.Default.Bookmarks, null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Apply templates")
+                                }
+                            }
                         } else {
                             thresholdGroups.forEachIndexed { index, group ->
                                 ThresholdGroupRow(
@@ -600,6 +611,36 @@ fun SlotDetailScreen(
                 }
             )
         }
+    }
+
+    if (showApplyTemplatesSheet) {
+        LaunchedEffect(Unit) {
+            if (availableItems.isEmpty()) {
+                textClientViewModel.fetchAutocompleteData(roomDbId, slotId, slot?.game, context.applicationContext as? android.app.Application)
+            }
+            userViewModel.fetchMilestoneTemplates(slot?.game)
+        }
+        ApplyTemplatesSheet(
+            gameName = slot?.game,
+            templates = milestoneTemplates,
+            availableItems = availableItems,
+            isAutocompleteLoading = isAutocompleteLoading,
+            existingGroupNames = remember(thresholdGroups) {
+                thresholdGroups.mapNotNull { it.name?.trim()?.lowercase()?.ifBlank { null } }.toSet()
+            },
+            onManageTemplates = {
+                showApplyTemplatesSheet = false
+                onNavigateToMilestoneTemplates()
+            },
+            onToggleAutoApply = { template, enabled ->
+                userViewModel.setMilestoneTemplateAutoApply(template.id, enabled)
+            },
+            onDismiss = { showApplyTemplatesSheet = false },
+            onApply = { groups ->
+                userViewModel.applyMilestoneTemplates(roomDbId, slotId, groups)
+                showApplyTemplatesSheet = false
+            }
+        )
     }
 
     if (showAddThresholdDialog) {
@@ -1590,6 +1631,248 @@ fun ThresholdGroupSheet(
             confirmButton = {},
             dismissButton = { TextButton(onClick = { showTemplatePicker = false }) { Text("Cancel") } }
         )
+    }
+}
+
+/**
+ * How one template lands on this slot, worked out before anything is created.
+ *
+ * The single-group editor could show a template's fallout after the fact, because there was
+ * only ever one. Ticking three at once has no such moment -- so every row states up front what
+ * it will actually add, and rows that would add nothing usable cannot be ticked at all.
+ */
+private data class TemplateApplyState(
+    val template: MilestoneTemplate,
+    val items: List<ThresholdGroupItemRequest>,
+    val note: String?,
+    val isDuplicate: Boolean
+) {
+    val isSelectable: Boolean get() = items.isNotEmpty() && !isDuplicate
+
+    val statusText: String? get() = when {
+        isDuplicate -> "Already on this slot"
+        items.isEmpty() -> "No items from this template are in this seed"
+        else -> note
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ApplyTemplatesSheet(
+    gameName: String?,
+    templates: List<MilestoneTemplate>,
+    availableItems: List<AutocompleteOption>,
+    isAutocompleteLoading: Boolean,
+    existingGroupNames: Set<String>,
+    onManageTemplates: () -> Unit,
+    onToggleAutoApply: (MilestoneTemplate, Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    onApply: (List<CreateThresholdGroupRequest>) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val selectedIds = remember { mutableStateListOf<Int>() }
+
+    val states = remember(templates, availableItems, existingGroupNames) {
+        templates.map { template ->
+            val (items, note) = resolveTemplateItems(template.items, availableItems)
+            TemplateApplyState(
+                template = template,
+                items = items,
+                note = note,
+                isDuplicate = template.name.trim().lowercase() in existingGroupNames
+            )
+        }
+    }
+
+    // Keep the selection honest when the item list finally arrives and re-resolves the rows:
+    // a template that was tickable against an unverified list may not be against the real one.
+    LaunchedEffect(states) {
+        selectedIds.retainAll { id -> states.any { it.template.id == id && it.isSelectable } }
+    }
+
+    val isResolving = availableItems.isEmpty() && isAutocompleteLoading
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 16.dp)
+        ) {
+            Text(
+                "Apply Templates",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (gameName.isNullOrBlank()) "Each template becomes its own milestone group."
+                else "Each template becomes its own milestone group for $gameName.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
+            Spacer(Modifier.height(16.dp))
+
+            when {
+                isResolving -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            "Checking templates against this seed...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                }
+                templates.isEmpty() -> {
+                    Text(
+                        if (gameName.isNullOrBlank()) "You haven't saved any templates yet."
+                        else "You haven't saved any templates for $gameName yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Gray
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Tap the bookmark on a milestone group to save it as one.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+                else -> {
+                    LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                        items(states, key = { it.template.id }) { state ->
+                            ApplyTemplateRow(
+                                state = state,
+                                isChecked = state.template.id in selectedIds,
+                                onCheckedChange = { checked ->
+                                    if (checked) selectedIds.add(state.template.id)
+                                    else selectedIds.remove(state.template.id)
+                                },
+                                onToggleAutoApply = {
+                                    onToggleAutoApply(state.template, !state.template.auto_apply)
+                                }
+                            )
+                            HorizontalDivider(color = Color.DarkGray.copy(alpha = 0.3f))
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Bolt,
+                            null,
+                            modifier = Modifier.size(16.dp),
+                            tint = Color.Gray
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Tap the bolt to add a template automatically to new slots you play " +
+                                "for this game.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(color = Color.DarkGray.copy(alpha = 0.3f))
+            TextButton(onClick = onManageTemplates) {
+                Text("Manage templates")
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+                Spacer(Modifier.width(16.dp))
+                Button(
+                    onClick = {
+                        val chosen = states.filter { it.template.id in selectedIds }
+                        onApply(chosen.map { CreateThresholdGroupRequest(it.template.name, it.items) })
+                    },
+                    enabled = selectedIds.isNotEmpty()
+                ) {
+                    Text(
+                        when (selectedIds.size) {
+                            0 -> "Add"
+                            1 -> "Add 1 group"
+                            else -> "Add ${selectedIds.size} groups"
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ApplyTemplateRow(
+    state: TemplateApplyState,
+    isChecked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onToggleAutoApply: () -> Unit
+) {
+    val enabled = state.isSelectable
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (enabled) Modifier.clickable { onCheckedChange(!isChecked) } else Modifier
+            )
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(
+            checked = isChecked,
+            onCheckedChange = if (enabled) onCheckedChange else null,
+            enabled = enabled
+        )
+        Spacer(Modifier.width(4.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                state.template.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else Color.Gray
+            )
+            Text(
+                state.items.ifEmpty { state.template.items.map {
+                    ThresholdGroupItemRequest(it.item_name, it.quantity, it.is_group)
+                } }.joinToString(", ") { "${it.item_name} x${it.quantity}" },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            state.statusText?.let { status ->
+                Text(
+                    status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (enabled) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.error
+                )
+            }
+        }
+        IconButton(onClick = onToggleAutoApply) {
+            Icon(
+                Icons.Default.Bolt,
+                contentDescription = if (state.template.auto_apply)
+                    "Stop applying ${state.template.name} to new slots automatically"
+                else "Apply ${state.template.name} to new slots automatically",
+                modifier = Modifier.size(20.dp),
+                tint = if (state.template.auto_apply) MaterialTheme.colorScheme.primary
+                       else Color.Gray.copy(alpha = 0.6f)
+            )
+        }
     }
 }
 

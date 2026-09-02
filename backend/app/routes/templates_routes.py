@@ -16,6 +16,7 @@ def _serialize_template(t):
         'id': t.id,
         'name': t.name,
         'game_name': t.game_name,
+        'auto_apply': bool(t.auto_apply),
         'items': [
             {
                 'id': item.id,
@@ -92,6 +93,7 @@ def create_milestone_template(current_user):
             user_id=current_user.id,
             game_name=game_name,
             name=name,
+            auto_apply=bool(data.get('auto_apply', False)),
         )
         session.add(template)
         session.flush()
@@ -149,6 +151,8 @@ def update_milestone_template(current_user, template_id):
 
         template.name = name
         template.game_name = game_name
+        if 'auto_apply' in data:
+            template.auto_apply = bool(data.get('auto_apply'))
         template.items.clear()
 
         for item_name, quantity, is_group in valid_items:
@@ -169,6 +173,39 @@ def update_milestone_template(current_user, template_id):
         session.rollback()
         logging.error(f"Failed to update milestone template {template_id}: {e}", exc_info=True)
         return jsonify({'error': 'Failed to update template'}), 500
+    finally:
+        Session.remove()
+
+
+@templates_bp.route('/milestone-templates/<int:template_id>/auto-apply', methods=['PUT'])
+@handle_db_errors
+@log_api_call
+@token_required
+def set_milestone_template_auto_apply(current_user, template_id):
+    """
+    Flips one template's "always add to new slots I play for this game" switch.
+
+    Separate from the full update so the switch in the app does not have to round-trip every
+    item just to change a boolean -- and so a stale client cannot silently revert a template's
+    items while toggling it.
+    """
+    data = request.json or {}
+    if 'auto_apply' not in data:
+        return jsonify({'error': 'auto_apply is required'}), 400
+
+    session = Session()
+    try:
+        template = session.query(MilestoneTemplate).filter_by(
+            id=template_id,
+            user_id=current_user.id,
+        ).first()
+
+        if not template:
+            return jsonify({'error': 'Template not found'}), 404
+
+        template.auto_apply = bool(data.get('auto_apply'))
+        session.commit()
+        return jsonify({'message': 'Template updated', 'auto_apply': template.auto_apply})
     finally:
         Session.remove()
 

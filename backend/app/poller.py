@@ -33,6 +33,7 @@ from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id
 from app.services.cheese_service import process_cheese_update
 from app.services.redis_service import get_redis_client, publish_event
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
+from app.services import milestone_template_service
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -1402,6 +1403,16 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
 
         slots_to_clear_backfill = [slot for slot in all_tracked_slots_in_room if slot.needs_backfill]
         backfill_check_set = {(slot.user_id, slot.slot_id) for slot in slots_to_clear_backfill}
+
+        # Auto-apply milestone templates to slots the user has newly started playing. This has
+        # to happen here rather than when the slot is tracked: for a brand new room the game a
+        # slot is playing is not known until a poll has run. Groups added now are evaluated
+        # from the next poll onwards -- a slot in its backfill window is skipped by
+        # _evaluate_threshold_groups, so a freshly applied milestone cannot fire on items the
+        # user collected before they started tracking.
+        milestone_template_service.apply_pending_for_room(
+            session, players, game_checksums, all_tracked_slots_in_room
+        )
 
         tracked_slots_by_user = {}
         prefs_by_user_slot = {}

@@ -26,6 +26,8 @@ import com.jones.aptracker.network.CreateThresholdGroupRequest
 import com.jones.aptracker.network.ThresholdGroupItemRequest
 import com.jones.aptracker.network.MilestoneTemplate
 import com.jones.aptracker.network.CreateMilestoneTemplateRequest
+import com.jones.aptracker.network.BulkCreateThresholdGroupsRequest
+import com.jones.aptracker.network.SetTemplateAutoApplyRequest
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.database.CachedDatapackageEntity
 import com.google.gson.Gson
@@ -1359,6 +1361,74 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e("UserViewModel", "Failed to update milestone template", e)
                 _errorMessage.value = "Failed to update template. Check connection."
                 onError?.invoke()
+            }
+        }
+    }
+
+    /**
+     * Applies several templates to one slot as separate milestone groups, in one request.
+     *
+     * [groups] is already resolved against the slot's item list by the caller, so the server
+     * only ever sees requirements this seed can satisfy. It still reports what it skipped --
+     * a name the slot already uses, or a group left with nothing after resolution -- and that
+     * is surfaced rather than swallowed, since the user ticked those boxes deliberately.
+     */
+    fun applyMilestoneTemplates(
+        roomDbId: Int,
+        slotId: Int,
+        groups: List<CreateThresholdGroupRequest>
+    ) {
+        if (groups.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val response = RetrofitClient.instance.createThresholdGroupsBulk(
+                    roomDbId, slotId, BulkCreateThresholdGroupsRequest(groups)
+                )
+                if (response.isSuccessful) {
+                    fetchThresholdGroups(roomDbId, slotId)
+                    com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshSlotAndUpdateAsync(
+                        getApplication(), roomDbId, slotId
+                    )
+                    val created = response.body()?.created?.size ?: groups.size
+                    val skipped = response.body()?.skipped?.size ?: 0
+                    val groupWord = if (created == 1) "group" else "groups"
+                    _integrationMessage.value = if (skipped > 0) {
+                        "Added $created milestone $groupWord. $skipped skipped."
+                    } else {
+                        "Added $created milestone $groupWord."
+                    }
+                } else {
+                    _errorMessage.value = "Failed to apply templates: ${response.code()}"
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to apply milestone templates", e)
+                _errorMessage.value = "Failed to apply templates. Check connection."
+            }
+        }
+    }
+
+    /**
+     * Flips a template's auto-apply switch, updating the list optimistically so the toggle does
+     * not visibly lag the tap, and rolling back if the write fails.
+     */
+    fun setMilestoneTemplateAutoApply(templateId: Int, autoApply: Boolean) {
+        viewModelScope.launch {
+            val currentList = _milestoneTemplates.value
+            _milestoneTemplates.value = currentList.map {
+                if (it.id == templateId) it.copy(auto_apply = autoApply) else it
+            }
+            try {
+                val response = RetrofitClient.instance.setMilestoneTemplateAutoApply(
+                    templateId, SetTemplateAutoApplyRequest(autoApply)
+                )
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Failed to update auto-apply: ${response.code()}"
+                    _milestoneTemplates.value = currentList
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to set template auto-apply", e)
+                _errorMessage.value = "Failed to update auto-apply. Check connection."
+                _milestoneTemplates.value = currentList
             }
         }
     }

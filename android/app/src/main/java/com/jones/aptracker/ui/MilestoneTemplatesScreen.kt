@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
@@ -39,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -278,6 +280,9 @@ fun MilestoneTemplatesScreen(
                                     putExtra(Intent.EXTRA_SUBJECT, "Milestone Template: ${template.name}")
                                 }
                                 context.startActivity(Intent.createChooser(sendIntent, "Share Template"))
+                            },
+                            onAutoApplyChange = { enabled ->
+                                userViewModel.setMilestoneTemplateAutoApply(template.id, enabled)
                             }
                         )
                     }
@@ -766,43 +771,81 @@ fun MilestoneTemplateCard(
     template: MilestoneTemplate,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onExport: () -> Unit
+    onExport: () -> Unit,
+    onAutoApplyChange: (Boolean) -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    template.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(Modifier.height(4.dp))
-                val summary = template.items.joinToString(", ") {
-                    if (it.is_group) "${it.item_name} (Group) x${it.quantity}" else "${it.item_name} x${it.quantity}"
+        Column {
+            Row(
+                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        template.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    val summary = template.items.joinToString(", ") {
+                        if (it.is_group) "${it.item_name} (Group) x${it.quantity}" else "${it.item_name} x${it.quantity}"
+                    }
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray,
+                        maxLines = 2
+                    )
                 }
-                Text(
-                    summary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray,
-                    maxLines = 2
+                IconButton(onClick = onExport) {
+                    Icon(Icons.Default.Share, contentDescription = "Export", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Default.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                }
+            }
+
+            // Deliberately a labelled switch rather than a fourth icon in the row above: this is
+            // the screen where the setting is managed, and "automatically" needs saying in words.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onAutoApplyChange(!template.auto_apply) }
+                    .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Bolt,
+                    null,
+                    modifier = Modifier.size(18.dp),
+                    tint = if (template.auto_apply) MaterialTheme.colorScheme.primary else Color.Gray
                 )
-            }
-            IconButton(onClick = onExport) {
-                Icon(Icons.Default.Share, contentDescription = "Export", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            IconButton(onClick = onEdit) {
-                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Apply automatically",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "Added to new ${template.game_name} slots you play. Slots you already " +
+                            "track are left alone.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+                Switch(
+                    checked = template.auto_apply,
+                    onCheckedChange = onAutoApplyChange
+                )
             }
         }
     }
