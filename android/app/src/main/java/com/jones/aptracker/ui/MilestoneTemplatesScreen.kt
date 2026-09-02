@@ -1,6 +1,7 @@
 package com.jones.aptracker.ui
 
 import android.content.Intent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
@@ -30,6 +32,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -79,6 +82,26 @@ fun MilestoneTemplatesScreen(
     var deletingTemplate by remember { mutableStateOf<MilestoneTemplate?>(null) }
     var showImportDialog by remember { mutableStateOf(false) }
 
+    // --- Create-from-here state ---
+    // A template is per-game, so creating one from this screen needs a game chosen
+    // first; on the slot detail screen the slot supplies it.
+    var showGamePicker by remember { mutableStateOf(false) }
+    var creatingForGame by remember { mutableStateOf<String?>(null) }
+    var createConflict by remember { mutableStateOf<TemplateConflict?>(null) }
+
+    val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
+
+    // Games the user could plausibly want a template for: anything they track, plus
+    // anything they already have a template for, so a game dropped from tracking can
+    // still take a second template.
+    val templateableGames = remember(trackedSlotsByRoom, milestoneTemplates) {
+        (trackedSlotsByRoom.flatMap { room -> room.tracked_slots.mapNotNull { it.game } } +
+            milestoneTemplates.map { it.game_name })
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sortedBy { it.lowercase() }
+    }
+
     // --- Sequential import queue state ---
     var importItems by remember { mutableStateOf<List<ParsedTemplate>>(emptyList()) }
     var importIndex by remember { mutableStateOf(0) }
@@ -87,6 +110,9 @@ fun MilestoneTemplatesScreen(
 
     LaunchedEffect(Unit) {
         userViewModel.fetchMilestoneTemplates()
+        // Populates the game picker. This screen is reachable without visiting Rooms
+        // first, so the list cannot be assumed to be loaded already.
+        userViewModel.fetchTrackedSlots()
     }
 
     LaunchedEffect(integrationMessage) {
@@ -143,6 +169,9 @@ fun MilestoneTemplatesScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showGamePicker = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "New Template")
+                    }
                     IconButton(onClick = { showImportDialog = true }) {
                         Icon(Icons.Default.Upload, contentDescription = "Import Templates")
                     }
@@ -177,12 +206,19 @@ fun MilestoneTemplatesScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Save a milestone group as a template from a slot's detail screen, or import one below.",
+                            "Build one here, save a milestone group as a template from a slot's detail screen, or import one below.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.Gray,
                             textAlign = TextAlign.Center
                         )
                         Spacer(Modifier.height(16.dp))
+                        Button(onClick = { showGamePicker = true }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("New Template")
+                            }
+                        }
                         TextButton(onClick = { showImportDialog = true }) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -233,6 +269,99 @@ fun MilestoneTemplatesScreen(
                 }
             }
         }
+    }
+
+    if (showGamePicker) {
+        GamePickerDialog(
+            games = templateableGames,
+            onDismiss = { showGamePicker = false },
+            onSelect = { game ->
+                showGamePicker = false
+                creatingForGame = game
+            }
+        )
+    }
+
+    val newGame = creatingForGame
+    if (newGame != null) {
+        LaunchedEffect(newGame) {
+            userViewModel.fetchGameAvailableItems(newGame)
+        }
+        ThresholdGroupSheet(
+            // Name the game: the picker is a separate step, so by the time the editor is
+            // open there is otherwise nothing on screen saying which game was chosen.
+            title = "New Template · $newGame",
+            confirmLabel = "Create",
+            initialItems = emptyList(),
+            availableItems = gameAvailableItems,
+            nameRequired = true,
+            onDismiss = {
+                creatingForGame = null
+                userViewModel.clearGameAvailableItems()
+            },
+            onConfirm = { name, items, _ ->
+                // nameRequired gates the confirm button on a non-blank name, so this is
+                // only defensive.
+                val templateName = name?.trim()
+                if (!templateName.isNullOrBlank()) {
+                    userViewModel.createMilestoneTemplate(
+                        name = templateName,
+                        gameName = newGame,
+                        items = items,
+                        onConflict = {
+                            createConflict = TemplateConflict(items, templateName, newGame)
+                        }
+                    )
+                }
+                creatingForGame = null
+                userViewModel.clearGameAvailableItems()
+            }
+        )
+    }
+
+    val newTemplateConflict = createConflict
+    if (newTemplateConflict != null) {
+        LaunchedEffect(newTemplateConflict) {
+            // Refresh so the clashing template is present and Overwrite can enable.
+            // Deliberately unfiltered: this screen lists every game, and passing a game
+            // to fetchMilestoneTemplates replaces the whole list rather than merging.
+            userViewModel.fetchMilestoneTemplates()
+        }
+        val existingTemplate = milestoneTemplates.find {
+            it.game_name == newTemplateConflict.gameName && it.name == newTemplateConflict.name
+        }
+        AlertDialog(
+            onDismissRequest = { createConflict = null },
+            title = { Text("Template Already Exists") },
+            text = {
+                Text("A template named \"${newTemplateConflict.name}\" already exists for ${newTemplateConflict.gameName}. Overwrite it?")
+            },
+            confirmButton = {
+                Button(
+                    enabled = existingTemplate != null,
+                    onClick = {
+                        existingTemplate?.let { existing ->
+                            userViewModel.updateMilestoneTemplate(
+                                templateId = existing.id,
+                                name = newTemplateConflict.name,
+                                gameName = newTemplateConflict.gameName,
+                                items = newTemplateConflict.items
+                            )
+                        }
+                        createConflict = null
+                    }
+                ) {
+                    if (existingTemplate == null) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Overwrite")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { createConflict = null }) { Text("Cancel") }
+            }
+        )
     }
 
     val toEdit = editingTemplate
@@ -395,6 +524,62 @@ fun MilestoneTemplatesScreen(
     }
 }
 
+/** Carries the details of a name clash so the overwrite prompt can act on it. */
+private data class TemplateConflict(
+    val items: List<ThresholdGroupItemRequest>,
+    val name: String,
+    val gameName: String
+)
+
+/**
+ * Picks the game a new template belongs to. Item autocomplete is per-game, so the
+ * choice has to come before the editor opens.
+ */
+@Composable
+fun GamePickerDialog(
+    games: List<String>,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (games.isEmpty()) "No Games Yet" else "Choose a Game") },
+        text = {
+            if (games.isEmpty()) {
+                Text(
+                    "Templates are tied to a game. Track a slot first, or import a template, " +
+                        "and the game will show up here."
+                )
+            } else {
+                Column {
+                    Text(
+                        "Milestone items come from the game's datapackage, so pick the game first.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                        items(games, key = { it }) { game ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelect(game) }
+                                    .padding(vertical = 12.dp)
+                            ) {
+                                Text(game, style = MaterialTheme.typography.bodyLarge)
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(if (games.isEmpty()) "OK" else "Cancel") }
+        }
+    )
+}
+
 @Composable
 fun TemplatesTips() {
     Surface(
@@ -414,8 +599,8 @@ fun TemplatesTips() {
             )
             Spacer(modifier = Modifier.width(12.dp))
             Text(
-                "New templates are created from a slot's Milestone Groups (tap Bookmark on a group), not from here. " +
-                    "Use the upload icon above to import a template someone shared with you.",
+                "Tap + to build a template here, or save one from a slot's Milestone Groups " +
+                    "(tap Bookmark on a group). Use the upload icon to import a template someone shared with you.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
