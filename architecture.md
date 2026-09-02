@@ -27,7 +27,7 @@ flowchart TD
 
         subgraph poller["Poller Container — run_poller_only.py"]
             PollerSupervisor[poller_supervisor]
-            PollerWorker[poller_service]
+            PollerWorker[poller.run_room_poll]
             DatapackageSvc[datapackage_service]
             ThresholdSvc[threshold_service]
             FilterSvc[filtering_service]
@@ -87,7 +87,7 @@ Four more blueprints are registered directly in `create_app()`:
 
 ### C. Modular Poller Engine (`backend/app/services/`)
 The poller handles background polling and event detection across active Archipelago multiworld rooms:
-* **[poller_service.py](backend/app/services/poller_service.py):** Stateless HTTP GET polling using `/api/room_status/<uuid>` gatekeepers to skip redundant tracker downloads.
+* **[poller.py](backend/app/poller.py):** The poll loop itself lives outside `services/`. `run_room_poll` does stateless HTTP GET polling, using `/api/room_status/<uuid>` gatekeepers to skip redundant tracker downloads.
 * **[threshold_service.py](backend/app/services/threshold_service.py):** Evaluates AND-logic milestone threshold groups for tracked slots.
 * **[filtering_service.py](backend/app/services/filtering_service.py):** Resolves ignore and whitelist rules server-side, expanding item-group rules against the exact datapackage checksum an item arrived under.
 * **[notification_service.py](backend/app/services/notification_service.py):** Aggregates and dispatches FCM push payloads, including the Android channel id and priority for each event category.
