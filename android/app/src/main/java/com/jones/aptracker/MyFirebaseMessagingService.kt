@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.jones.aptracker.network.RetrofitClient
+import com.jones.aptracker.network.TokenManager
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.HistorySyncWorker
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +39,14 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             Log.d("FCM", "Notification Received: ${notification.title} - ${notification.body} (Channel: $channelId)")
             // Pass the bundled items, bundle type, and resolved channel ID to the generator
             sendSystemNotification(notification.title, notification.body, bundledItems, bundleType, channelId)
+        }
+
+        // Both sync paths below call authenticated endpoints. A logged-out device keeps
+        // receiving pushes until the server prunes its registration, so without this guard
+        // every push fired five requests that could only ever 401. See #308.
+        if (TokenManager(applicationContext).getToken() == null) {
+            Log.w("FCM", "Push received while logged out; skipping history sync.")
+            return
         }
 
         // 1. Enqueue guaranteed background sync worker with WorkManager (OS wake lock protection)
