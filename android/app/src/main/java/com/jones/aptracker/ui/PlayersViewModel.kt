@@ -106,13 +106,29 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
         return if (claim.can_claim) TrackMode.PLAY else TrackMode.WATCH
     }
 
+    /**
+     * True when the claim state came from Cheese rather than being assumed. False
+     * for a room that has not synced yet, where the slot may already be held by
+     * someone else and nothing has looked.
+     */
+    fun isClaimKnown(player: Player): Boolean = player.cheese_claim?.is_known ?: true
+
+    /**
+     * True when Cheese already records this slot as the user's.
+     *
+     * The picker is a form: until it is saved, Playing is an intention, not a fact.
+     * This is what separates "you hold this" from "you are about to ask for it",
+     * which the caption had been conflating.
+     */
+    fun isClaimMine(player: Player): Boolean = player.cheese_claim?.is_mine == true
+
     /** True when this slot is claimed on Cheese by someone other than the user. */
     fun isClaimLocked(player: Player): Boolean {
         val claim = player.cheese_claim ?: return false
         return !claim.can_claim
     }
 
-    /** The Playing/Watching control only makes sense for Cheese-linked rooms. */
+    /** The Playing/Watching control makes sense for any Cheese-connected user. */
     fun showsTrackMode(player: Player): Boolean = player.cheese_claim != null
 
     fun modeFor(player: Player): String =
@@ -164,9 +180,11 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                     Log.d("SLOTS_DEBUG", "  No slots to prune locally.")
                 }
 
-                // Only send modes for slots that can actually have one. Rooms
-                // with no Cheese link have nothing to claim, so sending "play"
-                // for every slot would just be noise on the wire.
+                // Only send modes for slots that can actually have one. Without a
+                // Cheese key there is nothing to claim, so sending "play" for every
+                // slot would just be noise on the wire. A room that is not linked
+                // yet still gets modes: the user's choice has to reach the server
+                // before the link catch-up runs.
                 val modesToSend = newTrackedSlots
                     .filter { slotId -> allPlayers.value.any { it.slot_id == slotId && it.cheese_claim != null } }
                     .associate { slotId ->

@@ -848,3 +848,319 @@ class TestManualRefreshSendsDemotionPushes(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestWatchOnlyRoomSurvivesCheeseSync(TrackModeTestBase):
+    """
+    A watch-only room never appears on the Cheese dashboard: the user claims
+    nothing on it, so Cheese has no reason to list it. The stale-subscription
+    prune read that absence as "you are done with this room" and deleted the
+    subscription, which took the room out of the app entirely along with the
+    slots the user was watching. See #315.
+    """
+
+    def _run_sync(self, mock_session_cls):
+        mock_session = MagicMock()
+        mock_session_cls.return_value.__enter__.return_value = mock_session
+
+        me_resp = MagicMock(ok=True)
+        me_resp.json.return_value = {'id': MY_CT_ID, 'discord_username': 'me'}
+
+        # Only the played room is on the dashboard. The watch-only room is not,
+        # which is the whole point.
+        dash_resp = MagicMock(ok=True)
+        dash_resp.json.return_value = [{
+            'tracker_id': 'ct_room_1',
+            'room_link': 'https://archipelago.gg/room/room_uuid',
+            'title': 'Played Room',
+            'dashboard_override_visibility': True,
+        }]
+
+        detail_resp = MagicMock(ok=True)
+        detail_resp.json.return_value = {
+            'updated_at': '2026-06-23T10:00:00Z',
+            'games': [{'id': 901, 'position': 1, 'claimed_by_ct_user_id': MY_CT_ID}],
+        }
+
+        def mock_get(url, *args, **kwargs):
+            if '/user/self' in url:
+                return me_resp
+            if '/dashboard/tracker' in url:
+                return dash_resp
+            if '/tracker/ct_room_1' in url:
+                return detail_resp
+            return MagicMock()
+
+        mock_session.get.side_effect = mock_get
+
+    @patch('app.api_cheese.requests.Session')
+    def test_watch_only_room_keeps_its_subscription(self, mock_session_cls):
+        self._run_sync(mock_session_cls)
+
+        user = self.make_user(is_syncing_cheese=True)
+        user_id = user.id
+
+        # On the dashboard, played. Gives the prune a non-empty dashboard set to
+        # work with, which is the realistic case.
+        self.make_room_with_slot_for(user_id, slot_id=1, track_mode=TRACK_MODE_PLAY)
+
+        # Not on the dashboard, watched only.
+        watch_room = TrackedRoom(room_id="watch_uuid", cheese_tracker_id="ct_room_2")
+        self.session.add(watch_room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=watch_room.id, alias="Watch Only"
+        ))
+        self.session.add(UserTrackedSlot(
+            user_id=user_id, room_id=watch_room.id, slot_id=5, track_mode=TRACK_MODE_WATCH
+        ))
+        self.session.commit()
+        watch_room_id = watch_room.id
+
+        setup_cheese_user_task(self.app, user_id)
+
+        fresh = Session()
+        try:
+            sub = fresh.query(UserRoomSubscription).filter_by(
+                user_id=user_id, room_id=watch_room_id
+            ).first()
+            slot = fresh.query(UserTrackedSlot).filter_by(
+                user_id=user_id, room_id=watch_room_id, slot_id=5
+            ).first()
+        finally:
+            fresh.close()
+
+        self.assertIsNotNone(
+            sub,
+            "a room the user still watches slots in must survive the sync, even "
+            "though Cheese never lists it on the dashboard",
+        )
+        self.assertIsNotNone(slot, "the watched slot must survive with it")
+
+
+    @patch('app.api_cheese.requests.Session')
+    def test_played_room_off_the_dashboard_is_still_pruned(self, mock_session_cls):
+        """
+        The narrowing is to watch slots specifically. A room the user only plays
+        still leaves the app when they take it off their Cheese dashboard, which
+        is how the prune behaved before #315 and is not what that issue asked to
+        change.
+        """
+        self._run_sync(mock_session_cls)
+
+        user = self.make_user(is_syncing_cheese=True)
+        user_id = user.id
+        self.make_room_with_slot_for(user_id, slot_id=1, track_mode=TRACK_MODE_PLAY)
+
+        played_elsewhere = TrackedRoom(room_id="played_uuid", cheese_tracker_id="ct_room_3")
+        self.session.add(played_elsewhere)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=played_elsewhere.id, alias="Played Elsewhere"
+        ))
+        self.session.add(UserTrackedSlot(
+            user_id=user_id, room_id=played_elsewhere.id, slot_id=7, track_mode=TRACK_MODE_PLAY
+        ))
+        self.session.commit()
+        played_room_id = played_elsewhere.id
+
+        setup_cheese_user_task(self.app, user_id)
+
+        fresh = Session()
+        try:
+            sub = fresh.query(UserRoomSubscription).filter_by(
+                user_id=user_id, room_id=played_room_id
+            ).first()
+        finally:
+            fresh.close()
+
+        self.assertIsNone(
+            sub,
+            "a room the user only plays is still pruned when it leaves their "
+            "Cheese dashboard; only watched rooms are exempt",
+        )
+
+
+class TestFreshRoomOffersTrackMode(TrackModeTestBase):
+    """
+    The picker shows the Playing/Watching control when the server sends a
+    cheese_claim for a slot. That was built only for rooms that already had a
+    cheese_tracker_id and cached tracker JSON -- which a brand-new room has
+    neither of, since it gets linked on the next sync. So the choice was hidden
+    at exactly the moment the user was first deciding what to track. See #314.
+    """
+
+    def _players(self, user, room_id):
+        from app.routes import rooms_routes
+        with self.app.test_request_context():
+            resp = rooms_routes.get_room_players.__wrapped__.__wrapped__.__wrapped__(
+                user, room_id
+            )
+        return json.loads(resp.get_data(as_text=True))
+
+    def _make_fresh_room(self, user_id):
+        """A room the user just added: no Cheese link, no cached tracker JSON."""
+        room = TrackedRoom(
+            room_id="fresh_uuid",
+            cached_players_json=json.dumps([
+                {'slot_id': 1, 'name': 'Link', 'game': 'A Link to the Past'},
+            ]),
+        )
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=room.id, alias="Fresh Room"
+        ))
+        self.session.commit()
+        return room.id
+
+    def test_cheese_user_gets_the_choice_on_a_fresh_room(self):
+        user = self.make_user()
+        room_id = self._make_fresh_room(user.id)
+
+        players = self._players(user, room_id)
+
+        self.assertEqual(len(players), 1)
+        claim = players[0]['cheese_claim']
+        self.assertIsNotNone(
+            claim,
+            "a Cheese-connected user must get the Playing/Watching choice on a "
+            "room that has not been linked to a tracker yet",
+        )
+        self.assertFalse(
+            claim['is_known'],
+            "nobody has looked this slot up on Cheese, so the picker must not "
+            "present the claim state as fact",
+        )
+        self.assertTrue(claim['can_claim'], "the choice is open until Cheese says otherwise")
+        self.assertFalse(claim['is_claimed'])
+        self.assertFalse(claim['is_mine'])
+
+    def test_a_linked_room_reports_a_known_claim(self):
+        user = self.make_user()
+        room = TrackedRoom(
+            room_id="linked_uuid",
+            cheese_tracker_id="ct_room_1",
+            cached_players_json=json.dumps([
+                {'slot_id': 1, 'name': 'Link', 'game': 'A Link to the Past'},
+            ]),
+            cached_cheese_json=json.dumps({
+                'games': [{'id': 901, 'position': 1, 'claimed_by_ct_user_id': OTHER_CT_ID}],
+            }),
+        )
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user.id, room_id=room.id, alias="Linked Room"
+        ))
+        self.session.commit()
+
+        claim = self._players(user, room.id)[0]['cheese_claim']
+
+        self.assertTrue(claim['is_known'], "this one really was read from Cheese")
+        self.assertTrue(claim['is_claimed'])
+        self.assertFalse(claim['is_mine'])
+        self.assertFalse(
+            claim['can_claim'],
+            "a slot someone else holds must still lock Playing out",
+        )
+
+    def test_user_without_cheese_still_gets_the_plain_checkbox(self):
+        user = self.make_user(cheese_api_key=None, cheese_user_id=None)
+        room_id = self._make_fresh_room(user.id)
+
+        players = self._players(user, room_id)
+
+        self.assertIsNone(
+            players[0]['cheese_claim'],
+            "without a Cheese key there is nothing to claim, so the picker must "
+            "stay a plain checkbox",
+        )
+
+
+class TestLinkCatchUpRespectsWatch(TrackModeTestBase):
+    """
+    Adding a room fires push_new_room_to_cheese on a thread. It sleeps twice for
+    CHEESE_DELAY before its database phase, so the catch-up claim runs about two
+    minutes after the room is added -- comfortably after the user has been
+    through the picker.
+
+    That was harmless while an unlinked room hid the Playing/Watching control,
+    because every slot really was play. Now that the control is offered before
+    the room is linked (#314), claiming everything the catch-up finds would turn
+    an explicit "Watching" into a real claim on the user's Cheese account, and it
+    would not heal: the local mode stays watch, so the next sync leaves it alone
+    while the claim stays held.
+    """
+
+    def _link_room(self, ap_room_id="fresh_uuid"):
+        """Runs the link flow with the network and the two CHEESE_DELAY sleeps stubbed."""
+        import app.api_cheese as live_cheese
+
+        pushes = []
+
+        def fake_push(app_ctx, user_id, room_db_id, added, removed):
+            pushes.append({'added': list(added), 'removed': list(removed)})
+
+        post_resp = MagicMock(status_code=200)
+        post_resp.json.return_value = {'tracker_id': 'ct_new'}
+        get_resp = MagicMock(ok=True)
+        get_resp.json.return_value = {'title': 'Fresh Room', 'updated_at': '2026-06-23T10:00:00Z'}
+        put_resp = MagicMock(status_code=200)
+
+        session_mock = MagicMock()
+        session_mock.post.return_value = post_resp
+        session_mock.get.return_value = get_resp
+        session_mock.put.return_value = put_resp
+
+        with patch.object(live_cheese, '_cheese_session', session_mock), \
+             patch.object(live_cheese.time, 'sleep', lambda *_: None), \
+             patch.object(live_cheese, 'push_slot_changes_to_cheese', fake_push):
+            live_cheese.push_new_room_to_cheese(
+                self.app, self.user_id,
+                "https://cheese/tracker/x", ap_room_id,
+                "https://archipelago.gg/room/fresh_uuid", "Fresh Room",
+            )
+        return pushes
+
+    def _make_room(self, modes):
+        """modes: {slot_id: track_mode}. Room starts unlinked, as a fresh one is."""
+        room = TrackedRoom(room_id="fresh_uuid")
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=self.user_id, room_id=room.id, alias="Fresh Room"
+        ))
+        for slot_id, mode in modes.items():
+            self.session.add(UserTrackedSlot(
+                user_id=self.user_id, room_id=room.id, slot_id=slot_id, track_mode=mode
+            ))
+        self.session.commit()
+        return room.id
+
+    def setUp(self):
+        super().setUp()
+        self.user_id = self.make_user().id
+
+    def test_watch_slots_are_not_claimed_when_the_room_links(self):
+        self._make_room({1: TRACK_MODE_WATCH, 2: TRACK_MODE_WATCH})
+
+        pushes = self._link_room()
+
+        claimed = [s for p in pushes for s in p['added']]
+        self.assertEqual(
+            claimed, [],
+            "a slot the user set to Watching before the room linked must not be "
+            "claimed on their Cheese account by the catch-up",
+        )
+
+    def test_play_slots_are_still_claimed(self):
+        self._make_room({1: TRACK_MODE_PLAY, 2: TRACK_MODE_WATCH})
+
+        pushes = self._link_room()
+
+        claimed = sorted(s for p in pushes for s in p['added'])
+        self.assertEqual(
+            claimed, [1],
+            "the catch-up must still claim played slots; only watch is exempt",
+        )

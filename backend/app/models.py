@@ -129,8 +129,10 @@ class UserTrackedSlot(Base):
     # Tracker". One of:
     #   play  -- I am playing this slot. Claimed on Cheese, kept in sync.
     #   watch -- Alerts only. Never written to Cheese, never unclaimed by sync.
-    # Only meaningful when the user is connected to Cheese and the room is
-    # linked to a tracker; otherwise every slot is 'play' and nothing is pushed.
+    # Meaningful for any Cheese-connected user, including before the room is
+    # linked to a tracker: the picker offers the choice from the start, and the
+    # link catch-up honours it rather than claiming everything it finds.
+    # Without a Cheese key there is nothing to claim, so every slot is 'play'.
     # See TRACK_MODES in app/utils.py.
     track_mode = Column(String(16), nullable=False, default='play', server_default='play')
     notify_progression = Column(Boolean, nullable=True, default=None)

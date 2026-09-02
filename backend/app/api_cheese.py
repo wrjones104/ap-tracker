@@ -333,6 +333,23 @@ def setup_cheese_user_task(app, user_id):
             if all_dashboard_tracker_ids:
                 stale_subs_query = stale_subs_query.filter(TrackedRoom.cheese_tracker_id.notin_(all_dashboard_tracker_ids))
 
+            # A room with watched slots is never stale. A watch-only room does not
+            # appear on the dashboard at all -- the user claims nothing on it, so
+            # Cheese has no reason to list it -- and the prune read that absence as
+            # "you are done here", deleting the subscription and cascading away the
+            # slots being watched. See #315.
+            #
+            # Deliberately scoped to watch rather than to any tracked slot: a room
+            # the user only plays is still pruned when they take it off their
+            # dashboard, exactly as before. Widening this would quietly change that
+            # behaviour too, which is not what #315 asked for.
+            still_watched = session.query(UserTrackedSlot).filter(
+                UserTrackedSlot.user_id == user.id,
+                UserTrackedSlot.room_id == UserRoomSubscription.room_id,
+                UserTrackedSlot.track_mode == TRACK_MODE_WATCH,
+            ).exists()
+            stale_subs_query = stale_subs_query.filter(~still_watched)
+
             stale_subs = stale_subs_query.all()
 
             for sub in stale_subs:
@@ -657,9 +674,20 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
                 
                 # Fetch the slots we need to push while the session is alive
                 try:
-                    slots_to_claim = session.query(UserTrackedSlot.slot_id).filter_by(
-                        user_id=user_id, 
-                        room_id=local_room.id
+                    # Watch slots are never claimed on Cheese. The picker can now
+                    # offer Watching before the room is linked (#314), and this
+                    # catch-up runs about two minutes after the room is added --
+                    # comfortably after the user has made that choice. Claiming
+                    # everything found here would convert an explicit "Watching"
+                    # into a real claim on their Cheese account, and it would not
+                    # heal: the local mode stays watch, so the next sync leaves it
+                    # alone while the claim stays held. Anything not explicitly
+                    # watch is still claimed, which keeps the old behaviour for
+                    # every other value.
+                    slots_to_claim = session.query(UserTrackedSlot.slot_id).filter(
+                        UserTrackedSlot.user_id == user_id,
+                        UserTrackedSlot.room_id == local_room.id,
+                        UserTrackedSlot.track_mode != TRACK_MODE_WATCH,
                     ).all()
                     
                     if slots_to_claim:

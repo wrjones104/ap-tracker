@@ -201,6 +201,8 @@ fun PlayersScreen(
                                             TrackModeSelector(
                                                 mode = playersViewModel.modeFor(player),
                                                 claimLocked = playersViewModel.isClaimLocked(player),
+                                                claimKnown = playersViewModel.isClaimKnown(player),
+                                                alreadyMine = playersViewModel.isClaimMine(player),
                                                 claimedBy = player.cheese_claim?.claimed_by,
                                                 onModeSelected = { mode ->
                                                     playersViewModel.onTrackModeChanged(player, mode)
@@ -236,6 +238,8 @@ private fun TrackModeSelector(
     mode: String,
     claimLocked: Boolean,
     claimedBy: String?,
+    claimKnown: Boolean,
+    alreadyMine: Boolean,
     onModeSelected: (String) -> Unit
 ) {
     Column {
@@ -264,10 +268,23 @@ private fun TrackModeSelector(
                 } else {
                     "Claimed by $claimedBy on Cheese Tracker"
                 }
+            // The picker is a form: nothing has happened until it is saved. Only
+            // `alreadyMine` reports a claim Cheese actually holds; the rest say what
+            // saving will do. Conflating the two told users a slot was theirs while
+            // they were still deciding, and did it even when our cached snapshot was
+            // too old to know someone else had taken it.
             } else if (mode == TrackMode.WATCH) {
-                "Alerts only. Not claimed on Cheese Tracker."
-            } else {
+                if (alreadyMine) {
+                    "Alerts only. Saving releases your claim on Cheese Tracker."
+                } else {
+                    "Alerts only. Never claimed on Cheese Tracker."
+                }
+            } else if (alreadyMine) {
                 "Claimed by you on Cheese Tracker."
+            } else if (!claimKnown) {
+                "Will claim on Cheese Tracker once this room syncs."
+            } else {
+                "Will claim on Cheese Tracker when you save."
             },
             style = MaterialTheme.typography.labelSmall,
             color = Color.Gray,
