@@ -20,7 +20,7 @@ The system consists of two main parts:
     *   `app/`: Main application package.
         *   `routes/`: Domain-driven REST API blueprint modules (`auth_routes.py`, `user_routes.py`, `rooms_routes.py`, `slots_routes.py`, `thresholds_routes.py`, `history_routes.py`, `game_routes.py`, `whats_new_routes.py`).
         *   `data/`: Static app resources including `changelog.json` for serving `GET /api/whats_new`.
-        *   `services/`: Background service modules (`poller_service.py`, `redis_service.py`, `datapackage_service.py`, `threshold_service.py`, `notification_service.py`, `cheese_service.py`, `retention_service.py`).
+        *   `services/`: Background service modules (`redis_service.py`, `datapackage_service.py`, `threshold_service.py`, `filtering_service.py`, `notification_service.py`, `cheese_service.py`, `retention_service.py`).
         *   `api.py`: Composite entry router maintaining 100% backward compatibility.
         *   `auth.py`: Authentication logic (Discord OAuth2, JWT).
         *   `poller.py`: Background poller supervisor and room setup engine.
