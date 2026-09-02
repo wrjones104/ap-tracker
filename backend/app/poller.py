@@ -1404,15 +1404,6 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         slots_to_clear_backfill = [slot for slot in all_tracked_slots_in_room if slot.needs_backfill]
         backfill_check_set = {(slot.user_id, slot.slot_id) for slot in slots_to_clear_backfill}
 
-        # Auto-apply milestone templates to slots the user has newly started playing. This has
-        # to happen here rather than when the slot is tracked: for a brand new room the game a
-        # slot is playing is not known until a poll has run. Groups added now are evaluated
-        # from the next poll onwards -- a slot in its backfill window is skipped by
-        # _evaluate_threshold_groups, so a freshly applied milestone cannot fire on items the
-        # user collected before they started tracking.
-        milestone_template_service.apply_pending_for_room(
-            session, players, game_checksums, all_tracked_slots_in_room
-        )
 
         tracked_slots_by_user = {}
         prefs_by_user_slot = {}
@@ -1544,6 +1535,19 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                         count=new_count
                     )
                     session.add(new_count_obj)
+
+        # Auto-apply milestone templates to slots the user has newly started playing. This has
+        # to happen during a poll rather than when the slot is tracked: for a brand new room the
+        # game a slot is playing is not known until one has run.
+        #
+        # Position matters twice over. It is after this poll's SlotItemCount writes, so a group
+        # for a milestone the slot has already passed is recognised as such and marked triggered
+        # silently instead of firing a push for something long finished. And it is before
+        # _resolve_names_and_notify, which re-queries the groups, so anything genuinely still
+        # outstanding is evaluated this poll like any other group.
+        milestone_template_service.apply_pending_for_room(
+            session, room, players, game_checksums, all_tracked_slots_in_room
+        )
 
         # --- LOGIC STEP 5: Resolve Names & Build Notifications ---
         all_cache_keys = item_cache_keys | hint_cache_keys

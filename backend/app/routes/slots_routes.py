@@ -186,6 +186,9 @@ def update_tracked_slots(current_user, room_db_id):
             existing.auto_apply_pending = True
         else:
             cheese_releases.add(slot_id)
+            # No longer playing it, so it no longer earns auto-apply templates -- including when
+            # the flip lands before the poll that would have applied them.
+            existing.auto_apply_pending = False
         logging.info(
             f"[API] User {current_user.id} set slot {slot_id} in room {room_db_id} to '{new_mode}'."
         )

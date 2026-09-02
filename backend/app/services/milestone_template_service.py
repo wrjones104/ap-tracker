@@ -23,6 +23,8 @@ from app.models import (
     ThresholdGroup,
     ThresholdGroupItem,
 )
+from app.services.threshold_service import compute_requirement_progress
+from app.utils import TRACK_MODE_PLAY, normalize_track_mode
 
 # A single slot gaining more milestone groups than this is far more likely to be a mistake
 # than an intent, and every group is evaluated on every poll.
@@ -152,16 +154,63 @@ def count_groups(session, tracked_slot_id):
     ).count()
 
 
-def apply_auto_templates(session, tracked_slot, game_name, checksum):
+def mark_already_satisfied(session, room, slot_id, groups):
+    """
+    Marks any of [groups] whose requirements the slot has already met as triggered, without
+    notifying. Returns the number marked.
+
+    A milestone group is evaluated against the slot's *cumulative* item counts, and the poller's
+    backfill window only skips one poll -- it never sets is_triggered. So a group created on a
+    slot that is already past it does not stay quietly satisfied: it fires a "milestone reached"
+    push the moment the next unrelated item lands, for something the user finished hours ago.
+    Deciding it here, at creation, is the only point where "already done before this group
+    existed" and "reached it just now" can still be told apart.
+
+    Silent by design: the user was not tracking this milestone when they passed it, so there is
+    nothing to announce -- the group simply shows as met.
+    """
+    if room is None or not groups:
+        return 0
+
+    requirements = [item for group in groups for item in group.items]
+    if not requirements:
+        return 0
+
+    try:
+        progress = compute_requirement_progress(session, room, slot_id, requirements)
+    except Exception as e:
+        # Never worth failing an apply over: an unmarked group is the pre-existing behavior.
+        logging.error(
+            f"[MILESTONE_TEMPLATE] Could not check milestone progress for slot {slot_id}: {e}",
+            exc_info=True
+        )
+        return 0
+
+    if not progress:
+        return 0
+
+    marked = 0
+    for group in groups:
+        if not group.items:
+            continue
+        # A requirement missing from progress could not be resolved, so it cannot be called met.
+        if all(progress.get(item.id, -1) >= item.quantity for item in group.items):
+            group.is_triggered = True
+            marked += 1
+    return marked
+
+
+def apply_auto_templates(session, tracked_slot, game_name, checksum, valid_names_cache=None):
     """
     Applies every auto_apply template the slot's owner holds for this game.
 
-    Returns True when the slot has been dealt with and its auto_apply_pending flag should be
-    cleared, False when the datapackage is not cached yet and a later poll should try again.
-    A slot with no matching templates is "dealt with" -- there is nothing to wait for.
+    Returns (handled, created_groups). `handled` is True when the slot has been dealt with and
+    its auto_apply_pending flag should be cleared, False when the datapackage is not cached yet
+    and a later poll should try again. A slot with no matching templates is "dealt with" --
+    there is nothing to wait for.
     """
     if not game_name:
-        return False
+        return False, []
 
     templates = session.query(MilestoneTemplate).filter(
         MilestoneTemplate.user_id == tracked_slot.user_id,
@@ -171,20 +220,26 @@ def apply_auto_templates(session, tracked_slot, game_name, checksum):
     game_lower = game_name.strip().lower()
     matching = [t for t in templates if (t.game_name or '').strip().lower() == game_lower]
     if not matching:
-        return True
+        return True, []
 
-    valid_names = load_valid_item_names(session, checksum)
+    if valid_names_cache is not None and checksum in valid_names_cache:
+        valid_names = valid_names_cache[checksum]
+    else:
+        valid_names = load_valid_item_names(session, checksum)
+        if valid_names_cache is not None:
+            valid_names_cache[checksum] = valid_names
+
     if valid_names is None:
         # The game is known but its datapackage has not been cached yet. Applying now would
         # mean writing requirements nothing has verified, so wait for a later poll instead.
-        return False
+        return False, []
 
     taken = existing_group_names(session, tracked_slot.id)
     already = count_groups(session, tracked_slot.id)
 
-    created = 0
+    created = []
     for template in sorted(matching, key=lambda t: (t.name or '').lower()):
-        if already + created >= MAX_GROUPS_PER_SLOT:
+        if already + len(created) >= MAX_GROUPS_PER_SLOT:
             logging.warning(
                 f"[MILESTONE_TEMPLATE] Slot {tracked_slot.id} hit the {MAX_GROUPS_PER_SLOT}-group "
                 f"cap; skipping the rest of its auto-apply templates."
@@ -199,27 +254,37 @@ def apply_auto_templates(session, tracked_slot, game_name, checksum):
                 f"'{game_name}' for slot {tracked_slot.id}; skipped."
             )
             continue
-        create_group(session, tracked_slot.id, template.name, items)
+        created.append(create_group(session, tracked_slot.id, template.name, items))
         taken.add((template.name or '').strip().lower())
-        created += 1
 
     if created:
         logging.info(
-            f"[MILESTONE_TEMPLATE] Auto-applied {created} template(s) to slot "
+            f"[MILESTONE_TEMPLATE] Auto-applied {len(created)} template(s) to slot "
             f"{tracked_slot.slot_id} ({game_name}) for user {tracked_slot.user_id}."
         )
-    return True
+    return True, created
 
 
-def apply_pending_for_room(session, players, game_checksums, tracked_slots):
+def apply_pending_for_room(session, room, players, game_checksums, tracked_slots):
     """
     Poller entry point. Applies auto-apply templates to every slot in this room still flagged
     auto_apply_pending, clearing the flag for the ones it could resolve.
 
-    Never raises: an auto-apply failure must not cost the room its poll.
+    Never raises, and never leaves the caller's session unusable: each slot's writes go through
+    their own SAVEPOINT, so a failed flush rolls back that slot alone. Without one, a swallowed
+    flush error would mark the session as needing rollback and every later statement in the poll
+    would raise PendingRollbackError -- costing the whole room its poll, for every user in it,
+    which is the exact opposite of what this being non-fatal is meant to buy.
+
+    Must run after this poll's SlotItemCount updates: mark_already_satisfied reads those counts
+    to tell a milestone the slot has long since passed from one it is about to reach.
     """
-    pending = [s for s in tracked_slots if getattr(s, 'auto_apply_pending', False)]
-    if not pending:
+    play_pending = [
+        s for s in tracked_slots
+        if getattr(s, 'auto_apply_pending', False)
+        and normalize_track_mode(getattr(s, 'track_mode', None)) == TRACK_MODE_PLAY
+    ]
+    if not play_pending:
         return 0
 
     try:
@@ -233,17 +298,34 @@ def apply_pending_for_room(session, players, game_checksums, tracked_slots):
             for k, v in (game_checksums or {}).items()
             if isinstance(k, str)
         }
-
-        handled = 0
-        for slot in pending:
-            game = game_by_slot.get(slot.slot_id)
-            if not game:
-                continue
-            checksum = checksums_lower.get(game.strip().lower())
-            if apply_auto_templates(session, slot, game, checksum):
-                slot.auto_apply_pending = False
-                handled += 1
-        return handled
     except Exception as e:
-        logging.error(f"[MILESTONE_TEMPLATE] Auto-apply pass failed: {e}", exc_info=True)
+        logging.error(f"[MILESTONE_TEMPLATE] Unreadable room cache: {e}", exc_info=True)
         return 0
+
+    # One datapackage lookup per checksum, not per slot: a room where several slots play the
+    # same game is the common case, not the exception.
+    valid_names_cache = {}
+
+    handled = 0
+    for slot in play_pending:
+        game = game_by_slot.get(slot.slot_id)
+        if not game:
+            continue
+        checksum = checksums_lower.get(game.strip().lower())
+        try:
+            with session.begin_nested():
+                dealt_with, created = apply_auto_templates(
+                    session, slot, game, checksum, valid_names_cache
+                )
+                if created:
+                    session.flush()
+                    mark_already_satisfied(session, room, slot.slot_id, created)
+                if dealt_with:
+                    slot.auto_apply_pending = False
+                    handled += 1
+        except Exception as e:
+            logging.error(
+                f"[MILESTONE_TEMPLATE] Failed applying templates to slot {slot.id}: {e}",
+                exc_info=True
+            )
+    return handled

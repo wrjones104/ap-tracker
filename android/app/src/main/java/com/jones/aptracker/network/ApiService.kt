@@ -708,21 +708,28 @@ data class CreatedThresholdGroup(
 
 data class SkippedThresholdGroup(
     val name: String?,
-    /** "duplicate_name" or "no_valid_items". */
+    /** "duplicate_name", "no_valid_items" or "slot_group_limit". */
     val reason: String
+)
+
+/** The 400 body when a bulk apply creates nothing: every group was skipped, and this says why. */
+data class BulkCreateThresholdGroupsError(
+    val error: String? = null,
+    val skipped: List<SkippedThresholdGroup> = emptyList()
 )
 
 data class MilestoneTemplate(
     val id: Int,
     val name: String,
     val game_name: String,
+    val items: List<ThresholdGroupItem>,
     /**
      * "Always add this template to new slots I play for this game." Applied server-side on the
      * first poll that knows a newly played slot's game; never retroactive. Defaults to false so
-     * a server older than this field reads as "off".
+     * a server older than this field reads as "off" -- and sits last so a defaulted parameter
+     * never precedes a required one for a positional construction.
      */
-    val auto_apply: Boolean = false,
-    val items: List<ThresholdGroupItem>
+    val auto_apply: Boolean = false
 )
 
 data class CreateMilestoneTemplateRequest(

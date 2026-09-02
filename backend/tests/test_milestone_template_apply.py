@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 import json
+from unittest.mock import patch
 
 TEST_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test_template_apply.db'))
 os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
@@ -14,7 +15,7 @@ from app import create_app, Session, engine
 from app.models import (
     Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     ThresholdGroup, ThresholdGroupItem, MilestoneTemplate, MilestoneTemplateItem,
-    DatapackageCache,
+    DatapackageCache, SlotItemCount,
 )
 from app.services import milestone_template_service
 from app.utils import TRACK_MODE_PLAY, TRACK_MODE_WATCH
@@ -153,7 +154,7 @@ class TemplateApplyTestBase(unittest.TestCase):
         finally:
             Session.remove()
 
-    def _groups(self, tracked_slot_id=None):
+    def _groups_full(self, tracked_slot_id=None):
         """Re-reads groups through a fresh session so a lost commit cannot hide."""
         session = Session()
         try:
@@ -161,9 +162,43 @@ class TemplateApplyTestBase(unittest.TestCase):
                 user_tracked_slot_id=tracked_slot_id or self.tracked_slot_id
             ).all()
             return [
-                (g.name, sorted((i.item_name, i.quantity, i.is_group) for i in g.items))
+                (
+                    g.name,
+                    sorted((i.item_name, i.quantity, i.is_group) for i in g.items),
+                    g.is_triggered,
+                )
                 for g in groups
             ]
+        finally:
+            Session.remove()
+
+    def _groups(self, tracked_slot_id=None):
+        return [(name, items) for name, items, _ in self._groups_full(tracked_slot_id)]
+
+    def _record_counts(self, counts_by_item_name, checksum=CHECKSUM):
+        """
+        Seeds SlotItemCount the way the poller does, so "the slot is already past this
+        milestone" is a real state rather than an assumption.
+        """
+        session = Session()
+        try:
+            ids = {
+                name.lower(): entity_id
+                for name, entity_id in session.query(
+                    DatapackageCache.entity_name, DatapackageCache.entity_id
+                ).filter(
+                    DatapackageCache.checksum == checksum,
+                    DatapackageCache.entity_type == 'item'
+                ).all()
+            }
+            for item_name, count in counts_by_item_name.items():
+                session.add(SlotItemCount(
+                    room_id=ROOM_UUID,
+                    slot_id=SLOT_ID,
+                    item_id=ids[item_name.lower()],
+                    count=count,
+                ))
+            session.commit()
         finally:
             Session.remove()
 
@@ -266,6 +301,96 @@ class TestBulkThresholdGroupCreate(TemplateApplyTestBase):
         self.assertEqual(self._groups(), [])
 
 
+class TestBulkResolvesAgainstTheSeed(TemplateApplyTestBase):
+    """
+    The bulk endpoint does its own resolution rather than trusting the client's. The app resolves
+    the same names before posting, but only once its autocomplete list has loaded -- offline or
+    mid-fetch it offers the templates anyway, flagged unverified.
+    """
+
+    def test_drops_an_item_this_seed_does_not_have(self):
+        self._cache_datapackage()
+        resp = self._bulk([{'name': 'Mixed', 'items': [
+            {'item_name': 'Metal Blade', 'quantity': 1},
+            {'item_name': 'Rush Coil', 'quantity': 1},
+        ]}])
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(dict(self._groups())['Mixed'], [('Metal Blade', 1, False)])
+
+    def test_skips_a_group_with_nothing_this_seed_has(self):
+        self._cache_datapackage()
+        resp = self._bulk([
+            {'name': 'Stale', 'items': [{'item_name': 'Rush Coil', 'quantity': 1}]},
+            {'name': 'Good', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]},
+        ])
+        self.assertEqual(resp.status_code, 201)
+        body = resp.get_json()
+        self.assertEqual([g['name'] for g in body['created']], ['Good'])
+        self.assertEqual(body['skipped'], [{'name': 'Stale', 'reason': 'no_valid_items'}])
+
+    def test_restores_the_datapackage_casing(self):
+        self._cache_datapackage()
+        self._bulk([{'name': 'Cased', 'items': [{'item_name': 'metal BLADE', 'quantity': 2}]}])
+        self.assertEqual(dict(self._groups())['Cased'], [('Metal Blade', 2, False)])
+
+    def test_passes_names_through_when_the_datapackage_is_not_cached(self):
+        # Nothing to check against is not the same as "these are wrong"; refusing here would
+        # break the ordinary case of applying to a slot whose datapackage has not landed yet.
+        resp = self._bulk([{'name': 'Unverified', 'items': [
+            {'item_name': 'Rush Coil', 'quantity': 1}
+        ]}])
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(dict(self._groups())['Unverified'], [('Rush Coil', 1, False)])
+
+    def test_marks_a_milestone_the_slot_has_already_passed(self):
+        self._cache_datapackage()
+        self._record_counts({'Metal Blade': 3})
+        self._bulk([
+            {'name': 'Done', 'items': [{'item_name': 'Metal Blade', 'quantity': 2}]},
+            {'name': 'Ahead', 'items': [{'item_name': 'Metal Blade', 'quantity': 9}]},
+        ])
+        self.assertEqual(
+            sorted((name, triggered) for name, _, triggered in self._groups_full()),
+            [('Ahead', False), ('Done', True)]
+        )
+
+    def test_counts_the_cap_against_groups_it_actually_creates(self):
+        # A request of five where four are duplicates costs one slot, not five.
+        cap = milestone_template_service.MAX_GROUPS_PER_SLOT
+        self._bulk([
+            {'name': f'G{i}', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]}
+            for i in range(cap - 2)
+        ])
+        self.assertEqual(len(self._groups()), cap - 2)
+
+        resp = self._bulk([
+            {'name': 'G0', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]},
+            {'name': 'G1', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]},
+            {'name': 'G2', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]},
+            {'name': 'New A', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]},
+            {'name': 'New B', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]},
+        ])
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual([g['name'] for g in resp.get_json()['created']], ['New A', 'New B'])
+        self.assertEqual(len(self._groups()), cap)
+
+    def test_reports_the_groups_the_cap_pushed_out(self):
+        cap = milestone_template_service.MAX_GROUPS_PER_SLOT
+        self._bulk([
+            {'name': f'G{i}', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]}
+            for i in range(cap - 1)
+        ])
+        resp = self._bulk([
+            {'name': 'Fits', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]},
+            {'name': 'Over', 'items': [{'item_name': 'Metal Blade', 'quantity': 1}]},
+        ])
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual([g['name'] for g in resp.get_json()['created']], ['Fits'])
+        self.assertEqual(
+            resp.get_json()['skipped'], [{'name': 'Over', 'reason': 'slot_group_limit'}]
+        )
+
+
 class TestTemplateAutoApplyFlag(TemplateApplyTestBase):
     """The per-template "always add to new slots I play" switch."""
 
@@ -358,6 +483,15 @@ class TestAutoApplyPendingFlagging(TemplateApplyTestBase):
         self._put_slots([SLOT_ID, SLOT_ID + 1], {str(SLOT_ID + 1): TRACK_MODE_PLAY})
         self.assertTrue(self._pending(SLOT_ID + 1))
 
+    def test_flipping_play_back_to_watch_clears_the_flag(self):
+        # The window this closes: track as play, change your mind, and the poll that would have
+        # applied the templates has not run yet. Watch-only slots never auto-apply.
+        self._put_slots([SLOT_ID, SLOT_ID + 1], {str(SLOT_ID + 1): TRACK_MODE_PLAY})
+        self.assertTrue(self._pending(SLOT_ID + 1))
+
+        self._put_slots([SLOT_ID, SLOT_ID + 1], {str(SLOT_ID + 1): TRACK_MODE_WATCH})
+        self.assertFalse(self._pending(SLOT_ID + 1))
+
     def test_a_slot_already_in_the_library_is_untouched(self):
         # The fixture slot predates the feature: it must stay unflagged so turning auto-apply
         # on never reaches backwards into slots the user is already playing.
@@ -381,9 +515,11 @@ class TestAutoApplyPass(TemplateApplyTestBase):
         """Runs the pass and commits, mirroring the poller's own transaction."""
         session = Session()
         try:
+            room = session.query(TrackedRoom).filter_by(id=self.room_db_id).first()
             slots = session.query(UserTrackedSlot).filter_by(room_id=self.room_db_id).all()
             handled = milestone_template_service.apply_pending_for_room(
                 session,
+                room,
                 players if players is not None else [
                     {'slot_id': SLOT_ID, 'name': 'Rock', 'game': GAME}
                 ],
@@ -554,7 +690,7 @@ class TestAutoApplyPass(TemplateApplyTestBase):
         self._run_pass()
         self.assertEqual([name for name, _ in self._groups()], ['Weapons'])
 
-    def test_a_failure_never_costs_the_room_its_poll(self):
+    def test_a_malformed_player_cache_is_survivable(self):
         self._cache_datapackage()
         self._make_template('Weapons', [('Metal Blade', 1, False)], auto_apply=True)
         self._mark_pending()
@@ -562,14 +698,108 @@ class TestAutoApplyPass(TemplateApplyTestBase):
         # A malformed player cache is data the poller reads, not something it validates.
         session = Session()
         try:
+            room = session.query(TrackedRoom).filter_by(id=self.room_db_id).first()
             slots = session.query(UserTrackedSlot).filter_by(room_id=self.room_db_id).all()
             handled = milestone_template_service.apply_pending_for_room(
-                session, ['not-a-dict', None], {GAME: CHECKSUM}, slots
+                session, room, ['not-a-dict', None], {GAME: CHECKSUM}, slots
             )
             self.assertEqual(handled, 0)
         finally:
             Session.remove()
         self.assertTrue(self._pending())
+
+    def test_a_write_failure_leaves_the_session_usable(self):
+        """
+        The real cost of a swallowed failure. create_group flushes; a flush that raises marks the
+        session as needing rollback, and every later statement in the poll then raises
+        PendingRollbackError -- so "auto-apply must not cost the room its poll" would cost the
+        whole room its poll, for every user in it. The savepoint is what keeps that local.
+        """
+        self._cache_datapackage()
+        self._make_template('Weapons', [('Metal Blade', 1, False)], auto_apply=True)
+        self._mark_pending()
+
+        session = Session()
+        try:
+            room = session.query(TrackedRoom).filter_by(id=self.room_db_id).first()
+            slots = session.query(UserTrackedSlot).filter_by(room_id=self.room_db_id).all()
+
+            def boom(*args, **kwargs):
+                raise RuntimeError("flush exploded")
+
+            with patch.object(
+                milestone_template_service, 'create_group', side_effect=boom
+            ):
+                handled = milestone_template_service.apply_pending_for_room(
+                    session, room, [{'slot_id': SLOT_ID, 'name': 'Rock', 'game': GAME}],
+                    {GAME: CHECKSUM}, slots
+                )
+            self.assertEqual(handled, 0)
+
+            # The poll continues: the very next statement must not raise PendingRollbackError.
+            remaining = session.query(UserTrackedSlot).filter_by(room_id=self.room_db_id).count()
+            self.assertEqual(remaining, 1)
+            session.commit()
+        finally:
+            Session.remove()
+
+        self.assertEqual(self._groups(), [])
+        self.assertTrue(self._pending())
+
+    def test_never_applies_to_a_slot_that_is_no_longer_played(self):
+        # Belt to the braces in slots_routes: even if a flag survives a play -> watch flip, the
+        # pass itself refuses to put milestone groups on a slot the user only watches.
+        self._cache_datapackage()
+        self._make_template('Weapons', [('Metal Blade', 1, False)], auto_apply=True)
+        self._mark_pending()
+
+        session = Session()
+        try:
+            self._slot(session).track_mode = TRACK_MODE_WATCH
+            session.commit()
+        finally:
+            Session.remove()
+
+        self.assertEqual(self._run_pass(), 0)
+        self.assertEqual(self._groups(), [])
+
+    def test_a_milestone_the_slot_has_already_passed_is_marked_met_silently(self):
+        # Otherwise the group sits untriggered and fires a "milestone reached" push on the next
+        # unrelated item, for something the user finished long before the template was applied.
+        self._cache_datapackage()
+        self._record_counts({'Metal Blade': 3})
+        self._make_template('Weapons', [('Metal Blade', 2, False)], auto_apply=True)
+        self._mark_pending()
+
+        self._run_pass()
+        self.assertEqual([(name, triggered) for name, _, triggered in self._groups_full()],
+                         [('Weapons', True)])
+
+    def test_a_milestone_still_ahead_of_the_slot_stays_open(self):
+        self._cache_datapackage()
+        self._record_counts({'Metal Blade': 1})
+        self._make_template('Weapons', [('Metal Blade', 5, False)], auto_apply=True)
+        self._mark_pending()
+
+        self._run_pass()
+        self.assertEqual([(name, triggered) for name, _, triggered in self._groups_full()],
+                         [('Weapons', False)])
+
+    def test_a_deferred_apply_still_lands_on_current_counts(self):
+        # The path the backfill window never covered: the datapackage is missing on the first
+        # poll, so the apply happens later -- by which time everything is backfilled. The group
+        # must still be recognised as already met.
+        self._make_template('Weapons', [('Metal Blade', 2, False)], auto_apply=True)
+        self._mark_pending()
+
+        self.assertEqual(self._run_pass(), 0)
+        self.assertEqual(self._groups(), [])
+
+        self._cache_datapackage()
+        self._record_counts({'Metal Blade': 4})
+        self.assertEqual(self._run_pass(), 1)
+        self.assertEqual([(name, triggered) for name, _, triggered in self._groups_full()],
+                         [('Weapons', True)])
 
 
 if __name__ == '__main__':

@@ -108,6 +108,27 @@ fun SlotDetailScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val passwordManager = remember { com.jones.aptracker.network.PasswordManager(context) }
 
+    // Milestone edits report themselves through these two, and this screen was collecting
+    // neither -- so "Added 3 milestone groups. Skipped: 1 already on this slot." went nowhere,
+    // and a failed apply closed the sheet in silence. Worse, an uncleared message would surface
+    // later, out of context, on whichever screen happened to collect it next.
+    val integrationMessage by userViewModel.integrationMessage.collectAsState()
+    val userErrorMessage by userViewModel.errorMessage.collectAsState()
+
+    LaunchedEffect(integrationMessage) {
+        integrationMessage?.let {
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+            userViewModel.clearIntegrationMessage()
+        }
+    }
+
+    LaunchedEffect(userErrorMessage) {
+        userErrorMessage?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            userViewModel.clearErrorMessage()
+        }
+    }
+
     LaunchedEffect(currentRoom?.host) {
         currentRoom?.host?.let { host ->
             val saved = passwordManager.getPassword(host)
