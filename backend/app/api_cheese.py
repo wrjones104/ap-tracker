@@ -1,5 +1,7 @@
 import logging
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import threading
 import os
 import json
@@ -26,6 +28,39 @@ bp = Blueprint('api_cheese', __name__)
 
 CHEESE_BASE_URL = os.environ.get('CHEESE_BASE_URL', 'https://cheesetrackers.theincrediblewheelofchee.se/api')
 CHEESE_DELAY = 60.0
+
+# Cheese Tracker is slow often enough that a single read timeout was losing slot
+# claims outright: the local rows commit, the push dies in a log line, and nothing
+# reconciles -- the app says Playing while the slot stays open on Cheese. Every
+# Cheese call goes through one session with a small retry budget, which also reuses
+# connections instead of opening a new one per request. See #304.
+#
+# POST is deliberately absent from the retried methods: creating a tracker is not
+# idempotent. The retried verbs are, and the PUT that claims a slot additionally
+# carries an x-if-owner-is precondition, so a retry after a read timeout that did
+# land fails the precondition rather than overwriting someone else's claim.
+_CHEESE_RETRY = Retry(
+    total=2,
+    connect=2,
+    read=2,
+    status=2,
+    status_forcelist=(500, 502, 503, 504),
+    allowed_methods=frozenset(("GET", "PUT", "DELETE", "HEAD", "OPTIONS")),
+    backoff_factor=0.5,
+    raise_on_status=False,
+)
+
+def _build_cheese_session():
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=_CHEESE_RETRY)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+# Shared across request threads and the background push worker. Safe because
+# nothing mutates it -- headers are passed per call, and urllib3's pool is
+# thread-safe.
+_cheese_session = _build_cheese_session()
     
 def setup_cheese_user_task(app, user_id):
     """
@@ -404,7 +439,7 @@ def connect_cheese_account(current_user):
         test_headers = get_cheese_headers() 
         test_headers["Authorization"] = f"Bearer {api_key}"
 
-        test_resp = requests.get(f"{CHEESE_BASE_URL}/user/self", headers=test_headers, timeout=10)
+        test_resp = _cheese_session.get(f"{CHEESE_BASE_URL}/user/self", headers=test_headers, timeout=10)
         
         if test_resp.status_code == 401:
             return jsonify({'error': 'Invalid API Key.'}), 400
@@ -540,7 +575,7 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         
         # Step 1: POST to create/get the tracker
         payload = {"url": tracker_url}
-        response_post = requests.post(f"{CHEESE_BASE_URL}/tracker", json=payload, headers=headers, timeout=10)
+        response_post = _cheese_session.post(f"{CHEESE_BASE_URL}/tracker", json=payload, headers=headers, timeout=10)
 
         if not (response_post.status_code == 200 or response_post.status_code == 201):
             logging.warning(f"[CHEESE_DEBUG] Failed (POST) to create tracker for {tracker_url}: {response_post.status_code} {response_post.text}")
@@ -556,7 +591,7 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         time.sleep(CHEESE_DELAY)
 
         # Step 2: GET the tracker's current state
-        response_get = requests.get(f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}", headers=headers, timeout=10)
+        response_get = _cheese_session.get(f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}", headers=headers, timeout=10)
         
         tracker_data = {}
         if response_get.ok:
@@ -585,7 +620,7 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         time.sleep(CHEESE_DELAY)
 
         # Step 5: PUT the update
-        response_put = requests.put(f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}", json=put_payload, headers=put_headers, timeout=10)
+        response_put = _cheese_session.put(f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}", json=put_payload, headers=put_headers, timeout=10)
         
         if not (response_put.status_code == 200 or response_put.status_code == 204):
             logging.warning(f"[CHEESE_DEBUG] Failed (PUT) to update title/room_link for {cheese_tracker_id}: {response_put.status_code} {response_put.text}")
@@ -656,13 +691,31 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
     with app.app_context():
         session = Session()
         try:
+            # One tracker fetch for the whole batch. This used to sit inside send_state,
+            # so an N-slot push made N full tracker downloads -- N chances to hit the read
+            # timeout that silently drops a claim, which is why large rooms were worst
+            # affected. See #304.
+            try:
+                detail_resp = _cheese_session.get(
+                    f"{CHEESE_BASE_URL}/tracker/{tracker_id}",
+                    headers=base_headers,
+                    timeout=10
+                )
+                if not detail_resp.ok:
+                    logging.warning(f"[CHEESE_DEBUG_WORKER] Tracker {tracker_id} fetch returned {detail_resp.status_code}; no slots pushed.")
+                    return
+                tracker_details = detail_resp.json()
+            except Exception as fetch_err:
+                logging.error(f"[CHEESE_DEBUG_WORKER] Could not read tracker {tracker_id}; no slots pushed: {fetch_err}", exc_info=True)
+                return
+
             # Process removals
             for slot_id in removed_slots:
-                send_state(session, app, slot_id, False, user_id, my_ct_id, tracker_id, base_headers, notifications_outbox)
+                send_state(session, app, slot_id, False, user_id, my_ct_id, tracker_id, base_headers, tracker_details, notifications_outbox)
             
             # Process additions
             for slot_id in added_slots:
-                send_state(session, app, slot_id, True, user_id, my_ct_id, tracker_id, base_headers, notifications_outbox)
+                send_state(session, app, slot_id, True, user_id, my_ct_id, tracker_id, base_headers, tracker_details, notifications_outbox)
 
             session.commit()
             logging.info(f"[CHEESE_DEBUG_WORKER] Finished slot push.")
@@ -730,22 +783,20 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
     except Exception as e:
         logging.error(f"Failed to run push worker for user {user_id}: {e}")
 
-def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread, initial_ct_id, tracker_id, base_headers, notifications_outbox=None):
+def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread, initial_ct_id, tracker_id, base_headers, tracker_details, notifications_outbox=None):
     """
     Helper function to send the state to Cheese Tracker.
     """
     try:
         my_ct_id = initial_ct_id
 
-        # 1. FETCH LATEST STATE
-        detail_resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=base_headers, timeout=10)
-        if not detail_resp.ok:
-            logging.warning(f"[CHEESE_DEBUG] Failed to fetch details for {tracker_id} before push.")
-            return
-        
-        details = detail_resp.json()
-        games = details.get('games', [])
-        
+        # 1. `tracker_details` is the caller's snapshot of the tracker, taken once for
+        # the whole batch. Each position is written independently, so one slot's write
+        # does not invalidate another's entry. A third party claiming the slot between
+        # the snapshot and the PUT is caught by the x-if-owner-is precondition below,
+        # which fails the write rather than overwriting them.
+        games = tracker_details.get('games', [])
+
         # 2. Find the *specific* game object
         game_object = None
         for game in games:
@@ -758,7 +809,7 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
             return
 
         cheese_game_id = game_object.get('id')
-        updated_at_timestamp = details.get('updated_at')
+        updated_at_timestamp = tracker_details.get('updated_at')
         current_owner_id = game_object.get('claimed_by_ct_user_id')
         ct_discord = game_object.get('discord_username')
         ct_eff_discord = game_object.get('effective_discord_username')
@@ -898,7 +949,7 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
         put_headers['x-if-owner-is'] = json.dumps(owner_precondition)
         
         # 6. Send the update
-        response = requests.put(url, json=payload, headers=put_headers, timeout=5)
+        response = _cheese_session.put(url, json=payload, headers=put_headers, timeout=5)
         
         if response.status_code in [200, 204]:
             logging.debug(f"[CHEESE_DEBUG] Success for pos {ap_position} (game {cheese_game_id})")
@@ -982,7 +1033,7 @@ def apply_cheese_slot_update(app, user_id, room_db_id, slot_id, updates):
     base_headers["Authorization"] = f"Bearer {api_key}"
 
     try:
-        detail_resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=base_headers, timeout=10)
+        detail_resp = _cheese_session.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=base_headers, timeout=10)
         if not detail_resp.ok:
             logging.warning(f"[CHEESE_SLOT] Failed to fetch tracker {tracker_id}: {detail_resp.status_code}")
             return {'status': 'error'}
@@ -1045,7 +1096,7 @@ def apply_cheese_slot_update(app, user_id, room_db_id, slot_id, updates):
         })
 
         url = f"{CHEESE_BASE_URL}/tracker/{tracker_id}/game/{cheese_game_id}"
-        put_resp = requests.put(url, json=payload, headers=put_headers, timeout=10)
+        put_resp = _cheese_session.put(url, json=payload, headers=put_headers, timeout=10)
 
         if put_resp.status_code == 412:
             return {'status': 'conflict'}
@@ -1138,7 +1189,7 @@ def refresh_tracker_cache(app, user_id, room_db_id):
     headers = get_cheese_headers()
     headers['Authorization'] = f"Bearer {api_key}"
     try:
-        resp = requests.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=headers, timeout=10)
+        resp = _cheese_session.get(f"{CHEESE_BASE_URL}/tracker/{tracker_id}", headers=headers, timeout=10)
         if not resp.ok:
             logging.warning(f"[CHEESE_REFRESH] Fetch failed for {tracker_id}: {resp.status_code}")
             return {'status': 'error'}
@@ -1225,7 +1276,7 @@ def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):
             url = f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}/dashboard_override"
             payload = {"visibility": visibility}
             
-            resp = requests.put(url, json=payload, headers=headers, timeout=10)
+            resp = _cheese_session.put(url, json=payload, headers=headers, timeout=10)
             
             if resp.status_code not in [200, 204]:
                 logging.warning(f"[CHEESE_VISIBILITY] Failed to set visibility {visibility} for {cheese_tracker_id}: {resp.status_code}")
