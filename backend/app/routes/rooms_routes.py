@@ -406,7 +406,8 @@ def get_room_players(current_user, room_db_id):
                 cheese_claim = build_cheese_claim_summary(
                     cheese_game or {},
                     current_user.cheese_user_id,
-                    my_discord_clean
+                    my_discord_clean,
+                    is_known=cheese_game is not None,
                 )
 
             response_players.append({

@@ -350,7 +350,14 @@ data class CheeseClaim(
     /** Display name of the holder, or null if they are anonymous to us. */
     val claimed_by: String? = null,
     /** False when someone else holds the slot: the picker must force Watching. */
-    val can_claim: Boolean = true
+    val can_claim: Boolean = true,
+    /**
+     * False when the room has not synced with Cheese yet, so the fields above are
+     * what we would attempt rather than what Cheese reports -- someone else may
+     * hold the slot. Defaults true so a payload from an older server reads as
+     * before.
+     */
+    val is_known: Boolean = true
 )
 
 data class UpdateSlotsRequest(
@@ -555,16 +562,20 @@ data class CheeseSlotState(
  * badge would sit on every row and tell them nothing. Marking the exception is what
  * carries information.
  *
- * Gated on the Cheese state being present, not just on the mode: watch mode's entire
- * effect is on Cheese claiming, so without a linked tracker a stored "watch"
- * describes nothing the user can currently see.
+ * Gated on the mode alone. It used to also require the per-slot Cheese state, on the
+ * grounds that without a linked tracker a stored "watch" described nothing -- true
+ * while the picker refused to offer the choice before a room was linked, and wrong
+ * as soon as it did (#314). A slot set to Watching on a room still waiting to sync
+ * is a real choice with a real effect: it is what stops the link catch-up claiming
+ * it. Only a user connected to Cheese can reach watch mode at all, so gating on the
+ * mode cannot put an eye on a row that has no business carrying one.
  *
  * One property rather than the condition repeated per screen -- the rooms list, the
  * slot detail header and the activity feed all have to agree on what "watched" means,
  * and they drifted apart the moment each spelled it out for itself.
  */
 val TrackedSlotDetail.isWatched: Boolean
-    get() = track_mode == TrackMode.WATCH && cheese != null
+    get() = track_mode == TrackMode.WATCH
 
 data class UpdateCheeseSlotResponse(
     val message: String? = null,

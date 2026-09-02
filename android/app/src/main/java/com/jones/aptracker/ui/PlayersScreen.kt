@@ -201,6 +201,7 @@ fun PlayersScreen(
                                             TrackModeSelector(
                                                 mode = playersViewModel.modeFor(player),
                                                 claimLocked = playersViewModel.isClaimLocked(player),
+                                                claimKnown = playersViewModel.isClaimKnown(player),
                                                 claimedBy = player.cheese_claim?.claimed_by,
                                                 onModeSelected = { mode ->
                                                     playersViewModel.onTrackModeChanged(player, mode)
@@ -236,6 +237,7 @@ private fun TrackModeSelector(
     mode: String,
     claimLocked: Boolean,
     claimedBy: String?,
+    claimKnown: Boolean,
     onModeSelected: (String) -> Unit
 ) {
     Column {
@@ -266,6 +268,11 @@ private fun TrackModeSelector(
                 }
             } else if (mode == TrackMode.WATCH) {
                 "Alerts only. Not claimed on Cheese Tracker."
+            } else if (!claimKnown) {
+                // Nobody has looked this slot up on Cheese yet, so it may already
+                // be held by someone else. Say what will be attempted rather than
+                // claiming it is already ours.
+                "Will claim on Cheese Tracker once this room syncs."
             } else {
                 "Claimed by you on Cheese Tracker."
             },

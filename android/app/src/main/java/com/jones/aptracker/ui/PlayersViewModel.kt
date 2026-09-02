@@ -106,6 +106,13 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
         return if (claim.can_claim) TrackMode.PLAY else TrackMode.WATCH
     }
 
+    /**
+     * True when the claim state came from Cheese rather than being assumed. False
+     * for a room that has not synced yet, where the slot may already be held by
+     * someone else and nothing has looked.
+     */
+    fun isClaimKnown(player: Player): Boolean = player.cheese_claim?.is_known ?: true
+
     /** True when this slot is claimed on Cheese by someone other than the user. */
     fun isClaimLocked(player: Player): Boolean {
         val claim = player.cheese_claim ?: return false

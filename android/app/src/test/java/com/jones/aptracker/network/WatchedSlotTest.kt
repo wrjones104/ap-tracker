@@ -8,10 +8,17 @@ import org.junit.Test
  * Pins the condition behind the watched-slot eye.
  *
  * Three screens draw that eye -- the rooms list, the slot detail header and the
- * activity feed -- and each used to spell the condition out for itself. The two
- * halves are easy to get wrong in opposite directions: dropping the mode check marks
- * every Cheese-linked slot, and dropping the Cheese check marks slots whose stored
- * "watch" describes nothing the user can currently see.
+ * activity feed -- and each used to spell the condition out for itself, so they
+ * drifted. Marking every Cheese-linked slot is the failure in one direction;
+ * marking Playing rows, which is every row for a user not on Cheese, is the other.
+ *
+ * This used to also require the per-slot Cheese state, on the grounds that without
+ * a linked tracker a stored "watch" described nothing. That held while the picker
+ * refused to offer the choice before a room was linked, and stopped holding the
+ * moment it did (#314): a slot set to Watching on a room still waiting to sync is
+ * a real choice with a real effect, since it is what stops the link catch-up
+ * claiming it. Only a Cheese-connected user can reach watch mode at all, so the
+ * mode alone cannot light up a row that has no business carrying an eye.
  */
 class WatchedSlotTest {
 
@@ -45,10 +52,12 @@ class WatchedSlotTest {
     }
 
     @Test
-    fun `watch mode without Cheese state is not marked`() {
-        // Watch mode's whole effect is on Cheese claiming. With no linked tracker there
-        // is nothing for the eye to explain, so the room reads as an ordinary one.
-        assertFalse(slot(TrackMode.WATCH, null).isWatched)
+    fun `watch mode is marked before the room has linked to Cheese`() {
+        // Inverted from the original expectation, deliberately. The picker now offers
+        // Watching on a room that has not synced yet, and that choice is what keeps
+        // the link catch-up from claiming the slot -- so the eye has something real
+        // to explain well before any Cheese state arrives.
+        assertTrue(slot(TrackMode.WATCH, null).isWatched)
     }
 
     @Test

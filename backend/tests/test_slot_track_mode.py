@@ -1027,9 +1027,43 @@ class TestFreshRoomOffersTrackMode(TrackModeTestBase):
             "a Cheese-connected user must get the Playing/Watching choice on a "
             "room that has not been linked to a tracker yet",
         )
-        self.assertTrue(claim['can_claim'], "nothing holds a slot on an unlinked room")
+        self.assertFalse(
+            claim['is_known'],
+            "nobody has looked this slot up on Cheese, so the picker must not "
+            "present the claim state as fact",
+        )
+        self.assertTrue(claim['can_claim'], "the choice is open until Cheese says otherwise")
         self.assertFalse(claim['is_claimed'])
         self.assertFalse(claim['is_mine'])
+
+    def test_a_linked_room_reports_a_known_claim(self):
+        user = self.make_user()
+        room = TrackedRoom(
+            room_id="linked_uuid",
+            cheese_tracker_id="ct_room_1",
+            cached_players_json=json.dumps([
+                {'slot_id': 1, 'name': 'Link', 'game': 'A Link to the Past'},
+            ]),
+            cached_cheese_json=json.dumps({
+                'games': [{'id': 901, 'position': 1, 'claimed_by_ct_user_id': OTHER_CT_ID}],
+            }),
+        )
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user.id, room_id=room.id, alias="Linked Room"
+        ))
+        self.session.commit()
+
+        claim = self._players(user, room.id)[0]['cheese_claim']
+
+        self.assertTrue(claim['is_known'], "this one really was read from Cheese")
+        self.assertTrue(claim['is_claimed'])
+        self.assertFalse(claim['is_mine'])
+        self.assertFalse(
+            claim['can_claim'],
+            "a slot someone else holds must still lock Playing out",
+        )
 
     def test_user_without_cheese_still_gets_the_plain_checkbox(self):
         user = self.make_user(cheese_api_key=None, cheese_user_id=None)

@@ -60,7 +60,7 @@ def build_cheese_slot_state(game, global_ping_policy, cheese_user_id, discord_us
         'global_ping_policy': global_ping_policy,
     }
 
-def build_cheese_claim_summary(game, cheese_user_id, discord_username_clean):
+def build_cheese_claim_summary(game, cheese_user_id, discord_username_clean, is_known=True):
     """
     Compact per-slot claim state for the slot picker: enough for the client to
     decide whether the user may claim a slot, and to name the holder if not.
@@ -80,6 +80,11 @@ def build_cheese_claim_summary(game, cheese_user_id, discord_username_clean):
         # name attached; the client falls back to a generic "someone else".
         'claimed_by': None if is_mine else claimed_by,
         'can_claim': is_mine or not is_claimed,
+        # False when the room has not synced with Cheese yet, so the fields above
+        # are what we would attempt rather than what Cheese reports. Someone else
+        # may well hold the slot. The picker has to say so instead of asserting a
+        # claim state nobody has looked up. See #314.
+        'is_known': is_known,
     }
 
 
