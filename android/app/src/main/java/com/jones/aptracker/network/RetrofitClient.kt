@@ -22,8 +22,12 @@ object RetrofitClient {
         }
 
         val httpClient = OkHttpClient.Builder()
+            // AuthInterceptor is the single place that decides a 401 ends the session.
+            // There used to be an Authenticator here doing the same thing, but it ran
+            // below the interceptor in OkHttp's chain and fired unconditionally, so it
+            // always won the race and made the interceptor's rule unreachable. It never
+            // returned a retry request -- the side effect was all it did. See #311.
             .addInterceptor(AuthInterceptor(TokenManager(context)))
-            .authenticator(UnauthorizedAuthenticator())
             .addInterceptor(logging)
             .readTimeout(60, TimeUnit.SECONDS)
             .connectTimeout(15, TimeUnit.SECONDS)
