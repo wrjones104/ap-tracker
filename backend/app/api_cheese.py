@@ -333,6 +333,17 @@ def setup_cheese_user_task(app, user_id):
             if all_dashboard_tracker_ids:
                 stale_subs_query = stale_subs_query.filter(TrackedRoom.cheese_tracker_id.notin_(all_dashboard_tracker_ids))
 
+            # A room the user still tracks slots in is not stale, whatever the
+            # dashboard says. A watch-only room never appears there -- the user
+            # claims nothing on it, so Cheese has no reason to list it -- and
+            # without this the prune deleted the subscription and took the room
+            # out of the app along with the slots being watched. See #315.
+            still_tracked = session.query(UserTrackedSlot).filter(
+                UserTrackedSlot.user_id == user.id,
+                UserTrackedSlot.room_id == UserRoomSubscription.room_id,
+            ).exists()
+            stale_subs_query = stale_subs_query.filter(~still_tracked)
+
             stale_subs = stale_subs_query.all()
 
             for sub in stale_subs:

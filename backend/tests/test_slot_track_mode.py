@@ -848,3 +848,92 @@ class TestManualRefreshSendsDemotionPushes(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestWatchOnlyRoomSurvivesCheeseSync(TrackModeTestBase):
+    """
+    A watch-only room never appears on the Cheese dashboard: the user claims
+    nothing on it, so Cheese has no reason to list it. The stale-subscription
+    prune read that absence as "you are done with this room" and deleted the
+    subscription, which took the room out of the app entirely along with the
+    slots the user was watching. See #315.
+    """
+
+    def _run_sync(self, mock_session_cls):
+        mock_session = MagicMock()
+        mock_session_cls.return_value.__enter__.return_value = mock_session
+
+        me_resp = MagicMock(ok=True)
+        me_resp.json.return_value = {'id': MY_CT_ID, 'discord_username': 'me'}
+
+        # Only the played room is on the dashboard. The watch-only room is not,
+        # which is the whole point.
+        dash_resp = MagicMock(ok=True)
+        dash_resp.json.return_value = [{
+            'tracker_id': 'ct_room_1',
+            'room_link': 'https://archipelago.gg/room/room_uuid',
+            'title': 'Played Room',
+            'dashboard_override_visibility': True,
+        }]
+
+        detail_resp = MagicMock(ok=True)
+        detail_resp.json.return_value = {
+            'updated_at': '2026-06-23T10:00:00Z',
+            'games': [{'id': 901, 'position': 1, 'claimed_by_ct_user_id': MY_CT_ID}],
+        }
+
+        def mock_get(url, *args, **kwargs):
+            if '/user/self' in url:
+                return me_resp
+            if '/dashboard/tracker' in url:
+                return dash_resp
+            if '/tracker/ct_room_1' in url:
+                return detail_resp
+            return MagicMock()
+
+        mock_session.get.side_effect = mock_get
+
+    @patch('app.api_cheese.requests.Session')
+    def test_watch_only_room_keeps_its_subscription(self, mock_session_cls):
+        self._run_sync(mock_session_cls)
+
+        user = self.make_user(is_syncing_cheese=True)
+        user_id = user.id
+
+        # On the dashboard, played. Gives the prune a non-empty dashboard set to
+        # work with, which is the realistic case.
+        self.make_room_with_slot_for(user_id, slot_id=1, track_mode=TRACK_MODE_PLAY)
+
+        # Not on the dashboard, watched only.
+        watch_room = TrackedRoom(room_id="watch_uuid", cheese_tracker_id="ct_room_2")
+        self.session.add(watch_room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=watch_room.id, alias="Watch Only"
+        ))
+        self.session.add(UserTrackedSlot(
+            user_id=user_id, room_id=watch_room.id, slot_id=5, track_mode=TRACK_MODE_WATCH
+        ))
+        self.session.commit()
+        watch_room_id = watch_room.id
+
+        setup_cheese_user_task(self.app, user_id)
+
+        fresh = Session()
+        try:
+            sub = fresh.query(UserRoomSubscription).filter_by(
+                user_id=user_id, room_id=watch_room_id
+            ).first()
+            slot = fresh.query(UserTrackedSlot).filter_by(
+                user_id=user_id, room_id=watch_room_id, slot_id=5
+            ).first()
+        finally:
+            fresh.close()
+
+        self.assertIsNotNone(
+            sub,
+            "a room the user still watches slots in must survive the sync, even "
+            "though Cheese never lists it on the dashboard",
+        )
+        self.assertIsNotNone(slot, "the watched slot must survive with it")
+
