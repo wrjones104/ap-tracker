@@ -90,14 +90,26 @@ fun MilestoneTemplatesScreen(
     var createConflict by remember { mutableStateOf<TemplateConflict?>(null) }
 
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
+    val knownGames by userViewModel.knownGames.collectAsState()
+    val isKnownGamesLoading by userViewModel.isKnownGamesLoading.collectAsState()
 
-    // Games the user could plausibly want a template for: anything they track, plus
-    // anything they already have a template for, so a game dropped from tracking can
-    // still take a second template.
-    val templateableGames = remember(trackedSlotsByRoom, milestoneTemplates) {
+    // The games the user has a reason to care about: anything they track, plus anything
+    // they already have a template for, so a game dropped from tracking can still take
+    // a second template. These get pinned to the top of the picker.
+    val myGames = remember(trackedSlotsByRoom, milestoneTemplates) {
         (trackedSlotsByRoom.flatMap { room -> room.tracked_slots.mapNotNull { it.game } } +
             milestoneTemplates.map { it.game_name })
             .filter { it.isNotBlank() }
+            .distinct()
+            .sortedBy { it.lowercase() }
+    }
+
+    // Everything else the server has a datapackage for. A template only needs the item
+    // list, not a slot, so there is no reason to require having played the game first.
+    val otherGames = remember(knownGames, myGames) {
+        val mine = myGames.map { it.lowercase() }.toSet()
+        knownGames
+            .filter { it.isNotBlank() && it.lowercase() !in mine }
             .distinct()
             .sortedBy { it.lowercase() }
     }
@@ -113,6 +125,8 @@ fun MilestoneTemplatesScreen(
         // Populates the game picker. This screen is reachable without visiting Rooms
         // first, so the list cannot be assumed to be loaded already.
         userViewModel.fetchTrackedSlots()
+        // The rest of the picker: every game the server knows a datapackage for.
+        userViewModel.fetchKnownGames()
     }
 
     LaunchedEffect(integrationMessage) {
@@ -273,7 +287,9 @@ fun MilestoneTemplatesScreen(
 
     if (showGamePicker) {
         GamePickerDialog(
-            games = templateableGames,
+            myGames = myGames,
+            otherGames = otherGames,
+            isLoadingOtherGames = isKnownGamesLoading,
             onDismiss = { showGamePicker = false },
             onSelect = { game ->
                 showGamePicker = false
@@ -534,18 +550,33 @@ private data class TemplateConflict(
 /**
  * Picks the game a new template belongs to. Item autocomplete is per-game, so the
  * choice has to come before the editor opens.
+ *
+ * Two sections, both searchable: the games the user actually plays sit at the top,
+ * then every other game the server has a datapackage for. Building a template does
+ * not need a slot, so there is no reason to limit the list to games already played.
  */
 @Composable
 fun GamePickerDialog(
-    games: List<String>,
+    myGames: List<String>,
+    otherGames: List<String>,
+    isLoadingOtherGames: Boolean = false,
     onDismiss: () -> Unit,
     onSelect: (String) -> Unit
 ) {
+    var query by remember { mutableStateOf("") }
+    val filteredMine = remember(query, myGames) {
+        if (query.isBlank()) myGames else myGames.filter { it.contains(query, ignoreCase = true) }
+    }
+    val filteredOthers = remember(query, otherGames) {
+        if (query.isBlank()) otherGames else otherGames.filter { it.contains(query, ignoreCase = true) }
+    }
+    val noGamesAtAll = myGames.isEmpty() && otherGames.isEmpty() && !isLoadingOtherGames
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (games.isEmpty()) "No Games Yet" else "Choose a Game") },
+        title = { Text(if (noGamesAtAll) "No Games Yet" else "Choose a Game") },
         text = {
-            if (games.isEmpty()) {
+            if (noGamesAtAll) {
                 Text(
                     "Templates are tied to a game. Track a slot first, or import a template, " +
                         "and the game will show up here."
@@ -558,26 +589,86 @@ fun GamePickerDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(12.dp))
-                    LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
-                        items(games, key = { it }) { game ->
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onSelect(game) }
-                                    .padding(vertical = 12.dp)
-                            ) {
-                                Text(game, style = MaterialTheme.typography.bodyLarge)
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text("Search games") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        // The full game list comes from the server. Without this the
+                        // dialog looks finished while it is still arriving.
+                        trailingIcon = {
+                            if (isLoadingOtherGames) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
                             }
-                            HorizontalDivider()
+                        }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (isLoadingOtherGames && filteredMine.isEmpty() && filteredOthers.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(100.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator()
+                        }
+                    } else if (filteredMine.isEmpty() && filteredOthers.isEmpty()) {
+                        Text(
+                            "No game matches that search.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                    } else {
+                        LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                            if (filteredMine.isNotEmpty()) {
+                                item(key = "header_mine") { GamePickerSectionHeader("Your games") }
+                                items(filteredMine, key = { "mine_$it" }) { game ->
+                                    GamePickerRow(game) { onSelect(game) }
+                                }
+                            }
+                            if (filteredOthers.isNotEmpty()) {
+                                item(key = "header_all") { GamePickerSectionHeader("All games") }
+                                items(filteredOthers, key = { "all_$it" }) { game ->
+                                    GamePickerRow(game) { onSelect(game) }
+                                }
+                            }
                         }
                     }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(if (games.isEmpty()) "OK" else "Cancel") }
+            TextButton(onClick = onDismiss) { Text(if (noGamesAtAll) "OK" else "Cancel") }
         }
     )
+}
+
+@Composable
+private fun GamePickerSectionHeader(label: String) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+    )
+}
+
+@Composable
+private fun GamePickerRow(game: String, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp)
+    ) {
+        Text(game, style = MaterialTheme.typography.bodyLarge)
+    }
+    HorizontalDivider()
 }
 
 @Composable

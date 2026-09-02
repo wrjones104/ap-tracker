@@ -225,6 +225,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _knownGames = MutableStateFlow<List<String>>(emptyList())
     val knownGames = _knownGames.asStateFlow()
 
+    private val _isKnownGamesLoading = MutableStateFlow(false)
+    val isKnownGamesLoading = _isKnownGamesLoading.asStateFlow()
+
     private val _gameAvailableItems = MutableStateFlow<List<AutocompleteOption>>(emptyList())
     val gameAvailableItems = _gameAvailableItems.asStateFlow()
 
@@ -745,6 +748,11 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun fetchKnownGames() {
+        // The list only grows when a game new to the whole server gets a datapackage,
+        // and the server answers with a DISTINCT scan of the datapackage cache. Three
+        // screens ask for it on every entry, so hold the answer for the session.
+        if (_knownGames.value.isNotEmpty() || _isKnownGamesLoading.value) return
+        _isKnownGamesLoading.value = true
         viewModelScope.launch {
             try {
                 val games = RetrofitClient.instance.getKnownGames()
@@ -752,6 +760,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to fetch games list", e)
                 _errorMessage.value = "Could not load game list."
+            } finally {
+                _isKnownGamesLoading.value = false
             }
         }
     }
