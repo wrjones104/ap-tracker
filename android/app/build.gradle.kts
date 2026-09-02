@@ -113,8 +113,8 @@ android {
     sourceSets {
         // The minified build type ships no sources of its own, so it reuses the debug
         // manifest for its network security config -- devMinified talks to 10.0.2.2
-        // over cleartext and would otherwise be blocked. Launcher icons deliberately
-        // come from the flavor, so a minified build looks exactly like the real one.
+        // over cleartext and would otherwise be blocked. Variant-specific badged icons
+        // are provided in src/<flavor>Minified to distinguish them at a glance.
         getByName("minified").manifest.srcFile("src/debug/AndroidManifest.xml")
     }
 
