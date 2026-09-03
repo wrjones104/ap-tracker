@@ -302,7 +302,10 @@ def setup_cheese_user_task(app, user_id):
                             user_id=user.id,
                             room_id=room.id,
                             slot_id=slot_id,
-                            track_mode=TRACK_MODE_PLAY
+                            track_mode=TRACK_MODE_PLAY,
+                            # A slot Cheese says the user owns is one they are playing, so it
+                            # earns their auto-apply milestone templates like any other.
+                            auto_apply_pending=True,
                         ))
                         stats['slots_synced'] += 1
                     # Watch is sticky: a slot the user already tracks is left in

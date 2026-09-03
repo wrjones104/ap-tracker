@@ -33,6 +33,7 @@ from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id
 from app.services.cheese_service import process_cheese_update
 from app.services.redis_service import get_redis_client, publish_event
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
+from app.services import milestone_template_service
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -1403,6 +1404,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         slots_to_clear_backfill = [slot for slot in all_tracked_slots_in_room if slot.needs_backfill]
         backfill_check_set = {(slot.user_id, slot.slot_id) for slot in slots_to_clear_backfill}
 
+
         tracked_slots_by_user = {}
         prefs_by_user_slot = {}
         all_user_ids_in_room = set()
@@ -1533,6 +1535,19 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                         count=new_count
                     )
                     session.add(new_count_obj)
+
+        # Auto-apply milestone templates to slots the user has newly started playing. This has
+        # to happen during a poll rather than when the slot is tracked: for a brand new room the
+        # game a slot is playing is not known until one has run.
+        #
+        # Position matters twice over. It is after this poll's SlotItemCount writes, so a group
+        # for a milestone the slot has already passed is recognised as such and marked triggered
+        # silently instead of firing a push for something long finished. And it is before
+        # _resolve_names_and_notify, which re-queries the groups, so anything genuinely still
+        # outstanding is evaluated this poll like any other group.
+        milestone_template_service.apply_pending_for_room(
+            session, room, players, game_checksums, all_tracked_slots_in_room
+        )
 
         # --- LOGIC STEP 5: Resolve Names & Build Notifications ---
         all_cache_keys = item_cache_keys | hint_cache_keys

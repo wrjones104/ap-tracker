@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import (
     create_engine, func, Column, Integer, String, ForeignKey, DateTime, 
     UniqueConstraint, Boolean, ForeignKeyConstraint, BigInteger,
-    Index
+    Index, false as sa_false
 )
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
@@ -152,6 +152,11 @@ class UserTrackedSlot(Base):
     finished_definition = Column(String(16), nullable=True, default=None)
     snooze_until = Column(DateTime, nullable=True)
     snooze_wake_on_slot_id = Column(Integer, nullable=True)
+    # Set only when a slot is newly tracked in 'play' mode, and cleared by the first poll
+    # that resolves the slot's game and datapackage checksum. Existing rows default to
+    # False so turning auto-apply on never reaches backwards into a library of old slots:
+    # the feature is forward-only by construction. See services/milestone_template_service.
+    auto_apply_pending = Column(Boolean, nullable=False, default=False, server_default=sa_false())
     user = relationship("User", viewonly=True)    
     
     __table_args__ = (
@@ -189,6 +194,9 @@ class MilestoneTemplate(Base):
     game_name = Column(String(255), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # "Always add this template to new slots I play for this game." Applied by the poller
+    # on the first poll that knows the slot's game, never retroactively.
+    auto_apply = Column(Boolean, nullable=False, default=False, server_default=sa_false())
 
     user = relationship("User", viewonly=True)
     items = relationship("MilestoneTemplateItem", back_populates="template", cascade="all, delete-orphan")

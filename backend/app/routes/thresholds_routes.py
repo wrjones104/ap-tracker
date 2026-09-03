@@ -5,7 +5,19 @@ from sqlalchemy.orm import selectinload
 from app import Session
 from app.models import UserTrackedSlot, ThresholdGroup, ThresholdGroupItem, TrackedRoom
 from app.routes.common import log_api_call, token_required, handle_db_errors
-from app.services.threshold_service import compute_requirement_progress
+from app.services.threshold_service import (
+    compute_requirement_progress,
+    _resolve_slot_checksum as resolve_slot_checksum,
+)
+from app.services.milestone_template_service import (
+    MAX_GROUPS_PER_SLOT,
+    count_groups,
+    create_group,
+    existing_group_names,
+    load_valid_item_names,
+    mark_already_satisfied,
+    resolve_items,
+)
 
 thresholds_bp = Blueprint('thresholds_routes', __name__)
 
@@ -121,6 +133,125 @@ def create_threshold_group(current_user, room_db_id, slot_id):
         return jsonify({'error': 'Failed to create threshold group'}), 500
     finally:
         Session.remove()
+
+
+@thresholds_bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups/bulk', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def create_threshold_groups_bulk(current_user, room_db_id, slot_id):
+    """
+    Creates several milestone groups on one slot in a single transaction.
+
+    Behind the app's "Apply Templates" sheet, where ticking three templates has to mean three
+    groups or none -- looping the single-create endpoint would leave a half-applied slot on the
+    first failure, and cost a round trip, a group refetch and a widget refresh per template.
+
+    Groups whose items are all absent from this seed, or whose name duplicates a group already
+    on the slot, are reported in 'skipped' rather than failing the request: the client cannot
+    always know which templates still resolve, and a partial apply the user is told about is
+    more useful than a rejection.
+    """
+    data = request.json or {}
+    groups_data = data.get('groups', [])
+
+    if not isinstance(groups_data, list) or not groups_data:
+        return jsonify({'error': 'At least one group is required'}), 400
+    if len(groups_data) > MAX_GROUPS_PER_SLOT:
+        return jsonify({'error': f'At most {MAX_GROUPS_PER_SLOT} groups can be applied at once'}), 400
+
+    session = Session()
+    try:
+        tracked_slot = session.query(UserTrackedSlot).filter_by(
+            user_id=current_user.id,
+            room_id=room_db_id,
+            slot_id=slot_id
+        ).first()
+        if not tracked_slot:
+            return jsonify({'error': 'Tracked slot not found'}), 404
+
+        taken = existing_group_names(session, tracked_slot.id)
+        already = count_groups(session, tracked_slot.id)
+
+        # Resolved server-side rather than trusting what the client sends. The app resolves the
+        # same names before it posts, but only when its autocomplete list has loaded -- offline
+        # or mid-fetch it offers the templates anyway, flagged unverified. Taking those names on
+        # faith would write a requirement this seed can never satisfy, pinning the milestone
+        # open forever. When the datapackage is not cached the pair comes back None and
+        # resolve_items passes the names through, which is the best that can be said for them.
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+        checksum = resolve_slot_checksum(room, slot_id) if room else None
+        valid_names = load_valid_item_names(session, checksum)
+
+        created = []
+        skipped = []
+        for entry in groups_data:
+            if not isinstance(entry, dict):
+                continue
+            name = (entry.get('name') or '').strip()
+            raw_items = entry.get('items', [])
+            if not isinstance(raw_items, list):
+                raw_items = []
+
+            valid_items = []
+            for item_data in raw_items:
+                if not isinstance(item_data, dict):
+                    continue
+                item_name = (item_data.get('item_name') or '').strip()
+                quantity = item_data.get('quantity', 1)
+                if not isinstance(quantity, int) or isinstance(quantity, bool):
+                    continue
+                if item_name and quantity >= 1:
+                    valid_items.append((item_name, quantity, bool(item_data.get('is_group', False))))
+
+            resolved, _missing = resolve_items(valid_items, valid_names)
+            if not resolved:
+                skipped.append({'name': name or None, 'reason': 'no_valid_items'})
+                continue
+            if name and name.lower() in taken:
+                skipped.append({'name': name, 'reason': 'duplicate_name'})
+                continue
+            # Counted as groups are actually created, not up front: a request of five templates
+            # where four are duplicates costs one slot, and should not be refused as if it cost
+            # five.
+            if already + len(created) >= MAX_GROUPS_PER_SLOT:
+                skipped.append({'name': name or None, 'reason': 'slot_group_limit'})
+                continue
+
+            group = create_group(session, tracked_slot.id, name, resolved)
+            if name:
+                taken.add(name.lower())
+            created.append(group)
+
+        if not created:
+            session.rollback()
+            return jsonify({
+                'error': 'No groups could be created',
+                'skipped': skipped
+            }), 400
+
+        # A group for a milestone this slot is already past is marked met on the spot. Left
+        # untriggered it would fire a "milestone reached" push on the next unrelated item, for
+        # something the user finished long before they applied the template.
+        session.flush()
+        mark_already_satisfied(session, room, slot_id, created)
+
+        session.commit()
+        return jsonify({
+            'message': f'Created {len(created)} milestone group(s)',
+            'created': [{'id': g.id, 'name': g.name} for g in created],
+            'skipped': skipped
+        }), 201
+    except Exception as e:
+        session.rollback()
+        logging.error(
+            f"Failed to bulk-create threshold groups for room {room_db_id} slot {slot_id}: {e}",
+            exc_info=True
+        )
+        return jsonify({'error': 'Failed to create milestone groups'}), 500
+    finally:
+        Session.remove()
+
 
 @thresholds_bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups/<int:group_id>', methods=['DELETE'])
 @handle_db_errors

@@ -81,6 +81,7 @@ The system consists of two main parts:
 *   `UserIgnoreItem`: Muted items/groups (global or per-game) suppressed during polling and feed display.
 *   `UserWhitelistItem`: Whitelisted items/groups (global or per-game) that always trigger push notifications and bypass ignore rules and category preference mutes (e.g., filler item mutes).
 *   `NotifiedItem` / `NotifiedHint`: Logs of events sent to users (for history).
+*   `MilestoneTemplate` / `MilestoneTemplateItem`: A saved, reusable set of milestone requirements for one game. `auto_apply` marks a template to be added to new slots the user plays for that game; `UserTrackedSlot.auto_apply_pending` is the flag that says a slot is still waiting for that pass.
 *   `DatapackageCache`: Caches game data (Item/Location names, group memberships) to reduce API calls.
 
 ## Development Notes
@@ -88,8 +89,9 @@ The system consists of two main parts:
 1.  **Environment Variables:** The backend relies on environment variables (often in `backend/.env`). Key vars include `DATABASE_URL`, `DISCORD_CLIENT_ID`, `SECRET_KEY`, and `ENCRYPTION_KEY`.
 2.  **Polling Logic:** The `poller.py` is complex. It manages concurrent setups, regular polling, and "Cheese" polling. It handles "backfilling" history for new subscriptions to avoid notification spam.
 3.  **Threshold Groups Evaluation:** The poller evaluates milestone groups when a slot receives new items. It expands `item_group` conditions (e.g. "Swords") using the cached datapackage item group members in `DatapackageCache` to check sum total counts.
-4.  **Testing:** The project has unit tests for the Cheese Tracker claim/sync integration in `backend/tests/test_cheese_sync.py`. These can be run in the virtualenv using `python -m unittest backend/tests/test_cheese_sync.py`. Other parts of the project lack a formal test suite; verify those changes carefully by running the backend locally.
-5.  **Frontend/Backend Sync:** Changes to API response formats in `backend/app/api.py` usually require corresponding updates in the Android app (specifically the Retrofit interfaces).
+4.  **Milestone Templates:** Templates are applied in two places. The app's "Apply Templates" sheet resolves a template's items against the slot's item list, then posts every ticked template to `POST /rooms/<id>/slots/<slot_id>/threshold-groups/bulk` as one transaction. Auto-apply runs server-side from `services/milestone_template_service.py`, called by the poller: a slot newly tracked in `play` mode is flagged `auto_apply_pending`, and the first poll that can resolve its game *and* its cached datapackage turns the user's `auto_apply` templates into real milestone groups. Both paths drop items the seed does not have and skip a template whose name is already a group on the slot. Auto-apply is forward-only -- the flag is only ever set by a live tracking action, never back-filled onto slots already in a library.
+5.  **Testing:** The project has unit tests for the Cheese Tracker claim/sync integration in `backend/tests/test_cheese_sync.py`. These can be run in the virtualenv using `python -m unittest backend/tests/test_cheese_sync.py`. Other parts of the project lack a formal test suite; verify those changes carefully by running the backend locally.
+6.  **Frontend/Backend Sync:** Changes to API response formats in `backend/app/api.py` usually require corresponding updates in the Android app (specifically the Retrofit interfaces).
 
 ## "Gotchas"
 

@@ -26,6 +26,10 @@ import com.jones.aptracker.network.CreateThresholdGroupRequest
 import com.jones.aptracker.network.ThresholdGroupItemRequest
 import com.jones.aptracker.network.MilestoneTemplate
 import com.jones.aptracker.network.CreateMilestoneTemplateRequest
+import com.jones.aptracker.network.BulkCreateThresholdGroupsRequest
+import com.jones.aptracker.network.BulkCreateThresholdGroupsError
+import com.jones.aptracker.network.SkippedThresholdGroup
+import com.jones.aptracker.network.SetTemplateAutoApplyRequest
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.database.CachedDatapackageEntity
 import com.google.gson.Gson
@@ -1361,6 +1365,111 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 onError?.invoke()
             }
         }
+    }
+
+    /**
+     * Applies several templates to one slot as separate milestone groups, in one request.
+     *
+     * [groups] is already resolved against the slot's item list by the caller, so the server
+     * only ever sees requirements this seed can satisfy. It still reports what it skipped --
+     * a name the slot already uses, or a group left with nothing after resolution -- and that
+     * is surfaced rather than swallowed, since the user ticked those boxes deliberately.
+     */
+    fun applyMilestoneTemplates(
+        roomDbId: Int,
+        slotId: Int,
+        groups: List<CreateThresholdGroupRequest>
+    ) {
+        if (groups.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val response = RetrofitClient.instance.createThresholdGroupsBulk(
+                    roomDbId, slotId, BulkCreateThresholdGroupsRequest(groups)
+                )
+                if (response.isSuccessful) {
+                    fetchThresholdGroups(roomDbId, slotId)
+                    com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshSlotAndUpdateAsync(
+                        getApplication(), roomDbId, slotId
+                    )
+                    val created = response.body()?.created?.size ?: groups.size
+                    val skipped = response.body()?.skipped.orEmpty()
+                    val groupWord = if (created == 1) "group" else "groups"
+                    _integrationMessage.value = if (skipped.isEmpty()) {
+                        "Added $created milestone $groupWord."
+                    } else {
+                        "Added $created milestone $groupWord. ${describeSkipped(skipped)}"
+                    }
+                } else {
+                    // Nothing was created. The server already said why per group, so say that
+                    // rather than a bare status code -- "all of these are already on this slot"
+                    // is the difference between a bug and a race with another device.
+                    val skipped = runCatching {
+                        Gson().fromJson(
+                            response.errorBody()?.string(),
+                            BulkCreateThresholdGroupsError::class.java
+                        )?.skipped.orEmpty()
+                    }.getOrDefault(emptyList())
+
+                    _errorMessage.value = if (skipped.isEmpty()) {
+                        "Failed to apply templates: ${response.code()}"
+                    } else {
+                        "Nothing to add. ${describeSkipped(skipped)}"
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to apply milestone templates", e)
+                _errorMessage.value = "Failed to apply templates. Check connection."
+            }
+        }
+    }
+
+    /**
+     * Flips a template's auto-apply switch, updating the list optimistically so the toggle does
+     * not visibly lag the tap, and rolling back if the write fails.
+     *
+     * The rollback restores this one template's flag rather than the whole list it was captured
+     * from: two toggles in flight at once would otherwise let a failing one revert a sibling
+     * that had already succeeded.
+     */
+    fun setMilestoneTemplateAutoApply(templateId: Int, autoApply: Boolean) {
+        viewModelScope.launch {
+            fun setFlag(value: Boolean) {
+                _milestoneTemplates.value = _milestoneTemplates.value.map {
+                    if (it.id == templateId) it.copy(auto_apply = value) else it
+                }
+            }
+
+            val previous = _milestoneTemplates.value.find { it.id == templateId }?.auto_apply
+            setFlag(autoApply)
+            try {
+                val response = RetrofitClient.instance.setMilestoneTemplateAutoApply(
+                    templateId, SetTemplateAutoApplyRequest(autoApply)
+                )
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Failed to update auto-apply: ${response.code()}"
+                    previous?.let { setFlag(it) }
+                }
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to set template auto-apply", e)
+                _errorMessage.value = "Failed to update auto-apply. Check connection."
+                previous?.let { setFlag(it) }
+            }
+        }
+    }
+
+    /** Turns the server's per-group skip reasons into one short phrase for a toast. */
+    private fun describeSkipped(skipped: List<SkippedThresholdGroup>): String {
+        val duplicates = skipped.count { it.reason == "duplicate_name" }
+        val unusable = skipped.count { it.reason == "no_valid_items" }
+        val overLimit = skipped.count { it.reason == "slot_group_limit" }
+
+        val parts = buildList {
+            if (duplicates > 0) add("$duplicates already on this slot")
+            if (unusable > 0) add("$unusable not in this seed")
+            if (overLimit > 0) add("$overLimit over the group limit")
+        }
+        return if (parts.isEmpty()) "${skipped.size} skipped."
+        else "Skipped: ${parts.joinToString(", ")}."
     }
 
     fun deleteMilestoneTemplate(templateId: Int) {

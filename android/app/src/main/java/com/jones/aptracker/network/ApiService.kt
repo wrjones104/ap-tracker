@@ -109,6 +109,19 @@ interface ApiService {
         @Body request: CreateThresholdGroupRequest
     ): Response<Unit>
 
+    /**
+     * Creates several milestone groups on one slot in a single transaction, for the "Apply
+     * Templates" sheet. Ticking three templates has to mean three groups or none: looping
+     * createThresholdGroup would leave a half-applied slot on the first failure and cost a
+     * round trip, a refetch and a widget refresh per template.
+     */
+    @POST("rooms/{id}/slots/{slot_id}/threshold-groups/bulk")
+    suspend fun createThresholdGroupsBulk(
+        @Path("id") roomId: Int,
+        @Path("slot_id") slotId: Int,
+        @Body request: BulkCreateThresholdGroupsRequest
+    ): Response<BulkCreateThresholdGroupsResponse>
+
     @DELETE("rooms/{id}/slots/{slot_id}/threshold-groups/{group_id}")
     suspend fun deleteThresholdGroup(
         @Path("id") roomId: Int,
@@ -138,6 +151,17 @@ interface ApiService {
     suspend fun updateMilestoneTemplate(
         @Path("id") templateId: Int,
         @Body request: CreateMilestoneTemplateRequest
+    ): Response<Unit>
+
+    /**
+     * Flips one template's "always add to new slots I play" switch. Separate from the full
+     * update so the toggle does not round-trip every item just to change a boolean, and so a
+     * stale screen cannot silently revert a template's items while toggling it.
+     */
+    @PUT("milestone-templates/{id}/auto-apply")
+    suspend fun setMilestoneTemplateAutoApply(
+        @Path("id") templateId: Int,
+        @Body request: SetTemplateAutoApplyRequest
     ): Response<Unit>
 
     @DELETE("milestone-templates/{id}")
@@ -663,17 +687,59 @@ data class ThresholdGroupItemRequest(
     val is_group: Boolean = false
 )
 
+data class BulkCreateThresholdGroupsRequest(
+    val groups: List<CreateThresholdGroupRequest>
+)
+
+data class BulkCreateThresholdGroupsResponse(
+    /**
+     * Deliberately not [ThresholdGroup]: the server answers with id and name only, so typing
+     * this as the full group would hand callers an `items` list Gson had left null.
+     */
+    val created: List<CreatedThresholdGroup> = emptyList(),
+    /** Groups the server declined to create, with a machine-readable reason. */
+    val skipped: List<SkippedThresholdGroup> = emptyList()
+)
+
+data class CreatedThresholdGroup(
+    val id: Int,
+    val name: String?
+)
+
+data class SkippedThresholdGroup(
+    val name: String?,
+    /** "duplicate_name", "no_valid_items" or "slot_group_limit". */
+    val reason: String
+)
+
+/** The 400 body when a bulk apply creates nothing: every group was skipped, and this says why. */
+data class BulkCreateThresholdGroupsError(
+    val error: String? = null,
+    val skipped: List<SkippedThresholdGroup> = emptyList()
+)
+
 data class MilestoneTemplate(
     val id: Int,
     val name: String,
     val game_name: String,
-    val items: List<ThresholdGroupItem>
+    val items: List<ThresholdGroupItem>,
+    /**
+     * "Always add this template to new slots I play for this game." Applied server-side on the
+     * first poll that knows a newly played slot's game; never retroactive. Defaults to false so
+     * a server older than this field reads as "off" -- and sits last so a defaulted parameter
+     * never precedes a required one for a positional construction.
+     */
+    val auto_apply: Boolean = false
 )
 
 data class CreateMilestoneTemplateRequest(
     val name: String,
     val game_name: String,
     val items: List<ThresholdGroupItemRequest>
+)
+
+data class SetTemplateAutoApplyRequest(
+    val auto_apply: Boolean
 )
 
 data class RoomDatapackage(

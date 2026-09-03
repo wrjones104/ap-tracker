@@ -179,8 +179,16 @@ def update_tracked_slots(current_user, room_db_id):
         existing.track_mode = new_mode
         if new_mode == TRACK_MODE_PLAY:
             cheese_claims.add(slot_id)
+            # Flipping watch -> play is the moment the user starts playing this slot, so it
+            # earns their auto-apply templates the same as a freshly tracked one. Duplicate
+            # group names are suppressed when they are applied, so a slot that already has
+            # them cannot end up with two of each.
+            existing.auto_apply_pending = True
         else:
             cheese_releases.add(slot_id)
+            # No longer playing it, so it no longer earns auto-apply templates -- including when
+            # the flip lands before the poll that would have applied them.
+            existing.auto_apply_pending = False
         logging.info(
             f"[API] User {current_user.id} set slot {slot_id} in room {room_db_id} to '{new_mode}'."
         )
@@ -196,7 +204,10 @@ def update_tracked_slots(current_user, room_db_id):
                 room_id=room_db_id,
                 slot_id=slot_id,
                 added_at=datetime.utcnow(),
-                track_mode=mode
+                track_mode=mode,
+                # Only slots the user is playing. The poller clears this once it can resolve
+                # the slot's game -- which is usually not yet known for a brand new room.
+                auto_apply_pending=(mode == TRACK_MODE_PLAY),
             ))
             if mode == TRACK_MODE_PLAY:
                 cheese_claims.add(slot_id)
