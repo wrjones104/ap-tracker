@@ -14,12 +14,15 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 
 from . import Session
-from .models import User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
+from .models import (
+    User, TrackedRoom, UserRoomSubscription, UserTrackedSlot, CheeseDismissedTracker
+)
 from .api import token_required, log_api_call, handle_db_errors
 from .encryption import encrypt_api_key, decrypt_api_key
 from .utils import (
     get_cheese_headers, extract_ap_room_id,
-    TRACK_MODE_PLAY, TRACK_MODE_WATCH, normalize_track_mode
+    TRACK_MODE_PLAY, TRACK_MODE_WATCH, normalize_track_mode,
+    CHEESE_LINK_NONE, CHEESE_LINK_LINKED, normalize_cheese_link
 )
 
 load_dotenv()
@@ -62,9 +65,147 @@ def _build_cheese_session():
 # thread-safe.
 _cheese_session = _build_cheese_session()
     
+def _fetch_tracker_details(req_session, tracker_ids):
+    """
+    Fetch the full payload for each tracker, keyed by id.
+
+    A tracker that fails to fetch is simply absent from the result, and every
+    caller treats absence as "no news" rather than as evidence of a change.
+    """
+    details = {}
+    for ct_id in tracker_ids:
+        time.sleep(0.5)
+        try:
+            resp = req_session.get(f"{CHEESE_BASE_URL}/tracker/{ct_id}", timeout=10)
+            if not resp.ok:
+                logging.warning(f"[CHEESE_DEBUG] Tracker {ct_id} detail returned {resp.status_code}.")
+                continue
+            payload = resp.json()
+            # Anything that is not a JSON object is not a tracker. Letting one
+            # through would take down the whole sync on the first attribute
+            # access, losing the reconciliation for every other room with it.
+            if not isinstance(payload, dict):
+                logging.warning(f"[CHEESE_DEBUG] Tracker {ct_id} detail was not an object; ignoring it.")
+                continue
+            details[ct_id] = payload
+        except Exception as e:
+            logging.error(f"[CHEESE_DEBUG] Failed to fetch details for {ct_id}: {e}")
+    return details
+
+
+def _apply_tracker_payload(room, full_data):
+    """Refresh a room's cached Cheese payload from a tracker detail response."""
+    room.cached_cheese_json = json.dumps(full_data)
+    if full_data.get('updated_at'):
+        try:
+            room.cheese_updated_at = datetime.fromisoformat(
+                full_data.get('updated_at').replace('Z', '+00:00')
+            )
+        except ValueError:
+            pass
+
+
+def _reconcile_claims(session, user, room, full_data, my_cheese_id, discord_username, stats):
+    """
+    Bring one linked room's slot claims into line with what Cheese reports.
+
+    Cheese owns claims -- they are shared state between everyone in the room, so
+    the app cannot decide them unilaterally. What the app owns is alerts, and
+    those are never withdrawn here: a slot Cheese does not confirm is demoted to
+    watch, never untracked.
+
+    Returns the user's possibly-updated Cheese id, which the discord-username
+    fallback can discover.
+    """
+    games = full_data.get('games', [])
+
+    # A tracker with no games carries no ownership information, so it is not
+    # evidence that anything is unclaimed. Without this, an `ok` response with an
+    # empty games array demotes every claim in the room in one pass -- a
+    # brand-new tracker with no games yet is enough to trigger it.
+    if not games:
+        logging.warning(
+            f"[CHEESE_DEBUG] Tracker {room.cheese_tracker_id} returned no games; "
+            f"skipping claim reconciliation for room {room.id}."
+        )
+        return my_cheese_id
+
+    slots_found = set()
+
+    for game in games:
+        if my_cheese_id and game.get('claimed_by_ct_user_id') == my_cheese_id:
+            slots_found.add(game.get('position'))
+        elif discord_username:
+            eff_discord = game.get('effective_discord_username')
+            if eff_discord and eff_discord.strip().lower() == discord_username:
+                slots_found.add(game.get('position'))
+                found_ct_id = game.get('claimed_by_ct_user_id')
+                if found_ct_id and not my_cheese_id:
+                    user.cheese_user_id = found_ct_id
+                    my_cheese_id = found_ct_id
+
+    slots_found.discard(None)
+
+    existing_slots = session.query(UserTrackedSlot).filter_by(
+        user_id=user.id, room_id=room.id
+    ).all()
+    existing_by_id = {s.slot_id: s for s in existing_slots}
+
+    # Connecting mid-async must not cost the user slots they were already
+    # tracking. Anything Cheese does not confirm as theirs is demoted to watch
+    # instead: alerts survive, the claim does not, and the demotion is
+    # reversible from the app.
+    for slot_id, existing in existing_by_id.items():
+        if slot_id in slots_found:
+            continue
+        if normalize_track_mode(existing.track_mode) != TRACK_MODE_PLAY:
+            continue
+        logging.info(
+            f"[CHEESE_DEBUG] Demoting slot {slot_id} in room {room.id} to watch "
+            f"(not claimed by user {user.id} on Cheese)."
+        )
+        existing.track_mode = TRACK_MODE_WATCH
+        stats['demoted'] += 1
+
+    for slot_id in slots_found:
+        if existing_by_id.get(slot_id) is None:
+            # notify_finished is deliberately left NULL so the slot inherits
+            # User.notify_finished_default and keeps following it. Stamping the
+            # default in here would write a permanent per-slot override, so
+            # CT-created slots would stop tracking the global setting while
+            # picker-created ones kept following it.
+            session.add(UserTrackedSlot(
+                user_id=user.id,
+                room_id=room.id,
+                slot_id=slot_id,
+                track_mode=TRACK_MODE_PLAY,
+                # A slot Cheese says the user owns is one they are playing, so it
+                # earns their auto-apply milestone templates like any other.
+                auto_apply_pending=True,
+            ))
+            stats['slots_synced'] += 1
+        # Watch is sticky: a slot the user already tracks is left in whatever
+        # mode they put it in, even when Cheese still shows them as the owner.
+        # That happens when a play -> watch release failed to land, and silently
+        # re-claiming would revert an explicit choice. The picker shows "Claimed
+        # by you on Cheese Tracker" so they can switch back deliberately.
+
+    return my_cheese_id
+
+
 def setup_cheese_user_task(app, user_id):
     """
-    The 'First-Time Setup' & 'Manual Sync' task.
+    Reconcile the rooms this user has linked to Cheese Tracker.
+
+    The app owns the room library, so this task never adds a room and never
+    removes one. It refreshes the cached tracker payload for linked rooms,
+    reconciles their slot claims, and flags a linked room that has fallen off
+    the user's Cheese dashboard so the app can say so. Trackers the app does not
+    have are offered through GET /integrations/cheese/available instead of being
+    imported. See #323.
+
+    Only linked trackers are fetched in detail, so the cost of a sync scales with
+    what the user actually mirrors rather than with the size of their dashboard.
     """
     with app.app_context():
         session = Session()
@@ -77,7 +218,7 @@ def setup_cheese_user_task(app, user_id):
             user.is_syncing_cheese = True
             user.cheese_sync_started_at = datetime.utcnow()
             session.commit()
-            
+
             # --- KEY DECRYPTION ---
             api_key = decrypt_api_key(user.cheese_api_key)
             if not api_key:
@@ -89,6 +230,20 @@ def setup_cheese_user_task(app, user_id):
             my_cheese_id = user.cheese_user_id
             discord_username = user.discord_username.strip().lower() if user.discord_username else None
 
+            # The set of trackers worth a detail request: the ones this user
+            # asked us to mirror. Deliberately not filtered by dashboard
+            # membership -- a linked room the user hid on Cheese still gets its
+            # claims reconciled, it is just flagged as unlisted below.
+            linked_tracker_ids = {
+                ct_id for (ct_id,) in session.query(TrackedRoom.cheese_tracker_id)
+                .join(UserRoomSubscription, UserRoomSubscription.room_id == TrackedRoom.id)
+                .filter(
+                    UserRoomSubscription.user_id == user.id,
+                    UserRoomSubscription.cheese_link == CHEESE_LINK_LINKED,
+                    TrackedRoom.cheese_tracker_id.isnot(None),
+                ).all()
+            }
+
             # Close/release DB session before starting network calls to prevent holding connection/locks
             Session.remove()
 
@@ -99,7 +254,7 @@ def setup_cheese_user_task(app, user_id):
             with requests.Session() as req_session:
                 req_session.headers.update(get_cheese_headers())
                 req_session.headers['Authorization'] = f"Bearer {api_key}"
-                
+
                 # 1. Verify Self
                 try:
                     me_resp = req_session.get(f"{CHEESE_BASE_URL}/user/self", timeout=10)
@@ -110,7 +265,7 @@ def setup_cheese_user_task(app, user_id):
                             logging.info(f"[CHEESE_DEBUG] Resolved Cheese User ID: {resolved_cheese_user_id}")
                 except Exception as e:
                     logging.warning(f"[CHEESE_DEBUG] Failed to fetch /user/self: {e}")
-                
+
                 # 2. Fetch User's Trackers List
                 try:
                     logging.info(f"[CHEESE_DEBUG] Fetching dashboard for user {user_id}...")
@@ -128,32 +283,15 @@ def setup_cheese_user_task(app, user_id):
                         session.commit()
                     return
 
-                # --- FETCH DETAILS FOR EACH TRACKER ---
-                # Do all slow network queries and sleeps in memory first!
-                detailed_trackers = []
-                for tracker_meta in trackers_list:
-                    if tracker_meta.get('dashboard_override_visibility') is False:
-                        continue
-                    ct_id = tracker_meta.get('tracker_id')
-                    room_link = tracker_meta.get('room_link')
-                    title = tracker_meta.get('title') or "Unknown Room"
-                    
-                    if not ct_id: continue
-                    
-                    time.sleep(0.5)
-                    try:
-                        detail_resp = req_session.get(f"{CHEESE_BASE_URL}/tracker/{ct_id}", timeout=10)
-                        if detail_resp.ok:
-                            full_data = detail_resp.json()
-                            detailed_trackers.append({
-                                'ct_id': ct_id,
-                                'room_link': room_link,
-                                'title': title,
-                                'full_data': full_data
-                            })
-                    except Exception as e:
-                        logging.error(f"[CHEESE_DEBUG] Failed to fetch details for {ct_id}: {e}")
-                        continue
+                # 3. Fetch details for the linked trackers only.
+                details_by_ct_id = _fetch_tracker_details(req_session, linked_tracker_ids)
+
+            # Every tracker the dashboard knows about, hidden ones included.
+            # Visibility decides whether a tracker is worth *suggesting*; it says
+            # nothing about whether a room the user already linked is still real.
+            dashboard_tracker_ids = {
+                t.get('tracker_id') for t in trackers_list if t.get('tracker_id')
+            }
 
             # === DATABASE TRANSACTION START ===
             # Run all DB operations in a single fast transaction
@@ -169,209 +307,61 @@ def setup_cheese_user_task(app, user_id):
 
             my_cheese_id = user.cheese_user_id
 
-            stats = {'linked': 0, 'created': 0, 'slots_synced': 0, 'pruned': 0, 'demoted': 0}
-            found_cheese_tracker_ids = set()
-            processed_room_ids = set()
+            stats = {'refreshed': 0, 'slots_synced': 0, 'demoted': 0, 'unlisted': 0, 'relisted': 0}
 
-            for tracker_item in detailed_trackers:
-                ct_id = tracker_item['ct_id']
-                room_link = tracker_item['room_link']
-                title = tracker_item['title']
-                full_data = tracker_item['full_data']
-                
-                found_cheese_tracker_ids.add(ct_id)
+            linked_subs = session.query(UserRoomSubscription, TrackedRoom)\
+                .join(TrackedRoom, UserRoomSubscription.room_id == TrackedRoom.id)\
+                .filter(
+                    UserRoomSubscription.user_id == user.id,
+                    UserRoomSubscription.cheese_link == CHEESE_LINK_LINKED,
+                ).all()
 
-                room = session.query(TrackedRoom).filter_by(cheese_tracker_id=ct_id).first()
-
-                if not room and room_link:
-                    ap_room_id = extract_ap_room_id(room_link)
-                    if ap_room_id:
-                        room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
-                        if room and not room.cheese_tracker_id:
-                            room.cheese_tracker_id = ct_id
-                            logging.info(f"[CHEESE_DEBUG] Linked existing AP room {ap_room_id} to Cheese ID {ct_id}")
-
-                if not room:
-                    ap_room_id_extracted = extract_ap_room_id(room_link) or "PENDING_DISCOVERY_" + ct_id[:8]
-                    hostname = "archipelago.gg"
-                    try:
-                        if room_link:
-                            hostname = urlparse(room_link).hostname or "archipelago.gg"
-                    except: pass
-
-                    updated_at_dt = None
-                    if full_data.get('updated_at'):
-                        try:
-                            updated_at_dt = datetime.fromisoformat(full_data.get('updated_at').replace('Z', '+00:00'))
-                        except ValueError: pass
-
-                    logging.info(f"[CHEESE_DEBUG] Creating new room: {ap_room_id_extracted}")
-                    room = TrackedRoom(
-                        room_id=ap_room_id_extracted,
-                        hostname=hostname,
-                        cheese_tracker_id=ct_id,
-                        cached_cheese_json=json.dumps(full_data),
-                        cheese_updated_at=updated_at_dt,
-                        cached_full_address=hostname
-                    )
-                    session.add(room)
-                    session.flush()
-                    stats['created'] += 1
-                else:
-                    room.cached_cheese_json = json.dumps(full_data)
-                    if full_data.get('updated_at'):
-                        try:
-                            room.cheese_updated_at = datetime.fromisoformat(full_data.get('updated_at').replace('Z', '+00:00'))
-                        except ValueError: pass
-
-                if room:
-                    processed_room_ids.add(room.id)
-
-                # Subscribe User & Sync Slots
-                sub = session.query(UserRoomSubscription).filter_by(user_id=user.id, room_id=room.id).first()
-                if not sub:
-                    session.add(UserRoomSubscription(
-                        user_id=user.id, room_id=room.id, alias=title, icon_name='cheese'
-                    ))
-                    stats['linked'] += 1
-                    session.flush() 
-
-                games = full_data.get('games', [])
-
-                # A tracker with no games carries no ownership information, so
-                # it is not evidence that anything is unclaimed. Without this,
-                # an `ok` response with an empty games array demotes every
-                # claim in the room in one pass -- a brand-new tracker with no
-                # games yet is enough to trigger it. The fetch-failure case is
-                # already covered: a room whose detail request raised never
-                # reaches detailed_trackers.
-                if not games:
-                    logging.warning(
-                        f"[CHEESE_DEBUG] Tracker {ct_id} returned no games; "
-                        f"skipping claim reconciliation for room {room.id}."
-                    )
+            for sub, room in linked_subs:
+                ct_id = room.cheese_tracker_id
+                if not ct_id:
+                    # Linked but never pushed. The healing phase below owns it.
                     continue
 
-                slots_found = set()
-
-                for game in games:
-                    if my_cheese_id and game.get('claimed_by_ct_user_id') == my_cheese_id:
-                        slots_found.add(game.get('position'))
-                    elif discord_username:
-                        eff_discord = game.get('effective_discord_username')
-                        if eff_discord and eff_discord.strip().lower() == discord_username:
-                            slots_found.add(game.get('position'))
-                            found_ct_id = game.get('claimed_by_ct_user_id')
-                            if found_ct_id and not my_cheese_id:
-                                user.cheese_user_id = found_ct_id
-                                my_cheese_id = found_ct_id
-
-                slots_found.discard(None)
-
-                existing_slots = session.query(UserTrackedSlot).filter_by(
-                    user_id=user.id, room_id=room.id
-                ).all()
-                existing_by_id = {s.slot_id: s for s in existing_slots}
-
-                # Connecting mid-async must not cost the user slots they were
-                # already tracking. Anything Cheese does not confirm as theirs
-                # is demoted to watch instead: alerts survive, the claim does
-                # not, and the demotion is reversible from the app.
-                for slot_id, existing in existing_by_id.items():
-                    if slot_id in slots_found:
-                        continue
-                    if normalize_track_mode(existing.track_mode) != TRACK_MODE_PLAY:
-                        continue
-                    logging.info(
-                        f"[CHEESE_DEBUG] Demoting slot {slot_id} in room {room.id} to watch "
-                        f"(not claimed by user {user.id} on Cheese)."
+                full_data = details_by_ct_id.get(ct_id)
+                if full_data is not None:
+                    _apply_tracker_payload(room, full_data)
+                    stats['refreshed'] += 1
+                    my_cheese_id = _reconcile_claims(
+                        session, user, room, full_data, my_cheese_id, discord_username, stats
                     )
-                    existing.track_mode = TRACK_MODE_WATCH
-                    stats['demoted'] += 1
 
-                for slot_id in slots_found:
-                    existing = existing_by_id.get(slot_id)
-                    if existing is None:
-                        # notify_finished is deliberately left NULL so the slot
-                        # inherits User.notify_finished_default and keeps
-                        # following it. Stamping the default in here would write
-                        # a permanent per-slot override, so CT-created slots
-                        # would stop tracking the global setting while
-                        # picker-created ones kept following it.
-                        session.add(UserTrackedSlot(
-                            user_id=user.id,
-                            room_id=room.id,
-                            slot_id=slot_id,
-                            track_mode=TRACK_MODE_PLAY,
-                            # A slot Cheese says the user owns is one they are playing, so it
-                            # earns their auto-apply milestone templates like any other.
-                            auto_apply_pending=True,
-                        ))
-                        stats['slots_synced'] += 1
-                    # Watch is sticky: a slot the user already tracks is left in
-                    # whatever mode they put it in, even when Cheese still shows
-                    # them as the owner. That happens when a play -> watch
-                    # release failed to land, and silently re-claiming would
-                    # revert an explicit choice. The picker shows "Claimed by you
-                    # on Cheese Tracker" so they can switch back deliberately.
+                # Dashboard presence is a flag, never a deletion. An empty
+                # dashboard is not evidence of anything -- one thin response used
+                # to be enough to wipe a whole library (#323) -- so it is ignored
+                # outright.
+                if not dashboard_tracker_ids:
+                    continue
 
-            # 3. Prune stale subscriptions
-            # A subscription is stale if it is linked to a Cheese tracker that is no longer present on the user's dashboard.
-            # We use the list of all trackers returned by the dashboard API (all_dashboard_tracker_ids) rather than found_cheese_tracker_ids
-            # to avoid pruning rooms that are still on the user's dashboard but failed to fetch due to a timeout or other error.
-            all_dashboard_tracker_ids = {
-                t.get('tracker_id') for t in trackers_list 
-                if t.get('tracker_id') and t.get('dashboard_override_visibility') is not False
-            }
+                if ct_id in dashboard_tracker_ids:
+                    if sub.cheese_unlisted_at is not None:
+                        sub.cheese_unlisted_at = None
+                        stats['relisted'] += 1
+                elif sub.cheese_unlisted_at is None:
+                    logging.info(
+                        f"[CHEESE_DEBUG] Room {room.id} is linked but no longer on user "
+                        f"{user.id}'s Cheese dashboard; flagging it."
+                    )
+                    sub.cheese_unlisted_at = datetime.utcnow()
+                    stats['unlisted'] += 1
 
-            stale_subs_query = session.query(UserRoomSubscription)\
-                .join(TrackedRoom)\
-                .filter(UserRoomSubscription.user_id == user.id)\
-                .filter(UserRoomSubscription.is_archived == False) \
-                .filter(TrackedRoom.cheese_tracker_id.isnot(None))
-
-            if processed_room_ids:
-                stale_subs_query = stale_subs_query.filter(UserRoomSubscription.room_id.notin_(processed_room_ids))
-
-            if all_dashboard_tracker_ids:
-                stale_subs_query = stale_subs_query.filter(TrackedRoom.cheese_tracker_id.notin_(all_dashboard_tracker_ids))
-
-            # A room with watched slots is never stale. A watch-only room does not
-            # appear on the dashboard at all -- the user claims nothing on it, so
-            # Cheese has no reason to list it -- and the prune read that absence as
-            # "you are done here", deleting the subscription and cascading away the
-            # slots being watched. See #315.
-            #
-            # Deliberately scoped to watch rather than to any tracked slot: a room
-            # the user only plays is still pruned when they take it off their
-            # dashboard, exactly as before. Widening this would quietly change that
-            # behaviour too, which is not what #315 asked for.
-            still_watched = session.query(UserTrackedSlot).filter(
-                UserTrackedSlot.user_id == user.id,
-                UserTrackedSlot.room_id == UserRoomSubscription.room_id,
-                UserTrackedSlot.track_mode == TRACK_MODE_WATCH,
-            ).exists()
-            stale_subs_query = stale_subs_query.filter(~still_watched)
-
-            stale_subs = stale_subs_query.all()
-
-            for sub in stale_subs:
-                logging.info(f"[CHEESE_DEBUG] Pruning stale subscription for user {user.id}: Room {sub.room_id}")
-                session.delete(sub)
-                stats['pruned'] += 1
-            
             session.commit()
-            logging.info(f"[CHEESE_DEBUG] Initial sync loop complete. Stats: {stats}")
-
-            # --- REQUESTS SESSION END ---
+            logging.info(f"[CHEESE_DEBUG] Sync loop complete. Stats: {stats}")
 
             try:
-                # HEALING PHASE: Pushing orphaned rooms back to Cheese
+                # HEALING PHASE: Pushing linked-but-unpushed rooms to Cheese.
+                # Scoped to cheese_link, so a room the user keeps private to the
+                # app is never published on their behalf.
                 from sqlalchemy.orm import selectinload
                 orphaned_subs = session.query(UserRoomSubscription)\
                     .options(selectinload(UserRoomSubscription.room))\
                     .join(TrackedRoom)\
                     .filter(UserRoomSubscription.user_id == user.id)\
+                    .filter(UserRoomSubscription.cheese_link == CHEESE_LINK_LINKED)\
                     .filter(TrackedRoom.cheese_tracker_id.is_(None))\
                     .filter(~TrackedRoom.room_id.startswith("PENDING_DISCOVERY"))\
                     .all()
@@ -379,17 +369,17 @@ def setup_cheese_user_task(app, user_id):
                 rooms_to_push = []
                 for sub in orphaned_subs:
                     room = sub.room
-                    if room and room.tracker_id and room.hostname: 
+                    if room and room.tracker_id and room.hostname:
                         rooms_to_push.append({
                             'room_id': room.room_id,
                             'tracker_url': f"https://{room.hostname}/tracker/{room.tracker_id}",
                             'room_url': f"https://{room.hostname}/room/{room.room_id}",
                             'alias': sub.alias
                         })
-                
+
                 if rooms_to_push:
-                    logging.info(f"[CHEESE_DEBUG] Found {len(rooms_to_push)} orphaned rooms to heal. Closing DB session for network operations.")
-                    
+                    logging.info(f"[CHEESE_DEBUG] Found {len(rooms_to_push)} linked rooms to push. Closing DB session for network operations.")
+
                     # Close the session before starting the synchronous push loop
                     # This ensures push_new_room_to_cheese (which opens its own session)
                     # doesn't conflict with the current one.
@@ -397,21 +387,21 @@ def setup_cheese_user_task(app, user_id):
 
                     # Execute network calls safely
                     for data in rooms_to_push:
-                        logging.info(f"[CHEESE_DEBUG] Healing orphaned room: {data['room_id']}")
+                        logging.info(f"[CHEESE_DEBUG] Pushing linked room: {data['room_id']}")
                         push_new_room_to_cheese(
-                            app, 
-                            user_id, 
-                            data['tracker_url'], 
-                            data['room_id'], 
-                            data['room_url'], 
+                            app,
+                            user_id,
+                            data['tracker_url'],
+                            data['room_id'],
+                            data['room_url'],
                             data['alias']
                         )
                 else:
-                    logging.info("[CHEESE_DEBUG] No orphaned rooms found.")
+                    logging.info("[CHEESE_DEBUG] No linked rooms waiting to be pushed.")
 
             except Exception as e:
                 logging.error(f"[CHEESE_DEBUG] Error during healing phase: {e}", exc_info=True)
-            
+
             # --- RE-FETCH USER TO UNLOCK ---
             logging.info(f"[CHEESE_DEBUG] Sync task finished. Unlocking user {user_id}...")
             session = Session()
@@ -422,6 +412,7 @@ def setup_cheese_user_task(app, user_id):
                 # Surfaced by the app as a post-sync summary so a mid-async
                 # connect never silently changes slots out from under the user.
                 fresh_user.cheese_last_sync_demoted = stats.get('demoted', 0)
+                fresh_user.cheese_last_sync_unlisted = stats.get('unlisted', 0)
                 session.commit()
             logging.info(f"[CHEESE_DEBUG] User {user_id} unlocked.")
 
@@ -559,6 +550,246 @@ def trigger_manual_sync(current_user):
     ).start()
         
     return jsonify({'message': 'Sync started.'})
+
+
+
+def _fetch_dashboard(api_key):
+    """
+    Read the user's Cheese dashboard. One request, no per-tracker detail.
+
+    Returns the tracker list, or None when the call failed -- which every caller
+    must treat as "no news", never as an empty dashboard.
+    """
+    headers = get_cheese_headers()
+    headers['Authorization'] = f"Bearer {api_key}"
+    try:
+        resp = _cheese_session.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=headers, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logging.error(f"[CHEESE_DEBUG] Dashboard fetch failed: {e}")
+        return None
+
+
+@bp.route('/available', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def list_available_cheese_rooms(current_user):
+    """
+    Rooms on the user's Cheese dashboard that the app does not have.
+
+    These are offered, never imported. The app shows them as suggestions the
+    user accepts or dismisses, which is the whole difference between Cheese
+    proposing a room and Cheese writing one into somebody's library (#323).
+    """
+    if not current_user.cheese_api_key:
+        return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
+
+    api_key = decrypt_api_key(current_user.cheese_api_key)
+    if not api_key:
+        return jsonify({'error': 'Could not read your stored Cheese key.'}), 500
+
+    trackers = _fetch_dashboard(api_key)
+    if trackers is None:
+        return jsonify({'error': 'Could not reach Cheese Tracker.'}), 502
+
+    session = Session()
+
+    known_tracker_ids = {
+        ct_id for (ct_id,) in session.query(TrackedRoom.cheese_tracker_id)
+        .join(UserRoomSubscription, UserRoomSubscription.room_id == TrackedRoom.id)
+        .filter(
+            UserRoomSubscription.user_id == current_user.id,
+            TrackedRoom.cheese_tracker_id.isnot(None),
+        ).all()
+    }
+
+    dismissed_ids = {
+        ct_id for (ct_id,) in session.query(CheeseDismissedTracker.cheese_tracker_id)
+        .filter(CheeseDismissedTracker.user_id == current_user.id).all()
+    }
+
+    available = []
+    for tracker in trackers:
+        ct_id = tracker.get('tracker_id')
+        if not ct_id or ct_id in known_tracker_ids or ct_id in dismissed_ids:
+            continue
+        # A tracker the user hid on their Cheese dashboard is not a room they
+        # are asking us to suggest.
+        if tracker.get('dashboard_override_visibility') is False:
+            continue
+
+        available.append({
+            'cheese_tracker_id': ct_id,
+            'title': tracker.get('title') or 'Unknown Room',
+            'room_link': tracker.get('room_link'),
+            'last_activity': tracker.get('last_activity') or tracker.get('updated_at'),
+        })
+
+    return jsonify({'available': available, 'count': len(available)})
+
+
+@bp.route('/available/dismiss', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def dismiss_available_cheese_rooms(current_user):
+    """Stop offering these trackers. Reversible by importing them later."""
+    data = request.json or {}
+    tracker_ids = data.get('cheese_tracker_ids')
+    if not isinstance(tracker_ids, list) or not tracker_ids:
+        return jsonify({'error': 'cheese_tracker_ids must be a non-empty list.'}), 400
+
+    session = Session()
+    dismissed = 0
+    for ct_id in tracker_ids:
+        if not isinstance(ct_id, str) or not ct_id.strip():
+            continue
+        ct_id = ct_id.strip()
+        exists = session.query(CheeseDismissedTracker).filter_by(
+            user_id=current_user.id, cheese_tracker_id=ct_id
+        ).first()
+        if exists:
+            continue
+        session.add(CheeseDismissedTracker(user_id=current_user.id, cheese_tracker_id=ct_id))
+        dismissed += 1
+
+    session.commit()
+    return jsonify({'message': 'Dismissed.', 'dismissed': dismissed})
+
+
+@bp.route('/available/import', methods=['POST'])
+@handle_db_errors
+@log_api_call
+@token_required
+def import_available_cheese_rooms(current_user):
+    """
+    Add the named Cheese trackers to the user's library, linked.
+
+    This is the only path that creates a room from Cheese, and it only runs
+    because somebody tapped Add. The claim reconciliation that used to happen
+    for every dashboard tracker on every sync happens here once, for the rooms
+    the user chose.
+    """
+    data = request.json or {}
+    tracker_ids = data.get('cheese_tracker_ids')
+    if not isinstance(tracker_ids, list) or not tracker_ids:
+        return jsonify({'error': 'cheese_tracker_ids must be a non-empty list.'}), 400
+
+    if not current_user.cheese_api_key:
+        return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
+
+    api_key = decrypt_api_key(current_user.cheese_api_key)
+    if not api_key:
+        return jsonify({'error': 'Could not read your stored Cheese key.'}), 500
+
+    wanted = {t.strip() for t in tracker_ids if isinstance(t, str) and t.strip()}
+    if not wanted:
+        return jsonify({'error': 'cheese_tracker_ids must be a non-empty list.'}), 400
+
+    trackers = _fetch_dashboard(api_key)
+    if trackers is None:
+        return jsonify({'error': 'Could not reach Cheese Tracker.'}), 502
+
+    by_id = {t.get('tracker_id'): t for t in trackers if t.get('tracker_id')}
+    missing = sorted(wanted - set(by_id))
+
+    with requests.Session() as req_session:
+        req_session.headers.update(get_cheese_headers())
+        req_session.headers['Authorization'] = f"Bearer {api_key}"
+        details = _fetch_tracker_details(req_session, wanted & set(by_id))
+
+    session = Session()
+    user = session.merge(current_user)
+    my_cheese_id = user.cheese_user_id
+    discord_username = user.discord_username.strip().lower() if user.discord_username else None
+
+    stats = {'imported': 0, 'slots_synced': 0, 'demoted': 0}
+    failed = []
+
+    for ct_id in sorted(wanted & set(by_id)):
+        full_data = details.get(ct_id)
+        if full_data is None:
+            failed.append(ct_id)
+            continue
+
+        meta = by_id[ct_id]
+        room_link = meta.get('room_link')
+        title = meta.get('title') or 'Unknown Room'
+
+        room = session.query(TrackedRoom).filter_by(cheese_tracker_id=ct_id).first()
+
+        if not room and room_link:
+            ap_room_id = extract_ap_room_id(room_link)
+            if ap_room_id:
+                room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
+                if room and not room.cheese_tracker_id:
+                    room.cheese_tracker_id = ct_id
+                    logging.info(f"[CHEESE_IMPORT] Linked existing AP room {ap_room_id} to Cheese ID {ct_id}")
+
+        if not room:
+            ap_room_id_extracted = extract_ap_room_id(room_link) or "PENDING_DISCOVERY_" + ct_id[:8]
+            hostname = "archipelago.gg"
+            try:
+                if room_link:
+                    hostname = urlparse(room_link).hostname or "archipelago.gg"
+            except Exception:
+                pass
+
+            room = TrackedRoom(
+                room_id=ap_room_id_extracted,
+                hostname=hostname,
+                cheese_tracker_id=ct_id,
+                cached_full_address=hostname,
+            )
+            session.add(room)
+            session.flush()
+            logging.info(f"[CHEESE_IMPORT] Created room {ap_room_id_extracted} for tracker {ct_id}")
+
+        _apply_tracker_payload(room, full_data)
+
+        sub = session.query(UserRoomSubscription).filter_by(
+            user_id=user.id, room_id=room.id
+        ).first()
+        if not sub:
+            sub = UserRoomSubscription(
+                user_id=user.id,
+                room_id=room.id,
+                alias=title,
+                icon_name='cheese',
+                cheese_link=CHEESE_LINK_LINKED,
+            )
+            session.add(sub)
+            session.flush()
+            stats['imported'] += 1
+        else:
+            # Already tracked, so this is really "start mirroring it".
+            sub.cheese_link = CHEESE_LINK_LINKED
+            sub.is_archived = False
+        sub.cheese_unlisted_at = None
+
+        my_cheese_id = _reconcile_claims(
+            session, user, room, full_data, my_cheese_id, discord_username, stats
+        )
+
+        # Accepting a suggestion answers the question a dismissal was hiding.
+        session.query(CheeseDismissedTracker).filter_by(
+            user_id=user.id, cheese_tracker_id=ct_id
+        ).delete()
+
+    session.commit()
+
+    if missing:
+        logging.warning(f"[CHEESE_IMPORT] User {current_user.id} asked for trackers not on their dashboard: {missing}")
+
+    return jsonify({
+        'message': f"Added {stats['imported']} room(s).",
+        'imported': stats['imported'],
+        'slots_synced': stats['slots_synced'],
+        'demoted': stats['demoted'],
+        'failed': failed + missing,
+    })
 
 
 def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, alias):
@@ -795,7 +1026,19 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
             if not local_room or not local_room.cheese_tracker_id:
                 logging.warning(f"[CHEESE_DEBUG] Aborting: No cheese_tracker_id for room {room_db_id}.")
                 return
-                
+
+            # A room the user has unlinked keeps its tracker id -- unlinking does
+            # not delete anything on Cheese -- so the id alone is not permission
+            # to write. The link is. See #323.
+            sub = temp_session.query(UserRoomSubscription.cheese_link).filter_by(
+                user_id=user_id, room_id=room_db_id
+            ).first()
+            if not sub or normalize_cheese_link(sub.cheese_link) != CHEESE_LINK_LINKED:
+                logging.info(
+                    f"[CHEESE_DEBUG] Aborting: room {room_db_id} is not linked to Cheese for user {user_id}."
+                )
+                return
+
             tracker_id = local_room.cheese_tracker_id
         except Exception as e:
             logging.error(f"[CHEESE_DEBUG] Error in pre-flight: {e}", exc_info=True)
@@ -1033,6 +1276,14 @@ def apply_cheese_slot_update(app, user_id, room_db_id, slot_id, updates):
 
             room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
             if not room or not room.cheese_tracker_id:
+                return {'status': 'no_tracker'}
+
+            # Unlinking a room leaves its tracker id in place, so writes are
+            # gated on the link rather than on the id. See #323.
+            sub = session.query(UserRoomSubscription.cheese_link).filter_by(
+                user_id=user_id, room_id=room_db_id
+            ).first()
+            if not sub or normalize_cheese_link(sub.cheese_link) != CHEESE_LINK_LINKED:
                 return {'status': 'no_tracker'}
 
             local_slot = session.query(UserTrackedSlot).filter_by(

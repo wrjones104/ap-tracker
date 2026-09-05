@@ -30,7 +30,7 @@ from app.models import Base, Device, User, TrackedRoom, UserRoomSubscription, Us
 from app.services.cheese_service import process_cheese_update
 from app.api_cheese import setup_cheese_user_task
 from app.encryption import encrypt_api_key
-from app.utils import TRACK_MODE_PLAY, TRACK_MODE_WATCH, normalize_track_mode
+from app.utils import TRACK_MODE_PLAY, TRACK_MODE_WATCH, normalize_track_mode, CHEESE_LINK_LINKED, CHEESE_LINK_NONE
 
 MY_CT_ID = 12345
 OTHER_CT_ID = 99999
@@ -122,7 +122,8 @@ class TrackModeTestBase(unittest.TestCase):
         self.session.flush()
 
         self.session.add(UserRoomSubscription(
-            user_id=user_id, room_id=room.id, alias="Test Room"
+            user_id=user_id, room_id=room.id, alias="Test Room",
+            cheese_link=CHEESE_LINK_LINKED
         ))
         self.session.flush()
 
@@ -473,11 +474,12 @@ class TestSetupDemotesOnMidAsyncConnect(TrackModeTestBase):
         user = self.make_user(is_syncing_cheese=True)
 
         # The user was already tracking all three slots before connecting.
-        room = TrackedRoom(room_id="room_uuid")
+        room = TrackedRoom(room_id="room_uuid", cheese_tracker_id="ct_room_1")
         self.session.add(room)
         self.session.flush()
         self.session.add(UserRoomSubscription(
-            user_id=user.id, room_id=room.id, alias="Test Room"
+            user_id=user.id, room_id=room.id, alias="Test Room",
+            cheese_link=CHEESE_LINK_LINKED
         ))
         self.session.flush()
         for slot_id in (1, 2, 3):
@@ -543,11 +545,12 @@ class TestSetupDemotesOnMidAsyncConnect(TrackModeTestBase):
 
         user_id = self.make_user(is_syncing_cheese=True).id
 
-        room = TrackedRoom(room_id="room_uuid")
+        room = TrackedRoom(room_id="room_uuid", cheese_tracker_id="ct_room_1")
         self.session.add(room)
         self.session.flush()
         self.session.add(UserRoomSubscription(
-            user_id=user_id, room_id=room.id, alias="Test Room"
+            user_id=user_id, room_id=room.id, alias="Test Room",
+            cheese_link=CHEESE_LINK_LINKED
         ))
         self.session.flush()
         for slot_id, mode in existing_modes.items():
@@ -650,11 +653,12 @@ class TestCheeseSyncLeavesNotifyFinishedInherited(TrackModeTestBase):
         user = self.make_user(is_syncing_cheese=True, notify_finished_default=True)
         user_id = user.id
 
-        room = TrackedRoom(room_id="room_uuid")
+        room = TrackedRoom(room_id="room_uuid", cheese_tracker_id="ct_room_1")
         self.session.add(room)
         self.session.flush()
         self.session.add(UserRoomSubscription(
-            user_id=user_id, room_id=room.id, alias="Test Room"
+            user_id=user_id, room_id=room.id, alias="Test Room",
+            cheese_link=CHEESE_LINK_LINKED
         ))
         self.session.commit()
         room_id = room.id
@@ -850,13 +854,13 @@ if __name__ == '__main__':
     unittest.main()
 
 
-class TestWatchOnlyRoomSurvivesCheeseSync(TrackModeTestBase):
+class TestRoomsSurviveCheeseSync(TrackModeTestBase):
     """
-    A watch-only room never appears on the Cheese dashboard: the user claims
-    nothing on it, so Cheese has no reason to list it. The stale-subscription
-    prune read that absence as "you are done with this room" and deleted the
-    subscription, which took the room out of the app entirely along with the
-    slots the user was watching. See #315.
+    Absence from the Cheese dashboard removes nothing. It used to delete the
+    subscription, which took the room out of the app along with the slots and
+    milestone groups hanging off it -- for watch-only rooms (#315) and then for
+    every other room a connected user had (#323). The app owns the library now,
+    so a linked room that stops being listed is flagged and left alone.
     """
 
     def _run_sync(self, mock_session_cls):
@@ -909,7 +913,8 @@ class TestWatchOnlyRoomSurvivesCheeseSync(TrackModeTestBase):
         self.session.add(watch_room)
         self.session.flush()
         self.session.add(UserRoomSubscription(
-            user_id=user_id, room_id=watch_room.id, alias="Watch Only"
+            user_id=user_id, room_id=watch_room.id, alias="Watch Only",
+            cheese_link=CHEESE_LINK_LINKED
         ))
         self.session.add(UserTrackedSlot(
             user_id=user_id, room_id=watch_room.id, slot_id=5, track_mode=TRACK_MODE_WATCH
@@ -939,12 +944,11 @@ class TestWatchOnlyRoomSurvivesCheeseSync(TrackModeTestBase):
 
 
     @patch('app.api_cheese.requests.Session')
-    def test_played_room_off_the_dashboard_is_still_pruned(self, mock_session_cls):
+    def test_played_room_off_the_dashboard_is_flagged_not_removed(self, mock_session_cls):
         """
-        The narrowing is to watch slots specifically. A room the user only plays
-        still leaves the app when they take it off their Cheese dashboard, which
-        is how the prune behaved before #315 and is not what that issue asked to
-        change.
+        A room the user plays and then takes off their Cheese dashboard stays in
+        the app, flagged so the app can say it is no longer on Cheese. Removing
+        it is the user's call, in the app, where the room lives.
         """
         self._run_sync(mock_session_cls)
 
@@ -956,7 +960,8 @@ class TestWatchOnlyRoomSurvivesCheeseSync(TrackModeTestBase):
         self.session.add(played_elsewhere)
         self.session.flush()
         self.session.add(UserRoomSubscription(
-            user_id=user_id, room_id=played_elsewhere.id, alias="Played Elsewhere"
+            user_id=user_id, room_id=played_elsewhere.id, alias="Played Elsewhere",
+            cheese_link=CHEESE_LINK_LINKED
         ))
         self.session.add(UserTrackedSlot(
             user_id=user_id, room_id=played_elsewhere.id, slot_id=7, track_mode=TRACK_MODE_PLAY
@@ -971,14 +976,59 @@ class TestWatchOnlyRoomSurvivesCheeseSync(TrackModeTestBase):
             sub = fresh.query(UserRoomSubscription).filter_by(
                 user_id=user_id, room_id=played_room_id
             ).first()
+            slot = fresh.query(UserTrackedSlot).filter_by(
+                user_id=user_id, room_id=played_room_id, slot_id=7
+            ).first()
+            unlisted_count = fresh.get(User, user_id).cheese_last_sync_unlisted
         finally:
             fresh.close()
 
-        self.assertIsNone(
-            sub,
-            "a room the user only plays is still pruned when it leaves their "
-            "Cheese dashboard; only watched rooms are exempt",
-        )
+        self.assertIsNotNone(sub, "the room must stay in the user's library")
+        self.assertIsNotNone(sub.cheese_unlisted_at, "and be flagged as no longer listed")
+        self.assertIsNotNone(slot, "its tracked slot must survive with it")
+        self.assertEqual(unlisted_count, 1)
+
+    @patch('app.api_cheese.requests.Session')
+    def test_unlinked_room_is_never_touched(self, mock_session_cls):
+        """
+        A room the user keeps private to the app is not reconciled at all, even
+        when it happens to carry a tracker id from an earlier link.
+        """
+        self._run_sync(mock_session_cls)
+
+        user = self.make_user(is_syncing_cheese=True)
+        user_id = user.id
+        self.make_room_with_slot_for(user_id, slot_id=1, track_mode=TRACK_MODE_PLAY)
+
+        private_room = TrackedRoom(room_id="private_uuid", cheese_tracker_id="ct_room_4")
+        self.session.add(private_room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=private_room.id, alias="Mine Only",
+            cheese_link=CHEESE_LINK_NONE
+        ))
+        self.session.add(UserTrackedSlot(
+            user_id=user_id, room_id=private_room.id, slot_id=9, track_mode=TRACK_MODE_PLAY
+        ))
+        self.session.commit()
+        private_room_id = private_room.id
+
+        setup_cheese_user_task(self.app, user_id)
+
+        fresh = Session()
+        try:
+            sub = fresh.query(UserRoomSubscription).filter_by(
+                user_id=user_id, room_id=private_room_id
+            ).first()
+            slot = fresh.query(UserTrackedSlot).filter_by(
+                user_id=user_id, room_id=private_room_id, slot_id=9
+            ).first()
+        finally:
+            fresh.close()
+
+        self.assertIsNotNone(sub)
+        self.assertIsNone(sub.cheese_unlisted_at, "an unlinked room is not flagged")
+        self.assertEqual(slot.track_mode, TRACK_MODE_PLAY, "and its slots are not demoted")
 
 
 class TestFreshRoomOffersTrackMode(TrackModeTestBase):

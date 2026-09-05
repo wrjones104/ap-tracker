@@ -13,7 +13,8 @@ from flask import Blueprint, request, jsonify, current_app
 from app import Session
 from app.models import TrackedRoom, UserRoomSubscription, UserTrackedSlot, DatapackageCache
 from app.utils import (
-    verify_ap_server, get_web_base_url, parse_cached_checks, normalize_track_mode
+    verify_ap_server, get_web_base_url, parse_cached_checks, normalize_track_mode,
+    CHEESE_LINK_NONE, CHEESE_LINK_LINKED, normalize_cheese_link
 )
 from app.routes.common import log_api_call, token_required, handle_db_errors
 from app.routes.slots_routes import build_cheese_claim_summary
@@ -77,7 +78,15 @@ def get_rooms(current_user):
             'status': status,  
             'total_slots_count': room.cached_total_slots,
             'tracked_slots_count': tracked_count,
-            'web_url': f"{get_web_base_url(room.hostname)}/room/{room.room_id}"
+            'web_url': f"{get_web_base_url(room.hostname)}/room/{room.room_id}",
+            # Cheese state, for the chip on the room card. `cheese_link` is what
+            # the user asked for, `cheese_tracker_id` is whether it has actually
+            # landed yet (a push takes a couple of minutes), and
+            # `cheese_unlisted` says the linked tracker has dropped off their
+            # Cheese dashboard. None of the three ever removes the room.
+            'cheese_link': normalize_cheese_link(sub.cheese_link),
+            'cheese_tracker_id': room.cheese_tracker_id,
+            'cheese_unlisted': sub.cheese_unlisted_at is not None
         })
 
     return jsonify(rooms_list)
@@ -91,6 +100,17 @@ def add_room(current_user):
     room_url = data.get('room_url', '').strip()
     alias = data.get('alias', '').strip()
     icon_name = data.get('icon_name')
+
+    # Whether to mirror this room to Cheese Tracker. The client sends the state
+    # of the checkbox in the add-room dialog; an older build that sends nothing
+    # gets the user's default, which is what it has always done. Publishing a
+    # room creates a public tracker on someone else's service under the user's
+    # account, so it is a per-room decision rather than a global mode. See #323.
+    sync_to_cheese = data.get('sync_to_cheese')
+    if sync_to_cheese is None:
+        sync_to_cheese = bool(getattr(current_user, 'cheese_publish_new_rooms', True))
+    else:
+        sync_to_cheese = bool(sync_to_cheese)
 
     has_explicit_scheme = room_url.startswith(('http://', 'https://'))
 
@@ -188,7 +208,8 @@ def add_room(current_user):
         user_id=current_user.id,
         room_id=room.id,
         alias=alias,
-        icon_name=icon_name or 'person'
+        icon_name=icon_name or 'person',
+        cheese_link=CHEESE_LINK_LINKED if sync_to_cheese else CHEESE_LINK_NONE
     )
     session.add(subscription)
     room.is_suspended = cast(bool, False)
@@ -196,7 +217,7 @@ def add_room(current_user):
     logging.info(f"[API] User {current_user.id} subscribed to room {room.id} ('{alias}')")
     session.commit()
 
-    if current_user.cheese_api_key and ap_tracker_id and not current_user.is_guest:
+    if sync_to_cheese and current_user.cheese_api_key and ap_tracker_id and not current_user.is_guest:
         try:
             from app.api_cheese import push_new_room_to_cheese
             import threading
@@ -294,6 +315,82 @@ def update_subscription(current_user, room_db_id):
     return jsonify({
         'message': 'Subscription updated.',
         'is_archived': subscription.is_archived
+    })
+
+@rooms_bp.route('/rooms/<int:room_db_id>/cheese_link', methods=['PUT'])
+@handle_db_errors
+@log_api_call
+@token_required
+def update_cheese_link(current_user, room_db_id):
+    """
+    Start or stop mirroring one room to Cheese Tracker.
+
+    Linking a room with no tracker yet pushes it, which takes a couple of
+    minutes; the client shows the pending state by seeing `cheese_link` set with
+    `cheese_tracker_id` still null.
+
+    Unlinking is local. It does not delete the Cheese tracker and does not
+    release slot claims -- both are shared state that other people can see, so
+    giving them up stays an explicit action in the slot picker. What it stops is
+    this app writing to that tracker.
+    """
+    data = request.json or {}
+    linked = data.get('linked')
+    if linked is None:
+        return jsonify({'error': "Missing 'linked'."}), 400
+    linked = bool(linked)
+
+    session = Session()
+    subscription = session.query(UserRoomSubscription).filter_by(
+        user_id=current_user.id,
+        room_id=room_db_id
+    ).first()
+
+    if not subscription:
+        return jsonify({'error': 'Not subscribed to this room'}), 403
+
+    if linked and not current_user.cheese_api_key:
+        return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
+
+    room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+    if not room:
+        return jsonify({'error': 'Room not found'}), 404
+
+    subscription.cheese_link = CHEESE_LINK_LINKED if linked else CHEESE_LINK_NONE
+    if not linked:
+        subscription.cheese_unlisted_at = None
+    session.commit()
+
+    pushing = False
+    if (
+        linked
+        and not room.cheese_tracker_id
+        and room.tracker_id
+        and room.hostname
+        and not current_user.is_guest
+    ):
+        try:
+            from app.api_cheese import push_new_room_to_cheese
+            import threading
+
+            app_context = current_app._get_current_object()
+            threading.Thread(target=push_new_room_to_cheese, args=(
+                app_context,
+                current_user.id,
+                f"{get_web_base_url(room.hostname)}/tracker/{room.tracker_id}",
+                room.room_id,
+                f"{get_web_base_url(room.hostname)}/room/{room.room_id}",
+                subscription.alias
+            )).start()
+            pushing = True
+        except Exception as e:
+            logging.error(f"[API_ERROR] Failed to start Cheese push thread: {e}", exc_info=True)
+
+    return jsonify({
+        'message': 'Sharing on Cheese Tracker.' if linked else 'No longer syncing this room to Cheese Tracker.',
+        'cheese_link': subscription.cheese_link,
+        'cheese_tracker_id': room.cheese_tracker_id,
+        'pushing': pushing
     })
 
 @rooms_bp.route('/rooms/<int:room_db_id>', methods=['DELETE'])

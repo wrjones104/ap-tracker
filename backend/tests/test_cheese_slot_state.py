@@ -14,6 +14,7 @@ from backend.app.models import Base, User, TrackedRoom, UserRoomSubscription, Us
 from backend.app.api_cheese import apply_cheese_slot_update, refresh_tracker_cache, _background_push_worker
 from backend.app.routes.slots_routes import game_is_owned_by, build_cheese_slot_state
 from backend.app.encryption import encrypt_api_key
+from backend.app.utils import CHEESE_LINK_LINKED, CHEESE_LINK_NONE
 
 MY_CT_ID = 12345
 OTHER_CT_ID = 99999
@@ -98,7 +99,8 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
             cheese_tracker_id='ct_room_1',
             cached_cheese_json=json.dumps(make_tracker(make_game())),
         )
-        sub = UserRoomSubscription(user_id=1, room_id=10, alias='Test Room')
+        sub = UserRoomSubscription(user_id=1, room_id=10, alias='Test Room',
+                                   cheese_link=CHEESE_LINK_LINKED)
         slot = UserTrackedSlot(user_id=1, room_id=10, slot_id=1)
         self.session.add_all([user, room, sub, slot])
         self.session.commit()
@@ -147,6 +149,22 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
         self.session.refresh(room)
         cached = json.loads(room.cached_cheese_json)
         self.assertEqual(cached['games'][0]['notes'], 'new notes')
+
+    @patch('backend.app.api_cheese._cheese_session.put')
+    @patch('backend.app.api_cheese._cheese_session.get')
+    def test_unlinked_room_is_not_written_to(self, mock_get, mock_put):
+        """
+        Unlinking a room leaves its tracker id in place, so the id alone is not
+        permission to write. The link is. See #323.
+        """
+        sub = self.session.query(UserRoomSubscription).filter_by(user_id=1, room_id=10).first()
+        sub.cheese_link = CHEESE_LINK_NONE
+        self.session.commit()
+
+        result = apply_cheese_slot_update(self.app, 1, 10, 1, {'notes': 'new notes'})
+
+        self.assertEqual(result['status'], 'no_tracker')
+        mock_put.assert_not_called()
 
     @patch('backend.app.api_cheese._cheese_session.put')
     @patch('backend.app.api_cheese._cheese_session.get')
@@ -327,7 +345,8 @@ class TestBackgroundPushFetchesTrackerOnce(unittest.TestCase):
             cheese_tracker_id='ct_room_1',
             cached_players_json='[]',
         )
-        sub = UserRoomSubscription(user_id=1, room_id=10, alias='Test Room')
+        sub = UserRoomSubscription(user_id=1, room_id=10, alias='Test Room',
+                                   cheese_link=CHEESE_LINK_LINKED)
         self.session.add_all([user, room, sub])
         self.session.add_all([
             UserTrackedSlot(user_id=1, room_id=10, slot_id=pos) for pos in (1, 2, 3)

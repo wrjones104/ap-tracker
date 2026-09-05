@@ -14,6 +14,7 @@ from backend.app import create_app, Session, engine
 from backend.app.models import Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
 from backend.app.api_cheese import setup_cheese_user_task
 from backend.app.encryption import encrypt_api_key
+from backend.app.utils import CHEESE_LINK_LINKED, CHEESE_LINK_NONE
 
 class TestCheeseSync(unittest.TestCase):
     def setUp(self):
@@ -43,6 +44,7 @@ class TestCheeseSync(unittest.TestCase):
 
     @patch('backend.app.api_cheese.requests.Session')
     def test_setup_cheese_user_task(self, mock_session_cls):
+        """A linked room has its payload refreshed and its claims reconciled."""
         # Create a mock session instance
         mock_session = MagicMock()
         mock_session_cls.return_value.__enter__.return_value = mock_session
@@ -106,8 +108,27 @@ class TestCheeseSync(unittest.TestCase):
             is_guest=False
         )
         self.session.add(user)
+        self.session.flush()
+
+        # The sync reconciles rooms the user linked; it does not create them.
+        # Importing a dashboard tracker is an explicit action (see the import
+        # endpoint tests below).
+        room = TrackedRoom(
+            room_id='test_room_uuid',
+            hostname='archipelago.gg',
+            cheese_tracker_id='ct_room_1'
+        )
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user.id,
+            room_id=room.id,
+            alias='Test Room',
+            cheese_link=CHEESE_LINK_LINKED
+        ))
         self.session.commit()
-        
+        room_db_id = room.id
+
         # Run setup_cheese_user_task
         setup_cheese_user_task(self.app, user.id)
         
@@ -116,21 +137,23 @@ class TestCheeseSync(unittest.TestCase):
         updated_user = fresh_session.query(User).get(user.id)
         self.assertFalse(updated_user.is_syncing_cheese)
         self.assertEqual(updated_user.cheese_user_id, 12345)
-        
-        # Verify rooms are synced
-        room = fresh_session.query(TrackedRoom).filter_by(cheese_tracker_id='ct_room_1').first()
-        self.assertIsNotNone(room)
-        self.assertEqual(room.room_id, 'test_room_uuid')
-        
-        # Verify sub is created
-        sub = fresh_session.query(UserRoomSubscription).filter_by(user_id=user.id, room_id=room.id).first()
-        self.assertIsNotNone(sub)
-        self.assertEqual(sub.alias, 'Test Room')
-        
-        # Verify slot is tracked
-        slot = fresh_session.query(UserTrackedSlot).filter_by(user_id=user.id, room_id=room.id, slot_id=1).first()
+
+        # The cached tracker payload was refreshed
+        room_check = fresh_session.query(TrackedRoom).get(room_db_id)
+        self.assertIn('999', room_check.cached_cheese_json)
+
+        # Verify the claimed slot is now tracked
+        slot = fresh_session.query(UserTrackedSlot).filter_by(
+            user_id=user.id, room_id=room_db_id, slot_id=1
+        ).first()
         self.assertIsNotNone(slot)
-        
+
+        # Still on the dashboard, so not flagged
+        sub = fresh_session.query(UserRoomSubscription).filter_by(
+            user_id=user.id, room_id=room_db_id
+        ).first()
+        self.assertIsNone(sub.cheese_unlisted_at)
+
         fresh_session.close()
 
     @patch('backend.app.api_cheese.requests.Session')
@@ -344,7 +367,13 @@ class TestCheeseSync(unittest.TestCase):
         fresh_session.close()
 
     @patch('backend.app.api_cheese.requests.Session')
-    def test_setup_cheese_user_task_pruning_unlinked_room(self, mock_session_cls):
+    def test_linked_room_off_the_dashboard_is_flagged_not_deleted(self, mock_session_cls):
+        """
+        A linked room the dashboard stops listing is flagged, never removed.
+
+        The app owns the library, so a room falling off the Cheese dashboard is a
+        fact about Cheese rather than an instruction to delete anything. See #323.
+        """
         # Create a mock session instance
         mock_session = MagicMock()
         mock_session_cls.return_value.__enter__.return_value = mock_session
@@ -420,23 +449,39 @@ class TestCheeseSync(unittest.TestCase):
         self.session.flush()
         user_db_id = user.id
         
-        # Pre-subscribe user to room 2
+        # Pre-subscribe user to room 2, linked and tracking a slot
         sub_2 = UserRoomSubscription(
             user_id=user_db_id,
             room_id=room_2_db_id,
-            alias='Deleted Room',
-            is_archived=False
+            alias='Room Off The Dashboard',
+            is_archived=False,
+            cheese_link=CHEESE_LINK_LINKED
         )
         self.session.add(sub_2)
+        self.session.add(UserTrackedSlot(
+            user_id=user_db_id, room_id=room_2_db_id, slot_id=4, track_mode='play'
+        ))
         self.session.commit()
-        
+
         # Run setup_cheese_user_task
         setup_cheese_user_task(self.app, user_db_id)
-        
-        # Verify room 2's subscription was pruned/deleted
+
         fresh_session = Session()
-        sub_check = fresh_session.query(UserRoomSubscription).filter_by(user_id=user_db_id, room_id=room_2_db_id).first()
-        self.assertIsNone(sub_check)
+        sub_check = fresh_session.query(UserRoomSubscription).filter_by(
+            user_id=user_db_id, room_id=room_2_db_id
+        ).first()
+        self.assertIsNotNone(sub_check, "the subscription must survive")
+        self.assertIsNotNone(sub_check.cheese_unlisted_at, "and be flagged as unlisted")
+        self.assertFalse(sub_check.is_archived)
+
+        # The tracked slot survives with it: nothing cascades.
+        slot_check = fresh_session.query(UserTrackedSlot).filter_by(
+            user_id=user_db_id, room_id=room_2_db_id, slot_id=4
+        ).first()
+        self.assertIsNotNone(slot_check)
+
+        user_check = fresh_session.query(User).get(user_db_id)
+        self.assertEqual(user_check.cheese_last_sync_unlisted, 1)
         fresh_session.close()
 
 if __name__ == '__main__':

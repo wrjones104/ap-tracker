@@ -26,12 +26,22 @@ class User(Base):
     # as a post-sync summary; the client decides when it has been seen by
     # comparing against cheese_last_sync.
     cheese_last_sync_demoted = Column(Integer, nullable=False, default=0, server_default='0')
+    # How many linked rooms the most recent sync found missing from the user's
+    # Cheese dashboard. Nothing is removed on the strength of it; the app shows
+    # the affected rooms so the user can decide.
+    cheese_last_sync_unlisted = Column(Integer, nullable=False, default=0, server_default='0')
     is_syncing_cheese = Column(Boolean, nullable=False, default=False, server_default='f')
     cheese_sync_started_at = Column(DateTime, nullable=True)
     # Default Cheese Tracker ping preference applied at claim time. Null = leave
     # whatever value the game already has on Cheese untouched. One of:
     # liberally | sparingly | hints | see_notes | never
     cheese_default_ping = Column(String, nullable=True)
+    # Default for the "Also create this on Cheese Tracker" choice in the add-room
+    # dialog. A default for a per-room decision, not a sync mode: it only seeds
+    # the checkbox, and the room's own cheese_link is what actually authorises a
+    # push. Defaults to true, which is what every connected user had before the
+    # choice existed.
+    cheese_publish_new_rooms = Column(Boolean, nullable=False, default=True, server_default='t')
     is_guest = Column(Boolean, nullable=False, default=True, server_default='t')
     guest_uuid = Column(String, nullable=True, unique=True, index=True)
     subscriptions = relationship("UserRoomSubscription", back_populates="user", cascade="all, delete-orphan")
@@ -113,6 +123,15 @@ class UserRoomSubscription(Base):
     alias = Column(String, nullable=False)
     icon_name = Column(String, default="default_icon")
     is_archived = Column(Boolean, default=False, nullable=False)
+    # Whether this room mirrors to Cheese Tracker for this user: 'none' or
+    # 'linked'. See CHEESE_LINKS in app/utils.py. Per-subscription rather than
+    # per-room, because TrackedRoom.cheese_tracker_id is shared by everyone
+    # tracking that room while the decision to mirror is one user's.
+    cheese_link = Column(String(16), default='none', nullable=False, server_default='none')
+    # Set when a sync finds a linked room missing from the user's Cheese
+    # dashboard, cleared when it comes back. Purely a flag for the app to show:
+    # nothing is ever removed on the strength of it.
+    cheese_unlisted_at = Column(DateTime, nullable=True)
     user = relationship("User", back_populates="subscriptions")
     room = relationship("TrackedRoom", back_populates="subscriptions")
     tracked_slots = relationship("UserTrackedSlot", back_populates="subscription", cascade="all, delete-orphan")
@@ -230,6 +249,26 @@ class UserIgnoreItem(Base):
 
     __table_args__ = (
         UniqueConstraint('user_id', 'item_name', 'game_name', name='_user_ignore_item_uc'),
+    )
+
+class CheeseDismissedTracker(Base):
+    """
+    A Cheese tracker the user has said they do not want in the app.
+
+    The app offers newly-seen dashboard trackers as suggestions rather than
+    importing them, so it needs somewhere to remember a "no". Without this the
+    same room is offered again on the next sync, which is the nagging version of
+    the auto-import this replaced. Adding the room later is unaffected: the
+    import path clears the row.
+    """
+    __tablename__ = 'cheese_dismissed_trackers'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    cheese_tracker_id = Column(String(64), nullable=False)
+    dismissed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'cheese_tracker_id', name='_user_dismissed_tracker_uc'),
     )
 
 class UserWhitelistItem(Base):
