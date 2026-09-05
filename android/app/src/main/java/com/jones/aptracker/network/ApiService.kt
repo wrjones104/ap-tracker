@@ -96,6 +96,11 @@ interface ApiService {
     @PUT("users/me/preferences")
     suspend fun updateCheeseDefaultPing(@Body request: UpdateCheesePingRequest): Response<Unit>
 
+    @PUT("users/me/preferences")
+    suspend fun updateCheesePublishNewRooms(
+        @Body request: UpdateCheesePublishRequest
+    ): Response<Unit>
+
     @GET("rooms/{id}/slots/{slot_id}/threshold-groups")
     suspend fun getThresholdGroups(
         @Path("id") roomId: Int,
@@ -222,6 +227,21 @@ interface ApiService {
     @POST("integrations/cheese/sync")
     suspend fun syncCheeseTracker(): CheeseSyncResponse
 
+    @GET("integrations/cheese/available")
+    suspend fun getAvailableCheeseRooms(): AvailableCheeseRoomsResponse
+
+    @POST("integrations/cheese/available/import")
+    suspend fun importCheeseRooms(@Body request: CheeseTrackerIdsRequest): ImportCheeseRoomsResponse
+
+    @POST("integrations/cheese/available/dismiss")
+    suspend fun dismissCheeseRooms(@Body request: CheeseTrackerIdsRequest): Response<Unit>
+
+    @PUT("rooms/{id}/cheese_link")
+    suspend fun updateRoomCheeseLink(
+        @Path("id") roomId: Int,
+        @Body request: CheeseLinkRequest
+    ): CheeseLinkResponse
+
     @POST("auth/logout")
     suspend fun logout(): Response<Unit>
 
@@ -314,13 +334,54 @@ data class Room(
     val is_archived: Boolean = false,
     val is_suspended: Boolean = false,
     val status: String = "active",
-    val web_url: String? = null
+    val web_url: String? = null,
+    // Cheese state for the room card's chip. `cheese_link` is what the user
+    // asked for, `cheese_tracker_id` is whether the push has landed yet (it
+    // takes a couple of minutes), and `cheese_unlisted` means the linked tracker
+    // has dropped off their Cheese dashboard. None of them removes the room.
+    val cheese_link: String = "none",
+    val cheese_tracker_id: String? = null,
+    val cheese_unlisted: Boolean = false
 )
 
 data class AddRoomRequest(
     val room_url: String,
     val alias: String,
-    val icon_name: String
+    val icon_name: String,
+    /** Whether to also create this room on Cheese Tracker. Null means "use my default". */
+    val sync_to_cheese: Boolean? = null
+)
+
+data class CheeseLinkRequest(val linked: Boolean)
+
+data class CheeseLinkResponse(
+    val message: String? = null,
+    val cheese_link: String = "none",
+    val cheese_tracker_id: String? = null,
+    val pushing: Boolean = false
+)
+
+/** One room on the user's Cheese dashboard that the app does not have. */
+data class AvailableCheeseRoom(
+    val cheese_tracker_id: String,
+    val title: String,
+    val room_link: String? = null,
+    val last_activity: String? = null
+)
+
+data class AvailableCheeseRoomsResponse(
+    val available: List<AvailableCheeseRoom> = emptyList(),
+    val count: Int = 0
+)
+
+data class CheeseTrackerIdsRequest(val cheese_tracker_ids: List<String>)
+
+data class ImportCheeseRoomsResponse(
+    val message: String? = null,
+    val imported: Int = 0,
+    val slots_synced: Int = 0,
+    val demoted: Int = 0,
+    val failed: List<String> = emptyList()
 )
 
 data class UpdateRoomRequest(
@@ -465,6 +526,10 @@ data class UserProfile(
     val is_syncing_cheese: Boolean = false,
     /** Slots the last Cheese sync moved from Playing to Watching. */
     val cheese_last_sync_demoted: Int = 0,
+    /** Linked rooms the last sync could not find on the Cheese dashboard. Flagged, not removed. */
+    val cheese_last_sync_unlisted: Int = 0,
+    /** Default for the add-room dialog's "Also create this on Cheese Tracker" checkbox. */
+    val cheese_publish_new_rooms: Boolean = true,
     val cheese_last_sync: String? = null
 )
 
@@ -608,6 +673,10 @@ data class UpdateCheeseSlotResponse(
 
 data class UpdateCheesePingRequest(
     val cheese_default_ping: String?
+)
+
+data class UpdateCheesePublishRequest(
+    val cheese_publish_new_rooms: Boolean
 )
 
 data class HintHistoryResponse(

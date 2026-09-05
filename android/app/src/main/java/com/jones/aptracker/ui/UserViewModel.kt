@@ -9,6 +9,7 @@ import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.network.CheeseAuthRequest
 import com.jones.aptracker.network.CheeseSlotState
 import com.jones.aptracker.network.UpdateCheesePingRequest
+import com.jones.aptracker.network.UpdateCheesePublishRequest
 import com.jones.aptracker.network.IgnoreItem
 import com.jones.aptracker.network.WhitelistItem
 import com.jones.aptracker.network.RetrofitClient
@@ -204,12 +205,6 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _integrationMessage = MutableStateFlow<String?>(null)
     val integrationMessage = _integrationMessage.asStateFlow()
 
-    val isAutoSyncEnabled = settingsManager.isAutoSyncEnabled.stateIn(
-        viewModelScope,
-        SharingStarted.Eagerly,
-        true
-    )
-
     val dateFormatPreset = settingsManager.dateFormatPreset.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -257,15 +252,47 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         fetchIgnoreList()
         fetchWhitelist()
         loadSortPreference()
+        migrateLegacyAutoSyncPreference()
     }
 
     // ============================================================================================
     // PREFERENCES & SORTING
     // ============================================================================================
 
-    fun setAutoSync(isEnabled: Boolean) {
+    /**
+     * Carries the retired auto-sync switch over to the publishing default, once.
+     *
+     * Someone who turned auto-sync off was saying "don't let Cheese have my
+     * rooms". Checking Cheese is harmless now, so the honest home for that
+     * intent is the per-room publishing default rather than a sync mode. Anyone
+     * who left it on is unaffected: both default to on.
+     */
+    private fun migrateLegacyAutoSyncPreference() {
         viewModelScope.launch {
-            settingsManager.setAutoSync(isEnabled)
+            try {
+                if (settingsManager.hasMigratedAutoSync.first()) return@launch
+
+                if (settingsManager.legacyAutoSyncEnabled.first()) {
+                    // Auto-sync was on, and publishing defaults to on. Nothing to
+                    // carry over, so just record that we looked.
+                    settingsManager.setAutoSyncMigrated(true)
+                    return@launch
+                }
+
+                // The write is made here rather than through
+                // updateCheesePublishNewRooms so a failure leaves the migration
+                // un-run and it is retried on the next launch, instead of being
+                // marked done against a request that never landed.
+                val response = RetrofitClient.instance.updateCheesePublishNewRooms(
+                    UpdateCheesePublishRequest(false)
+                )
+                if (response.isSuccessful) {
+                    settingsManager.setAutoSyncMigrated(true)
+                    fetchUserProfile()
+                }
+            } catch (e: Exception) {
+                Log.w("UserViewModel", "Could not migrate the auto-sync preference: ${e.message}")
+            }
         }
     }
 
@@ -711,6 +738,32 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 _isRefreshingCheese.value = false
                 onComplete()
+            }
+        }
+    }
+
+    /**
+     * Sets the default for the add-room dialog's "Also create this on Cheese
+     * Tracker" checkbox. A default for a per-room decision, not a sync mode:
+     * publishing creates a public tracker under the user's Cheese account, so
+     * every room still gets its own yes or no.
+     */
+    fun updateCheesePublishNewRooms(enabled: Boolean) {
+        viewModelScope.launch {
+            val previousProfile = _userProfile.value
+            _userProfile.value = previousProfile?.copy(cheese_publish_new_rooms = enabled)
+            try {
+                val response = RetrofitClient.instance.updateCheesePublishNewRooms(
+                    UpdateCheesePublishRequest(enabled)
+                )
+                if (!response.isSuccessful) {
+                    _userProfile.value = previousProfile
+                    _errorMessage.value = "Failed to save that preference."
+                }
+            } catch (e: Exception) {
+                _userProfile.value = previousProfile
+                _errorMessage.value = "Failed to save that preference."
+                e.printStackTrace()
             }
         }
     }

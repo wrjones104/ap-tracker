@@ -72,7 +72,10 @@ object RoomMapper {
             is_archived = entity.is_archived,
             is_suspended = entity.is_suspended,
             status = entity.status,
-            web_url = entity.web_url
+            web_url = entity.web_url,
+            cheese_link = entity.cheese_link,
+            cheese_tracker_id = entity.cheese_tracker_id,
+            cheese_unlisted = entity.cheese_unlisted
         )
     }
 
@@ -89,7 +92,10 @@ object RoomMapper {
             is_archived = domain.is_archived,
             is_suspended = domain.is_suspended,
             status = domain.status,
-            web_url = domain.web_url
+            web_url = domain.web_url,
+            cheese_link = domain.cheese_link,
+            cheese_tracker_id = domain.cheese_tracker_id,
+            cheese_unlisted = domain.cheese_unlisted
         )
     }
 

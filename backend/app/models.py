@@ -124,7 +124,7 @@ class UserRoomSubscription(Base):
     icon_name = Column(String, default="default_icon")
     is_archived = Column(Boolean, default=False, nullable=False)
     # Whether this room mirrors to Cheese Tracker for this user: 'none' or
-    # 'linked'. See CHEESE_LINKS in app/utils.py. Per-subscription rather than
+    # 'linked'. See VALID_CHEESE_LINKS in app/utils.py. Per-subscription rather than
     # per-room, because TrackedRoom.cheese_tracker_id is shared by everyone
     # tracking that room while the decision to mirror is one user's.
     cheese_link = Column(String(16), default='none', nullable=False, server_default='none')

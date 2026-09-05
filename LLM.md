@@ -67,14 +67,15 @@ The system consists of two main parts:
     *   **Guest Mode:** Supports anonymous guest accounts.
 *   **Push Notifications:** Firebase Cloud Messaging (FCM) via `firebase-admin` SDK.
 *   **Data Retention:** Historical events (`notified_items` and `notified_hints`) are maintained with a default 90-day retention policy to support long-running async multiworlds.
-*   **Integrations:** "Cheese Tracker" integration allows users to sync their tracked rooms from an external service. API keys are stored encrypted. Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering. A slot collision does **not** untrack the slot: it demotes it to watch mode and sends an FCM push saying so (see "Slot track modes" below).
+*   **Integrations:** "Cheese Tracker" integration lets a user mirror chosen rooms to an external service. API keys are stored encrypted. Authority is split by domain: the app owns which rooms are in a user's library, Cheese owns slot claims (see "Cheese room ownership" below). Slot claims and unclaims are synced bidirectionally; ownership conflicts (both authenticated and unauthenticated) are strictly validated to prevent claim clobbering. A slot collision does **not** untrack the slot: it demotes it to watch mode and sends an FCM push saying so (see "Slot track modes" below).
 *   **Push Notification Channels:** FCM pushes are categorized into Android Notification Channels (`channel_progression`, `channel_non_progression`, `channel_hints`, and `channel_general`) defined in `NotificationHelper.kt` and mapped on the backend in `notification_service.py`. This enables OS-level customization (distinct alert sounds, vibration, heads-up popup priority, and DND bypass) per event category directly in Android system settings.
 
 ## Database Schema (Key Models)
 
 *   `User`: Stores Discord ID, preferences, and encryption keys.
 *   `TrackedRoom`: Represents a single Archipelago game room (URL, tracker ID).
-*   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias.
+*   `UserRoomSubscription`: Links a User to a TrackedRoom with an alias. `cheese_link` (`none` / `linked`) records whether that user mirrors the room to Cheese Tracker and is the only thing that authorises a write to Cheese for it; `cheese_unlisted_at` marks a linked room the Cheese dashboard has stopped listing.
+*   `CheeseDismissedTracker`: A Cheese tracker the user declined, so the suggestion is not offered again.
 *   `UserTrackedSlot`: Represents a specific player slot a User wants to watch within a Room.
 *   `Device`: Stores FCM tokens for push notifications.
 *   `ThresholdGroup` / `ThresholdGroupItem`: Replaced the old single-item `SlotItemThreshold`. Allows users to define named milestone groups of multiple items (or item groups), triggering a notification only when all conditions are satisfied (AND logic).
@@ -101,6 +102,13 @@ The system consists of two main parts:
 *   **Polling:** The poller uses a "Supervisor" pattern to manage tasks. It has self-healing logic for "Pending" rooms that turn into real rooms.
 *   **Privacy:** We strictly avoid storing sensitive Discord info (email/pass). We only store ID, username, and avatar hash.
 *   **Cheese Tracker Claim Checking:** Unauthenticated claims on Cheese Tracker leave `claimed_by_ct_user_id` as `None` but populate `discord_username` (which shows as `effective_discord_username` on GET requests). Checking for claim conflicts requires checking both for authenticated ID mismatches and unauthenticated Discord username mismatches.
+*   **Cheese room ownership:** The app decides what is in a user's room library; Cheese Tracker decides who holds a slot claim. That split is what `UserRoomSubscription.cheese_link` exists to record (see `VALID_CHEESE_LINKS` in `app/utils.py`), and the rules around it:
+    *   **A sync never adds or removes a room.** `setup_cheese_user_task` reconciles claims for linked rooms, refreshes their cached tracker payload, and does nothing else. Absence from the dashboard sets `cheese_unlisted_at` for the app to show; an empty dashboard response is ignored entirely. It used to delete the subscription, which cascaded to the user's tracked slots and their milestone groups -- for watch-only rooms (#315), and then for every room a connected user had, because a room gets a `cheese_tracker_id` stamped on it the moment it is published (#323).
+    *   **A tracker id is not permission to write.** Unlinking leaves the id in place, so `push_slot_changes_to_cheese` and `apply_cheese_slot_update` check `cheese_link`, not the id.
+    *   **Detail requests are made only for linked trackers**, so a sync costs what the user mirrors rather than the size of their dashboard.
+    *   **Rooms arrive by invitation.** `GET /integrations/cheese/available` lists dashboard trackers the app does not have; `POST .../available/import` is the only path that creates a room from Cheese, and `POST .../available/dismiss` remembers a no.
+    *   **Publishing is per room and opt-in.** `POST /rooms` takes `sync_to_cheese`, defaulting to `User.cheese_publish_new_rooms` so a client that omits it behaves as before. `PUT /rooms/<id>/cheese_link` toggles it later; linking a room with no tracker pushes it, which takes about two minutes (`CHEESE_DELAY` twice).
+    *   Covered by `backend/tests/test_cheese_link.py`.
 *   **Slot track modes:** `UserTrackedSlot.track_mode` separates "alert me about this slot" (the row existing) from "this slot is mine on Cheese Tracker" (`play` vs `watch`). See `TRACK_MODES` in `app/utils.py`. The rules that everything else depends on:
     *   Cheese writes are driven by **transitions** in `track_mode`, never by tracking alone. `-> play` claims, `play ->` releases, anything watch-only never touches Cheese.
     *   **The sync never deletes a slot over a claim -- it only demotes `play` -> `watch`.** Lost claims, remote unclaims (including host auto-release) and mid-async Cheese connects all demote. The one remaining delete is a `play` slot that vanished from the Cheese tracker entirely; `watch` slots are skipped before that check and are never deleted by the sync, on the grounds that their alerts come from the AP room rather than from Cheese.

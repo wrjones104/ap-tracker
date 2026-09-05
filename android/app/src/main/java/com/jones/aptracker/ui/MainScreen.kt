@@ -200,9 +200,11 @@ fun MainScreen(
     if (showAddRoomDialog) {
         AddRoomDialog(
             isAdding = isAddingRoom,
+            isCheeseConnected = userProfile?.is_cheese_connected == true,
+            defaultSyncToCheese = userProfile?.cheese_publish_new_rooms ?: true,
             onDismiss = { showAddRoomDialog = false },
-            onAdd = { url, alias, icon ->
-                roomsViewModel.addRoom(url, alias, icon) {
+            onAdd = { url, alias, icon, syncToCheese ->
+                roomsViewModel.addRoom(url, alias, icon, syncToCheese) {
                     newRoomAliasToFind = alias
                     showAddRoomDialog = false
                 }
@@ -306,7 +308,7 @@ fun MainScreen(
                                     .size(24.dp)
                                     .then(if (isSyncingCheese) Modifier.rotate(angle) else Modifier)
                                     .clickable(enabled = !isSyncingCheese) {
-                                        roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = true)
+                                        roomsViewModel.refreshAll(isCheeseConnected = true)
                                     }
                                     .padding(2.dp)
                             )

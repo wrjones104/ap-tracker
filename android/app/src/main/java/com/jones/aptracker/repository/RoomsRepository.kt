@@ -97,7 +97,10 @@ class RoomsRepository(
                 is_archived = networkRoom.is_archived,
                 is_suspended = networkRoom.is_suspended,
                 status = networkRoom.status,
-                web_url = networkRoom.web_url
+                web_url = networkRoom.web_url,
+                cheese_link = networkRoom.cheese_link,
+                cheese_tracker_id = networkRoom.cheese_tracker_id,
+                cheese_unlisted = networkRoom.cheese_unlisted
             )
         }
         roomDao.syncRooms(roomEntities)

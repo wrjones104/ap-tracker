@@ -8,6 +8,9 @@ import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.AddRoomRequest
+import com.jones.aptracker.network.AvailableCheeseRoom
+import com.jones.aptracker.network.CheeseLinkRequest
+import com.jones.aptracker.network.CheeseTrackerIdsRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.Room
 import com.jones.aptracker.network.UpdateRoomRequest
@@ -41,11 +44,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private val _isAddingRoom = MutableStateFlow(false)
     val isAddingRoom: StateFlow<Boolean> = _isAddingRoom.asStateFlow()
 
-    val isAutoSyncEnabled = settingsManager.isAutoSyncEnabled.stateIn(
-        viewModelScope,
-        SharingStarted.Eagerly,
-        true
-    )
+    // Rooms on the user's Cheese dashboard that the app does not have. Offered,
+    // never imported: Cheese proposes and the user decides. See #323.
+    private val _availableCheeseRooms = MutableStateFlow<List<AvailableCheeseRoom>>(emptyList())
+    val availableCheeseRooms: StateFlow<List<AvailableCheeseRoom>> = _availableCheeseRooms.asStateFlow()
+
+    private val _isImportingCheeseRooms = MutableStateFlow(false)
+    val isImportingCheeseRooms: StateFlow<Boolean> = _isImportingCheeseRooms.asStateFlow()
 
     val isCheeseConnected = settingsManager.isCheeseConnected.stateIn(
         viewModelScope,
@@ -86,11 +91,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
         fetchRooms() // Regular fetch
 
+        // Checking Cheese on open is unconditional now that a sync cannot remove
+        // anything: it reconciles claims for linked rooms and reads which
+        // dashboard rooms are on offer. What to do with either is still the
+        // user's call, per room. See #323.
         viewModelScope.launch {
             delay(1000)
-            val isAutoSync = isAutoSyncEnabled.value
-            val isCheeseConn = isCheeseConnected.value
-            if (isAutoSync && isCheeseConn) {
+            if (isCheeseConnected.value) {
                 triggerBackgroundSync()
             }
         }
@@ -131,7 +138,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addRoom(roomUrl: String, alias: String, iconName: String, onSuccess: () -> Unit) {
+    fun addRoom(
+        roomUrl: String,
+        alias: String,
+        iconName: String,
+        syncToCheese: Boolean?,
+        onSuccess: () -> Unit
+    ) {
         viewModelScope.launch {
             _isAddingRoom.value = true
             _errorMessage.value = null
@@ -141,7 +154,12 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
-                val request = AddRoomRequest(room_url = cleanUrl, alias = alias, icon_name = iconName)
+                val request = AddRoomRequest(
+                    room_url = cleanUrl,
+                    alias = alias,
+                    icon_name = iconName,
+                    sync_to_cheese = syncToCheese
+                )
 
                 // FIXED: Use Repository method we just added
                 repository.addRoom(request)
@@ -272,21 +290,33 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 fetchRooms(force = true)
+                fetchAvailableCheeseRooms()
 
-                // Connecting or re-syncing mid-async can move slots from Playing
-                // to Watching. Say so: the alerts survive, but the Cheese claim
-                // did not, and silently changing that would be a nasty surprise.
+                // A sync that changes anything says so. It cannot remove a room
+                // any more, but it can still move a slot from Playing to
+                // Watching, and it can notice that a room has left the user's
+                // Cheese dashboard.
                 val demoted = finishedProfile?.cheese_last_sync_demoted ?: 0
-                val message = if (demoted > 0) {
+                val unlisted = finishedProfile?.cheese_last_sync_unlisted ?: 0
+                val parts = mutableListOf<String>()
+                if (demoted > 0) {
                     // "aren't claimed by you", not "claimed by someone else":
                     // the sync also demotes slots that are simply unclaimed.
                     val slotWord = if (demoted == 1) "slot isn't" else "slots aren't"
-                    "Cheese Sync Complete! $demoted $slotWord claimed by you on " +
-                        "Cheese Tracker - switched to Watching. You'll still get alerts."
-                } else {
-                    "Cheese Sync Complete!"
+                    parts += "$demoted $slotWord claimed by you on Cheese Tracker - " +
+                        "switched to Watching. You'll still get alerts."
                 }
-                val duration = if (demoted > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                if (unlisted > 0) {
+                    val roomWord = if (unlisted == 1) "room is" else "rooms are"
+                    parts += "$unlisted $roomWord no longer on your Cheese dashboard. " +
+                        "They're still here."
+                }
+                val message = if (parts.isEmpty()) {
+                    "Cheese Sync Complete!"
+                } else {
+                    "Cheese Sync Complete! " + parts.joinToString(" ")
+                }
+                val duration = if (parts.isEmpty()) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
                 Toast.makeText(getApplication(), message, duration).show()
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -302,15 +332,96 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshAll(isCheeseConnected: Boolean, forceCheeseSync: Boolean = false) {
-        val shouldSyncCheese = isCheeseConnected && (forceCheeseSync || isAutoSyncEnabled.value)
-
-        if (shouldSyncCheese && _isSyncingCheese.value) return
-
-        if (shouldSyncCheese) {
-            triggerBackgroundSync()
-        } else {
-            fetchRooms(force = true)
+    /**
+     * Ask the server which Cheese rooms the app does not have.
+     *
+     * One request to Cheese, no per-tracker detail, so it is cheap enough to run
+     * on open. Failures are silent: a suggestion badge is not worth an error.
+     */
+    fun fetchAvailableCheeseRooms() {
+        viewModelScope.launch {
+            try {
+                _availableCheeseRooms.value =
+                    RetrofitClient.instance.getAvailableCheeseRooms().available
+            } catch (e: Exception) {
+                Log.d("RoomsViewModel", "Could not read Cheese suggestions: ${e.message}")
+            }
         }
+    }
+
+    /** Accept suggestions: the only path that puts a Cheese room in the library. */
+    fun importCheeseRooms(trackerIds: List<String>) {
+        if (trackerIds.isEmpty()) return
+        viewModelScope.launch {
+            _isImportingCheeseRooms.value = true
+            try {
+                val result = RetrofitClient.instance.importCheeseRooms(
+                    CheeseTrackerIdsRequest(trackerIds)
+                )
+                fetchRooms(force = true)
+                fetchAvailableCheeseRooms()
+                val roomWord = if (result.imported == 1) "room" else "rooms"
+                Toast.makeText(
+                    getApplication(),
+                    "Added ${result.imported} $roomWord from Cheese Tracker.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Couldn't add those rooms. Check connection."
+            } finally {
+                _isImportingCheeseRooms.value = false
+            }
+        }
+    }
+
+    /** Stop offering these. Reversible: adding one later clears the dismissal. */
+    fun dismissCheeseRooms(trackerIds: List<String>) {
+        if (trackerIds.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                RetrofitClient.instance.dismissCheeseRooms(CheeseTrackerIdsRequest(trackerIds))
+                fetchAvailableCheeseRooms()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Couldn't dismiss those. Check connection."
+            }
+        }
+    }
+
+    /**
+     * Start or stop mirroring one room to Cheese Tracker.
+     *
+     * Unlinking is local: it leaves the Cheese tracker and any slot claims
+     * alone, and never removes the room from the app.
+     */
+    fun setRoomCheeseLink(roomId: Int, linked: Boolean) {
+        viewModelScope.launch {
+            try {
+                val result = RetrofitClient.instance.updateRoomCheeseLink(
+                    roomId, CheeseLinkRequest(linked)
+                )
+                fetchRooms(force = true)
+                val message = when {
+                    result.pushing -> "Creating this room on Cheese Tracker. Takes a minute or two."
+                    linked -> "Sharing this room on Cheese Tracker."
+                    else -> "This room is no longer synced to Cheese Tracker. " +
+                        "Your slot claims there are unchanged."
+                }
+                Toast.makeText(getApplication(), message, Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _errorMessage.value = "Couldn't change Cheese sharing for this room."
+            }
+        }
+    }
+
+    fun refreshAll(isCheeseConnected: Boolean) {
+        if (!isCheeseConnected) {
+            fetchRooms(force = true)
+            return
+        }
+        if (_isSyncingCheese.value) return
+        triggerBackgroundSync()
     }
 }

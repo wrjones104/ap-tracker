@@ -83,7 +83,6 @@ fun ProfileScreen(
 
 
     val userProfile by userViewModel.userProfile.collectAsState()
-    val isAutoSyncEnabled by userViewModel.isAutoSyncEnabled.collectAsState()
 
     val dateFormatPresetKey by userViewModel.dateFormatPreset.collectAsState()
     val dateFormatPreset = remember(dateFormatPresetKey) { DateFormatPreset.fromKey(dateFormatPresetKey) }
@@ -273,9 +272,9 @@ fun ProfileScreen(
 
             CheeseIntegrationCard(
                 isConnected = userProfile?.is_cheese_connected ?: false,
-                isAutoSyncEnabled = isAutoSyncEnabled,
+                publishNewRooms = userProfile?.cheese_publish_new_rooms ?: true,
                 defaultPing = userProfile?.cheese_default_ping,
-                onAutoSyncChanged = { userViewModel.setAutoSync(it) },
+                onPublishNewRoomsChanged = { userViewModel.updateCheesePublishNewRooms(it) },
                 onConnect = { key -> userViewModel.connectCheeseTracker(key) },
                 onSync = { userViewModel.manualSyncCheese() },
                 onDisconnect = { userViewModel.disconnectCheese() },
@@ -495,9 +494,9 @@ fun CheeseDefaultPingSelector(
 @Composable
 fun CheeseIntegrationCard(
     isConnected: Boolean,
-    isAutoSyncEnabled: Boolean,
+    publishNewRooms: Boolean,
     defaultPing: String?,
-    onAutoSyncChanged: (Boolean) -> Unit,
+    onPublishNewRoomsChanged: (Boolean) -> Unit,
     onConnect: (String) -> Unit,
     onSync: () -> Unit,
     onDisconnect: () -> Unit,
@@ -573,29 +572,31 @@ fun CheeseIntegrationCard(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Auto-sync Toggle
+                // The default for the per-room checkbox in Add Room, not a sync
+                // mode. Publishing creates a public tracker under the user's
+                // Cheese account, so every room still gets its own yes or no.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onAutoSyncChanged(!isAutoSyncEnabled) }
+                        .clickable { onPublishNewRoomsChanged(!publishNewRooms) }
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Auto-sync",
+                            "Share new rooms on Cheese Tracker",
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Text(
-                            "Sync when opening the app",
+                            "Ticks the box when you add a room. You can change it per room.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Switch(
-                        checked = isAutoSyncEnabled,
-                        onCheckedChange = onAutoSyncChanged,
+                        checked = publishNewRooms,
+                        onCheckedChange = onPublishNewRoomsChanged,
                         modifier = Modifier.padding(start = 16.dp)
                     )
                 }

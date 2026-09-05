@@ -53,6 +53,24 @@ def _run_inline(target=None, args=(), **kwargs):
     return thread
 
 
+def _verified_room(coro):
+    """
+    Stands in for asyncio.run around the add-room server check.
+
+    Closes the coroutine it was handed rather than dropping it, which is the
+    difference between a clean test run and a "was never awaited" warning.
+    """
+    coro.close()
+    return {
+        'room_id': 'added_uuid',
+        'hostname': 'archipelago.gg',
+        'cached_full_address': 'archipelago.gg:12345',
+        'cached_players_json': '[]',
+        'cached_total_slots': 0,
+        'ap_tracker_id': 'ap_trk',
+    }
+
+
 def _call(view, *args, body=None):
     """
     Invoke a route past its @handle_db_errors / @log_api_call / @token_required
@@ -374,14 +392,7 @@ class TestPublishingIsOptIn(CheeseLinkTestBase):
     @patch('app.api_cheese.push_new_room_to_cheese')
     @patch('app.routes.rooms_routes.asyncio.run')
     def test_opting_out_stores_no_link_and_pushes_nothing(self, mock_run, mock_push):
-        mock_run.return_value = {
-            'room_id': 'added_uuid',
-            'hostname': 'archipelago.gg',
-            'cached_full_address': 'archipelago.gg:12345',
-            'cached_players_json': '[]',
-            'cached_total_slots': 0,
-            'ap_tracker_id': 'ap_trk',
-        }
+        mock_run.side_effect = _verified_room
         user = self.make_user()
         user_id = user.id
 
@@ -401,14 +412,7 @@ class TestPublishingIsOptIn(CheeseLinkTestBase):
     @patch('app.api_cheese.push_new_room_to_cheese')
     @patch('app.routes.rooms_routes.asyncio.run')
     def test_opting_in_links_the_room_and_pushes_it(self, mock_run, mock_push, mock_thread):
-        mock_run.return_value = {
-            'room_id': 'added_uuid',
-            'hostname': 'archipelago.gg',
-            'cached_full_address': 'archipelago.gg:12345',
-            'cached_players_json': '[]',
-            'cached_total_slots': 0,
-            'ap_tracker_id': 'ap_trk',
-        }
+        mock_run.side_effect = _verified_room
         user = self.make_user()
         user_id = user.id
 
@@ -428,14 +432,7 @@ class TestPublishingIsOptIn(CheeseLinkTestBase):
     @patch('app.routes.rooms_routes.asyncio.run')
     def test_an_older_client_gets_the_users_default(self, mock_run, mock_push, mock_thread):
         """A build that sends no sync_to_cheese keeps the behaviour it had."""
-        mock_run.return_value = {
-            'room_id': 'added_uuid',
-            'hostname': 'archipelago.gg',
-            'cached_full_address': 'archipelago.gg:12345',
-            'cached_players_json': '[]',
-            'cached_total_slots': 0,
-            'ap_tracker_id': 'ap_trk',
-        }
+        mock_run.side_effect = _verified_room
         user = self.make_user(cheese_publish_new_rooms=False)
         user_id = user.id
 
