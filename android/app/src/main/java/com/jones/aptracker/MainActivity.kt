@@ -112,6 +112,7 @@ class MainActivity : ComponentActivity() {
             // Handle the user manually closing the browser or backing out
             if (result.resultCode == RESULT_CANCELED) {
                 Log.d("LOGIN_CANCELED", "User backed out of the login flow.")
+                authViewModel.abandonGuestUpgrade(this)
                 authViewModel.setLoading(false)
                 return@registerForActivityResult
             }
@@ -139,10 +140,12 @@ class MainActivity : ComponentActivity() {
                     val errorDetails = ex?.errorDescription ?: "Authorization cancelled or verifier lost"
                     Log.e("LOGIN_FAILED", "Auth failed: $errorDetails")
                     Toast.makeText(this, "Login Failed: $errorDetails", Toast.LENGTH_LONG).show()
+                    authViewModel.abandonGuestUpgrade(this)
                     authViewModel.setLoading(false)
                 }
             } else {
                 // Fallback for any other weird result codes
+                authViewModel.abandonGuestUpgrade(this)
                 authViewModel.setLoading(false)
             }
         }
@@ -179,6 +182,31 @@ class MainActivity : ComponentActivity() {
                         intent?.removeExtra("target_slot_id")
                     }
                 )
+
+                // Reachable again now that the guest token reaches the callback: the
+                // server answers 409 when the Discord account already belongs to
+                // somebody. Nothing merges two populated accounts, so the honest
+                // outcome is to say so and hand the guest session back.
+                val showMergeConflict by authViewModel.showMergeConflictDialog.collectAsState()
+                if (showMergeConflict) {
+                    AlertDialog(
+                        onDismissRequest = { authViewModel.clearMergeConflict(this@MainActivity) },
+                        title = { Text("That Discord account is already in use") },
+                        text = {
+                            Text(
+                                "It's already linked to another Archipelago Alerts account. " +
+                                    "You're still signed in as a guest, and your rooms are where " +
+                                    "you left them. To use that Discord account, log out first " +
+                                    "and sign in with it."
+                            )
+                        },
+                        confirmButton = {
+                            Button(onClick = { authViewModel.clearMergeConflict(this@MainActivity) }) {
+                                Text("OK")
+                            }
+                        }
+                    )
+                }
 
                 if (summaryItems != null) {
                     BundleSummarySheet(
@@ -299,9 +327,18 @@ class MainActivity : ComponentActivity() {
             try {
                 val redirectUri = "com.jones.aptracker:/oauth2redirect"
                 val authRequest = AuthRequest(code, redirectUri, codeVerifier)
-                val response = RetrofitClient.instance.exchangeCodeForToken(authRequest)
+
+                // Present the guest's own token, when there is one. That is what makes
+                // the server upgrade the guest account in place, keeping its rooms,
+                // rather than creating a second account and leaving them behind (#324).
+                val guestToken = tokenManager.getUpgradeToken()
+                val response = RetrofitClient.instance.exchangeCodeForToken(
+                    authRequest,
+                    guestToken?.let { "Bearer $it" }
+                )
 
                 tokenManager.saveToken(response.token)
+                tokenManager.clearStashedToken()
                 authViewModel.onLoginSuccess()
                 Toast.makeText(this@MainActivity, "Login Successful!", Toast.LENGTH_SHORT).show()
 
@@ -324,18 +361,22 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 errorDetails = "An unknown conflict occurred."
                                 Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                                authViewModel.abandonGuestUpgrade(this@MainActivity)
                             }
                         } catch (parseError: Exception) {
                             errorDetails = "This Discord account is already in use by another user."
                             Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                            authViewModel.abandonGuestUpgrade(this@MainActivity)
                         }
                     } else {
                         errorDetails = "Exchange Failed: ${e.code()} ${e.message()}"
                         Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                        authViewModel.abandonGuestUpgrade(this@MainActivity)
                     }
                 } else {
                     Log.e("LOGIN_ERROR", "Failed to exchange token", e)
                     Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()
+                    authViewModel.abandonGuestUpgrade(this@MainActivity)
                 }
             } finally {
                 authViewModel.setLoading(false)

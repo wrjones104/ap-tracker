@@ -34,12 +34,17 @@ class AuthViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val tokenManager = TokenManager(context)
-                // Actually clear it. Writing "" left a credential that is non-null to the
-                // client but empty to the server, so requests during the OAuth round trip
-                // were rejected as unauthenticated. See #311.
-                tokenManager.deleteToken()
+                // Set aside rather than deleted. #311 was right that no ambient
+                // credential may exist during the OAuth round trip -- a request
+                // rejected mid-flow ran the full logout and cleared the local
+                // database -- and stashing keeps that true, since getToken() returns
+                // null afterwards. What it also preserves is the one thing the auth
+                // callback needs: presented there, the guest's token is what makes
+                // the server upgrade this account in place instead of creating a
+                // second one and stranding its rooms. See #324.
+                tokenManager.stashTokenForUpgrade()
             } catch (e: Exception) {
-                Log.e("AuthViewModel", "Failed to clear token", e)
+                Log.e("AuthViewModel", "Failed to stash the guest token", e)
             }
 
             try {
@@ -60,9 +65,39 @@ class AuthViewModel : ViewModel() {
         _showMergeConflictDialog.value = true
     }
 
-    fun clearMergeConflict() {
+    /**
+     * Closes the conflict dialog and puts the guest back where they were.
+     *
+     * The Discord account they tried to link already exists, and the server will not
+     * merge two populated accounts. Restoring the stashed token is what stops the
+     * attempt costing them the guest account they still have.
+     */
+    fun clearMergeConflict(context: Context) {
+        try {
+            TokenManager(context).restoreStashedToken()
+        } catch (e: Exception) {
+            Log.e("AuthViewModel", "Failed to restore the guest token", e)
+        }
         _showMergeConflictDialog.value = false
         _failedAuthAttempt.value = null
+        _isLoggedIn.value = TokenManager(context).getToken() != null
+    }
+
+    /**
+     * Puts a stashed guest token back after an upgrade that did not complete.
+     *
+     * Backing out of the browser used to cost the guest account outright: the token
+     * was already gone and nothing server-side can hand one back, since guest_uuid is
+     * never read. See #324.
+     */
+    fun abandonGuestUpgrade(context: Context) {
+        try {
+            val tokenManager = TokenManager(context)
+            tokenManager.restoreStashedToken()
+            _isLoggedIn.value = tokenManager.getToken() != null
+        } catch (e: Exception) {
+            Log.e("AuthViewModel", "Failed to restore the guest token", e)
+        }
     }
 
     fun setLoading(isLoading: Boolean) {
