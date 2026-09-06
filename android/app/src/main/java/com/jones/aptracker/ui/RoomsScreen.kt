@@ -767,8 +767,8 @@ private fun HeroBanner(isWelcome: Boolean, metrics: LayoutMetrics) {
  * Says what one room's relationship with Cheese Tracker is, in the smallest
  * space that can carry it.
  *
- * Three states worth a chip: shared, still being created there (the push takes a
- * couple of minutes), and shared but no longer on the user's Cheese dashboard.
+ * Three states worth a chip: synced, still being created there (the push takes a
+ * couple of minutes), and synced but no longer on the user's Cheese dashboard.
  * An app-only room gets nothing, which is the quiet default it should be.
  */
 @Composable
@@ -898,7 +898,7 @@ private fun RoomCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        // Whether a room is shared on Cheese used to be invisible,
+                        // Whether a room syncs to Cheese used to be invisible,
                         // which is part of why rooms vanishing from Cheese felt
                         // arbitrary (#323). No chip means the room is app-only.
                         CheeseRoomChip(room)
@@ -1205,14 +1205,14 @@ fun RoomOptionsSheet(
             leadingContent = { Icon(Icons.Default.Inventory2, null, tint = MaterialTheme.colorScheme.secondary) },
             modifier = Modifier.clickable { onArchive(room) }
         )
-        // Sharing is per room and reversible either way. Unlinking is local: it
+        // Syncing is per room and reversible either way. Unlinking is local: it
         // leaves the Cheese tracker and any slot claims alone, and never removes
         // the room from the app.
         if (isCheeseConnected) {
             val isLinked = room.cheese_link == "linked"
             ListItem(
                 headlineContent = {
-                    Text(if (isLinked) "Unlink from Cheese" else "Share on Cheese Tracker")
+                    Text(if (isLinked) "Unlink from Cheese" else "Sync to Cheese Tracker")
                 },
                 supportingContent = {
                     Text(

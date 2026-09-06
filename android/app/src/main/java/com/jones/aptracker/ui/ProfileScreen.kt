@@ -33,6 +33,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -83,6 +84,8 @@ fun ProfileScreen(
 
 
     val userProfile by userViewModel.userProfile.collectAsState()
+    val isConnectingCheese by userViewModel.isConnectingCheese.collectAsState()
+    val isSyncingCheese by userViewModel.isSyncingCheese.collectAsState()
 
     val dateFormatPresetKey by userViewModel.dateFormatPreset.collectAsState()
     val dateFormatPreset = remember(dateFormatPresetKey) { DateFormatPreset.fromKey(dateFormatPresetKey) }
@@ -272,6 +275,8 @@ fun ProfileScreen(
 
             CheeseIntegrationCard(
                 isConnected = userProfile?.is_cheese_connected ?: false,
+                isConnecting = isConnectingCheese,
+                isSyncing = isSyncingCheese,
                 publishNewRooms = userProfile?.cheese_publish_new_rooms ?: true,
                 defaultPing = userProfile?.cheese_default_ping,
                 onPublishNewRoomsChanged = { userViewModel.updateCheesePublishNewRooms(it) },
@@ -494,6 +499,10 @@ fun CheeseDefaultPingSelector(
 @Composable
 fun CheeseIntegrationCard(
     isConnected: Boolean,
+    /** Connecting a key and waiting on the first sync it kicks off. */
+    isConnecting: Boolean,
+    /** A manual sync started from this card. */
+    isSyncing: Boolean,
     publishNewRooms: Boolean,
     defaultPing: String?,
     onPublishNewRoomsChanged: (Boolean) -> Unit,
@@ -526,6 +535,24 @@ fun CheeseIntegrationCard(
                     text = "Cheese Tracker",
                     style = MaterialTheme.typography.titleMedium
                 )
+
+                // Connecting takes a while -- the server verifies the key, reads the
+                // dashboard and reconciles every linked room before it is done -- and
+                // with no sign of that the card looked like it had ignored the key.
+                if (isConnecting || isSyncing) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = if (isConnecting) "Connecting..." else "Syncing...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -615,12 +642,13 @@ fun CheeseIntegrationCard(
 
                 Button(
                     onClick = { onSync() },
+                    enabled = !isSyncing && !isConnecting,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.outlinedButtonColors()
                 ) {
                     Icon(Icons.Default.Refresh, contentDescription = "Sync")
                     Spacer(Modifier.width(8.dp))
-                    Text("Sync Now")
+                    Text(if (isSyncing) "Syncing..." else "Sync Now")
                 }
 
             } else {
@@ -638,8 +666,18 @@ fun CheeseIntegrationCard(
                     label = { Text("API Key") },
                     placeholder = { Text("Paste key from Cheese Tracker") },
                     modifier = Modifier.fillMaxWidth(),
+                    enabled = !isConnecting,
                     singleLine = true
                 )
+
+                if (isConnecting) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Checking your key and syncing your rooms.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -649,9 +687,19 @@ fun CheeseIntegrationCard(
                 ) {
                     Button(
                         onClick = { onConnect(apiKey) },
-                        enabled = apiKey.isNotBlank()
+                        enabled = apiKey.isNotBlank() && !isConnecting
                     ) {
-                        Text("Connect & Sync")
+                        if (isConnecting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Connecting...")
+                        } else {
+                            Text("Connect & Sync")
+                        }
                     }
                 }
             }

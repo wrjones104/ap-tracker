@@ -404,14 +404,14 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 fetchRooms(force = true)
                 val message = when {
                     result.pushing -> "Creating this room on Cheese Tracker. Takes a minute or two."
-                    linked -> "Sharing this room on Cheese Tracker."
+                    linked -> "Syncing this room to Cheese Tracker."
                     else -> "This room is no longer synced to Cheese Tracker. " +
                         "Your slot claims there are unchanged."
                 }
                 Toast.makeText(getApplication(), message, Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
                 e.printStackTrace()
-                _errorMessage.value = "Couldn't change Cheese sharing for this room."
+                _errorMessage.value = "Couldn't change Cheese syncing for this room."
             }
         }
     }

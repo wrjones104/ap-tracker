@@ -205,6 +205,21 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _integrationMessage = MutableStateFlow<String?>(null)
     val integrationMessage = _integrationMessage.asStateFlow()
 
+    /**
+     * True from tapping Connect until the first sync after it has settled.
+     *
+     * Held locally rather than read from the profile's is_syncing_cheese: the
+     * server only sets that once the connect call returns, and the first poll for
+     * it is a couple of seconds later, so the card had nothing to show in exactly
+     * the window where the user is wondering whether their key did anything.
+     */
+    private val _isConnectingCheese = MutableStateFlow(false)
+    val isConnectingCheese = _isConnectingCheese.asStateFlow()
+
+    /** True while a manual sync from this card is running. */
+    private val _isSyncingCheese = MutableStateFlow(false)
+    val isSyncingCheese = _isSyncingCheese.asStateFlow()
+
     val dateFormatPreset = settingsManager.dateFormatPreset.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -521,6 +536,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     fun connectCheeseTracker(apiKey: String) {
         viewModelScope.launch {
+            _isConnectingCheese.value = true
             try {
                 val request = CheeseAuthRequest(apiKey)
                 val response = RetrofitClient.instance.connectCheeseTracker(request)
@@ -536,12 +552,15 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 e.printStackTrace()
                 _errorMessage.value = "Failed to connect. Check your key."
+            } finally {
+                _isConnectingCheese.value = false
             }
         }
     }
 
     fun manualSyncCheese() {
         viewModelScope.launch {
+            _isSyncingCheese.value = true
             try {
                 val response = RetrofitClient.instance.syncCheeseTracker()
                 _integrationMessage.value = response.message
@@ -551,6 +570,8 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 e.printStackTrace()
                 _errorMessage.value = "Sync failed. Are you connected?"
+            } finally {
+                _isSyncingCheese.value = false
             }
         }
     }

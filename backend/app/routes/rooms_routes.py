@@ -387,7 +387,7 @@ def update_cheese_link(current_user, room_db_id):
             logging.error(f"[API_ERROR] Failed to start Cheese push thread: {e}", exc_info=True)
 
     return jsonify({
-        'message': 'Sharing on Cheese Tracker.' if linked else 'No longer syncing this room to Cheese Tracker.',
+        'message': 'Syncing this room to Cheese Tracker.' if linked else 'No longer syncing this room to Cheese Tracker.',
         'cheese_link': subscription.cheese_link,
         'cheese_tracker_id': room.cheese_tracker_id,
         'pushing': pushing
