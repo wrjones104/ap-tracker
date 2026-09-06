@@ -777,8 +777,8 @@ private fun CheeseRoomChip(room: Room) {
 
     val (label, color) = when {
         room.cheese_unlisted -> "Not on Cheese" to MaterialTheme.colorScheme.onSurfaceVariant
-        room.cheese_tracker_id == null -> "Sharing..." to MaterialTheme.colorScheme.onSurfaceVariant
-        else -> "Cheese" to MaterialTheme.colorScheme.primary
+        room.cheese_tracker_id == null -> "Syncing" to MaterialTheme.colorScheme.onSurfaceVariant
+        else -> "Synced" to MaterialTheme.colorScheme.primary
     }
 
     Spacer(Modifier.width(6.dp))
@@ -1212,7 +1212,7 @@ fun RoomOptionsSheet(
             val isLinked = room.cheese_link == "linked"
             ListItem(
                 headlineContent = {
-                    Text(if (isLinked) "Stop sharing on Cheese" else "Share on Cheese Tracker")
+                    Text(if (isLinked) "Unlink from Cheese" else "Share on Cheese Tracker")
                 },
                 supportingContent = {
                     Text(
@@ -1352,21 +1352,10 @@ fun AddRoomDialog(
                             enabled = !isAdding
                         )
                         Spacer(Modifier.width(4.dp))
-                        Column {
-                            Text(
-                                "Also create on Cheese Tracker",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Text(
-                                if (syncToCheese) {
-                                    "Takes a minute or two to appear there."
-                                } else {
-                                    "This room stays in the app only."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Text(
+                            "Sync room to Cheese",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
                 }
 

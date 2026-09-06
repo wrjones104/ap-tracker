@@ -585,11 +585,11 @@ fun CheeseIntegrationCard(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Share new rooms on Cheese Tracker",
+                            "Auto sync new rooms to Cheese",
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Text(
-                            "Ticks the box when you add a room. You can change it per room.",
+                            "Ticks the box when you add a room",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
