@@ -340,10 +340,19 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun fetchAvailableCheeseRooms() {
         viewModelScope.launch {
+            if (!isCheeseConnected.value) {
+                _availableCheeseRooms.value = emptyList()
+                return@launch
+            }
             try {
                 _availableCheeseRooms.value =
                     RetrofitClient.instance.getAvailableCheeseRooms().available
             } catch (e: Exception) {
+                // Emptied rather than left alone. Holding the last list meant a
+                // disconnect left a banner offering rooms from an account the app
+                // no longer has a key for, and every later fetch failed the same
+                // way, so it never cleared.
+                _availableCheeseRooms.value = emptyList()
                 Log.d("RoomsViewModel", "Could not read Cheese suggestions: ${e.message}")
             }
         }

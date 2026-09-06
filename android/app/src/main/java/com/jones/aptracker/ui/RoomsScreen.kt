@@ -507,6 +507,7 @@ fun RoomsScreen(
                                 RoomCard(
                                     room = room,
                                     group = slotGroupsByRoomId[room.id],
+                                    isCheeseConnected = isCheeseConnected,
                                     // Searching implies you want to see what matched, so a
                                     // matching room opens regardless of its saved state.
                                     //
@@ -772,8 +773,11 @@ private fun HeroBanner(isWelcome: Boolean, metrics: LayoutMetrics) {
  * An app-only room gets nothing, which is the quiet default it should be.
  */
 @Composable
-private fun CheeseRoomChip(room: Room) {
-    if (room.cheese_link != "linked") return
+private fun CheeseRoomChip(room: Room, isCheeseConnected: Boolean) {
+    // Disconnecting leaves every room's link state exactly as it was, so that
+    // reconnecting restores it. What it must not leave behind is a chip that
+    // reports a service the user has left.
+    if (!isCheeseConnected || room.cheese_link != "linked") return
 
     val (label, color) = when {
         room.cheese_unlisted -> "Not on Cheese" to MaterialTheme.colorScheme.onSurfaceVariant
@@ -808,6 +812,8 @@ private fun RoomCard(
     room: Room,
     /** Null when the room has no tracked slots at all, or none survived the search. */
     group: RoomSlotGroup?,
+    /** Gates every Cheese affordance on the card: the chip and the watching eyes. */
+    isCheeseConnected: Boolean,
     isExpanded: Boolean,
     isReorderEnabled: Boolean,
     isDragging: Boolean,
@@ -901,7 +907,7 @@ private fun RoomCard(
                         // Whether a room syncs to Cheese used to be invisible,
                         // which is part of why rooms vanishing from Cheese felt
                         // arbitrary (#323). No chip means the room is app-only.
-                        CheeseRoomChip(room)
+                        CheeseRoomChip(room, isCheeseConnected)
                     }
                     // Both slot counts on one line. They were a line each plus a bar on
                     // a third, which is three lines to say two numbers -- and they are
@@ -992,6 +998,7 @@ private fun RoomCard(
 
                         visibleSlots.forEach { slot ->
                             SlotRow(
+                                isCheeseConnected = isCheeseConnected,
                                 slot = slot,
                                 isFinished = finishedResolver.isFinished(
                                     roomDbId = room.id,

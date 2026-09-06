@@ -513,6 +513,40 @@ fun CheeseIntegrationCard(
 ) {
     var apiKey by remember { mutableStateOf("") }
     var guestDiscordName by remember { mutableStateOf("") }
+    var showDisconnectConfirm by remember { mutableStateOf(false) }
+
+    // Disconnecting is easy to tap by accident and its effects are not obvious
+    // from the button, so it says what does and does not happen first. The
+    // reassuring half matters more than the warning half here: nothing is lost.
+    if (showDisconnectConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDisconnectConfirm = false },
+            title = { Text("Disconnect from Cheese Tracker?") },
+            text = {
+                Text(
+                    "Your rooms, tracked slots and alerts all stay exactly as they " +
+                        "are. The app just stops syncing with Cheese Tracker, and the " +
+                        "Cheese controls disappear until you reconnect.\n\n" +
+                        "Any slots you've claimed on Cheese Tracker stay claimed. " +
+                        "You can release them there if you want to."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDisconnectConfirm = false
+                        onDisconnect()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("Disconnect") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisconnectConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     Card(
         modifier = Modifier
@@ -586,7 +620,7 @@ fun CheeseIntegrationCard(
                     }
 
                     TextButton(
-                        onClick = onDisconnect,
+                        onClick = { showDisconnectConfirm = true },
                         colors = ButtonDefaults.textButtonColors(
                             contentColor = MaterialTheme.colorScheme.error
                         )

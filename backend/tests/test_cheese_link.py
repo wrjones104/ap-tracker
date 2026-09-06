@@ -253,6 +253,136 @@ class TestSyncNeverChangesTheLibrary(CheeseLinkTestBase):
         self.assertIsNone(sub.cheese_unlisted_at)
 
 
+    @patch('app.api_cheese.requests.Session')
+    def test_a_hidden_tracker_is_not_treated_as_removed(self, mock_session_cls):
+        """
+        Hiding a room on the Cheese dashboard is not removing it. The tracker is
+        still listed, just flagged hidden, so the room keeps reconciling and is
+        never marked unlisted.
+        """
+        self.mock_cheese(
+            mock_session_cls,
+            dashboard=[{
+                'tracker_id': 'ct_room_1',
+                'title': 'Hidden On Cheese',
+                'room_link': 'https://archipelago.gg/room/room_uuid',
+                'dashboard_override_visibility': False,
+            }],
+            details={'ct_room_1': {'games': [
+                {'id': 1, 'position': 1, 'claimed_by_ct_user_id': MY_CT_ID}
+            ]}},
+        )
+        user_id = self.make_user(is_syncing_cheese=True).id
+
+        room = TrackedRoom(room_id="room_uuid", cheese_tracker_id="ct_room_1")
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=room.id, alias="Hidden",
+            cheese_link=CHEESE_LINK_LINKED
+        ))
+        self.session.commit()
+        room_id = room.id
+
+        setup_cheese_user_task(self.app, user_id)
+
+        fresh = Session()
+        try:
+            sub = fresh.query(UserRoomSubscription).filter_by(
+                user_id=user_id, room_id=room_id
+            ).first()
+            slot = fresh.query(UserTrackedSlot).filter_by(
+                user_id=user_id, room_id=room_id, slot_id=1
+            ).first()
+        finally:
+            fresh.close()
+
+        self.assertIsNotNone(sub)
+        self.assertIsNone(sub.cheese_unlisted_at, "hidden is not the same as gone")
+        self.assertIsNotNone(slot, "and its claims are still reconciled")
+
+
+class TestDisconnectKeepsEverything(CheeseLinkTestBase):
+    """
+    Disconnecting takes Cheese out of the interface, not out of the library.
+
+    Nothing stored is destroyed, so reconnecting restores the previous state
+    rather than a guess at it. The app hides every Cheese affordance by keying it
+    off the connection instead.
+    """
+
+    def _connected_user_with_a_linked_room(self):
+        user = self.make_user()
+        room = TrackedRoom(room_id="room_uuid", cheese_tracker_id="ct_room_1")
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user.id, room_id=room.id, alias="Mine",
+            cheese_link=CHEESE_LINK_LINKED
+        ))
+        self.session.add(UserTrackedSlot(
+            user_id=user.id, room_id=room.id, slot_id=1, track_mode=TRACK_MODE_WATCH
+        ))
+        self.session.commit()
+        return user, room.id
+
+    def test_disconnect_clears_the_credentials_and_nothing_else(self):
+        user, room_id = self._connected_user_with_a_linked_room()
+        user_id = user.id
+
+        _call(api_cheese.disconnect_cheese_account, user)
+
+        fresh = Session()
+        try:
+            updated = fresh.query(User).get(user_id)
+            self.assertIsNone(updated.cheese_api_key)
+            self.assertIsNone(updated.cheese_user_id)
+            self.assertFalse(updated.is_syncing_cheese)
+
+            sub = fresh.query(UserRoomSubscription).filter_by(
+                user_id=user_id, room_id=room_id
+            ).first()
+            self.assertIsNotNone(sub, "the room stays in the library")
+            self.assertEqual(
+                sub.cheese_link, CHEESE_LINK_LINKED,
+                "and keeps its link, so reconnecting restores it",
+            )
+
+            slot = fresh.query(UserTrackedSlot).filter_by(
+                user_id=user_id, room_id=room_id, slot_id=1
+            ).first()
+            self.assertIsNotNone(slot)
+            self.assertEqual(
+                slot.track_mode, TRACK_MODE_WATCH,
+                "watch mode survives; the app just stops drawing the eye",
+            )
+
+            room = fresh.query(TrackedRoom).get(room_id)
+            self.assertEqual(
+                room.cheese_tracker_id, 'ct_room_1',
+                "the tracker id is shared with everyone else tracking this room",
+            )
+        finally:
+            fresh.close()
+
+    def test_a_disconnected_user_is_invisible_to_the_poller(self):
+        """
+        Clearing cheese_user_id is load-bearing, not cosmetic: it is what makes
+        process_cheese_update skip this user, so a poll cannot go on demoting the
+        slots of somebody who has left.
+        """
+        user, _ = self._connected_user_with_a_linked_room()
+        user_id = user.id
+
+        _call(api_cheese.disconnect_cheese_account, user)
+
+        fresh = Session()
+        try:
+            self.assertIsNone(fresh.query(User).get(user_id).cheese_user_id)
+        finally:
+            fresh.close()
+
+
 class TestSuggestions(CheeseLinkTestBase):
     """Cheese proposes rooms; it never writes them into a library."""
 

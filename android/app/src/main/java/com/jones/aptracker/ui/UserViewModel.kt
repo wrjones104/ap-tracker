@@ -611,6 +611,18 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             "Cheese Tracker - switched to Watching. You'll still get alerts."
     }
 
+    /**
+     * Disconnects the Cheese account and takes Cheese out of the interface.
+     *
+     * Nothing stored is destroyed: rooms, tracked slots, their play/watch modes and
+     * each room's link state all stay exactly as they are, so reconnecting restores
+     * the previous state rather than a guess at it. What goes is every Cheese
+     * affordance, which is keyed off the connected flag set here.
+     *
+     * Slot claims on Cheese Tracker are deliberately left held. They are shared
+     * state other people can see, and plenty of people disconnect the app while
+     * still playing those slots; releasing them is theirs to do on Cheese.
+     */
     fun disconnectCheese() {
         viewModelScope.launch {
             try {
@@ -618,6 +630,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 _integrationMessage.value = "Disconnected from Cheese Tracker."
                 settingsManager.setCheeseConnected(false)
                 fetchUserProfile()
+                // The activity feed decides at load time which slots read as
+                // watched, so it needs rebuilding rather than just recomposing.
+                fetchTrackedSlots()
             } catch (e: Exception) {
                 e.printStackTrace()
                 _errorMessage.value = "Failed to disconnect."

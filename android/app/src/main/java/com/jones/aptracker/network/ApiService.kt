@@ -651,20 +651,25 @@ data class CheeseSlotState(
  * badge would sit on every row and tell them nothing. Marking the exception is what
  * carries information.
  *
- * Gated on the mode alone. It used to also require the per-slot Cheese state, on the
- * grounds that without a linked tracker a stored "watch" described nothing -- true
- * while the picker refused to offer the choice before a room was linked, and wrong
- * as soon as it did (#314). A slot set to Watching on a room still waiting to sync
- * is a real choice with a real effect: it is what stops the link catch-up claiming
- * it. Only a user connected to Cheese can reach watch mode at all, so gating on the
- * mode cannot put an eye on a row that has no business carrying one.
+ * The mode alone is not enough. It used to be, on the grounds that only a user
+ * connected to Cheese can reach watch mode -- true, and irrelevant the moment they
+ * disconnect: the stored modes stay, the picker stops offering the choice, and the
+ * eyes sat there describing a service the user had just left. So connectedness is a
+ * parameter rather than an assumption, and disconnecting takes the eyes with it
+ * without touching what is stored. Reconnecting brings back the real ones.
  *
- * One property rather than the condition repeated per screen -- the rooms list, the
+ * Note it does *not* require the per-slot Cheese state. That was tried and was wrong
+ * as soon as the picker offered Watching before a room was linked (#314): a slot set
+ * to Watching on a room still waiting to sync is a real choice with a real effect, as
+ * it is what stops the link catch-up claiming it.
+ *
+ * One definition rather than the condition repeated per screen -- the rooms list, the
  * slot detail header and the activity feed all have to agree on what "watched" means,
- * and they drifted apart the moment each spelled it out for itself.
+ * and they drifted apart the moment each spelled it out for itself. A function rather
+ * than a property so no call site can quietly forget the connectedness half.
  */
-val TrackedSlotDetail.isWatched: Boolean
-    get() = track_mode == TrackMode.WATCH
+fun TrackedSlotDetail.readsAsWatched(isCheeseConnected: Boolean): Boolean =
+    isCheeseConnected && track_mode == TrackMode.WATCH
 
 data class UpdateCheeseSlotResponse(
     val message: String? = null,
