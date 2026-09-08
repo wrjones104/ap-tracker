@@ -387,6 +387,22 @@ class MainActivity : ComponentActivity() {
     private fun startGuestAuthentication() {
         authViewModel.setLoading(true)
         lifecycleScope.launch {
+            // An upgrade that was abandoned in a way none of the result callbacks
+            // saw -- the process killed while the browser was in front, most likely
+            // -- leaves the user on the login screen with their guest session
+            // stashed. Tapping Continue as Guest there means "forget the upgrade",
+            // not "give me a brand new account", and minting one would strand the
+            // rooms they already had. See #324.
+            if (authViewModel.resumeStashedGuestSession(this@MainActivity)) {
+                Toast.makeText(this@MainActivity, "Welcome back!", Toast.LENGTH_SHORT).show()
+                val intent = Intent(this@MainActivity, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+                startActivity(intent)
+                authViewModel.setLoading(false)
+                return@launch
+            }
+
             try {
                 val response = RetrofitClient.instance.loginAsGuest()
                 tokenManager.saveToken(response.token)

@@ -84,6 +84,35 @@ class AuthViewModel : ViewModel() {
     }
 
     /**
+     * Returns a stashed guest session to service, if there is one.
+     *
+     * The safety net under [abandonGuestUpgrade]: that covers the paths where the
+     * app is told the upgrade ended, and this covers the ones where it is not --
+     * chiefly the process being killed while the browser is in front, which leaves
+     * the user staring at the login screen with their account one tap away from
+     * being replaced by an empty new one.
+     *
+     * Returns true when a session was restored, so the caller can skip minting a
+     * new guest account.
+     */
+    fun resumeStashedGuestSession(context: Context): Boolean {
+        return try {
+            val tokenManager = TokenManager(context)
+            if (tokenManager.getUpgradeToken() == null) return false
+            tokenManager.restoreStashedToken()
+            val restored = tokenManager.getToken() != null
+            if (restored) {
+                SessionManager.resetLogoutState()
+                _isLoggedIn.value = true
+            }
+            restored
+        } catch (e: Exception) {
+            Log.e("AuthViewModel", "Failed to resume the stashed guest session", e)
+            false
+        }
+    }
+
+    /**
      * Puts a stashed guest token back after an upgrade that did not complete.
      *
      * Backing out of the browser used to cost the guest account outright: the token
