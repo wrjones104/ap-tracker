@@ -10,6 +10,87 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.11.0] - 2026-09-08
+
+_Templates Do The Repetitive Part_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **App v1.11.0 and Server v1.12.0 are out.**
+>
+> 📌 **Apply a pile of templates at once** — tick as many saved templates as you want on a slot and they all become milestone groups in one go.
+>
+> 🤖 **Or let them apply themselves** — switch a template to automatic and it lands on every new slot you play for that game.
+>
+> 🎮 **Templates for any game** — you don't have to be playing it, and there's a + button on Me > Milestone Templates now.
+>
+> 👁️ **Playing or Watching right away** — brand new rooms offer the choice immediately instead of after the first Cheese sync.
+>
+> 🔇 **Server-side:** hints whose location was already found no longer set off an alert.
+>
+> Plus sign-in fixes: logging in no longer clears your local data.
+>
+> Grab it: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> New: apply several milestone templates to a slot at once, or set one to apply automatically to new slots.
+>
+> New: build a template for any game, straight from Me > Milestone Templates.
+>
+> New: brand new rooms offer Playing or Watching right away.
+>
+> Fixed: signing in no longer clears your local data.
+>
+> Fixed: no more login loop when secure storage fails.
+>
+> Fixed: the template editor now loads items for a game you have not played.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - Apply Templates sheet on the Milestones card and its empty state: tick any number of saved templates and each becomes its own milestone group, posted through `POST /rooms/<id>/slots/<slot_id>/threshold-groups/bulk` in one transaction. Rows state what they will add and cannot be ticked when they would add nothing usable.
+> - Auto-apply: a template can be switched to "apply automatically" and is then added server-side to new slots the user plays for that game. Forward-only by construction.
+> - Milestone templates can be created from Me > Milestone Templates via a + action and an empty-state button, instead of only by bookmarking an existing group on a slot. Fixes #270.
+> - The template game picker lists the user's tracked games first, then every game with a server datapackage, with a search box over both. Uses the existing `GET /games`.
+>
+> ### Changed
+> - The Add button on the Milestones card is a two-item menu ("New milestone group" / "Apply templates"); the bookmark icon that was the only door to multi-apply is gone.
+> - Manage Templates explains "Apply automatically" once in the tips banner rather than under every card.
+> - The Playing/Watching picker is offered on a room that has not linked to Cheese Tracker yet, and its captions describe what saving will do instead of asserting a claim. Fixes #314.
+> - The watched-slot eye is gated on track mode alone, so a slot set to Watching before a room links carries it.
+> - `GET /games` results are held for the session; three screens were refetching on every entry.
+>
+> ### Fixed
+> - Deleted `UnauthorizedAuthenticator`, which called `SessionManager.logout()` on any 401 from below the application interceptors, making the `hasCredential` guard unreachable and wiping the local database during the sign-in window. Fixes #311.
+> - `SnoozeReceiver` fired `setGlobalSnooze` with no credential check; it now returns before `goAsync()` when there is no token.
+> - Push-triggered sync called `/users/me/tracked-slots` while logged out, and a forced logout never unregistered the FCM token. FCM registration is ordered after invalidation. Fixes #308.
+> - `TokenManager` was not a singleton, so its in-memory fallback was per-instance and a failed `EncryptedSharedPreferences` produced a login loop. Fixes #306.
+> - `fetchGameAvailableItems` exposes a loading flag and raises an error when a remote fetch leaves the item list empty, so the template editor for an unplayed game no longer opens silently empty.
+>
+> ```
+
+### Added
+- **Apply Templates Sheet**: Tick several templates and each becomes its own milestone group. Every row says up front what it will add, or why it cannot.
+- **Auto-Apply Templates**: A template switched to automatic is added to new slots you play for that game. Existing slots are left alone.
+- **Create Templates From The Templates Screen**: A + action and a matching empty-state button on Me > Milestone Templates. Pick the game, then the usual editor opens.
+- **Any Game In The Template Picker**: Your own games first, then every game the server has data for, with a search box over both.
+
+### Changed
+- **The Slot Picker Says What Saving Will Do**: Captions no longer report a claim that has not been made, or assert ownership on a room with no Cheese data behind it.
+- **The Watched Eye Appears Before A Room Links**: Setting a slot to Watching pre-link is what stops the catch-up claiming it, so the row now carries the eye that explains it.
+- **The Game List Is Fetched Once Per Session**: Three screens were refetching it on every entry. The picker also shows a spinner instead of flashing an empty state.
+
+### Fixed
+- **Signing In Could Clear The Local Database**: A 401 during the sign-in window ran a full logout. The authenticator that bypassed the guard against that is gone.
+- **Push-Triggered Sync Ran While Logged Out**: It called the API with no credential, and a forced logout never unregistered the push token.
+- **Login Loop When Secure Storage Failed**: TokenManager was not a singleton, so its in-memory fallback was per-instance and the token never stuck.
+- **Empty Item List For A Game You Have Not Played**: The template editor opened with nothing to search and no sign it was loading. It shows progress now, and reports a failed fetch.
+
+---
+
 ## [1.10.0] - 2026-08-31
 
 _Rooms And Slots Are One Place Now_
