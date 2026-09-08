@@ -1,6 +1,92 @@
 {
   "app_releases": [
     {
+      "version": "1.11.0",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-09-08",
+      "title": "Templates Do The Repetitive Part",
+      "highlights": [
+        {
+          "title": "Apply A Pile Of Templates At Once",
+          "description": "Tick as many saved templates as you want and they all become milestone groups in one go."
+        },
+        {
+          "title": "Templates That Apply Themselves",
+          "description": "Switch a template to automatic and it shows up on every new slot you play for that game."
+        },
+        {
+          "title": "Build Templates Without A Slot",
+          "description": "There's a + button on Me > Milestone Templates, and you can pick any game the server knows, not just ones you play."
+        },
+        {
+          "title": "Playing Or Watching, Right Away",
+          "description": "Brand new rooms offer the choice immediately instead of hiding it until the first Cheese sync."
+        },
+        {
+          "title": "Sign-In Fixes",
+          "description": "Logging in no longer clears your local data, and a push that lands while you're logged out stays quiet."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Apply Templates Sheet",
+            "description": "Tick several templates and each becomes its own milestone group. Every row says up front what it will add, or why it cannot."
+          },
+          {
+            "title": "Auto-Apply Templates",
+            "description": "A template switched to automatic is added to new slots you play for that game. Existing slots are left alone."
+          },
+          {
+            "title": "Create Templates From The Templates Screen",
+            "description": "A + action and a matching empty-state button on Me > Milestone Templates. Pick the game, then the usual editor opens."
+          },
+          {
+            "title": "Any Game In The Template Picker",
+            "description": "Your own games first, then every game the server has data for, with a search box over both."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "The Slot Picker Says What Saving Will Do",
+            "description": "Captions no longer report a claim that has not been made, or assert ownership on a room with no Cheese data behind it."
+          },
+          {
+            "title": "The Watched Eye Appears Before A Room Links",
+            "description": "Setting a slot to Watching pre-link is what stops the catch-up claiming it, so the row now carries the eye that explains it."
+          },
+          {
+            "title": "The Game List Is Fetched Once Per Session",
+            "description": "Three screens were refetching it on every entry. The picker also shows a spinner instead of flashing an empty state."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Signing In Could Clear The Local Database",
+            "description": "A 401 during the sign-in window ran a full logout. The authenticator that bypassed the guard against that is gone."
+          },
+          {
+            "title": "Push-Triggered Sync Ran While Logged Out",
+            "description": "It called the API with no credential, and a forced logout never unregistered the push token."
+          },
+          {
+            "title": "Login Loop When Secure Storage Failed",
+            "description": "TokenManager was not a singleton, so its in-memory fallback was per-instance and the token never stuck."
+          },
+          {
+            "title": "Empty Item List For A Game You Have Not Played",
+            "description": "The template editor opened with nothing to search and no sign it was loading. It shows progress now, and reports a failed fetch."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**App v1.11.0 and Server v1.12.0 are out.**\n\n📌 **Apply a pile of templates at once** — tick as many saved templates as you want on a slot and they all become milestone groups in one go.\n\n🤖 **Or let them apply themselves** — switch a template to automatic and it lands on every new slot you play for that game.\n\n🎮 **Templates for any game** — you don't have to be playing it, and there's a + button on Me > Milestone Templates now.\n\n👁️ **Playing or Watching right away** — brand new rooms offer the choice immediately instead of after the first Cheese sync.\n\n🔇 **Server-side:** hints whose location was already found no longer set off an alert.\n\nPlus sign-in fixes: logging in no longer clears your local data.\n\nGrab it: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "New: apply several milestone templates to a slot at once, or set one to apply automatically to new slots.\n\nNew: build a template for any game, straight from Me > Milestone Templates.\n\nNew: brand new rooms offer Playing or Watching right away.\n\nFixed: signing in no longer clears your local data.\n\nFixed: no more login loop when secure storage fails.\n\nFixed: the template editor now loads items for a game you have not played.",
+        "github": "### Added\n- Apply Templates sheet on the Milestones card and its empty state: tick any number of saved templates and each becomes its own milestone group, posted through `POST /rooms/<id>/slots/<slot_id>/threshold-groups/bulk` in one transaction. Rows state what they will add and cannot be ticked when they would add nothing usable.\n- Auto-apply: a template can be switched to \"apply automatically\" and is then added server-side to new slots the user plays for that game. Forward-only by construction.\n- Milestone templates can be created from Me > Milestone Templates via a + action and an empty-state button, instead of only by bookmarking an existing group on a slot. Fixes #270.\n- The template game picker lists the user's tracked games first, then every game with a server datapackage, with a search box over both. Uses the existing `GET /games`.\n\n### Changed\n- The Add button on the Milestones card is a two-item menu (\"New milestone group\" / \"Apply templates\"); the bookmark icon that was the only door to multi-apply is gone.\n- Manage Templates explains \"Apply automatically\" once in the tips banner rather than under every card.\n- The Playing/Watching picker is offered on a room that has not linked to Cheese Tracker yet, and its captions describe what saving will do instead of asserting a claim. Fixes #314.\n- The watched-slot eye is gated on track mode alone, so a slot set to Watching before a room links carries it.\n- `GET /games` results are held for the session; three screens were refetching on every entry.\n\n### Fixed\n- Deleted `UnauthorizedAuthenticator`, which called `SessionManager.logout()` on any 401 from below the application interceptors, making the `hasCredential` guard unreachable and wiping the local database during the sign-in window. Fixes #311.\n- `SnoozeReceiver` fired `setGlobalSnooze` with no credential check; it now returns before `goAsync()` when there is no token.\n- Push-triggered sync called `/users/me/tracked-slots` while logged out, and a forced logout never unregistered the FCM token. FCM registration is ordered after invalidation. Fixes #308.\n- `TokenManager` was not a singleton, so its in-memory fallback was per-instance and a failed `EncryptedSharedPreferences` produced a login loop. Fixes #306.\n- `fetchGameAvailableItems` exposes a loading flag and raises an error when a remote fetch leaves the item list empty, so the template editor for an unplayed game no longer opens silently empty.\n"
+      }
+    },
+    {
       "version": "1.10.0",
       "component": "app",
       "component_label": "App",
@@ -719,6 +805,96 @@
     }
   ],
   "server_releases": [
+    {
+      "version": "1.12.0",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-09-08",
+      "title": "Templates Apply Themselves, And Quieter Hints",
+      "highlights": [
+        {
+          "title": "Templates That Apply Themselves",
+          "description": "A template marked automatic is added to new slots you play for that game, as soon as the first poll works out what the game is."
+        },
+        {
+          "title": "No Alert For A Hint That Was Already Found",
+          "description": "Hints whose location had been checked before we ever saw them are still recorded, but they no longer interrupt you."
+        },
+        {
+          "title": "Watch-Only Rooms Survive A Cheese Sync",
+          "description": "A room where you only watch slots is no longer pruned when Cheese Tracker stops listing it."
+        },
+        {
+          "title": "Cheese Claims Retry Instead Of Vanishing",
+          "description": "A claim lost to a timeout is retried, and the tracker is fetched once per batch rather than once per slot."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Milestone Template Auto-Apply",
+            "description": "`UserTrackedSlot.auto_apply_pending` plus `milestone_template_service.py`, run from the poller once a slot's game resolves. Migration `d7b41e9c2a55`."
+          },
+          {
+            "title": "Bulk Milestone Group Creation",
+            "description": "`POST /rooms/<id>/slots/<slot_id>/threshold-groups/bulk` creates every group in one transaction and reports per-template skips with a reason."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Item Names Resolved Against The Seed",
+            "description": "The bulk endpoint resolves names server-side rather than trusting the client, which skips resolution when its autocomplete list has not loaded."
+          },
+          {
+            "title": "Auto-Apply Cannot Cost A Room Its Poll",
+            "description": "Each slot's writes run in their own SAVEPOINT, so a failed group creation no longer poisons the session for every other user in the room."
+          },
+          {
+            "title": "A Fatter Waitress Thread Pool",
+            "description": "Raised off its default of four threads."
+          },
+          {
+            "title": "Hint History Scoped In SQL",
+            "description": "The hint query is restricted to tracked slots in the database rather than filtered after loading."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Hints Already Found Raised An Alert",
+            "description": "Nothing about them was actionable, and the history view hides found hints by default. The row is still stored. Closes #326."
+          },
+          {
+            "title": "A Fresh Milestone Could Fire For Something Long Finished",
+            "description": "Groups are checked against the slot's counts at creation and marked met silently when the slot is already past them."
+          },
+          {
+            "title": "Watch Slots Were Claimed By The Link Catch-Up",
+            "description": "The catch-up selected every tracked slot with no track-mode filter, turning an explicit Watching into a real claim that never healed."
+          },
+          {
+            "title": "Watch-Only Rooms Were Pruned By The Cheese Sync",
+            "description": "The prune predicate is scoped to watch slots specifically, so a room the user only plays is still pruned as before. Closes #315."
+          },
+          {
+            "title": "Cheese Pushes Were Dropped On A Read Timeout",
+            "description": "Calls are retried and the tracker is fetched once per push batch. Closes #316."
+          },
+          {
+            "title": "Playing And Watching Were Hidden On A Fresh Room",
+            "description": "The claim summary is built for anyone with a Cheese key, and carries `is_known` so the client cannot assert a claim state nobody looked up. Closes #314."
+          },
+          {
+            "title": "Dead poller_service Module",
+            "description": "A duplicate `run_room_poll` that would have broken every push if it were ever wired up. Deleted. Closes #301."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Added\n- `UserTrackedSlot.auto_apply_pending` and `app/services/milestone_template_service.py`: milestone templates marked `auto_apply` are applied to newly played slots by the poller, once the slot's game and cached datapackage both resolve. Migration `d7b41e9c2a55`. The flag defaults to false and is only set by a live tracking action, so enabling a template never reaches backwards into slots already in a library.\n- `POST /rooms/<id>/slots/<slot_id>/threshold-groups/bulk` creates several milestone groups in one transaction, reporting `skipped` entries with `no_valid_items`, `duplicate_name` or `slot_group_limit` rather than failing the request. Capped at `MAX_GROUPS_PER_SLOT` = 50, counted as groups are actually created.\n\n### Changed\n- The bulk endpoint resolves item names against the seed's datapackage rather than trusting the client's resolution, which the app skips when its autocomplete list has not loaded.\n- Flipping a slot `watch` -> `play` sets `auto_apply_pending`; `play` -> `watch` clears it, and the auto-apply pass refuses any slot not in play mode.\n- The auto-apply pass runs after the poll's `SlotItemCount` writes and before the notification build, so the counts it reads are current.\n- Each slot's auto-apply writes run in their own SAVEPOINT. Previously a failed flush inside `create_group` left the session needing rollback, and every later statement in `db_process_poll_data` raised `PendingRollbackError`, losing item alerts, hints and completions for every user in the room.\n- Raised the Waitress thread count off its default of 4.\n- Auth failures log the request path instead of `remote_addr`.\n\n### Fixed\n- A hint whose location had already been checked before it was first seen no longer raises a \"New Hint!\" notification. The row is still stored and the item/location pair is still recorded, so an item delivered in the same poll keeps its bulb prefix. A hint first seen unfound and found on a later poll is unaffected. Closes #326.\n- A milestone group applied to a slot already past it fired on the next unrelated item. Groups are checked against the slot's counts at creation and marked met silently. The backfill window only skips one poll's evaluation and never set `is_triggered`, which is why it did not cover this.\n- `push_new_room_to_cheese`'s catch-up claim selected every tracked slot for the room with no `track_mode` filter, so an explicit Watching became a real claim on the user's Cheese account roughly two minutes after the room was added, and did not heal.\n- Narrowed the #315 prune predicate from any tracked slot to watch slots specifically; the broad version would have started sparing played-only rooms too.\n- Cheese calls are retried and the tracker fetched once per push batch, instead of a read timeout silently dropping the claim. Closes #316.\n- The Playing/Watching claim summary is built for any user with a Cheese key, not only for rooms that already carry a `cheese_tracker_id`, and carries `is_known` so a synthesised summary is not reported as a confirmed claim. Closes #314.\n- The hint history query is scoped to tracked slots in SQL rather than filtered after loading.\n- Deleted the dead `poller_service.py`, a duplicate `run_room_poll` that would have broken all pushes if wired up. Closes #301.\n"
+      }
+    },
     {
       "version": "1.11.0",
       "component": "server",
