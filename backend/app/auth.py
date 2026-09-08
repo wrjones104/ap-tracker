@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify, current_app, url_for
 
-from .models import User
+from .models import User, JWTBlocklist
 from . import Session
 
 bp = Blueprint('auth', __name__, url_prefix='/auth')
@@ -129,7 +129,17 @@ def callback():
             guest_token = auth_header.split(" ")[1]
             secret = current_app.config['SECRET_KEY']
             guest_data = jwt.decode(guest_token, secret, algorithms=['HS256'])
-            
+
+            # Every other authenticated path checks the blocklist (see routes/common.py),
+            # and this one is a live client path now that the app presents the guest's
+            # token here. A token the user logged out of must not still be able to bind
+            # that account to a Discord identity.
+            jti = guest_data.get('jti')
+            revoked = jti and session.query(JWTBlocklist).filter_by(jti=jti).first()
+            if revoked:
+                logging.warning("[AUTH_WARN] Revoked guest token presented during callback.")
+                raise ValueError('guest token has been revoked')
+
             guest_user = session.query(User).filter_by(id=guest_data['user_id']).first()
             if guest_user and guest_user.is_guest:
                 guest_user_to_upgrade = guest_user

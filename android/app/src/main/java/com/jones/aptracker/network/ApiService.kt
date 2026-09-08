@@ -4,6 +4,7 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.HTTP
 import retrofit2.http.POST
 import retrofit2.http.PUT
@@ -53,7 +54,18 @@ interface ApiService {
     suspend fun registerDevice(@Body request: RegisterDeviceRequest): Response<Unit>
 
     @POST("auth/callback")
-    suspend fun exchangeCodeForToken(@Body request: AuthRequest): AuthResponse
+    suspend fun exchangeCodeForToken(
+        @Body request: AuthRequest,
+        /**
+         * The guest's own token, on a guest upgrade only.
+         *
+         * Passed by hand rather than by AuthInterceptor, because the token is
+         * deliberately not in TokenManager during the OAuth round trip (#311). The
+         * server reads it as "upgrade this guest in place", which is what keeps the
+         * guest's rooms instead of starting a second account (#324).
+         */
+        @Header("Authorization") authorization: String? = null
+    ): AuthResponse
 
     @GET("users/me")
     suspend fun getUserProfile(): UserProfile
