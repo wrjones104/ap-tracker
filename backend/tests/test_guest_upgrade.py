@@ -22,7 +22,7 @@ os.environ['FLASK_ENV'] = 'development'
 os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='  # Valid Fernet key
 
 from backend.app import create_app, Session, engine
-from backend.app.models import Base, User, TrackedRoom, UserRoomSubscription
+from backend.app.models import Base, User, TrackedRoom, UserRoomSubscription, JWTBlocklist
 
 REDIRECT_URI = 'com.jones.aptracker:/oauth2redirect'
 DISCORD_ID = '999'
@@ -82,13 +82,13 @@ class GuestUpgradeTestBase(unittest.TestCase):
         self.session.commit()
         return guest.id
 
-    def token_for(self, user_id):
+    def token_for(self, user_id, jti=None):
         return pyjwt.encode(
             {
                 'user_id': user_id,
                 'iat': datetime.now(timezone.utc),
                 'exp': datetime.now(timezone.utc) + timedelta(days=1),
-                'jti': str(uuid_lib.uuid4()),
+                'jti': jti or str(uuid_lib.uuid4()),
                 'type': 'access',
             },
             self.app.config['SECRET_KEY'],
@@ -125,7 +125,7 @@ class TestGuestUpgrade(GuestUpgradeTestBase):
 
         fresh = Session()
         try:
-            upgraded = fresh.query(User).get(guest_id)
+            upgraded = fresh.get(User, guest_id)
             self.assertFalse(upgraded.is_guest, "the guest row itself becomes the Discord user")
             self.assertEqual(upgraded.discord_id, DISCORD_ID)
 
@@ -168,7 +168,7 @@ class TestGuestUpgrade(GuestUpgradeTestBase):
 
         fresh = Session()
         try:
-            guest = fresh.query(User).get(guest_id)
+            guest = fresh.get(User, guest_id)
             self.assertTrue(guest.is_guest)
             self.assertIsNone(guest.discord_id)
             self.assertEqual(
@@ -192,7 +192,7 @@ class TestGuestUpgrade(GuestUpgradeTestBase):
 
         fresh = Session()
         try:
-            guest = fresh.query(User).get(guest_id)
+            guest = fresh.get(User, guest_id)
             self.assertTrue(guest.is_guest)
 
             discord_user = fresh.query(User).filter_by(discord_id=DISCORD_ID).first()
@@ -219,9 +219,41 @@ class TestGuestUpgrade(GuestUpgradeTestBase):
 
         fresh = Session()
         try:
-            untouched = fresh.query(User).get(real_id)
+            untouched = fresh.get(User, real_id)
             self.assertEqual(untouched.discord_id, '111')
             self.assertIsNotNone(fresh.query(User).filter_by(discord_id=DISCORD_ID).first())
+        finally:
+            fresh.close()
+
+    def test_a_revoked_guest_token_cannot_bind_the_account(self):
+        """
+        Logging out blocklists the token. Every other authenticated path checks that
+        list; this one did not, and the app now presents a stored guest token here by
+        hand, so a token its owner had already retired could still bind their account
+        to whatever Discord identity signed in next.
+        """
+        guest_id = self.make_guest_with_a_room()
+        jti = str(uuid_lib.uuid4())
+        token = self.token_for(guest_id, jti=jti)
+
+        self.session.add(JWTBlocklist(
+            jti=jti,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        ))
+        self.session.commit()
+
+        resp = self.callback(guest_token=token)
+        self.assertEqual(resp.status_code, 200)
+
+        fresh = Session()
+        try:
+            guest = fresh.get(User, guest_id)
+            self.assertTrue(guest.is_guest, "the revoked token buys nothing")
+            self.assertIsNone(guest.discord_id)
+
+            discord_user = fresh.query(User).filter_by(discord_id=DISCORD_ID).first()
+            self.assertIsNotNone(discord_user)
+            self.assertNotEqual(discord_user.id, guest_id)
         finally:
             fresh.close()
 

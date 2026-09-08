@@ -24,9 +24,6 @@ class AuthViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
 
-    private val _failedAuthAttempt = MutableStateFlow<Pair<String, String>?>(null)
-    val failedAuthAttempt = _failedAuthAttempt.asStateFlow()
-
     private val _showMergeConflictDialog = MutableStateFlow(false)
     val showMergeConflictDialog = _showMergeConflictDialog.asStateFlow()
 
@@ -60,8 +57,7 @@ class AuthViewModel : ViewModel() {
             _isLoggedIn.value = false
         }
     }
-    fun onMergeConflict(code: String, codeVerifier: String) {
-        _failedAuthAttempt.value = code to codeVerifier
+    fun onMergeConflict() {
         _showMergeConflictDialog.value = true
     }
 
@@ -74,13 +70,18 @@ class AuthViewModel : ViewModel() {
      */
     fun clearMergeConflict(context: Context) {
         try {
-            TokenManager(context).restoreStashedToken()
+            val tokenManager = TokenManager(context)
+            // The latch is what stops two logouts racing, and it stays set until
+            // something says the session is live again. A restored session that skips
+            // this runs with the 401 handler disarmed.
+            if (tokenManager.restoreStashedToken()) {
+                SessionManager.resetLogoutState()
+            }
+            _isLoggedIn.value = tokenManager.getToken() != null
         } catch (e: Exception) {
             Log.e("AuthViewModel", "Failed to restore the guest token", e)
         }
         _showMergeConflictDialog.value = false
-        _failedAuthAttempt.value = null
-        _isLoggedIn.value = TokenManager(context).getToken() != null
     }
 
     /**
@@ -98,9 +99,11 @@ class AuthViewModel : ViewModel() {
     fun resumeStashedGuestSession(context: Context): Boolean {
         return try {
             val tokenManager = TokenManager(context)
-            if (tokenManager.getUpgradeToken() == null) return false
-            tokenManager.restoreStashedToken()
-            val restored = tokenManager.getToken() != null
+            // Deliberately not getUpgradeToken(): that answers "may this be sent to the
+            // server", which is a question about the Discord identity on the other end.
+            // This is the user asking for their own session back, and there is no age at
+            // which the answer to that is no.
+            val restored = tokenManager.restoreStashedToken()
             if (restored) {
                 SessionManager.resetLogoutState()
                 _isLoggedIn.value = true
@@ -122,7 +125,9 @@ class AuthViewModel : ViewModel() {
     fun abandonGuestUpgrade(context: Context) {
         try {
             val tokenManager = TokenManager(context)
-            tokenManager.restoreStashedToken()
+            if (tokenManager.restoreStashedToken()) {
+                SessionManager.resetLogoutState()
+            }
             _isLoggedIn.value = tokenManager.getToken() != null
         } catch (e: Exception) {
             Log.e("AuthViewModel", "Failed to restore the guest token", e)

@@ -70,6 +70,13 @@ import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.ResponseTypeValues
 import retrofit2.HttpException
 
+/**
+ * Whether the round trip now at Discord started from Link Discord rather than from the
+ * plain login button. Stored beside the code verifier, in the prefs that already have to
+ * survive the process being killed while the browser is in front.
+ */
+private const val KEY_IS_GUEST_UPGRADE = "is_guest_upgrade"
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var authService: AuthorizationService
@@ -125,15 +132,17 @@ class MainActivity : ComponentActivity() {
                 // Retrieve the code verifier from SharedPreferences
                 val prefs = getSharedPreferences("auth_prefs", MODE_PRIVATE)
                 val savedCodeVerifier = prefs.getString("code_verifier", null)
+                val wasGuestUpgrade = prefs.getBoolean(KEY_IS_GUEST_UPGRADE, false)
 
                 // Clean it up immediately so it doesn't linger
-                prefs.edit().remove("code_verifier").apply()
+                prefs.edit().remove("code_verifier").remove(KEY_IS_GUEST_UPGRADE).apply()
 
                 if (response?.authorizationCode != null && savedCodeVerifier != null) {
                     // Success! Exchange the code.
                     exchangeCodeForToken(
                         code = response.authorizationCode!!,
-                        codeVerifier = savedCodeVerifier
+                        codeVerifier = savedCodeVerifier,
+                        isGuestUpgrade = wasGuestUpgrade
                     )
                 } else {
                     // Something went wrong (e.g. Discord rejected it, or we somehow lost the verifier again)
@@ -157,7 +166,7 @@ class MainActivity : ComponentActivity() {
                 val onGuestUpgradeClick = {
                     authViewModel.startGuestUpgrade(
                         context = this@MainActivity,
-                        onAuth = { startAuthentication(authLauncher) }
+                        onAuth = { startAuthentication(authLauncher, isGuestUpgrade = true) }
                     )
                 }
 
@@ -300,7 +309,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startAuthentication(launcher: ActivityResultLauncher<Intent>) {
+    /**
+     * Sends the user to Discord.
+     *
+     * [isGuestUpgrade] says which button they pressed, and it is written to disk rather
+     * than held in memory because the callback can arrive after the process has been
+     * killed. The stash alone cannot answer this: one left behind by an upgrade that
+     * died silently is still sitting there when the same user later taps Login with
+     * Discord, and treating that as an upgrade would refuse a login for reasons nothing
+     * on screen explains.
+     */
+    private fun startAuthentication(
+        launcher: ActivityResultLauncher<Intent>,
+        isGuestUpgrade: Boolean = false
+    ) {
         val serviceConfig = AuthorizationServiceConfiguration(
             Uri.parse("https://discord.com/api/oauth2/authorize"),
             Uri.parse("https://discord.com/api/oauth2/token")
@@ -316,12 +338,13 @@ class MainActivity : ComponentActivity() {
         getSharedPreferences("auth_prefs", MODE_PRIVATE)
             .edit()
             .putString("code_verifier", codeVerifier)
+            .putBoolean(KEY_IS_GUEST_UPGRADE, isGuestUpgrade)
             .apply()
 
         launcher.launch(authService.getAuthorizationRequestIntent(request))
     }
 
-    fun exchangeCodeForToken(code: String, codeVerifier: String) {
+    fun exchangeCodeForToken(code: String, codeVerifier: String, isGuestUpgrade: Boolean = false) {
         authViewModel.setLoading(true)
         lifecycleScope.launch {
             try {
@@ -331,14 +354,37 @@ class MainActivity : ComponentActivity() {
                 // Present the guest's own token, when there is one. That is what makes
                 // the server upgrade the guest account in place, keeping its rooms,
                 // rather than creating a second account and leaving them behind (#324).
-                val guestToken = tokenManager.getUpgradeToken()
+                val guestToken = if (isGuestUpgrade) tokenManager.getUpgradeToken() else null
+
+                if (isGuestUpgrade && guestToken == null && tokenManager.hasStaleStashedToken()) {
+                    // Going on without it is the #324 failure exactly: the server sees no
+                    // guest, creates a second account, and the rooms stay on a row nothing
+                    // can reach -- under a "Login Successful!" toast. Stopping costs the
+                    // user a retry and costs them nothing else, since the stash is still
+                    // there and this hands it straight back.
+                    Log.w("LOGIN", "Guest upgrade token is stale; abandoning the upgrade.")
+                    authViewModel.abandonGuestUpgrade(this@MainActivity)
+                    Toast.makeText(
+                        this@MainActivity,
+                        "That took too long, so we left your guest account alone. " +
+                            "You're still signed in. Try linking Discord again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@launch
+                }
+
                 val response = RetrofitClient.instance.exchangeCodeForToken(
                     authRequest,
                     guestToken?.let { "Bearer $it" }
                 )
 
                 tokenManager.saveToken(response.token)
-                tokenManager.clearStashedToken()
+                if (isGuestUpgrade) {
+                    // Only the upgrade consumed it. A plain Discord login leaves any stash
+                    // where it is: it belongs to a guest account this login is not touching,
+                    // and it is the only way back to it.
+                    tokenManager.clearStashedToken()
+                }
                 authViewModel.onLoginSuccess()
                 Toast.makeText(this@MainActivity, "Login Successful!", Toast.LENGTH_SHORT).show()
 
@@ -357,7 +403,7 @@ class MainActivity : ComponentActivity() {
                             val errorResponse = Gson().fromJson(errorJson, AuthErrorResponse::class.java)
 
                             if (errorResponse.error == "account_conflict") {
-                                authViewModel.onMergeConflict(code, codeVerifier)
+                                authViewModel.onMergeConflict()
                             } else {
                                 errorDetails = "An unknown conflict occurred."
                                 Toast.makeText(this@MainActivity, errorDetails, Toast.LENGTH_LONG).show()

@@ -7,6 +7,53 @@ import android.util.Log
 import android.content.SharedPreferences
 
 /**
+ * How long a stashed token stays usable on the wire.
+ *
+ * The age check guards one direction only. Presenting a stranded token to the auth
+ * callback would upgrade whichever guest account it belongs to into the Discord
+ * identity being signed in, which on a shared device is somebody else's. Handing a
+ * session back to its own owner carries no such risk and needs no limit.
+ *
+ * A day, rather than the half hour this started at. A Discord signup inside the flow
+ * can include an email verification and a 2FA prompt, and half an hour failed those
+ * users in the worst available way: the stash was dropped, the callback went out
+ * unauthenticated, and the server created the second account this whole mechanism
+ * exists to prevent.
+ */
+internal const val UPGRADE_TOKEN_TTL_MS = 24L * 60L * 60L * 1000L
+
+/** What a stashed guest token may be used for. */
+internal enum class UpgradeTokenState {
+    /** Nothing is stashed. */
+    NONE,
+
+    /** Recent enough to present to the auth callback. */
+    USABLE,
+
+    /** Stashed but too old to send. Still its owner's session, so still restorable. */
+    STALE
+}
+
+/**
+ * Decides what may be done with a stashed token, from its age alone.
+ *
+ * Split out as a pure function because everything that went wrong here was a decision
+ * rather than a mechanism: expiry used to delete the stash, and both callers read it
+ * through the same getter, so a stale stash was destroyed on the way to being refused.
+ * A missing timestamp counts as stale rather than usable -- it means the stash outlived
+ * the write that dated it, and there is no way to tell how old it is.
+ */
+internal fun upgradeTokenState(hasToken: Boolean, stashedAt: Long?, now: Long): UpgradeTokenState {
+    if (!hasToken) return UpgradeTokenState.NONE
+    if (stashedAt == null) return UpgradeTokenState.STALE
+    return if (now - stashedAt > UPGRADE_TOKEN_TTL_MS) {
+        UpgradeTokenState.STALE
+    } else {
+        UpgradeTokenState.USABLE
+    }
+}
+
+/**
  * Reads and writes the auth token and a few small local flags.
  *
  * Instances are cheap handles over process-wide state. Six call sites construct their
@@ -37,17 +84,6 @@ class TokenManager(context: Context) {
          */
         private const val KEY_UPGRADE_TOKEN = "guest_upgrade_token"
         private const val KEY_UPGRADE_TOKEN_AT = "guest_upgrade_token_at"
-
-        /**
-         * How long a stashed token stays usable.
-         *
-         * An upgrade that is abandoned in a way none of the callbacks see -- the
-         * process killed while the browser is in front, say -- would otherwise leave
-         * the stash behind, and the next Discord sign-in would present a stranger's
-         * guest token and upgrade the wrong account. A round trip to Discord takes
-         * a minute; anything this old is wreckage.
-         */
-        private const val UPGRADE_TOKEN_TTL_MS = 30L * 60L * 1000L
 
         private val lock = Any()
 
@@ -172,20 +208,32 @@ class TokenManager(context: Context) {
         return prefs?.getString(KEY_UPGRADE_TOKEN, null) ?: inMemoryUpgradeToken
     }
 
+    private fun readStashedAt(): Long? {
+        return prefs?.getLong(KEY_UPGRADE_TOKEN_AT, 0L)?.takeIf { it != 0L }
+            ?: inMemoryUpgradeTokenAt
+    }
+
+    private fun stashState(): UpgradeTokenState =
+        upgradeTokenState(readStashedToken() != null, readStashedAt(), System.currentTimeMillis())
+
+    /** Whether anything is stashed, at any age. */
+    fun hasStashedToken(): Boolean = stashState() != UpgradeTokenState.NONE
+
+    /** Whether something is stashed but too old to present to the auth callback. */
+    fun hasStaleStashedToken(): Boolean = stashState() == UpgradeTokenState.STALE
+
     /**
      * The stashed token, if it is recent enough to send.
      *
-     * The age check guards the one direction that can do damage: presenting a
-     * stranded token to the auth callback would upgrade whichever guest account it
-     * belongs to into the Discord identity being signed in.
+     * Refusing and deleting are different things, and this used to do both. A stash
+     * too old to present is still the only handle on the account it belongs to, so it
+     * stays exactly where it is; [hasStaleStashedToken] is how a caller notices, and
+     * [restoreStashedToken] is how the user gets it back.
      */
     fun getUpgradeToken(): String? {
         val token = readStashedToken() ?: return null
-        val stashedAt = prefs?.getLong(KEY_UPGRADE_TOKEN_AT, 0L)?.takeIf { it != 0L }
-            ?: inMemoryUpgradeTokenAt
-        if (stashedAt == null || System.currentTimeMillis() - stashedAt > UPGRADE_TOKEN_TTL_MS) {
-            Log.w("TokenManager", "Discarding a stale guest upgrade token.")
-            clearStashedToken()
+        if (stashState() != UpgradeTokenState.USABLE) {
+            Log.w("TokenManager", "Guest upgrade token is stale; not presenting it.")
             return null
         }
         return token
@@ -198,10 +246,11 @@ class TokenManager(context: Context) {
      * user back their own session is safe at any age, and dropping it because the
      * upgrade took a while is the account loss this whole mechanism exists to stop.
      */
-    fun restoreStashedToken() {
-        val token = readStashedToken() ?: return
+    fun restoreStashedToken(): Boolean {
+        val token = readStashedToken() ?: return false
         saveToken(token)
         clearStashedToken()
+        return true
     }
 
     fun clearStashedToken() {
