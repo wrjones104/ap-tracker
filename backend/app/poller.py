@@ -581,6 +581,7 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
     hints_added_count = 0
     hints_skipped_backfill = 0
     hints_skipped_classification = 0
+    hints_skipped_found = 0
 
     for p_hints in tracker_data.get('hints', []):
          for hint_data in p_hints.get('hints', []):
@@ -620,26 +621,34 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
                 hints_added_count += 1
 
                 if has_hint_history:
-                    io_game = game_map.get(io_id, "Unknown")
-                    lo_game = game_map.get(lo_id, "Unknown")
-                    io_checksum = game_checksums.get(io_game)
-                    lo_checksum = game_checksums.get(lo_game)
-
-                    if io_checksum:
-                        cache_keys_to_fetch.add((io_checksum, 'item', item_id))
-                    if lo_checksum:
-                        cache_keys_to_fetch.add((lo_checksum, 'location', loc_id))
-                    
-                    new_hints_for_notify.append({
-                        'hint_key_batch': hint_key_batch,
-                        'io_id': io_id, 'lo_id': lo_id, 'item_id': item_id, 'loc_id': loc_id,
-                        'io_game': io_game, 'lo_game': lo_game,
-                        'io_checksum': io_checksum, 'lo_checksum': lo_checksum,
-                        'flags': flags
-                    })
-                    
                     if is_found_from_tracker:
+                        # Already found the first time we ever see it: the location was
+                        # checked before this poll, so the item is long gone and a
+                        # "New Hint!" tells the user nothing they can act on. The pair
+                        # is still recorded so the item notification keeps its bulb
+                        # prefix when the two land in the same cycle (issue #15), and
+                        # the row is still stored above so hint history stays complete
+                        # -- the history view hides found hints by default anyway.
                         just_found_hint_item_loc_pairs.add((loc_id, item_id))
+                        hints_skipped_found += 1
+                    else:
+                        io_game = game_map.get(io_id, "Unknown")
+                        lo_game = game_map.get(lo_id, "Unknown")
+                        io_checksum = game_checksums.get(io_game)
+                        lo_checksum = game_checksums.get(lo_game)
+
+                        if io_checksum:
+                            cache_keys_to_fetch.add((io_checksum, 'item', item_id))
+                        if lo_checksum:
+                            cache_keys_to_fetch.add((lo_checksum, 'location', loc_id))
+
+                        new_hints_for_notify.append({
+                            'hint_key_batch': hint_key_batch,
+                            'io_id': io_id, 'lo_id': lo_id, 'item_id': item_id, 'loc_id': loc_id,
+                            'io_game': io_game, 'lo_game': lo_game,
+                            'io_checksum': io_checksum, 'lo_checksum': lo_checksum,
+                            'flags': flags
+                        })
                 else:
                     hints_skipped_backfill += 1
             
@@ -655,6 +664,8 @@ def _process_hints(tracker_data, room_uuid, room_db_id, existing_hints_map, game
          logging.debug(f"[POLLER_DEBUG][RoomDBID:{room_db_id}] Hints: Proc={hints_processed_count}, SkipClass={hints_skipped_classification}, Added={hints_added_count}")
     if hints_skipped_backfill > 0:
         logging.info(f"[POLLER_INFO][RoomDBID:{room_db_id}] Suppressed {hints_skipped_backfill} hint notifications (backfill).")
+    if hints_skipped_found > 0:
+        logging.info(f"[POLLER_INFO][RoomDBID:{room_db_id}] Suppressed {hints_skipped_found} hint notifications (already found).")
 
     return hints_to_add, new_hints_for_notify, cache_keys_to_fetch, just_found_hint_item_loc_pairs
 
