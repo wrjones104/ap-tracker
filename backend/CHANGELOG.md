@@ -10,6 +10,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.12.0] - 2026-09-08
+
+_Templates Apply Themselves, And Quieter Hints_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - `UserTrackedSlot.auto_apply_pending` and `app/services/milestone_template_service.py`: milestone templates marked `auto_apply` are applied to newly played slots by the poller, once the slot's game and cached datapackage both resolve. Migration `d7b41e9c2a55`. The flag defaults to false and is only set by a live tracking action, so enabling a template never reaches backwards into slots already in a library.
+> - `POST /rooms/<id>/slots/<slot_id>/threshold-groups/bulk` creates several milestone groups in one transaction, reporting `skipped` entries with `no_valid_items`, `duplicate_name` or `slot_group_limit` rather than failing the request. Capped at `MAX_GROUPS_PER_SLOT` = 50, counted as groups are actually created.
+>
+> ### Changed
+> - The bulk endpoint resolves item names against the seed's datapackage rather than trusting the client's resolution, which the app skips when its autocomplete list has not loaded.
+> - Flipping a slot `watch` -> `play` sets `auto_apply_pending`; `play` -> `watch` clears it, and the auto-apply pass refuses any slot not in play mode.
+> - The auto-apply pass runs after the poll's `SlotItemCount` writes and before the notification build, so the counts it reads are current.
+> - Each slot's auto-apply writes run in their own SAVEPOINT. Previously a failed flush inside `create_group` left the session needing rollback, and every later statement in `db_process_poll_data` raised `PendingRollbackError`, losing item alerts, hints and completions for every user in the room.
+> - Raised the Waitress thread count off its default of 4.
+> - Auth failures log the request path instead of `remote_addr`.
+>
+> ### Fixed
+> - A hint whose location had already been checked before it was first seen no longer raises a "New Hint!" notification. The row is still stored and the item/location pair is still recorded, so an item delivered in the same poll keeps its bulb prefix. A hint first seen unfound and found on a later poll is unaffected. Closes #326.
+> - A milestone group applied to a slot already past it fired on the next unrelated item. Groups are checked against the slot's counts at creation and marked met silently. The backfill window only skips one poll's evaluation and never set `is_triggered`, which is why it did not cover this.
+> - `push_new_room_to_cheese`'s catch-up claim selected every tracked slot for the room with no `track_mode` filter, so an explicit Watching became a real claim on the user's Cheese account roughly two minutes after the room was added, and did not heal.
+> - Narrowed the #315 prune predicate from any tracked slot to watch slots specifically; the broad version would have started sparing played-only rooms too.
+> - Cheese calls are retried and the tracker fetched once per push batch, instead of a read timeout silently dropping the claim. Closes #316.
+> - The Playing/Watching claim summary is built for any user with a Cheese key, not only for rooms that already carry a `cheese_tracker_id`, and carries `is_known` so a synthesised summary is not reported as a confirmed claim. Closes #314.
+> - The hint history query is scoped to tracked slots in SQL rather than filtered after loading.
+> - Deleted the dead `poller_service.py`, a duplicate `run_room_poll` that would have broken all pushes if wired up. Closes #301.
+>
+> ```
+
+### Added
+- **Milestone Template Auto-Apply**: `UserTrackedSlot.auto_apply_pending` plus `milestone_template_service.py`, run from the poller once a slot's game resolves. Migration `d7b41e9c2a55`.
+- **Bulk Milestone Group Creation**: `POST /rooms/<id>/slots/<slot_id>/threshold-groups/bulk` creates every group in one transaction and reports per-template skips with a reason.
+
+### Changed
+- **Item Names Resolved Against The Seed**: The bulk endpoint resolves names server-side rather than trusting the client, which skips resolution when its autocomplete list has not loaded.
+- **Auto-Apply Cannot Cost A Room Its Poll**: Each slot's writes run in their own SAVEPOINT, so a failed group creation no longer poisons the session for every other user in the room.
+- **A Fatter Waitress Thread Pool**: Raised off its default of four threads.
+- **Hint History Scoped In SQL**: The hint query is restricted to tracked slots in the database rather than filtered after loading.
+
+### Fixed
+- **Hints Already Found Raised An Alert**: Nothing about them was actionable, and the history view hides found hints by default. The row is still stored. Closes #326.
+- **A Fresh Milestone Could Fire For Something Long Finished**: Groups are checked against the slot's counts at creation and marked met silently when the slot is already past them.
+- **Watch Slots Were Claimed By The Link Catch-Up**: The catch-up selected every tracked slot with no track-mode filter, turning an explicit Watching into a real claim that never healed.
+- **Watch-Only Rooms Were Pruned By The Cheese Sync**: The prune predicate is scoped to watch slots specifically, so a room the user only plays is still pruned as before. Closes #315.
+- **Cheese Pushes Were Dropped On A Read Timeout**: Calls are retried and the tracker is fetched once per push batch. Closes #316.
+- **Playing And Watching Were Hidden On A Fresh Room**: The claim summary is built for anyone with a Cheese key, and carries `is_known` so the client cannot assert a claim state nobody looked up. Closes #314.
+- **Dead poller_service Module**: A duplicate `run_room_poll` that would have broken every push if it were ever wired up. Deleted. Closes #301.
+
+---
+
 ## [1.11.0] - 2026-08-31
 
 _Watch Mode, And Settings That Stay Yours_
