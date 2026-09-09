@@ -112,6 +112,13 @@ def add_room(current_user):
     else:
         sync_to_cheese = bool(sync_to_cheese)
 
+    # A user with no Cheese key was never offered the choice: the dialog hides the
+    # checkbox and sends the stored default anyway. Marking those rooms linked meant
+    # a back catalogue nobody asked to publish went out the moment they connected,
+    # with no chip to show for it, since the chip needs a connection to render.
+    if not current_user.cheese_api_key:
+        sync_to_cheese = False
+
     has_explicit_scheme = room_url.startswith(('http://', 'https://'))
 
     if room_url and not has_explicit_scheme:

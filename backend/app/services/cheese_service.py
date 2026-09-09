@@ -6,7 +6,12 @@ from sqlalchemy.orm import selectinload
 
 from app import Session
 from app.models import Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot
-from app.utils import extract_ap_room_id, TRACK_MODE_WATCH, normalize_track_mode
+from app.utils import (
+    extract_ap_room_id,
+    TRACK_MODE_WATCH,
+    normalize_track_mode,
+    CHEESE_LINK_LINKED,
+)
 
 
 def _build_player_name_map(room):
@@ -181,6 +186,20 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
             selectinload(UserTrackedSlot.user)
         ).filter_by(room_id=room.id).all()
 
+        # Cheese may only rewrite the slots of users who asked for this room to be
+        # mirrored. Unlinking deliberately leaves the tracker id on the room -- it
+        # does not delete anything on Cheese -- so the id is not the gate, the
+        # subscription's link state is. Without this the poller kept reconciling
+        # rooms the user had told the app to stop syncing: demoting slots to watch,
+        # and deleting a tracked slot outright when it left the tracker, which
+        # cascades to that slot's milestone groups. See #323.
+        linked_user_ids = {
+            uid for (uid,) in session.query(UserRoomSubscription.user_id).filter(
+                UserRoomSubscription.room_id == room.id,
+                UserRoomSubscription.cheese_link == CHEESE_LINK_LINKED,
+            ).all()
+        }
+
         # {user_id: [(player_name, reason)]} for slots this sync demotes.
         # 'claimed' and 'released' are kept apart because an auto-release the
         # user opted into should not read as someone taking their slot.
@@ -190,6 +209,9 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         for ts in current_tracked_slots:
             user = ts.user
             if not user or not user.cheese_user_id:
+                continue
+
+            if ts.user_id not in linked_user_ids:
                 continue
 
             # Watch slots are alerts-only. Who owns the slot on Cheese is

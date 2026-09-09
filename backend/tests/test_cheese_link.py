@@ -10,6 +10,7 @@ suggestion, and leave only when the user says so. See #323.
 import json
 import os
 import unittest
+from datetime import datetime
 from unittest.mock import patch, MagicMock
 
 # Set up test DB and config before importing the app
@@ -26,6 +27,7 @@ from app.models import (
     Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot, CheeseDismissedTracker
 )
 from app.api_cheese import setup_cheese_user_task
+from app.services.cheese_service import process_cheese_update
 from app import api_cheese
 from app.routes import rooms_routes
 from app.encryption import encrypt_api_key
@@ -82,6 +84,18 @@ def _call(view, *args, body=None):
 
 
 _app_ref = [None]
+
+
+def _tracker_claimed_by_someone_else(position=1):
+    """A tracker payload whose slot is owned by a different Cheese user."""
+    return {
+        'title': 'T',
+        'games': [{
+            'position': position,
+            'claimed_by_ct_user_id': 'someone_else',
+            'discord_username': 'someone_else',
+        }],
+    }
 
 
 class CheeseLinkTestBase(unittest.TestCase):
@@ -370,15 +384,33 @@ class TestDisconnectKeepsEverything(CheeseLinkTestBase):
         Clearing cheese_user_id is load-bearing, not cosmetic: it is what makes
         process_cheese_update skip this user, so a poll cannot go on demoting the
         slots of somebody who has left.
+
+        Asserted by running the poller's own function rather than by reading the
+        column back. The column is the mechanism; this is the promise.
         """
-        user, _ = self._connected_user_with_a_linked_room()
+        user, room_id = self._connected_user_with_a_linked_room()
         user_id = user.id
+
+        # A slot they are playing, against a tracker that says somebody else owns
+        # it. A connected user would be demoted to watch for this.
+        self.session.add(UserTrackedSlot(
+            user_id=user_id, room_id=room_id, slot_id=2, track_mode=TRACK_MODE_PLAY
+        ))
+        self.session.commit()
 
         _call(api_cheese.disconnect_cheese_account, user)
 
+        process_cheese_update(room_id, _tracker_claimed_by_someone_else(2), '2026-02-01T00:00:00')
+
         fresh = Session()
         try:
-            self.assertIsNone(fresh.query(User).get(user_id).cheese_user_id)
+            self.assertIsNone(fresh.get(User, user_id).cheese_user_id)
+            slot = fresh.query(UserTrackedSlot).filter_by(
+                user_id=user_id, room_id=room_id, slot_id=2
+            ).first()
+            self.assertIsNotNone(slot, "the slot is not deleted")
+            self.assertEqual(slot.track_mode, TRACK_MODE_PLAY,
+                             "a poll does not rewrite the slots of somebody who left")
         finally:
             fresh.close()
 
@@ -645,6 +677,118 @@ class TestLinkToggle(CheeseLinkTestBase):
             api_cheese.push_slot_changes_to_cheese(self.app, user_id, room_id, {1}, set())
 
         mock_worker.assert_not_called()
+
+    def test_unlinking_still_lets_the_user_release_a_claim(self):
+        """
+        A claim is shared state on a public tracker. Unlinking must not leave the
+        user holding one with no way to give it back, so a release goes through
+        while a claim in the same call does not.
+        """
+        user = self.make_user()
+        user_id = user.id
+        room_id = self._room_for(user_id, link=CHEESE_LINK_NONE, tracker_id='ct_room_1')
+
+        with patch('app.api_cheese._background_push_worker') as mock_worker:
+            api_cheese.push_slot_changes_to_cheese(self.app, user_id, room_id, {2}, {1})
+
+        mock_worker.assert_called_once()
+        added = mock_worker.call_args.args[3]
+        removed = mock_worker.call_args.args[4]
+        self.assertEqual(removed, {1}, "the release reaches Cheese")
+        self.assertEqual(added, set(), "the claim does not")
+
+
+class TestThePollerRespectsTheLink(CheeseLinkTestBase):
+    """
+    The link governs what Cheese may write back, not only what the app pushes out.
+
+    Unlinking keeps the tracker id, and the poller schedules a Cheese task for any
+    room that has one, so without a link check an unlinked room went on being
+    reconciled: slots demoted to watch, and a slot missing from the tracker deleted
+    outright, taking its milestone groups with it. See #323.
+    """
+
+    def _room_with_a_played_slot(self, link):
+        user = self.make_user()
+        room = TrackedRoom(
+            room_id="room_uuid",
+            cheese_tracker_id="ct_room_1",
+            cheese_updated_at=datetime(2026, 1, 1),
+        )
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user.id, room_id=room.id, alias="Mine", cheese_link=link
+        ))
+        self.session.add(UserTrackedSlot(
+            user_id=user.id, room_id=room.id, slot_id=1, track_mode=TRACK_MODE_PLAY
+        ))
+        self.session.commit()
+        return user.id, room.id
+
+    def test_an_unlinked_room_is_not_demoted_by_a_poll(self):
+        _, room_id = self._room_with_a_played_slot(CHEESE_LINK_NONE)
+
+        process_cheese_update(room_id, _tracker_claimed_by_someone_else(), '2026-02-01T00:00:00')
+
+        fresh = Session()
+        try:
+            slot = fresh.query(UserTrackedSlot).filter_by(room_id=room_id).first()
+            self.assertEqual(slot.track_mode, TRACK_MODE_PLAY)
+        finally:
+            fresh.close()
+
+    def test_an_unlinked_room_does_not_lose_a_slot_that_left_the_tracker(self):
+        _, room_id = self._room_with_a_played_slot(CHEESE_LINK_NONE)
+
+        # The tracker no longer lists the slot at all. On a linked room this is the
+        # branch that deletes the tracked slot.
+        process_cheese_update(room_id, {'title': 'T', 'games': []}, '2026-02-01T00:00:00')
+
+        fresh = Session()
+        try:
+            self.assertIsNotNone(
+                fresh.query(UserTrackedSlot).filter_by(room_id=room_id).first(),
+                "an unlinked room keeps its slots, and the milestone groups under them",
+            )
+        finally:
+            fresh.close()
+
+    def test_a_linked_room_is_still_reconciled(self):
+        """The gate must not become a way of switching the sync off altogether."""
+        _, room_id = self._room_with_a_played_slot(CHEESE_LINK_LINKED)
+
+        process_cheese_update(room_id, _tracker_claimed_by_someone_else(), '2026-02-01T00:00:00')
+
+        fresh = Session()
+        try:
+            slot = fresh.query(UserTrackedSlot).filter_by(room_id=room_id).first()
+            self.assertEqual(slot.track_mode, TRACK_MODE_WATCH)
+        finally:
+            fresh.close()
+
+
+class TestAccountDeletion(CheeseLinkTestBase):
+
+    def test_a_user_who_dismissed_a_suggestion_can_still_be_deleted(self):
+        """
+        Dismissals hang off the user like every other per-user list. Without the
+        cascade the delete raises a foreign key violation, which fails account
+        deletion and rolls back the whole guest purge batch with it.
+        """
+        user = self.make_user()
+        user_id = user.id
+        self.session.add(CheeseDismissedTracker(
+            user_id=user_id, cheese_tracker_id='ct_room_1'
+        ))
+        self.session.commit()
+
+        self.session.delete(self.session.get(User, user_id))
+        self.session.commit()
+
+        self.assertEqual(
+            self.session.query(CheeseDismissedTracker).filter_by(user_id=user_id).count(), 0
+        )
 
 
 if __name__ == '__main__':

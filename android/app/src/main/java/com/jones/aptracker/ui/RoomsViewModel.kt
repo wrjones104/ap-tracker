@@ -311,10 +311,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                     parts += "$unlisted $roomWord no longer on your Cheese dashboard. " +
                         "They're still here."
                 }
-                val message = if (parts.isEmpty()) {
-                    "Cheese Sync Complete!"
-                } else {
-                    "Cheese Sync Complete! " + parts.joinToString(" ")
+                val message = when {
+                    // The poll budget ran out with the server still working. Saying it
+                    // finished would be a guess, and the counts above are all zero
+                    // because no profile came back, not because nothing changed.
+                    finishedProfile == null -> "Cheese Tracker is still syncing. Pull to refresh in a moment."
+                    parts.isEmpty() -> "Cheese Sync Complete!"
+                    else -> "Cheese Sync Complete! " + parts.joinToString(" ")
                 }
                 val duration = if (parts.isEmpty()) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
                 Toast.makeText(getApplication(), message, duration).show()
@@ -325,6 +328,8 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 e.printStackTrace()
                 Log.w("RoomsViewModel", "Background sync failed: ${e.message}")
+                // Cheese failing is not a reason to leave the room list stale.
+                fetchRooms(force = true)
                 _errorMessage.value = "Background sync failed."
             } finally {
                 _isSyncingCheese.value = false
@@ -425,12 +430,17 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Pull to refresh.
+     *
+     * The room list is ours and refreshes first, always. It used to be routed through
+     * the Cheese sync, so a Cheese outage, a rate limit or a sync already running left
+     * the user pulling on stale Archipelago data with nothing to show for it.
+     */
     fun refreshAll(isCheeseConnected: Boolean) {
-        if (!isCheeseConnected) {
-            fetchRooms(force = true)
-            return
+        fetchRooms(force = true)
+        if (isCheeseConnected && !_isSyncingCheese.value) {
+            triggerBackgroundSync()
         }
-        if (_isSyncingCheese.value) return
-        triggerBackgroundSync()
     }
 }

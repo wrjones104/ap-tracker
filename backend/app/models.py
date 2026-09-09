@@ -73,6 +73,9 @@ class User(Base):
     global_snooze_until = Column(DateTime, nullable=True)
     ignore_items = relationship("UserIgnoreItem", back_populates="user", cascade="all, delete-orphan")
     whitelist_items = relationship("UserWhitelistItem", back_populates="user", cascade="all, delete-orphan")
+    cheese_dismissed_trackers = relationship(
+        "CheeseDismissedTracker", back_populates="user", cascade="all, delete-orphan"
+    )
 
 class Device(Base):
     __tablename__ = 'devices'
@@ -263,9 +266,11 @@ class CheeseDismissedTracker(Base):
     """
     __tablename__ = 'cheese_dismissed_trackers'
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
     cheese_tracker_id = Column(String(64), nullable=False)
     dismissed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="cheese_dismissed_trackers")
 
     __table_args__ = (
         UniqueConstraint('user_id', 'cheese_tracker_id', name='_user_dismissed_tracker_uc'),

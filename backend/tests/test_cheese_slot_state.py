@@ -9,12 +9,12 @@ os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
 os.environ['FLASK_ENV'] = 'development'
 os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='  # Valid Fernet key
 
-from backend.app import create_app, Session, engine
-from backend.app.models import Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
-from backend.app.api_cheese import apply_cheese_slot_update, refresh_tracker_cache, _background_push_worker
-from backend.app.routes.slots_routes import game_is_owned_by, build_cheese_slot_state
-from backend.app.encryption import encrypt_api_key
-from backend.app.utils import CHEESE_LINK_LINKED, CHEESE_LINK_NONE
+from app import create_app, Session, engine
+from app.models import Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
+from app.api_cheese import apply_cheese_slot_update, refresh_tracker_cache, _background_push_worker
+from app.routes.slots_routes import game_is_owned_by, build_cheese_slot_state
+from app.encryption import encrypt_api_key
+from app.utils import CHEESE_LINK_LINKED, CHEESE_LINK_NONE
 
 MY_CT_ID = 12345
 OTHER_CT_ID = 99999
@@ -130,8 +130,8 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
         resp.text = ''
         return resp
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_notes_update_merges_and_persists(self, mock_get, mock_put):
         mock_get.return_value = self._mock_get(make_tracker(make_game()))
         # Server echoes the updated game with new notes.
@@ -150,8 +150,8 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
         cached = json.loads(room.cached_cheese_json)
         self.assertEqual(cached['games'][0]['notes'], 'new notes')
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_unlinked_room_is_not_written_to(self, mock_get, mock_put):
         """
         Unlinking a room leaves its tracker id in place, so the id alone is not
@@ -166,8 +166,8 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
         self.assertEqual(result['status'], 'no_tracker')
         mock_put.assert_not_called()
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_bk_stamps_last_checked(self, mock_get, mock_put):
         mock_get.return_value = self._mock_get(make_tracker(make_game()))
         mock_put.return_value = self._mock_put(body=make_game(progression_status='bk'))
@@ -179,8 +179,8 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
         self.assertEqual(sent_payload['progression_status'], 'bk')
         self.assertIsNotNone(sent_payload['last_checked'])
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_still_bk_touches_last_checked_only(self, mock_get, mock_put):
         mock_get.return_value = self._mock_get(make_tracker(make_game(progression_status='bk')))
         mock_put.return_value = self._mock_put(body=make_game(progression_status='bk'))
@@ -192,8 +192,8 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
         self.assertIsNotNone(sent_payload['last_checked'])
         self.assertEqual(sent_payload['progression_status'], 'bk')
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_completion_force_upgrade_uses_server_response(self, mock_get, mock_put):
         mock_get.return_value = self._mock_get(make_tracker(make_game()))
         # We ask for 'incomplete' but the server force-upgrades to 'all_checks'.
@@ -204,8 +204,8 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
         self.assertEqual(result['status'], 'ok')
         self.assertEqual(result['game']['completion_status'], 'all_checks')
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_ownership_rejected_for_other_users_slot(self, mock_get, mock_put):
         mock_get.return_value = self._mock_get(
             make_tracker(make_game(claimed_by_ct_user_id=OTHER_CT_ID))
@@ -216,8 +216,8 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
         self.assertEqual(result['status'], 'forbidden')
         mock_put.assert_not_called()
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_precondition_failed_maps_to_conflict(self, mock_get, mock_put):
         mock_get.return_value = self._mock_get(make_tracker(make_game()))
         mock_put.return_value = self._mock_put(status_code=412)
@@ -226,8 +226,8 @@ class TestApplyCheeseSlotUpdate(unittest.TestCase):
 
         self.assertEqual(result['status'], 'conflict')
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_slot_not_present_on_tracker(self, mock_get, mock_put):
         mock_get.return_value = self._mock_get(make_tracker(make_game(position=2)))
 
@@ -286,7 +286,7 @@ class TestRefreshTrackerCache(unittest.TestCase):
     # Patched at the definition site: refresh_tracker_cache imports it inside the
     # function, and app.poller only re-exports it.
     @patch('app.services.cheese_service.process_cheese_update')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.get')
     def test_ok_invokes_processing(self, mock_get, mock_process):
         resp = MagicMock()
         resp.ok = True
@@ -302,7 +302,7 @@ class TestRefreshTrackerCache(unittest.TestCase):
         self.assertEqual(args[0], 10)
         self.assertEqual(args[2], '2026-08-02T00:00:00Z')
 
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.get')
     def test_fetch_failure_returns_error(self, mock_get):
         resp = MagicMock()
         resp.ok = False
@@ -364,8 +364,8 @@ class TestBackgroundPushFetchesTrackerOnce(unittest.TestCase):
             except Exception:
                 pass
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_three_slots_cost_one_tracker_fetch(self, mock_get, mock_put):
         tracker = {
             'tracker_id': 'ct_room_1',
@@ -390,8 +390,8 @@ class TestBackgroundPushFetchesTrackerOnce(unittest.TestCase):
         self.assertEqual(mock_get.call_count, 1, "the tracker should be fetched once for the whole batch")
         self.assertEqual(mock_put.call_count, 3, "each slot should still be written individually")
 
-    @patch('backend.app.api_cheese._cheese_session.put')
-    @patch('backend.app.api_cheese._cheese_session.get')
+    @patch('app.api_cheese._cheese_session.put')
+    @patch('app.api_cheese._cheese_session.get')
     def test_unreadable_tracker_pushes_nothing(self, mock_get, mock_put):
         get_resp = MagicMock()
         get_resp.ok = False

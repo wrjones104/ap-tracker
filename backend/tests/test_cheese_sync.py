@@ -10,11 +10,11 @@ os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
 os.environ['FLASK_ENV'] = 'development'
 os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno=' # Valid Fernet key
 
-from backend.app import create_app, Session, engine
-from backend.app.models import Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
-from backend.app.api_cheese import setup_cheese_user_task
-from backend.app.encryption import encrypt_api_key
-from backend.app.utils import CHEESE_LINK_LINKED, CHEESE_LINK_NONE
+from app import create_app, Session, engine
+from app.models import Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot
+from app.api_cheese import setup_cheese_user_task
+from app.encryption import encrypt_api_key
+from app.utils import CHEESE_LINK_LINKED, CHEESE_LINK_NONE
 
 class TestCheeseSync(unittest.TestCase):
     def setUp(self):
@@ -42,7 +42,7 @@ class TestCheeseSync(unittest.TestCase):
             except Exception as e:
                 print(f"Failed to remove test DB: {e}")
 
-    @patch('backend.app.api_cheese.requests.Session')
+    @patch('app.api_cheese.requests.Session')
     def test_setup_cheese_user_task(self, mock_session_cls):
         """A linked room has its payload refreshed and its claims reconciled."""
         # Create a mock session instance
@@ -156,7 +156,7 @@ class TestCheeseSync(unittest.TestCase):
 
         fresh_session.close()
 
-    @patch('backend.app.api_cheese.requests.Session')
+    @patch('app.api_cheese.requests.Session')
     def test_setup_cheese_user_task_pruning_shared_room(self, mock_session_cls):
         # Create a mock session instance
         mock_session = MagicMock()
@@ -258,7 +258,7 @@ class TestCheeseSync(unittest.TestCase):
         
         fresh_session.close()
 
-    @patch('backend.app.api_cheese.requests.Session')
+    @patch('app.api_cheese.requests.Session')
     def test_setup_cheese_user_task_network_failure_does_not_prune(self, mock_session_cls):
         # Create a mock session instance
         mock_session = MagicMock()
@@ -366,7 +366,7 @@ class TestCheeseSync(unittest.TestCase):
         self.assertEqual(sub_check.icon_name, 'custom_icon')
         fresh_session.close()
 
-    @patch('backend.app.api_cheese.requests.Session')
+    @patch('app.api_cheese.requests.Session')
     def test_linked_room_off_the_dashboard_is_flagged_not_deleted(self, mock_session_cls):
         """
         A linked room the dashboard stops listing is flagged, never removed.

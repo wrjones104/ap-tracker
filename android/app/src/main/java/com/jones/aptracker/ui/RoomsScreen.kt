@@ -1269,7 +1269,9 @@ fun AddRoomDialog(
     var alias by remember { mutableStateOf("") }
     var selectedIconName by remember { mutableStateOf("default_icon") }
     var showUrlHelp by remember { mutableStateOf(false) }
-    var syncToCheese by remember { mutableStateOf(defaultSyncToCheese) }
+    // Keyed on the default: the profile can land after the dialog opens, and an
+    // unkeyed remember would leave the box showing the wrong answer.
+    var syncToCheese by remember(defaultSyncToCheese) { mutableStateOf(defaultSyncToCheese) }
 
     // --- VALIDATION LOGIC ---
     // Detects "domain:port" format common in game clients (e.g., archipelago.gg:12345)

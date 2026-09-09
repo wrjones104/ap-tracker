@@ -64,6 +64,9 @@ def _build_cheese_session():
 # nothing mutates it -- headers are passed per call, and urllib3's pool is
 # thread-safe.
 _cheese_session = _build_cheese_session()
+
+# How many trackers one import request will take. See import_available_cheese_rooms.
+MAX_IMPORT_PER_REQUEST = 25
     
 def _fetch_tracker_details(req_session, tracker_ids):
     """
@@ -565,7 +568,15 @@ def _fetch_dashboard(api_key):
     try:
         resp = _cheese_session.get(f"{CHEESE_BASE_URL}/dashboard/tracker", headers=headers, timeout=15)
         resp.raise_for_status()
-        return resp.json()
+        payload = resp.json()
+        # Anything that is not a list is not a dashboard. Callers iterate this and
+        # read attributes off each entry, so letting one through would raise deep
+        # inside a sync rather than here, where "could not reach Cheese" is already
+        # the handled case.
+        if not isinstance(payload, list):
+            logging.error("[CHEESE_DEBUG] Dashboard response was not a list; treating it as unreachable.")
+            return None
+        return [t for t in payload if isinstance(t, dict)]
     except Exception as e:
         logging.error(f"[CHEESE_DEBUG] Dashboard fetch failed: {e}")
         return None
@@ -688,6 +699,20 @@ def import_available_cheese_rooms(current_user):
     if not wanted:
         return jsonify({'error': 'cheese_tracker_ids must be a non-empty list.'}), 400
 
+    # Every tracker here costs a detail request, paced half a second apart and with a
+    # ten second timeout each, and this endpoint runs synchronously on a request
+    # worker. A whole dashboard selected at once would hold that worker for minutes,
+    # so the rest comes back as not-imported and the user can tap Add again.
+    deferred = []
+    if len(wanted) > MAX_IMPORT_PER_REQUEST:
+        ordered = sorted(wanted)
+        deferred = ordered[MAX_IMPORT_PER_REQUEST:]
+        wanted = set(ordered[:MAX_IMPORT_PER_REQUEST])
+        logging.info(
+            f"[CHEESE_IMPORT] User {current_user.id} asked for {len(ordered)} trackers; "
+            f"importing {MAX_IMPORT_PER_REQUEST} and deferring {len(deferred)}."
+        )
+
     trackers = _fetch_dashboard(api_key)
     if trackers is None:
         return jsonify({'error': 'Could not reach Cheese Tracker.'}), 502
@@ -729,7 +754,11 @@ def import_available_cheese_rooms(current_user):
                     logging.info(f"[CHEESE_IMPORT] Linked existing AP room {ap_room_id} to Cheese ID {ct_id}")
 
         if not room:
-            ap_room_id_extracted = extract_ap_room_id(room_link) or "PENDING_DISCOVERY_" + ct_id[:8]
+            # The whole tracker id, not a prefix of it. room_id is unique, and this
+            # endpoint can create several pending rooms in one transaction, so two
+            # trackers sharing their first eight characters used to collide and take
+            # the entire import down with an IntegrityError.
+            ap_room_id_extracted = extract_ap_room_id(room_link) or f"PENDING_DISCOVERY_{ct_id}"
             hostname = "archipelago.gg"
             try:
                 if room_link:
@@ -788,7 +817,7 @@ def import_available_cheese_rooms(current_user):
         'imported': stats['imported'],
         'slots_synced': stats['slots_synced'],
         'demoted': stats['demoted'],
-        'failed': failed + missing,
+        'failed': failed + missing + deferred,
     })
 
 
@@ -1034,10 +1063,21 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
                 user_id=user_id, room_id=room_db_id
             ).first()
             if not sub or normalize_cheese_link(sub.cheese_link) != CHEESE_LINK_LINKED:
+                # Releases still go through. A claim is shared state other people can
+                # see, and unlinking a room must not leave the user holding a slot on
+                # a public tracker with no way to give it back -- giving one up stays
+                # an explicit action in the picker, exactly as the unlink copy says.
+                # Claims are what the link authorises, so those are dropped.
+                if not removed_slots:
+                    logging.info(
+                        f"[CHEESE_DEBUG] Aborting: room {room_db_id} is not linked to Cheese for user {user_id}."
+                    )
+                    return
                 logging.info(
-                    f"[CHEESE_DEBUG] Aborting: room {room_db_id} is not linked to Cheese for user {user_id}."
+                    f"[CHEESE_DEBUG] Room {room_db_id} is unlinked for user {user_id}; "
+                    f"releasing {len(removed_slots)} slot(s) and claiming none."
                 )
-                return
+                added_slots = set()
 
             tracker_id = local_room.cheese_tracker_id
         except Exception as e:

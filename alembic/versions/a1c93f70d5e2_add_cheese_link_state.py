@@ -62,7 +62,7 @@ def upgrade() -> None:
         sa.Column('user_id', sa.Integer(), nullable=False),
         sa.Column('cheese_tracker_id', sa.String(length=64), nullable=False),
         sa.Column('dismissed_at', sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('user_id', 'cheese_tracker_id', name='_user_dismissed_tracker_uc'),
     )
