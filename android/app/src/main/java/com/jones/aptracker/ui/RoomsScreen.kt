@@ -135,8 +135,6 @@ fun RoomsScreen(
     val isLoading by roomsViewModel.isLoading.collectAsState()
     val isCheeseConnected by roomsViewModel.isCheeseConnected.collectAsState()
     val availableCheeseRooms by roomsViewModel.availableCheeseRooms.collectAsState()
-    val isImportingCheeseRooms by roomsViewModel.isImportingCheeseRooms.collectAsState()
-    var showCheeseSuggestions by remember { mutableStateOf(false) }
     val errorMessage by roomsViewModel.errorMessage.collectAsState()
     val slotErrorMessage by userViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -386,7 +384,9 @@ fun RoomsScreen(
                     if (offered > 0 && !isSearching) {
                         CheeseSuggestionsBanner(
                             count = offered,
-                            onClick = { showCheeseSuggestions = true }
+                            // What is new, not what was hidden. The Me tab is the
+                            // door to the hidden ones.
+                            onClick = { roomsViewModel.openCheeseSuggestions(includeDismissed = false) }
                         )
                     }
                 }
@@ -546,33 +546,6 @@ fun RoomsScreen(
         }
 
         // --- Dialogs & Sheets ---
-
-        // Raised by the Cheese card on the Me tab, which is the way back to a room
-        // the user hid or skipped past. The list it wants is already on its way.
-        val suggestionsRequested by roomsViewModel.suggestionsRequested.collectAsState()
-        LaunchedEffect(suggestionsRequested) {
-            if (suggestionsRequested) {
-                showCheeseSuggestions = true
-                roomsViewModel.consumeSuggestionsRequest()
-            }
-        }
-
-        if (showCheeseSuggestions) {
-            ModalBottomSheet(onDismissRequest = { showCheeseSuggestions = false }) {
-                CheeseSuggestionsSheet(
-                    available = availableCheeseRooms,
-                    isImporting = isImportingCheeseRooms,
-                    onAdd = { ids ->
-                        showCheeseSuggestions = false
-                        roomsViewModel.importCheeseRooms(ids)
-                    },
-                    onDismissRooms = { ids ->
-                        showCheeseSuggestions = false
-                        roomsViewModel.dismissCheeseRooms(ids)
-                    }
-                )
-            }
-        }
 
         if (roomForOptions != null) {
             ModalBottomSheet(onDismissRequest = { roomForOptions = null }) {

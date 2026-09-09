@@ -53,11 +53,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     val isImportingCheeseRooms: StateFlow<Boolean> = _isImportingCheeseRooms.asStateFlow()
 
     /**
-     * Raised when something outside the rooms list asks for the suggestions sheet.
+     * Whether the suggestions sheet should be on screen.
      *
-     * The banner only appears when there is something new to offer, so it is not a
-     * way back to a room the user hid or skipped past. This is: the Cheese card on
-     * the Me tab raises it, and the rooms screen opens the sheet and lowers it.
+     * Held here rather than on either screen because both tabs open the same sheet:
+     * the banner on Rooms, and the Cheese card on Me. It is rendered above the tabs
+     * so that asking for it never moves anybody off the screen they were reading.
      */
     private val _suggestionsRequested = MutableStateFlow(false)
     val suggestionsRequested: StateFlow<Boolean> = _suggestionsRequested.asStateFlow()
@@ -407,13 +407,14 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Show everything Cheese has that the app does not, hidden ones included.
+     * Ask for the suggestions sheet.
      *
-     * The entry point for someone who dismissed a room and changed their mind, or
-     * who backed out of the sheet and could not find it again.
+     * [includeDismissed] is what separates the two doors into it. The banner offers
+     * what is new, so it asks for that alone; the Me tab is the way back for someone
+     * who hid a room or backed out of the sheet, so it asks for everything.
      */
-    fun openCheeseSuggestions() {
-        fetchAvailableCheeseRooms(includeDismissed = true)
+    fun openCheeseSuggestions(includeDismissed: Boolean = true) {
+        fetchAvailableCheeseRooms(includeDismissed = includeDismissed)
         _suggestionsRequested.value = true
     }
 

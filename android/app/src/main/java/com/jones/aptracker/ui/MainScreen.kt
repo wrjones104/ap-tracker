@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -407,18 +408,33 @@ fun MainScreen(
                     onNavigateToGuide = onNavigateToGuide,
                     onShowWhatsNew = onShowWhatsNew,
                     onNavigateToArchived = onNavigateToArchived,
-                    // The sheet lives with the rooms, so the Me tab hands the request
-                    // to the rooms view model and sends the user where the answer is.
-                    onShowAvailableCheeseRooms = {
-                        roomsViewModel.openCheeseSuggestions()
-                        bottomNavController.navigate(BottomNavItem.Rooms.route) {
-                            popUpTo(bottomNavController.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    }
+                    // Opens over the Me tab. Sending someone to Rooms to answer a
+                    // question they asked here is a tab change they did not ask for.
+                    onShowAvailableCheeseRooms = { roomsViewModel.openCheeseSuggestions() }
                 )
             }
+        }
+    }
+
+    // Above the tabs on purpose: both the banner on Rooms and the Cheese card on Me
+    // open this, and neither should move the user to the other tab to see it.
+    val showCheeseSuggestions by roomsViewModel.suggestionsRequested.collectAsState()
+    if (showCheeseSuggestions) {
+        val availableCheeseRooms by roomsViewModel.availableCheeseRooms.collectAsState()
+        val isImportingCheeseRooms by roomsViewModel.isImportingCheeseRooms.collectAsState()
+        ModalBottomSheet(onDismissRequest = { roomsViewModel.consumeSuggestionsRequest() }) {
+            CheeseSuggestionsSheet(
+                available = availableCheeseRooms,
+                isImporting = isImportingCheeseRooms,
+                onAdd = { ids ->
+                    roomsViewModel.consumeSuggestionsRequest()
+                    roomsViewModel.importCheeseRooms(ids)
+                },
+                onDismissRooms = { ids ->
+                    roomsViewModel.consumeSuggestionsRequest()
+                    roomsViewModel.dismissCheeseRooms(ids)
+                }
+            )
         }
     }
 }
