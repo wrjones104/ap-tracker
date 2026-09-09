@@ -22,5 +22,11 @@ data class RoomEntity(
     val is_suspended: Boolean = false,
     @ColumnInfo(name = "status", defaultValue = "'active'")
     val status: String = "active",
-    val web_url: String? = null
+    val web_url: String? = null,
+    @ColumnInfo(name = "cheese_link", defaultValue = "'none'")
+    val cheese_link: String = "none",
+    @ColumnInfo(name = "cheese_tracker_id")
+    val cheese_tracker_id: String? = null,
+    @ColumnInfo(name = "cheese_unlisted", defaultValue = "0")
+    val cheese_unlisted: Boolean = false
 )

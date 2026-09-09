@@ -54,7 +54,7 @@ import com.jones.aptracker.network.CheeseSlotState
 import com.jones.aptracker.network.ConnectionStatus
 import com.jones.aptracker.network.RoomDatapackage
 import com.jones.aptracker.network.TrackMode
-import com.jones.aptracker.network.isWatched
+import com.jones.aptracker.network.readsAsWatched
 import com.jones.aptracker.network.resolveEntityName
 import com.jones.aptracker.network.TrackedSlotDetail
 import com.jones.aptracker.network.UserProfile
@@ -241,7 +241,7 @@ fun SlotDetailScreen(
                         // keeps its own "Watching" chip: that one is not a duplicate of
                         // this, it is what explains why the controls beside it are locked.
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (slot.isWatched) {
+                            if (slot.readsAsWatched(userProfile?.is_cheese_connected == true)) {
                                 Icon(
                                     imageVector = Icons.Filled.Visibility,
                                     contentDescription = WATCHING_DESCRIPTION,

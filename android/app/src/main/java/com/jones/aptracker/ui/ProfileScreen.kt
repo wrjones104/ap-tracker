@@ -33,6 +33,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -55,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -78,12 +80,15 @@ fun ProfileScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToGuide: () -> Unit = {},
     onShowWhatsNew: () -> Unit = {},
-    onNavigateToArchived: () -> Unit
+    onNavigateToArchived: () -> Unit,
+    /** Opens the Cheese suggestions sheet on the Rooms tab, hidden rooms included. */
+    onShowAvailableCheeseRooms: () -> Unit = {}
 ) {
 
 
     val userProfile by userViewModel.userProfile.collectAsState()
-    val isAutoSyncEnabled by userViewModel.isAutoSyncEnabled.collectAsState()
+    val isConnectingCheese by userViewModel.isConnectingCheese.collectAsState()
+    val isSyncingCheese by userViewModel.isSyncingCheese.collectAsState()
 
     val dateFormatPresetKey by userViewModel.dateFormatPreset.collectAsState()
     val dateFormatPreset = remember(dateFormatPresetKey) { DateFormatPreset.fromKey(dateFormatPresetKey) }
@@ -273,12 +278,13 @@ fun ProfileScreen(
 
             CheeseIntegrationCard(
                 isConnected = userProfile?.is_cheese_connected ?: false,
-                isAutoSyncEnabled = isAutoSyncEnabled,
+                isConnecting = isConnectingCheese,
+                isSyncing = isSyncingCheese,
                 defaultPing = userProfile?.cheese_default_ping,
-                onAutoSyncChanged = { userViewModel.setAutoSync(it) },
                 onConnect = { key -> userViewModel.connectCheeseTracker(key) },
                 onSync = { userViewModel.manualSyncCheese() },
                 onDisconnect = { userViewModel.disconnectCheese() },
+                onShowAvailableRooms = onShowAvailableCheeseRooms,
                 onDefaultPingChange = { userViewModel.updateCheeseDefaultPing(it) }
             )
 
@@ -495,16 +501,53 @@ fun CheeseDefaultPingSelector(
 @Composable
 fun CheeseIntegrationCard(
     isConnected: Boolean,
-    isAutoSyncEnabled: Boolean,
+    /** Connecting a key and waiting on the first sync it kicks off. */
+    isConnecting: Boolean,
+    /** A manual sync started from this card. */
+    isSyncing: Boolean,
     defaultPing: String?,
-    onAutoSyncChanged: (Boolean) -> Unit,
     onConnect: (String) -> Unit,
     onSync: () -> Unit,
     onDisconnect: () -> Unit,
+    onShowAvailableRooms: () -> Unit,
     onDefaultPingChange: (String?) -> Unit
 ) {
     var apiKey by remember { mutableStateOf("") }
     var guestDiscordName by remember { mutableStateOf("") }
+    var showDisconnectConfirm by remember { mutableStateOf(false) }
+
+    // Disconnecting is easy to tap by accident and its effects are not obvious
+    // from the button, so it says what does and does not happen first. The
+    // reassuring half matters more than the warning half here: nothing is lost.
+    if (showDisconnectConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDisconnectConfirm = false },
+            title = { Text("Disconnect from Cheese Tracker?") },
+            text = {
+                Text(
+                    "Your rooms, tracked slots and alerts all stay exactly as they " +
+                        "are. The app just stops syncing with Cheese Tracker, and the " +
+                        "Cheese controls disappear until you reconnect.\n\n" +
+                        "Any slots you've claimed on Cheese Tracker stay claimed. " +
+                        "You can release them there if you want to."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDisconnectConfirm = false
+                        onDisconnect()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("Disconnect") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisconnectConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     Card(
         modifier = Modifier
@@ -527,6 +570,24 @@ fun CheeseIntegrationCard(
                     text = "Cheese Tracker",
                     style = MaterialTheme.typography.titleMedium
                 )
+
+                // Connecting takes a while -- the server verifies the key, reads the
+                // dashboard and reconciles every linked room before it is done -- and
+                // with no sign of that the card looked like it had ignored the key.
+                if (isConnecting || isSyncing) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = if (isConnecting) "Connecting..." else "Syncing...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -560,7 +621,7 @@ fun CheeseIntegrationCard(
                     }
 
                     TextButton(
-                        onClick = onDisconnect,
+                        onClick = { showDisconnectConfirm = true },
                         colors = ButtonDefaults.textButtonColors(
                             contentColor = MaterialTheme.colorScheme.error
                         )
@@ -573,30 +634,37 @@ fun CheeseIntegrationCard(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Auto-sync Toggle
+                // The banner on the Rooms tab only appears when there is something
+                // new to offer, so it is no use to someone who hid a room or backed
+                // out of the sheet. This is the way back to all of them, hidden ones
+                // included.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onAutoSyncChanged(!isAutoSyncEnabled) }
+                        // Shut while a sync is running. Both write the same rooms from
+                        // opposite ends, and a list that is mid-change is not an answer.
+                        .alpha(if (isSyncing) 0.5f else 1f)
+                        .clickable(enabled = !isSyncing) { onShowAvailableRooms() }
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Auto-sync",
+                            "Rooms on Cheese Tracker",
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Text(
-                            "Sync when opening the app",
+                            if (isSyncing) "Available once the sync finishes"
+                            else "Add any that aren't in the app yet",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Switch(
-                        checked = isAutoSyncEnabled,
-                        onCheckedChange = onAutoSyncChanged,
-                        modifier = Modifier.padding(start = 16.dp)
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
@@ -614,12 +682,13 @@ fun CheeseIntegrationCard(
 
                 Button(
                     onClick = { onSync() },
+                    enabled = !isSyncing && !isConnecting,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.outlinedButtonColors()
                 ) {
                     Icon(Icons.Default.Refresh, contentDescription = "Sync")
                     Spacer(Modifier.width(8.dp))
-                    Text("Sync Now")
+                    Text(if (isSyncing) "Syncing..." else "Sync Now")
                 }
 
             } else {
@@ -637,8 +706,18 @@ fun CheeseIntegrationCard(
                     label = { Text("API Key") },
                     placeholder = { Text("Paste key from Cheese Tracker") },
                     modifier = Modifier.fillMaxWidth(),
+                    enabled = !isConnecting,
                     singleLine = true
                 )
+
+                if (isConnecting) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Checking your key and syncing your rooms.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -648,9 +727,19 @@ fun CheeseIntegrationCard(
                 ) {
                     Button(
                         onClick = { onConnect(apiKey) },
-                        enabled = apiKey.isNotBlank()
+                        enabled = apiKey.isNotBlank() && !isConnecting
                     ) {
-                        Text("Connect & Sync")
+                        if (isConnecting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Connecting...")
+                        } else {
+                            Text("Connect & Sync")
+                        }
                     }
                 }
             }

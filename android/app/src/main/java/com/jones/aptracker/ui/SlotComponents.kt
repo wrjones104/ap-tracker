@@ -35,7 +35,7 @@ import androidx.compose.ui.unit.dp
 import com.jones.aptracker.data.FinishedResolver
 import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.TrackedSlotDetail
-import com.jones.aptracker.network.isWatched
+import com.jones.aptracker.network.readsAsWatched
 import java.time.Duration
 import java.time.Instant
 
@@ -276,6 +276,8 @@ fun SlotRow(
     slot: TrackedSlotDetail,
     /** Finished under the user's own definition, not merely goaled. */
     isFinished: Boolean,
+    /** Without a Cheese connection there is no Playing/Watching to report. */
+    isCheeseConnected: Boolean,
     onClick: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
@@ -310,10 +312,10 @@ fun SlotRow(
             // under some definitions the first stays visible. Icons carry a
             // contentDescription, so this no longer depends on color alone.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // See [isWatched] for why only Watching is marked, and why the Cheese
-                // state has to be present. The slot detail header and the activity
-                // feed read the same property.
-                if (slot.isWatched) {
+                // See [readsAsWatched] for why only Watching is marked, and why a
+                // disconnected user gets no eye at all. The slot detail header and
+                // the activity feed use the same definition.
+                if (slot.readsAsWatched(isCheeseConnected)) {
                     Icon(
                         imageVector = Icons.Filled.Visibility,
                         contentDescription = WATCHING_DESCRIPTION,

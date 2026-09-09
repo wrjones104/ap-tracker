@@ -147,6 +147,12 @@ def get_current_user(current_user):
             'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False),
             # Slots the last Cheese sync moved from Playing to Watching.
             'cheese_last_sync_demoted': getattr(current_user, 'cheese_last_sync_demoted', 0) or 0,
+            # Linked rooms the last sync could not find on the Cheese dashboard.
+            # Reported, never acted on: the rooms stay put and the app flags them.
+            'cheese_last_sync_unlisted': getattr(current_user, 'cheese_last_sync_unlisted', 0) or 0,
+            # Default for the add-room dialog's "Also create this on Cheese
+            # Tracker" checkbox, not a sync mode.
+            'cheese_publish_new_rooms': getattr(current_user, 'cheese_publish_new_rooms', True),
             'cheese_last_sync': format_iso_z(getattr(current_user, 'cheese_last_sync', None))
         })
     else:
@@ -192,6 +198,12 @@ def get_current_user(current_user):
             'is_syncing_cheese': getattr(current_user, 'is_syncing_cheese', False),
             # Slots the last Cheese sync moved from Playing to Watching.
             'cheese_last_sync_demoted': getattr(current_user, 'cheese_last_sync_demoted', 0) or 0,
+            # Linked rooms the last sync could not find on the Cheese dashboard.
+            # Reported, never acted on: the rooms stay put and the app flags them.
+            'cheese_last_sync_unlisted': getattr(current_user, 'cheese_last_sync_unlisted', 0) or 0,
+            # Default for the add-room dialog's "Also create this on Cheese
+            # Tracker" checkbox, not a sync mode.
+            'cheese_publish_new_rooms': getattr(current_user, 'cheese_publish_new_rooms', True),
             'cheese_last_sync': format_iso_z(getattr(current_user, 'cheese_last_sync', None))
         })
 
@@ -260,6 +272,8 @@ def update_user_preferences(current_user):
                 user.cheese_default_ping = raw.strip().lower()
             else:
                 return jsonify({'error': 'Invalid cheese_default_ping value.'}), 400
+        if 'cheese_publish_new_rooms' in data:
+            setattr(user, 'cheese_publish_new_rooms', bool(data['cheese_publish_new_rooms']))
         session.commit()
         return jsonify({'message': 'Preferences updated successfully'}), 200
     except Exception as e:

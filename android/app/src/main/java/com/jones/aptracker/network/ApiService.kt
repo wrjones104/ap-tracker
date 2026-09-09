@@ -108,6 +108,11 @@ interface ApiService {
     @PUT("users/me/preferences")
     suspend fun updateCheeseDefaultPing(@Body request: UpdateCheesePingRequest): Response<Unit>
 
+    @PUT("users/me/preferences")
+    suspend fun updateCheesePublishNewRooms(
+        @Body request: UpdateCheesePublishRequest
+    ): Response<Unit>
+
     @GET("rooms/{id}/slots/{slot_id}/threshold-groups")
     suspend fun getThresholdGroups(
         @Path("id") roomId: Int,
@@ -234,6 +239,24 @@ interface ApiService {
     @POST("integrations/cheese/sync")
     suspend fun syncCheeseTracker(): CheeseSyncResponse
 
+    @GET("integrations/cheese/available")
+    suspend fun getAvailableCheeseRooms(
+        /** Also return the ones the user has hidden, so a dismissal can be undone. */
+        @Query("include_dismissed") includeDismissed: Boolean = false
+    ): AvailableCheeseRoomsResponse
+
+    @POST("integrations/cheese/available/import")
+    suspend fun importCheeseRooms(@Body request: CheeseTrackerIdsRequest): ImportCheeseRoomsResponse
+
+    @POST("integrations/cheese/available/dismiss")
+    suspend fun dismissCheeseRooms(@Body request: CheeseTrackerIdsRequest): Response<Unit>
+
+    @PUT("rooms/{id}/cheese_link")
+    suspend fun updateRoomCheeseLink(
+        @Path("id") roomId: Int,
+        @Body request: CheeseLinkRequest
+    ): CheeseLinkResponse
+
     @POST("auth/logout")
     suspend fun logout(): Response<Unit>
 
@@ -326,13 +349,56 @@ data class Room(
     val is_archived: Boolean = false,
     val is_suspended: Boolean = false,
     val status: String = "active",
-    val web_url: String? = null
+    val web_url: String? = null,
+    // Cheese state for the room card's chip. `cheese_link` is what the user
+    // asked for, `cheese_tracker_id` is whether the push has landed yet (it
+    // takes a couple of minutes), and `cheese_unlisted` means the linked tracker
+    // has dropped off their Cheese dashboard. None of them removes the room.
+    val cheese_link: String = "none",
+    val cheese_tracker_id: String? = null,
+    val cheese_unlisted: Boolean = false
 )
 
 data class AddRoomRequest(
     val room_url: String,
     val alias: String,
-    val icon_name: String
+    val icon_name: String,
+    /** Whether to also create this room on Cheese Tracker. Null means "use my default". */
+    val sync_to_cheese: Boolean? = null
+)
+
+data class CheeseLinkRequest(val linked: Boolean)
+
+data class CheeseLinkResponse(
+    val message: String? = null,
+    val cheese_link: String = "none",
+    val cheese_tracker_id: String? = null,
+    val pushing: Boolean = false
+)
+
+/** One room on the user's Cheese dashboard that the app does not have. */
+data class AvailableCheeseRoom(
+    val cheese_tracker_id: String,
+    val title: String,
+    val room_link: String? = null,
+    val last_activity: String? = null,
+    /** The user hid this one. Only ever true when the caller asked for them. */
+    val dismissed: Boolean = false
+)
+
+data class AvailableCheeseRoomsResponse(
+    val available: List<AvailableCheeseRoom> = emptyList(),
+    val count: Int = 0
+)
+
+data class CheeseTrackerIdsRequest(val cheese_tracker_ids: List<String>)
+
+data class ImportCheeseRoomsResponse(
+    val message: String? = null,
+    val imported: Int = 0,
+    val slots_synced: Int = 0,
+    val demoted: Int = 0,
+    val failed: List<String> = emptyList()
 )
 
 data class UpdateRoomRequest(
@@ -477,6 +543,10 @@ data class UserProfile(
     val is_syncing_cheese: Boolean = false,
     /** Slots the last Cheese sync moved from Playing to Watching. */
     val cheese_last_sync_demoted: Int = 0,
+    /** Linked rooms the last sync could not find on the Cheese dashboard. Flagged, not removed. */
+    val cheese_last_sync_unlisted: Int = 0,
+    /** Default for the add-room dialog's "Also create this on Cheese Tracker" checkbox. */
+    val cheese_publish_new_rooms: Boolean = true,
     val cheese_last_sync: String? = null
 )
 
@@ -598,20 +668,25 @@ data class CheeseSlotState(
  * badge would sit on every row and tell them nothing. Marking the exception is what
  * carries information.
  *
- * Gated on the mode alone. It used to also require the per-slot Cheese state, on the
- * grounds that without a linked tracker a stored "watch" described nothing -- true
- * while the picker refused to offer the choice before a room was linked, and wrong
- * as soon as it did (#314). A slot set to Watching on a room still waiting to sync
- * is a real choice with a real effect: it is what stops the link catch-up claiming
- * it. Only a user connected to Cheese can reach watch mode at all, so gating on the
- * mode cannot put an eye on a row that has no business carrying one.
+ * The mode alone is not enough. It used to be, on the grounds that only a user
+ * connected to Cheese can reach watch mode -- true, and irrelevant the moment they
+ * disconnect: the stored modes stay, the picker stops offering the choice, and the
+ * eyes sat there describing a service the user had just left. So connectedness is a
+ * parameter rather than an assumption, and disconnecting takes the eyes with it
+ * without touching what is stored. Reconnecting brings back the real ones.
  *
- * One property rather than the condition repeated per screen -- the rooms list, the
+ * Note it does *not* require the per-slot Cheese state. That was tried and was wrong
+ * as soon as the picker offered Watching before a room was linked (#314): a slot set
+ * to Watching on a room still waiting to sync is a real choice with a real effect, as
+ * it is what stops the link catch-up claiming it.
+ *
+ * One definition rather than the condition repeated per screen -- the rooms list, the
  * slot detail header and the activity feed all have to agree on what "watched" means,
- * and they drifted apart the moment each spelled it out for itself.
+ * and they drifted apart the moment each spelled it out for itself. A function rather
+ * than a property so no call site can quietly forget the connectedness half.
  */
-val TrackedSlotDetail.isWatched: Boolean
-    get() = track_mode == TrackMode.WATCH
+fun TrackedSlotDetail.readsAsWatched(isCheeseConnected: Boolean): Boolean =
+    isCheeseConnected && track_mode == TrackMode.WATCH
 
 data class UpdateCheeseSlotResponse(
     val message: String? = null,
@@ -620,6 +695,10 @@ data class UpdateCheeseSlotResponse(
 
 data class UpdateCheesePingRequest(
     val cheese_default_ping: String?
+)
+
+data class UpdateCheesePublishRequest(
+    val cheese_publish_new_rooms: Boolean
 )
 
 data class HintHistoryResponse(

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -200,9 +201,14 @@ fun MainScreen(
     if (showAddRoomDialog) {
         AddRoomDialog(
             isAdding = isAddingRoom,
+            isCheeseConnected = userProfile?.is_cheese_connected == true,
+            // Ticked by default, always. The switch that used to seed this was one
+            // more thing to read on the Me tab for a decision the checkbox already
+            // asks per room, which is where it belongs.
+            defaultSyncToCheese = true,
             onDismiss = { showAddRoomDialog = false },
-            onAdd = { url, alias, icon ->
-                roomsViewModel.addRoom(url, alias, icon) {
+            onAdd = { url, alias, icon, syncToCheese ->
+                roomsViewModel.addRoom(url, alias, icon, syncToCheese) {
                     newRoomAliasToFind = alias
                     showAddRoomDialog = false
                 }
@@ -306,7 +312,7 @@ fun MainScreen(
                                     .size(24.dp)
                                     .then(if (isSyncingCheese) Modifier.rotate(angle) else Modifier)
                                     .clickable(enabled = !isSyncingCheese) {
-                                        roomsViewModel.refreshAll(isCheeseConnected = true, forceCheeseSync = true)
+                                        roomsViewModel.refreshAll(isCheeseConnected = true)
                                     }
                                     .padding(2.dp)
                             )
@@ -401,11 +407,40 @@ fun MainScreen(
                     onNavigateToSettings = onNavigateToSettings,
                     onNavigateToGuide = onNavigateToGuide,
                     onShowWhatsNew = onShowWhatsNew,
-                    onNavigateToArchived = onNavigateToArchived
-
-
+                    onNavigateToArchived = onNavigateToArchived,
+                    // Opens over the Me tab. Sending someone to Rooms to answer a
+                    // question they asked here is a tab change they did not ask for.
+                    onShowAvailableCheeseRooms = { roomsViewModel.openCheeseSuggestions() }
                 )
             }
+        }
+    }
+
+    // Above the tabs on purpose: both the banner on Rooms and the Cheese card on Me
+    // open this, and neither should move the user to the other tab to see it.
+    val showCheeseSuggestions by roomsViewModel.suggestionsRequested.collectAsState()
+    if (showCheeseSuggestions) {
+        val sheetRooms by roomsViewModel.sheetRooms.collectAsState()
+        val isLoadingSuggestions by roomsViewModel.isLoadingSuggestions.collectAsState()
+        val isImportingCheeseRooms by roomsViewModel.isImportingCheeseRooms.collectAsState()
+        ModalBottomSheet(
+            onDismissRequest = {
+                // An import in flight owns the sheet until it answers. Swiping it away
+                // mid-import is how somebody ends up asking for the same rooms twice.
+                if (!isImportingCheeseRooms) roomsViewModel.consumeSuggestionsRequest()
+            }
+        ) {
+            CheeseSuggestionsSheet(
+                available = sheetRooms,
+                isLoading = isLoadingSuggestions,
+                isImporting = isImportingCheeseRooms,
+                // Both of these close the sheet themselves, once the work is done.
+                onAdd = { ids -> roomsViewModel.importCheeseRooms(ids) },
+                onDismissRooms = { ids ->
+                    roomsViewModel.consumeSuggestionsRequest()
+                    roomsViewModel.dismissCheeseRooms(ids)
+                }
+            )
         }
     }
 }

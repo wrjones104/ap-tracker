@@ -10,13 +10,14 @@ import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.FinishedDefinition
 import com.jones.aptracker.data.FinishedDefinitionStore
 import com.jones.aptracker.data.FinishedResolver
+import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.data.ShowFinishedPreference
 import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.diagnostics.CrashReporter
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
-import com.jones.aptracker.network.isWatched
+import com.jones.aptracker.network.readsAsWatched
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.HistorySyncManager
 import com.jones.aptracker.repository.SyncProgressState
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -58,6 +60,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     // SharedPreferences for local UI settings
     private val prefs = application.getSharedPreferences("ap_tracker_prefs", Context.MODE_PRIVATE)
+
+    // Whether to mark watched slots in the feed at all. Disconnecting from Cheese
+    // leaves the stored modes in place, so without this the eyes outlive the
+    // connection they describe.
+    private val settingsManager = SettingsManager(application)
 
     init {
         ShowFinishedPreference.ensureLoaded(application)
@@ -557,6 +564,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 // --- STEP 1: Metadata & Room Setup (Fast) ---
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
+                val isCheeseConnected = settingsManager.isCheeseConnected.first()
 
                 val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
                 val liveIcons = mutableMapOf<Int, String>()
@@ -601,7 +609,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                             hasAllChecks = slot.has_all_checks
                         )
                         slotDefinitions[room.room_db_id to slot.slot_id] = slot.finished_definition
-                        if (slot.isWatched) {
+                        if (slot.readsAsWatched(isCheeseConnected)) {
                             watchedKeys.add(room.room_db_id to slot.player_name)
                         }
                     }

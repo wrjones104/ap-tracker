@@ -350,3 +350,19 @@ val MIGRATION_24_25 = object : Migration(24, 25) {
         """.trimIndent())
     }
 }
+
+/**
+ * Adds the per-room Cheese Tracker state the room card shows.
+ *
+ * `cheese_link` is what the user asked for ('none' or 'linked'), `cheese_tracker_id`
+ * is whether the push to Cheese has actually landed yet, and `cheese_unlisted` marks a
+ * linked room that has dropped off their Cheese dashboard. Defaults match a room that
+ * has nothing to do with Cheese, which is what the server sends for one.
+ */
+val MIGRATION_25_26 = object : Migration(25, 26) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE rooms ADD COLUMN cheese_link TEXT NOT NULL DEFAULT 'none'")
+        db.execSQL("ALTER TABLE rooms ADD COLUMN cheese_tracker_id TEXT")
+        db.execSQL("ALTER TABLE rooms ADD COLUMN cheese_unlisted INTEGER NOT NULL DEFAULT 0")
+    }
+}

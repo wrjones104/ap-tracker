@@ -3,6 +3,7 @@ package com.jones.aptracker.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
@@ -54,12 +55,14 @@ import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -79,6 +82,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -86,6 +90,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -101,6 +106,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.jones.aptracker.R
+import com.jones.aptracker.network.AvailableCheeseRoom
 import com.jones.aptracker.network.Room
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
@@ -127,6 +133,9 @@ fun RoomsScreen(
 ) {
     val rooms by roomsViewModel.rooms.collectAsState()
     val isLoading by roomsViewModel.isLoading.collectAsState()
+    val isCheeseConnected by roomsViewModel.isCheeseConnected.collectAsState()
+    val availableCheeseRooms by roomsViewModel.availableCheeseRooms.collectAsState()
+    val isSyncingCheese by roomsViewModel.isSyncingCheese.collectAsState()
     val errorMessage by roomsViewModel.errorMessage.collectAsState()
     val slotErrorMessage by userViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -152,6 +161,7 @@ fun RoomsScreen(
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             roomsViewModel.fetchRooms()
+            roomsViewModel.fetchAvailableCheeseRooms()
             userViewModel.fetchUserProfile()
             val now = System.currentTimeMillis()
             if (now - lastSlotFetch > SLOT_FETCH_COOLDOWN_MS) {
@@ -363,6 +373,27 @@ fun RoomsScreen(
                             textAlign = TextAlign.Center
                         )
                     }
+
+                    // Rooms waiting on Cheese are offered above the list rather than
+                    // appearing in it unannounced. Deliberately not a list item: every
+                    // item in the list below is a room, one to one, and the reorder
+                    // math depends on that.
+                    // Hidden ones ride along in the same list when the sheet was
+                    // opened from the Me tab. They are not news, so they do not put
+                    // a banner back on screen.
+                    val offered = availableCheeseRooms.count { !it.dismissed }
+                    if (offered > 0 && !isSearching) {
+                        CheeseSuggestionsBanner(
+                            count = offered,
+                            // Shut while a sync is running. The two write the same
+                            // rooms from opposite ends, and the sheet would be
+                            // answering with a list that is mid-change.
+                            enabled = !isSyncingCheese,
+                            // What is new, not what was hidden. The Me tab is the
+                            // door to the hidden ones.
+                            onClick = { roomsViewModel.openCheeseSuggestions(includeDismissed = false) }
+                        )
+                    }
                 }
 
                 // weight rather than fillMaxSize: this takes whatever the pinned chrome
@@ -486,6 +517,7 @@ fun RoomsScreen(
                                 RoomCard(
                                     room = room,
                                     group = slotGroupsByRoomId[room.id],
+                                    isCheeseConnected = isCheeseConnected,
                                     // Searching implies you want to see what matched, so a
                                     // matching room opens regardless of its saved state.
                                     //
@@ -524,6 +556,7 @@ fun RoomsScreen(
             ModalBottomSheet(onDismissRequest = { roomForOptions = null }) {
                 RoomOptionsSheet(
                     room = roomForOptions!!,
+                    isCheeseConnected = isCheeseConnected,
                     onDismiss = { roomForOptions = null },
                     onViewActivity = { r ->
                         roomForOptions = null
@@ -548,6 +581,10 @@ fun RoomsScreen(
                     onRevive = { r ->
                         roomForOptions = null
                         roomToRevive = r
+                    },
+                    onCheeseLinkChange = { r, linked ->
+                        roomForOptions = null
+                        roomsViewModel.setRoomCheeseLink(r.id, linked)
                     }
                 )
             }
@@ -721,6 +758,48 @@ private fun HeroBanner(isWelcome: Boolean, metrics: LayoutMetrics) {
 }
 
 /**
+ * Says what one room's relationship with Cheese Tracker is, without words.
+ *
+ * A cheese for a room that is mirrored, a cheese with a spinner while the push
+ * that creates it is still in flight, and a faded cheese for one that is mirrored
+ * but has left the user's Cheese dashboard. An app-only room gets nothing, which
+ * is the quiet default it should be.
+ *
+ * The three used to be labelled, on a card that already carries a host, two slot
+ * counts and a progress bar. The legend lives in Guide & FAQ instead, where it is
+ * read once rather than on every row forever.
+ */
+@Composable
+private fun CheeseRoomIndicator(room: Room, isCheeseConnected: Boolean) {
+    // Disconnecting leaves every room's link state exactly as it was, so that
+    // reconnecting restores it. What it must not leave behind is a mark that
+    // reports a service the user has left.
+    if (!isCheeseConnected || room.cheese_link != "linked") return
+
+    val isPending = room.cheese_tracker_id == null
+
+    Spacer(Modifier.width(6.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "\uD83E\uDDC0",
+            style = MaterialTheme.typography.labelMedium,
+            // A room that has left the dashboard is still mirrored, so it keeps the
+            // cheese; it is faded because there is nothing on the other end of it
+            // any more.
+            modifier = Modifier.alpha(if (room.cheese_unlisted) 0.4f else 1f)
+        )
+        if (isPending) {
+            Spacer(Modifier.width(4.dp))
+            CircularProgressIndicator(
+                modifier = Modifier.size(10.dp),
+                strokeWidth = 1.5.dp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
  * One room, and — when expanded — the slots it tracks.
  *
  * This card is the whole of the old Rooms and Slots tabs in one place. It exists because
@@ -739,6 +818,8 @@ private fun RoomCard(
     room: Room,
     /** Null when the room has no tracked slots at all, or none survived the search. */
     group: RoomSlotGroup?,
+    /** Gates every Cheese affordance on the card: the chip and the watching eyes. */
+    isCheeseConnected: Boolean,
     isExpanded: Boolean,
     isReorderEnabled: Boolean,
     isDragging: Boolean,
@@ -823,11 +904,17 @@ private fun RoomCard(
                         }
                     }
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = room.host ?: "Connecting...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = room.host ?: "Connecting...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        // Whether a room syncs to Cheese used to be invisible,
+                        // which is part of why rooms vanishing from Cheese felt
+                        // arbitrary (#323). No cheese means the room is app-only.
+                        CheeseRoomIndicator(room, isCheeseConnected)
+                    }
                     // Both slot counts on one line. They were a line each plus a bar on
                     // a third, which is three lines to say two numbers -- and they are
                     // closely enough related ("how much of the room am I watching" and
@@ -917,6 +1004,7 @@ private fun RoomCard(
 
                         visibleSlots.forEach { slot ->
                             SlotRow(
+                                isCheeseConnected = isCheeseConnected,
                                 slot = slot,
                                 isFinished = finishedResolver.isFinished(
                                     roomDbId = room.id,
@@ -954,17 +1042,197 @@ private fun RoomCard(
     }
 }
 
+/**
+ * "There are rooms on your Cheese dashboard the app doesn't have."
+ *
+ * An invitation, not an import. Rooms used to appear in the list unannounced,
+ * including ones somebody else had added the user to; now they wait here until
+ * someone says yes. See #323.
+ */
+@Composable
+private fun CheeseSuggestionsBanner(count: Int, enabled: Boolean = true, onClick: () -> Unit) {
+    val roomWord = if (count == 1) "room" else "rooms"
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .alpha(if (enabled) 1f else 0.5f)
+            .clickable(enabled = enabled, onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("\uD83E\uDDC0", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "$count $roomWord available from Cheese Tracker",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Text(
+                    "Tap to choose which to add",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+    }
+}
+
+/**
+ * The picker behind the banner: tick the rooms to add, or dismiss the lot.
+ *
+ * New rooms start ticked, so the common case ("yes, these are mine") is one tap,
+ * while the room somebody else added the user to can be unticked instead of
+ * having to be dealt with after it lands.
+ *
+ * Rooms the user already said no to appear only when the sheet was opened from
+ * the Me tab, and they start unticked: this is the undo, not a second helping of
+ * the same question.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CheeseSuggestionsSheet(
+    available: List<AvailableCheeseRoom>,
+    /** The list is still on its way from Cheese Tracker. */
+    isLoading: Boolean,
+    isImporting: Boolean,
+    onAdd: (List<String>) -> Unit,
+    onDismissRooms: (List<String>) -> Unit
+) {
+    // Keyed on which rooms are listed rather than on the list object, so a refetch
+    // that returns the same rooms leaves the user's ticks alone.
+    val selected = remember(available.map { it.cheese_tracker_id }) {
+        mutableStateMapOf<String, Boolean>().apply {
+            available.forEach { put(it.cheese_tracker_id, !it.dismissed) }
+        }
+    }
+    val chosen = available.map { it.cheese_tracker_id }.filter { selected[it] == true }
+    val stillOffered = available.filter { !it.dismissed }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .navigationBarsPadding()
+            .imePadding()
+    ) {
+        Text("Rooms on Cheese Tracker", style = MaterialTheme.typography.titleLarge)
+        Text(
+            "These are on your Cheese dashboard but not in the app.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+        )
+        HorizontalDivider()
+
+        if (isLoading) {
+            // Said out loud rather than shown as an empty list: "nothing to add" is a
+            // real answer and must not be the one on screen while we are still asking.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "Checking Cheese Tracker...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else if (available.isEmpty()) {
+            Text(
+                "Nothing to add. Every room on your Cheese dashboard is already here.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 24.dp)
+            )
+        }
+
+        available.forEach { room ->
+            val isChecked = selected[room.cheese_tracker_id] == true
+            ListItem(
+                headlineContent = { Text(room.title) },
+                supportingContent = {
+                    Text(
+                        if (room.dismissed) "Hidden earlier"
+                        else room.room_link ?: "On Cheese Tracker"
+                    )
+                },
+                leadingContent = {
+                    Checkbox(
+                        checked = isChecked,
+                        onCheckedChange = { selected[room.cheese_tracker_id] = it },
+                        enabled = !isImporting
+                    )
+                },
+                modifier = Modifier.clickable(enabled = !isImporting) {
+                    selected[room.cheese_tracker_id] = !isChecked
+                }
+            )
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isImporting) {
+                // Each room is a call to Cheese Tracker that can take ten seconds to
+                // give up. Saying so is the difference between waiting and retrying.
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Adding...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.weight(1f))
+            }
+            // Only ever hides what is currently being offered. Something already
+            // hidden is here to be undone, and re-hiding it is what closing does.
+            if (stillOffered.isNotEmpty()) {
+                TextButton(
+                    enabled = !isImporting,
+                    onClick = { onDismissRooms(stillOffered.map { it.cheese_tracker_id }) }
+                ) { Text("Not these") }
+                Spacer(Modifier.width(8.dp))
+            }
+            Button(
+                enabled = chosen.isNotEmpty() && !isImporting,
+                onClick = { onAdd(chosen) }
+            ) { Text(if (chosen.size == 1) "Add room" else "Add ${chosen.size} rooms") }
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomOptionsSheet(
     room: Room,
+    isCheeseConnected: Boolean,
     onDismiss: () -> Unit,
     onViewActivity: (Room) -> Unit,
     onManageSlots: (Room) -> Unit,
     onEdit: (Room) -> Unit,
     onArchive: (Room) -> Unit,
     onDelete: (Room) -> Unit,
-    onRevive: (Room) -> Unit
+    onRevive: (Room) -> Unit,
+    onCheeseLinkChange: (Room, Boolean) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp).navigationBarsPadding().imePadding()) {
         Text(room.alias, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 16.dp))
@@ -1006,6 +1274,37 @@ fun RoomOptionsSheet(
             leadingContent = { Icon(Icons.Default.Inventory2, null, tint = MaterialTheme.colorScheme.secondary) },
             modifier = Modifier.clickable { onArchive(room) }
         )
+        // Syncing is per room and reversible either way. Unlinking is local: it
+        // leaves the Cheese tracker and any slot claims alone, and never removes
+        // the room from the app.
+        if (isCheeseConnected) {
+            val isLinked = room.cheese_link == "linked"
+            ListItem(
+                headlineContent = {
+                    Text(if (isLinked) "Unlink from Cheese" else "Sync to Cheese Tracker")
+                },
+                supportingContent = {
+                    Text(
+                        when {
+                            isLinked && room.cheese_unlisted ->
+                                "This room is no longer on your Cheese dashboard"
+                            isLinked ->
+                                "Stops syncing this room. Your slot claims stay as they are."
+                            else ->
+                                "Creates this room on Cheese Tracker"
+                        }
+                    )
+                },
+                leadingContent = {
+                    Icon(
+                        if (isLinked) Icons.Default.LinkOff else Icons.Default.Link,
+                        null,
+                        tint = MaterialTheme.colorScheme.secondary
+                    )
+                },
+                modifier = Modifier.clickable { onCheeseLinkChange(room, !isLinked) }
+            )
+        }
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         ListItem(
             headlineContent = { Text("Delete Room") },
@@ -1020,11 +1319,21 @@ fun RoomOptionsSheet(
 // --- Dialogs ---
 
 @Composable
-fun AddRoomDialog(isAdding: Boolean, onDismiss: () -> Unit, onAdd: (String, String, String) -> Unit) {
+fun AddRoomDialog(
+    isAdding: Boolean,
+    isCheeseConnected: Boolean,
+    defaultSyncToCheese: Boolean,
+    onDismiss: () -> Unit,
+    /** url, alias, icon, and whether to also create the room on Cheese Tracker. */
+    onAdd: (String, String, String, Boolean) -> Unit
+) {
     var roomUrl by remember { mutableStateOf("") }
     var alias by remember { mutableStateOf("") }
     var selectedIconName by remember { mutableStateOf("default_icon") }
     var showUrlHelp by remember { mutableStateOf(false) }
+    // Keyed on the default: the profile can land after the dialog opens, and an
+    // unkeyed remember would leave the box showing the wrong answer.
+    var syncToCheese by remember(defaultSyncToCheese) { mutableStateOf(defaultSyncToCheese) }
 
     // --- VALIDATION LOGIC ---
     // Detects "domain:port" format common in game clients (e.g., archipelago.gg:12345)
@@ -1097,6 +1406,30 @@ fun AddRoomDialog(isAdding: Boolean, onDismiss: () -> Unit, onAdd: (String, Stri
                 Text("Select Icon", style = MaterialTheme.typography.labelMedium)
                 IconPicker(selected = selectedIconName, onSelect = { if (!isAdding) selectedIconName = it })
 
+                // Publishing creates a real tracker on Cheese Tracker under the
+                // user's account, which is not something to do on their behalf
+                // without asking. Off means the room stays private to the app.
+                if (isCheeseConnected) {
+                    Spacer(Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !isAdding) { syncToCheese = !syncToCheese },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = syncToCheese,
+                            onCheckedChange = { if (!isAdding) syncToCheese = it },
+                            enabled = !isAdding
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "Sync room to Cheese",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+
                 if (isAdding) {
                     Spacer(Modifier.height(16.dp))
                     Row(
@@ -1118,7 +1451,7 @@ fun AddRoomDialog(isAdding: Boolean, onDismiss: () -> Unit, onAdd: (String, Stri
         confirmButton = {
             TextButton(
                 enabled = canAdd,
-                onClick = { onAdd(roomUrl, alias, selectedIconName) }
+                onClick = { onAdd(roomUrl, alias, selectedIconName, syncToCheese) }
             ) { Text("Add") }
         },
         dismissButton = {

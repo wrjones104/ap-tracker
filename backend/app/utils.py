@@ -479,3 +479,34 @@ def normalize_track_mode(value):
     if isinstance(value, str) and value in VALID_TRACK_MODES:
         return value
     return DEFAULT_TRACK_MODE
+
+
+# --- Cheese link state ------------------------------------------------------
+#
+# Which rooms are in a user's library is the app's decision, not Cheese
+# Tracker's. `UserRoomSubscription.cheese_link` records what the user asked us
+# to do with one room, and it is the only thing that authorises a write to
+# Cheese on that room's behalf:
+#
+#   CHEESE_LINK_NONE   -- private to the app. Never pushed to Cheese, never
+#                         reconciled against a tracker, never touched by a sync.
+#   CHEESE_LINK_LINKED -- mirrored to Cheese. Pushed when it has no tracker yet,
+#                         and its slot claims are reconciled on every sync.
+#
+# Nothing here ever removes a room. A linked room that stops appearing on the
+# user's Cheese dashboard is stamped with `cheese_unlisted_at` and shown as such
+# in the app; deciding what to do about it belongs to the user. See #323.
+
+CHEESE_LINK_NONE = 'none'
+CHEESE_LINK_LINKED = 'linked'
+
+VALID_CHEESE_LINKS = {CHEESE_LINK_NONE, CHEESE_LINK_LINKED}
+
+DEFAULT_CHEESE_LINK = CHEESE_LINK_NONE
+
+
+def normalize_cheese_link(value):
+    """Coerces any stored/wire value to a valid link state, defaulting to 'none'."""
+    if isinstance(value, str) and value in VALID_CHEESE_LINKS:
+        return value
+    return DEFAULT_CHEESE_LINK

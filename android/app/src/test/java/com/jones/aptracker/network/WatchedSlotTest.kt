@@ -17,8 +17,13 @@ import org.junit.Test
  * refused to offer the choice before a room was linked, and stopped holding the
  * moment it did (#314): a slot set to Watching on a room still waiting to sync is
  * a real choice with a real effect, since it is what stops the link catch-up
- * claiming it. Only a Cheese-connected user can reach watch mode at all, so the
- * mode alone cannot light up a row that has no business carrying an eye.
+ * claiming it.
+ *
+ * Connectedness is the other half, and it is a parameter rather than an assumption.
+ * Only a Cheese-connected user can reach watch mode, but the stored mode outlives
+ * the connection: disconnecting used to leave eyes on screen describing a service
+ * the user had just left. The modes stay, the eyes go, and reconnecting brings them
+ * back.
  */
 class WatchedSlotTest {
 
@@ -43,12 +48,12 @@ class WatchedSlotTest {
 
     @Test
     fun `watching a slot on a Cheese-linked room is marked`() {
-        assertTrue(slot(TrackMode.WATCH, cheeseState()).isWatched)
+        assertTrue(slot(TrackMode.WATCH, cheeseState()).readsAsWatched(isCheeseConnected = true))
     }
 
     @Test
     fun `playing is never marked`() {
-        assertFalse(slot(TrackMode.PLAY, cheeseState()).isWatched)
+        assertFalse(slot(TrackMode.PLAY, cheeseState()).readsAsWatched(isCheeseConnected = true))
     }
 
     @Test
@@ -57,7 +62,7 @@ class WatchedSlotTest {
         // Watching on a room that has not synced yet, and that choice is what keeps
         // the link catch-up from claiming the slot -- so the eye has something real
         // to explain well before any Cheese state arrives.
-        assertTrue(slot(TrackMode.WATCH, null).isWatched)
+        assertTrue(slot(TrackMode.WATCH, null).readsAsWatched(isCheeseConnected = true))
     }
 
     @Test
@@ -78,6 +83,15 @@ class WatchedSlotTest {
             suppress_connected = null,
             cheese = cheeseState()
         )
-        assertFalse(defaulted.isWatched)
+        assertFalse(defaulted.readsAsWatched(isCheeseConnected = true))
+    }
+
+    @Test
+    fun `a disconnected account carries no eyes`() {
+        // The mode survives a disconnect on purpose, so that reconnecting restores what
+        // the user chose. The eye must not: it describes a service the app no longer has
+        // a key for.
+        assertFalse(slot(TrackMode.WATCH, cheeseState()).readsAsWatched(isCheeseConnected = false))
+        assertFalse(slot(TrackMode.WATCH, null).readsAsWatched(isCheeseConnected = false))
     }
 }
