@@ -135,6 +135,7 @@ fun RoomsScreen(
     val isLoading by roomsViewModel.isLoading.collectAsState()
     val isCheeseConnected by roomsViewModel.isCheeseConnected.collectAsState()
     val availableCheeseRooms by roomsViewModel.availableCheeseRooms.collectAsState()
+    val isSyncingCheese by roomsViewModel.isSyncingCheese.collectAsState()
     val errorMessage by roomsViewModel.errorMessage.collectAsState()
     val slotErrorMessage by userViewModel.errorMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -384,6 +385,10 @@ fun RoomsScreen(
                     if (offered > 0 && !isSearching) {
                         CheeseSuggestionsBanner(
                             count = offered,
+                            // Shut while a sync is running. The two write the same
+                            // rooms from opposite ends, and the sheet would be
+                            // answering with a list that is mid-change.
+                            enabled = !isSyncingCheese,
                             // What is new, not what was hidden. The Me tab is the
                             // door to the hidden ones.
                             onClick = { roomsViewModel.openCheeseSuggestions(includeDismissed = false) }
@@ -1045,13 +1050,14 @@ private fun RoomCard(
  * someone says yes. See #323.
  */
 @Composable
-private fun CheeseSuggestionsBanner(count: Int, onClick: () -> Unit) {
+private fun CheeseSuggestionsBanner(count: Int, enabled: Boolean = true, onClick: () -> Unit) {
     val roomWord = if (count == 1) "room" else "rooms"
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .clickable(onClick = onClick),
+            .alpha(if (enabled) 1f else 0.5f)
+            .clickable(enabled = enabled, onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer
         )
@@ -1098,11 +1104,15 @@ private fun CheeseSuggestionsBanner(count: Int, onClick: () -> Unit) {
 @Composable
 fun CheeseSuggestionsSheet(
     available: List<AvailableCheeseRoom>,
+    /** The list is still on its way from Cheese Tracker. */
+    isLoading: Boolean,
     isImporting: Boolean,
     onAdd: (List<String>) -> Unit,
     onDismissRooms: (List<String>) -> Unit
 ) {
-    val selected = remember(available) {
+    // Keyed on which rooms are listed rather than on the list object, so a refetch
+    // that returns the same rooms leaves the user's ticks alone.
+    val selected = remember(available.map { it.cheese_tracker_id }) {
         mutableStateMapOf<String, Boolean>().apply {
             available.forEach { put(it.cheese_tracker_id, !it.dismissed) }
         }
@@ -1126,7 +1136,23 @@ fun CheeseSuggestionsSheet(
         )
         HorizontalDivider()
 
-        if (available.isEmpty()) {
+        if (isLoading) {
+            // Said out loud rather than shown as an empty list: "nothing to add" is a
+            // real answer and must not be the one on screen while we are still asking.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "Checking Cheese Tracker...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else if (available.isEmpty()) {
             Text(
                 "Nothing to add. Every room on your Cheese dashboard is already here.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1164,6 +1190,18 @@ fun CheeseSuggestionsSheet(
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (isImporting) {
+                // Each room is a call to Cheese Tracker that can take ten seconds to
+                // give up. Saying so is the difference between waiting and retrying.
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Adding...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.weight(1f))
+            }
             // Only ever hides what is currently being offered. Something already
             // hidden is here to be undone, and re-hiding it is what closing does.
             if (stillOffered.isNotEmpty()) {

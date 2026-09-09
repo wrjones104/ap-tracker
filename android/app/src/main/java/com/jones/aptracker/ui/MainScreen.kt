@@ -420,16 +420,22 @@ fun MainScreen(
     // open this, and neither should move the user to the other tab to see it.
     val showCheeseSuggestions by roomsViewModel.suggestionsRequested.collectAsState()
     if (showCheeseSuggestions) {
-        val availableCheeseRooms by roomsViewModel.availableCheeseRooms.collectAsState()
+        val sheetRooms by roomsViewModel.sheetRooms.collectAsState()
+        val isLoadingSuggestions by roomsViewModel.isLoadingSuggestions.collectAsState()
         val isImportingCheeseRooms by roomsViewModel.isImportingCheeseRooms.collectAsState()
-        ModalBottomSheet(onDismissRequest = { roomsViewModel.consumeSuggestionsRequest() }) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                // An import in flight owns the sheet until it answers. Swiping it away
+                // mid-import is how somebody ends up asking for the same rooms twice.
+                if (!isImportingCheeseRooms) roomsViewModel.consumeSuggestionsRequest()
+            }
+        ) {
             CheeseSuggestionsSheet(
-                available = availableCheeseRooms,
+                available = sheetRooms,
+                isLoading = isLoadingSuggestions,
                 isImporting = isImportingCheeseRooms,
-                onAdd = { ids ->
-                    roomsViewModel.consumeSuggestionsRequest()
-                    roomsViewModel.importCheeseRooms(ids)
-                },
+                // Both of these close the sheet themselves, once the work is done.
+                onAdd = { ids -> roomsViewModel.importCheeseRooms(ids) },
                 onDismissRooms = { ids ->
                     roomsViewModel.consumeSuggestionsRequest()
                     roomsViewModel.dismissCheeseRooms(ids)

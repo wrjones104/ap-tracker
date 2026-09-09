@@ -62,6 +62,21 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private val _suggestionsRequested = MutableStateFlow(false)
     val suggestionsRequested: StateFlow<Boolean> = _suggestionsRequested.asStateFlow()
 
+    /**
+     * What the open sheet is showing, which is deliberately not [availableCheeseRooms].
+     *
+     * That one is the banner's, and it is rewritten by everything that touches Cheese:
+     * a sync finishing, an import, a dismissal. Sharing it meant a background sync
+     * could swap the list out from under someone reading it, and because the tick
+     * boxes are keyed to the list, their ticks went with it -- so Add sent whatever
+     * survived the swap, which was sometimes nothing.
+     */
+    private val _sheetRooms = MutableStateFlow<List<AvailableCheeseRoom>>(emptyList())
+    val sheetRooms: StateFlow<List<AvailableCheeseRoom>> = _sheetRooms.asStateFlow()
+
+    private val _isLoadingSuggestions = MutableStateFlow(false)
+    val isLoadingSuggestions: StateFlow<Boolean> = _isLoadingSuggestions.asStateFlow()
+
     val isCheeseConnected = settingsManager.isCheeseConnected.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -380,7 +395,14 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Accept suggestions: the only path that puts a Cheese room in the library. */
+    /**
+     * Accept suggestions: the only path that puts a Cheese room in the library.
+     *
+     * The sheet stays up for the duration on purpose. Each room costs a call to
+     * Cheese Tracker that can take ten seconds to time out, and closing on the tap
+     * left that running behind an interface with nothing to show for it -- so the
+     * rooms did not appear, and the obvious response was to go and ask again.
+     */
     fun importCheeseRooms(trackerIds: List<String>) {
         if (trackerIds.isEmpty()) return
         viewModelScope.launch {
@@ -389,16 +411,29 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 val result = RetrofitClient.instance.importCheeseRooms(
                     CheeseTrackerIdsRequest(trackerIds)
                 )
+                consumeSuggestionsRequest()
                 fetchRooms(force = true)
                 fetchAvailableCheeseRooms()
+
+                // A room Cheese would not hand over is reported, not swallowed. The
+                // count alone read as success when half the request had failed.
+                val failed = result.failed.size
                 val roomWord = if (result.imported == 1) "room" else "rooms"
+                val message = if (failed > 0) {
+                    val failedWord = if (failed == 1) "room" else "rooms"
+                    "Added ${result.imported} $roomWord. Cheese Tracker didn't answer " +
+                        "for $failed more $failedWord -- try those again."
+                } else {
+                    "Added ${result.imported} $roomWord from Cheese Tracker."
+                }
                 Toast.makeText(
                     getApplication(),
-                    "Added ${result.imported} $roomWord from Cheese Tracker.",
-                    Toast.LENGTH_SHORT
+                    message,
+                    if (failed > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
                 ).show()
             } catch (e: Exception) {
                 e.printStackTrace()
+                consumeSuggestionsRequest()
                 _errorMessage.value = "Couldn't add those rooms. Check connection."
             } finally {
                 _isImportingCheeseRooms.value = false
@@ -414,12 +449,25 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
      * who hid a room or backed out of the sheet, so it asks for everything.
      */
     fun openCheeseSuggestions(includeDismissed: Boolean = true) {
-        fetchAvailableCheeseRooms(includeDismissed = includeDismissed)
         _suggestionsRequested.value = true
+        _isLoadingSuggestions.value = true
+        viewModelScope.launch {
+            try {
+                _sheetRooms.value = RetrofitClient.instance
+                    .getAvailableCheeseRooms(includeDismissed).available
+            } catch (e: Exception) {
+                _sheetRooms.value = emptyList()
+                _errorMessage.value = "Couldn't read your Cheese dashboard."
+                Log.d("RoomsViewModel", "Could not read Cheese suggestions: ${e.message}")
+            } finally {
+                _isLoadingSuggestions.value = false
+            }
+        }
     }
 
     fun consumeSuggestionsRequest() {
         _suggestionsRequested.value = false
+        _sheetRooms.value = emptyList()
     }
 
     /** Stop offering these. Reversible: adding one later clears the dismissal. */

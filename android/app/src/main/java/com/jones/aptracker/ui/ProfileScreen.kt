@@ -56,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -640,7 +641,10 @@ fun CheeseIntegrationCard(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onShowAvailableRooms() }
+                        // Shut while a sync is running. Both write the same rooms from
+                        // opposite ends, and a list that is mid-change is not an answer.
+                        .alpha(if (isSyncing) 0.5f else 1f)
+                        .clickable(enabled = !isSyncing) { onShowAvailableRooms() }
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -651,7 +655,8 @@ fun CheeseIntegrationCard(
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Text(
-                            "Add any that aren't in the app yet",
+                            if (isSyncing) "Available once the sync finishes"
+                            else "Add any that aren't in the app yet",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

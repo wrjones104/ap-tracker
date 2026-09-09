@@ -76,8 +76,11 @@ def _fetch_tracker_details(req_session, tracker_ids):
     caller treats absence as "no news" rather than as evidence of a change.
     """
     details = {}
-    for ct_id in tracker_ids:
-        time.sleep(0.5)
+    for index, ct_id in enumerate(tracker_ids):
+        # Paced, not delayed. Sleeping before the first request charged every caller
+        # half a second for a courtesy owed only to the second one onwards.
+        if index:
+            time.sleep(0.5)
         try:
             resp = req_session.get(f"{CHEESE_BASE_URL}/tracker/{ct_id}", timeout=10)
             if not resp.ok:
