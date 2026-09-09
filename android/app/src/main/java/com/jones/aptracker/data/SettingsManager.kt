@@ -17,34 +17,12 @@ class SettingsManager(context: Context) {
     private val dataStore = context.dataStore
 
     companion object {
-        val CHEESE_AUTO_SYNC_KEY = booleanPreferencesKey("cheese_auto_sync")
         val IS_CHEESE_CONNECTED_KEY = booleanPreferencesKey("is_cheese_connected")
         val DATE_FORMAT_PRESET_KEY = stringPreferencesKey("date_format_preset")
         val SLOTS_SHOW_FINISHED_KEY = booleanPreferencesKey("slots_show_finished")
         val EXPANDED_ROOM_IDS_KEY = stringPreferencesKey("expanded_room_ids")
         val LAYOUT_DENSITY_KEY = stringPreferencesKey("layout_density")
-        val CHEESE_AUTO_SYNC_MIGRATED_KEY = booleanPreferencesKey("cheese_auto_sync_migrated")
     }
-
-    /**
-     * The retired auto-sync preference, kept only so it can be migrated once.
-     *
-     * It used to gate the whole Cheese reconcile, which could delete rooms, so
-     * turning it off was how people stopped that happening (#323). Nothing
-     * deletes now, so checking Cheese is unconditional; what the old "off" meant
-     * is "don't let Cheese have my rooms", which maps onto the per-room
-     * publishing default. Defaults to 'true' the way it always did.
-     */
-    val legacyAutoSyncEnabled: Flow<Boolean> = dataStore.data
-        .map { preferences ->
-            preferences[CHEESE_AUTO_SYNC_KEY] ?: true
-        }
-
-    /** Whether the one-time migration of the above has already run. */
-    val hasMigratedAutoSync: Flow<Boolean> = dataStore.data
-        .map { preferences ->
-            preferences[CHEESE_AUTO_SYNC_MIGRATED_KEY] ?: false
-        }
 
     /**
      * A flow that emits whether Cheese Tracker is connected.
@@ -104,12 +82,6 @@ class SettingsManager(context: Context) {
                 emptySet()
             }
         }
-
-    suspend fun setAutoSyncMigrated(migrated: Boolean) {
-        dataStore.edit { preferences ->
-            preferences[CHEESE_AUTO_SYNC_MIGRATED_KEY] = migrated
-        }
-    }
 
     /**
      * Saves whether Cheese Tracker is connected.

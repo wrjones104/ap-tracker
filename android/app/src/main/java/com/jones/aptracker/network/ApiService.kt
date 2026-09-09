@@ -240,7 +240,10 @@ interface ApiService {
     suspend fun syncCheeseTracker(): CheeseSyncResponse
 
     @GET("integrations/cheese/available")
-    suspend fun getAvailableCheeseRooms(): AvailableCheeseRoomsResponse
+    suspend fun getAvailableCheeseRooms(
+        /** Also return the ones the user has hidden, so a dismissal can be undone. */
+        @Query("include_dismissed") includeDismissed: Boolean = false
+    ): AvailableCheeseRoomsResponse
 
     @POST("integrations/cheese/available/import")
     suspend fun importCheeseRooms(@Body request: CheeseTrackerIdsRequest): ImportCheeseRoomsResponse
@@ -378,7 +381,9 @@ data class AvailableCheeseRoom(
     val cheese_tracker_id: String,
     val title: String,
     val room_link: String? = null,
-    val last_activity: String? = null
+    val last_activity: String? = null,
+    /** The user hid this one. Only ever true when the caller asked for them. */
+    val dismissed: Boolean = false
 )
 
 data class AvailableCheeseRoomsResponse(

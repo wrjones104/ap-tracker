@@ -89,14 +89,29 @@ fun TutorialGuideScreen(
             FaqTopic(
                 id = "cheese_tracker",
                 title = "How do I sync with Cheese Tracker?",
-                summary = "Automatically import tracked rooms and slot claims from Cheese Tracker.",
+                summary = "Mirror the rooms you choose, and keep your slot claims in step.",
                 detailedSteps = listOf(
-                    "Go to Settings -> Connected Accounts.",
-                    "Enter your Cheese Tracker API key.",
-                    "Your tracked rooms and slot claims will automatically stay synced bidirectionally."
+                    "Open the Me tab and enter your Cheese Tracker API key under Integrations.",
+                    "Rooms on your Cheese dashboard that aren't in the app are offered as suggestions on the Rooms tab. Nothing is added until you tap Add.",
+                    "Adding a room in the app offers to create it on Cheese Tracker too. The box is ticked by default; untick it to keep the room private to the app.",
+                    "Slot claims stay in step both ways for the rooms you mirror. If someone else claims a slot on Cheese, yours switches to Watching and you keep the alerts.",
+                    "A sync never adds or removes a room on its own. Use the room's menu to stop mirroring one, which leaves its Cheese tracker and any claims alone.",
+                    "To see rooms you skipped or hid, tap 'Rooms on Cheese Tracker' in the Me tab's Cheese card."
                 ),
-                screenshotCaption = "Connected Accounts: Auto-sync slots with Cheese Tracker",
+                screenshotCaption = "Connected Accounts: Mirror the rooms you choose",
                 imageRes = R.drawable.faq_cheese
+            ),
+            FaqTopic(
+                id = "cheese_room_marks",
+                title = "What does the cheese on a room card mean?",
+                summary = "The small marks next to a room's host say how it stands with Cheese Tracker.",
+                detailedSteps = listOf(
+                    "Cheese: the room is mirrored to Cheese Tracker.",
+                    "Cheese with a spinner: it is being created on Cheese Tracker. That push takes a couple of minutes.",
+                    "Faded cheese: it is still mirrored, but it has left your Cheese dashboard. Nothing has been deleted here.",
+                    "No cheese: the room lives in the app only.",
+                    "The marks appear only while your Cheese account is connected. Disconnecting hides them and changes nothing."
+                )
             ),
             FaqTopic(
                 id = "notifications",

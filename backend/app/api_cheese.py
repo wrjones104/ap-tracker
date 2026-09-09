@@ -593,6 +593,11 @@ def list_available_cheese_rooms(current_user):
     These are offered, never imported. The app shows them as suggestions the
     user accepts or dismisses, which is the whole difference between Cheese
     proposing a room and Cheese writing one into somebody's library (#323).
+
+    `include_dismissed=1` also returns the ones the user has said no to, each
+    flagged `dismissed`. A dismissal has to be reversible on purpose rather than
+    only by accident: without this the answer to "I hid that by mistake" was
+    nothing at all.
     """
     if not current_user.cheese_api_key:
         return jsonify({'error': 'Not connected to Cheese Tracker.'}), 400
@@ -621,13 +626,23 @@ def list_available_cheese_rooms(current_user):
         .filter(CheeseDismissedTracker.user_id == current_user.id).all()
     }
 
+    include_dismissed = str(request.args.get('include_dismissed', '')).strip().lower() in (
+        '1', 'true', 'yes'
+    )
+
     available = []
     for tracker in trackers:
         ct_id = tracker.get('tracker_id')
-        if not ct_id or ct_id in known_tracker_ids or ct_id in dismissed_ids:
+        if not ct_id or ct_id in known_tracker_ids:
             continue
+
+        is_dismissed = ct_id in dismissed_ids
+        if is_dismissed and not include_dismissed:
+            continue
+
         # A tracker the user hid on their Cheese dashboard is not a room they
-        # are asking us to suggest.
+        # are asking us to suggest. That is their word on it either way, so it
+        # stays hidden even when dismissals are being listed.
         if tracker.get('dashboard_override_visibility') is False:
             continue
 
@@ -636,6 +651,7 @@ def list_available_cheese_rooms(current_user):
             'title': tracker.get('title') or 'Unknown Room',
             'room_link': tracker.get('room_link'),
             'last_activity': tracker.get('last_activity') or tracker.get('updated_at'),
+            'dismissed': is_dismissed,
         })
 
     return jsonify({'available': available, 'count': len(available)})

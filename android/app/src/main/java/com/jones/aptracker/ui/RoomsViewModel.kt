@@ -52,6 +52,16 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private val _isImportingCheeseRooms = MutableStateFlow(false)
     val isImportingCheeseRooms: StateFlow<Boolean> = _isImportingCheeseRooms.asStateFlow()
 
+    /**
+     * Raised when something outside the rooms list asks for the suggestions sheet.
+     *
+     * The banner only appears when there is something new to offer, so it is not a
+     * way back to a room the user hid or skipped past. This is: the Cheese card on
+     * the Me tab raises it, and the rooms screen opens the sheet and lowers it.
+     */
+    private val _suggestionsRequested = MutableStateFlow(false)
+    val suggestionsRequested: StateFlow<Boolean> = _suggestionsRequested.asStateFlow()
+
     val isCheeseConnected = settingsManager.isCheeseConnected.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -98,6 +108,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             delay(1000)
             if (isCheeseConnected.value) {
+                // Read separately from the sync, and first. The suggestions used to
+                // arrive only as a side effect of a sync that finished, so a sync
+                // that failed, rate-limited or outran its poll budget left the offer
+                // invisible with no way to ask for it again.
+                fetchAvailableCheeseRooms()
                 triggerBackgroundSync()
             }
         }
@@ -328,8 +343,10 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 e.printStackTrace()
                 Log.w("RoomsViewModel", "Background sync failed: ${e.message}")
-                // Cheese failing is not a reason to leave the room list stale.
+                // Cheese failing is not a reason to leave the room list stale, or to
+                // hide an offer the separate, cheaper call can still answer.
                 fetchRooms(force = true)
+                fetchAvailableCheeseRooms()
                 _errorMessage.value = "Background sync failed."
             } finally {
                 _isSyncingCheese.value = false
@@ -343,7 +360,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
      * One request to Cheese, no per-tracker detail, so it is cheap enough to run
      * on open. Failures are silent: a suggestion badge is not worth an error.
      */
-    fun fetchAvailableCheeseRooms() {
+    fun fetchAvailableCheeseRooms(includeDismissed: Boolean = false) {
         viewModelScope.launch {
             if (!isCheeseConnected.value) {
                 _availableCheeseRooms.value = emptyList()
@@ -351,7 +368,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
             }
             try {
                 _availableCheeseRooms.value =
-                    RetrofitClient.instance.getAvailableCheeseRooms().available
+                    RetrofitClient.instance.getAvailableCheeseRooms(includeDismissed).available
             } catch (e: Exception) {
                 // Emptied rather than left alone. Holding the last list meant a
                 // disconnect left a banner offering rooms from an account the app
@@ -387,6 +404,21 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 _isImportingCheeseRooms.value = false
             }
         }
+    }
+
+    /**
+     * Show everything Cheese has that the app does not, hidden ones included.
+     *
+     * The entry point for someone who dismissed a room and changed their mind, or
+     * who backed out of the sheet and could not find it again.
+     */
+    fun openCheeseSuggestions() {
+        fetchAvailableCheeseRooms(includeDismissed = true)
+        _suggestionsRequested.value = true
+    }
+
+    fun consumeSuggestionsRequest() {
+        _suggestionsRequested.value = false
     }
 
     /** Stop offering these. Reversible: adding one later clears the dismissal. */

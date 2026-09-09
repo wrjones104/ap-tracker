@@ -73,13 +73,13 @@ def _verified_room(coro):
     }
 
 
-def _call(view, *args, body=None):
+def _call(view, *args, body=None, query=None):
     """
     Invoke a route past its @handle_db_errors / @log_api_call / @token_required
     decorators, the way the other route tests in this suite do.
     """
     fn = view.__wrapped__.__wrapped__.__wrapped__
-    with _app_ref[0].test_request_context(json=body or {}):
+    with _app_ref[0].test_request_context(json=body or {}, query_string=query or {}):
         return fn(*args)
 
 
@@ -469,6 +469,45 @@ class TestSuggestions(CheeseLinkTestBase):
               body={'cheese_tracker_ids': ['ct_new']})
 
         resp = _call(api_cheese.list_available_cheese_rooms, user)
+        payload = json.loads(resp.get_data(as_text=True))
+        self.assertEqual(payload['count'], 0)
+
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_a_dismissal_can_be_asked_for_and_undone(self, mock_dash):
+        """
+        A dismissal has to be reversible deliberately. The banner only appears for
+        rooms still on offer, so without this the answer to "I hid that by mistake"
+        was nothing at all.
+        """
+        mock_dash.return_value = self._dashboard()
+        user = self._seed()
+
+        resp = _call(api_cheese.list_available_cheese_rooms, user,
+                     query={'include_dismissed': '1'})
+        payload = json.loads(resp.get_data(as_text=True))
+        by_id = {t['cheese_tracker_id']: t for t in payload['available']}
+
+        self.assertEqual(set(by_id), {'ct_new', 'ct_dismissed'},
+                         "the hidden one comes back; the room already in the app does not")
+        self.assertTrue(by_id['ct_dismissed']['dismissed'],
+                        "the app needs to know which of these were hidden")
+        self.assertFalse(by_id['ct_new']['dismissed'])
+
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_a_tracker_hidden_on_the_cheese_dashboard_stays_hidden(self, mock_dash):
+        """
+        Asking for dismissals back is about this app's list, not about overriding
+        what the user did on Cheese itself.
+        """
+        mock_dash.return_value = [{
+            'tracker_id': 'ct_hidden_there', 'title': 'Hidden On Cheese',
+            'room_link': 'https://archipelago.gg/room/hidden_uuid',
+            'dashboard_override_visibility': False,
+        }]
+        user = self._seed()
+
+        resp = _call(api_cheese.list_available_cheese_rooms, user,
+                     query={'include_dismissed': '1'})
         payload = json.loads(resp.get_data(as_text=True))
         self.assertEqual(payload['count'], 0)
 

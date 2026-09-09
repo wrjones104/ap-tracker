@@ -90,6 +90,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -378,9 +379,13 @@ fun RoomsScreen(
                     // appearing in it unannounced. Deliberately not a list item: every
                     // item in the list below is a room, one to one, and the reorder
                     // math depends on that.
-                    if (availableCheeseRooms.isNotEmpty() && !isSearching) {
+                    // Hidden ones ride along in the same list when the sheet was
+                    // opened from the Me tab. They are not news, so they do not put
+                    // a banner back on screen.
+                    val offered = availableCheeseRooms.count { !it.dismissed }
+                    if (offered > 0 && !isSearching) {
                         CheeseSuggestionsBanner(
-                            count = availableCheeseRooms.size,
+                            count = offered,
                             onClick = { showCheeseSuggestions = true }
                         )
                     }
@@ -541,6 +546,16 @@ fun RoomsScreen(
         }
 
         // --- Dialogs & Sheets ---
+
+        // Raised by the Cheese card on the Me tab, which is the way back to a room
+        // the user hid or skipped past. The list it wants is already on its way.
+        val suggestionsRequested by roomsViewModel.suggestionsRequested.collectAsState()
+        LaunchedEffect(suggestionsRequested) {
+            if (suggestionsRequested) {
+                showCheeseSuggestions = true
+                roomsViewModel.consumeSuggestionsRequest()
+            }
+        }
 
         if (showCheeseSuggestions) {
             ModalBottomSheet(onDismissRequest = { showCheeseSuggestions = false }) {
@@ -765,32 +780,45 @@ private fun HeroBanner(isWelcome: Boolean, metrics: LayoutMetrics) {
 }
 
 /**
- * Says what one room's relationship with Cheese Tracker is, in the smallest
- * space that can carry it.
+ * Says what one room's relationship with Cheese Tracker is, without words.
  *
- * Three states worth a chip: synced, still being created there (the push takes a
- * couple of minutes), and synced but no longer on the user's Cheese dashboard.
- * An app-only room gets nothing, which is the quiet default it should be.
+ * A cheese for a room that is mirrored, a cheese with a spinner while the push
+ * that creates it is still in flight, and a faded cheese for one that is mirrored
+ * but has left the user's Cheese dashboard. An app-only room gets nothing, which
+ * is the quiet default it should be.
+ *
+ * The three used to be labelled, on a card that already carries a host, two slot
+ * counts and a progress bar. The legend lives in Guide & FAQ instead, where it is
+ * read once rather than on every row forever.
  */
 @Composable
-private fun CheeseRoomChip(room: Room, isCheeseConnected: Boolean) {
+private fun CheeseRoomIndicator(room: Room, isCheeseConnected: Boolean) {
     // Disconnecting leaves every room's link state exactly as it was, so that
-    // reconnecting restores it. What it must not leave behind is a chip that
+    // reconnecting restores it. What it must not leave behind is a mark that
     // reports a service the user has left.
     if (!isCheeseConnected || room.cheese_link != "linked") return
 
-    val (label, color) = when {
-        room.cheese_unlisted -> "Not on Cheese" to MaterialTheme.colorScheme.onSurfaceVariant
-        room.cheese_tracker_id == null -> "Syncing" to MaterialTheme.colorScheme.onSurfaceVariant
-        else -> "Synced" to MaterialTheme.colorScheme.primary
-    }
+    val isPending = room.cheese_tracker_id == null
 
     Spacer(Modifier.width(6.dp))
-    Text(
-        text = "\uD83E\uDDC0 $label",
-        style = MaterialTheme.typography.labelSmall,
-        color = color
-    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "\uD83E\uDDC0",
+            style = MaterialTheme.typography.labelMedium,
+            // A room that has left the dashboard is still mirrored, so it keeps the
+            // cheese; it is faded because there is nothing on the other end of it
+            // any more.
+            modifier = Modifier.alpha(if (room.cheese_unlisted) 0.4f else 1f)
+        )
+        if (isPending) {
+            Spacer(Modifier.width(4.dp))
+            CircularProgressIndicator(
+                modifier = Modifier.size(10.dp),
+                strokeWidth = 1.5.dp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 /**
@@ -906,8 +934,8 @@ private fun RoomCard(
                         )
                         // Whether a room syncs to Cheese used to be invisible,
                         // which is part of why rooms vanishing from Cheese felt
-                        // arbitrary (#323). No chip means the room is app-only.
-                        CheeseRoomChip(room, isCheeseConnected)
+                        // arbitrary (#323). No cheese means the room is app-only.
+                        CheeseRoomIndicator(room, isCheeseConnected)
                     }
                     // Both slot counts on one line. They were a line each plus a bar on
                     // a third, which is three lines to say two numbers -- and they are
@@ -1085,9 +1113,13 @@ private fun CheeseSuggestionsBanner(count: Int, onClick: () -> Unit) {
 /**
  * The picker behind the banner: tick the rooms to add, or dismiss the lot.
  *
- * Everything starts ticked, so the common case ("yes, these are mine") is one
- * tap, while the room somebody else added the user to can be unticked instead of
+ * New rooms start ticked, so the common case ("yes, these are mine") is one tap,
+ * while the room somebody else added the user to can be unticked instead of
  * having to be dealt with after it lands.
+ *
+ * Rooms the user already said no to appear only when the sheet was opened from
+ * the Me tab, and they start unticked: this is the undo, not a second helping of
+ * the same question.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1099,10 +1131,11 @@ fun CheeseSuggestionsSheet(
 ) {
     val selected = remember(available) {
         mutableStateMapOf<String, Boolean>().apply {
-            available.forEach { put(it.cheese_tracker_id, true) }
+            available.forEach { put(it.cheese_tracker_id, !it.dismissed) }
         }
     }
     val chosen = available.map { it.cheese_tracker_id }.filter { selected[it] == true }
+    val stillOffered = available.filter { !it.dismissed }
 
     Column(
         modifier = Modifier
@@ -1120,11 +1153,25 @@ fun CheeseSuggestionsSheet(
         )
         HorizontalDivider()
 
+        if (available.isEmpty()) {
+            Text(
+                "Nothing to add. Every room on your Cheese dashboard is already here.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 24.dp)
+            )
+        }
+
         available.forEach { room ->
             val isChecked = selected[room.cheese_tracker_id] == true
             ListItem(
                 headlineContent = { Text(room.title) },
-                supportingContent = { Text(room.room_link ?: "On Cheese Tracker") },
+                supportingContent = {
+                    Text(
+                        if (room.dismissed) "Hidden earlier"
+                        else room.room_link ?: "On Cheese Tracker"
+                    )
+                },
                 leadingContent = {
                     Checkbox(
                         checked = isChecked,
@@ -1144,11 +1191,15 @@ fun CheeseSuggestionsSheet(
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(
-                enabled = !isImporting,
-                onClick = { onDismissRooms(available.map { it.cheese_tracker_id }) }
-            ) { Text("Not these") }
-            Spacer(Modifier.width(8.dp))
+            // Only ever hides what is currently being offered. Something already
+            // hidden is here to be undone, and re-hiding it is what closing does.
+            if (stillOffered.isNotEmpty()) {
+                TextButton(
+                    enabled = !isImporting,
+                    onClick = { onDismissRooms(stillOffered.map { it.cheese_tracker_id }) }
+                ) { Text("Not these") }
+                Spacer(Modifier.width(8.dp))
+            }
             Button(
                 enabled = chosen.isNotEmpty() && !isImporting,
                 onClick = { onAdd(chosen) }

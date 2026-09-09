@@ -79,7 +79,9 @@ fun ProfileScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToGuide: () -> Unit = {},
     onShowWhatsNew: () -> Unit = {},
-    onNavigateToArchived: () -> Unit
+    onNavigateToArchived: () -> Unit,
+    /** Opens the Cheese suggestions sheet on the Rooms tab, hidden rooms included. */
+    onShowAvailableCheeseRooms: () -> Unit = {}
 ) {
 
 
@@ -277,12 +279,11 @@ fun ProfileScreen(
                 isConnected = userProfile?.is_cheese_connected ?: false,
                 isConnecting = isConnectingCheese,
                 isSyncing = isSyncingCheese,
-                publishNewRooms = userProfile?.cheese_publish_new_rooms ?: true,
                 defaultPing = userProfile?.cheese_default_ping,
-                onPublishNewRoomsChanged = { userViewModel.updateCheesePublishNewRooms(it) },
                 onConnect = { key -> userViewModel.connectCheeseTracker(key) },
                 onSync = { userViewModel.manualSyncCheese() },
                 onDisconnect = { userViewModel.disconnectCheese() },
+                onShowAvailableRooms = onShowAvailableCheeseRooms,
                 onDefaultPingChange = { userViewModel.updateCheeseDefaultPing(it) }
             )
 
@@ -503,12 +504,11 @@ fun CheeseIntegrationCard(
     isConnecting: Boolean,
     /** A manual sync started from this card. */
     isSyncing: Boolean,
-    publishNewRooms: Boolean,
     defaultPing: String?,
-    onPublishNewRoomsChanged: (Boolean) -> Unit,
     onConnect: (String) -> Unit,
     onSync: () -> Unit,
     onDisconnect: () -> Unit,
+    onShowAvailableRooms: () -> Unit,
     onDefaultPingChange: (String?) -> Unit
 ) {
     var apiKey by remember { mutableStateOf("") }
@@ -633,32 +633,33 @@ fun CheeseIntegrationCard(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // The default for the per-room checkbox in Add Room, not a sync
-                // mode. Publishing creates a public tracker under the user's
-                // Cheese account, so every room still gets its own yes or no.
+                // The banner on the Rooms tab only appears when there is something
+                // new to offer, so it is no use to someone who hid a room or backed
+                // out of the sheet. This is the way back to all of them, hidden ones
+                // included.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onPublishNewRoomsChanged(!publishNewRooms) }
+                        .clickable { onShowAvailableRooms() }
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Auto sync new rooms to Cheese",
+                            "Rooms on Cheese Tracker",
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Text(
-                            "Ticks the box when you add a room",
+                            "Add any that aren't in the app yet",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Switch(
-                        checked = publishNewRooms,
-                        onCheckedChange = onPublishNewRoomsChanged,
-                        modifier = Modifier.padding(start = 16.dp)
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 

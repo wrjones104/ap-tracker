@@ -201,7 +201,10 @@ fun MainScreen(
         AddRoomDialog(
             isAdding = isAddingRoom,
             isCheeseConnected = userProfile?.is_cheese_connected == true,
-            defaultSyncToCheese = userProfile?.cheese_publish_new_rooms ?: true,
+            // Ticked by default, always. The switch that used to seed this was one
+            // more thing to read on the Me tab for a decision the checkbox already
+            // asks per room, which is where it belongs.
+            defaultSyncToCheese = true,
             onDismiss = { showAddRoomDialog = false },
             onAdd = { url, alias, icon, syncToCheese ->
                 roomsViewModel.addRoom(url, alias, icon, syncToCheese) {
@@ -403,9 +406,17 @@ fun MainScreen(
                     onNavigateToSettings = onNavigateToSettings,
                     onNavigateToGuide = onNavigateToGuide,
                     onShowWhatsNew = onShowWhatsNew,
-                    onNavigateToArchived = onNavigateToArchived
-
-
+                    onNavigateToArchived = onNavigateToArchived,
+                    // The sheet lives with the rooms, so the Me tab hands the request
+                    // to the rooms view model and sends the user where the answer is.
+                    onShowAvailableCheeseRooms = {
+                        roomsViewModel.openCheeseSuggestions()
+                        bottomNavController.navigate(BottomNavItem.Rooms.route) {
+                            popUpTo(bottomNavController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
                 )
             }
         }
