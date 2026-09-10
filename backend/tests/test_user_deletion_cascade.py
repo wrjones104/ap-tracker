@@ -2,8 +2,13 @@
 
 Regression cover for #331: milestone_templates had no collection on User, so
 session.delete(user) raised ForeignKeyViolation on Postgres. That broke account
-deletion outright, and rolled back the whole inactive-guest purge batch with it,
-because the purge deletes every expired guest in one transaction.
+deletion outright, and took the daily janitor down with it, because db_run_cleanup
+deletes every stale guest and every orphaned room in one transaction.
+
+Both guest purges are covered here. db_run_cleanup in poller.py is the one that
+runs in production; purge_inactive_guest_accounts in retention_service has no
+caller today, which is #334, so its tests guard the shape rather than live
+behaviour.
 
 These tests only mean anything with foreign keys enforced. SQLite leaves them
 off by default, which is why the original suite passed while production failed,
@@ -65,11 +70,16 @@ class TestUserDeletionCascade(unittest.TestCase):
 
     def tearDown(self):
         Session.remove()
-        if os.path.exists(TEST_DB_PATH):
-            try:
-                os.remove(TEST_DB_PATH)
-            except Exception:
-                pass
+        # Windows will not unlink a file the pool still holds open, so without
+        # this the removal below fails silently and leaves the database and its
+        # write-ahead log behind.
+        engine.dispose()
+        for path in (TEST_DB_PATH, f'{TEST_DB_PATH}-wal', f'{TEST_DB_PATH}-shm'):
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Helpers
@@ -153,6 +163,66 @@ class TestUserDeletionCascade(unittest.TestCase):
             'whitelists': session.query(UserWhitelistItem).filter_by(user_id=user_id).count(),
             'dismissed': session.query(CheeseDismissedTracker).filter_by(user_id=user_id).count(),
         }
+
+    # ------------------------------------------------------------------
+    # Structural guards. The behavioural tests below cannot tell the two
+    # halves of the fix apart: SQLite builds its schema from models.py, so
+    # the column-level cascade alone carries them even with the ORM
+    # collection gone. These assert on each half directly.
+    # ------------------------------------------------------------------
+
+    def test_every_user_foreign_key_has_a_cascading_collection(self):
+        """The assertion that would have caught #331 before it shipped."""
+        from sqlalchemy import inspect as sa_inspect
+
+        collected = {
+            rel.mapper.class_.__tablename__
+            for rel in sa_inspect(User).relationships
+            if 'delete-orphan' in rel.cascade
+        }
+
+        # Reached through UserRoomSubscription.tracked_slots rather than from
+        # User directly. See the comment on the collections in models.py.
+        expected_indirect = {'user_tracked_slots'}
+
+        missing = {
+            table.name
+            for table in Base.metadata.tables.values()
+            for fk in table.foreign_keys
+            if fk.column.table.name == 'users'
+            and table.name not in collected
+            and table.name not in expected_indirect
+        }
+
+        self.assertEqual(
+            missing, set(),
+            f"tables with a users.id foreign key and no delete-orphan collection "
+            f"on User: {sorted(missing)}. Account deletion raises "
+            f"ForeignKeyViolation on Postgres. See #331.",
+        )
+
+    def test_every_owned_foreign_key_cascades_in_the_schema(self):
+        """The database-level backstop, asserted on the metadata rather than a delete."""
+        # tracked_rooms is shared between everyone tracking a room, so those keys
+        # stay NO ACTION on purpose and the room delete path remains ORM-only.
+        owned_parents = {
+            'users', 'user_room_subscriptions', 'threshold_groups', 'milestone_templates',
+        }
+
+        not_cascading = {
+            f"{table.name}.{','.join(c.name for c in fk.constraint.columns)}"
+            f" -> {fk.column.table.name}"
+            for table in Base.metadata.tables.values()
+            for fk in table.foreign_keys
+            if fk.column.table.name in owned_parents
+            and (fk.ondelete or '').upper() != 'CASCADE'
+        }
+
+        self.assertEqual(
+            not_cascading, set(),
+            f"foreign keys on the user-owned subtree without ON DELETE CASCADE: "
+            f"{sorted(not_cascading)}. A raw DELETE stops here. See #331.",
+        )
 
     # ------------------------------------------------------------------
     # The guard: these tests are worthless without it
@@ -296,6 +366,47 @@ class TestUserDeletionCascade(unittest.TestCase):
         try:
             self.assertEqual(session.query(User).count(), 0)
             self.assertEqual(session.query(MilestoneTemplate).count(), 0)
+        finally:
+            Session.remove()
+
+    def test_janitor_cleanup_survives_a_template_owning_guest(self):
+        """db_run_cleanup is the purge that actually runs, on the supervisor's daily tick.
+
+        It deletes orphaned rooms and stale guests in one transaction and commits
+        once, so a single blocked guest used to roll back the room cleanup too.
+        """
+        from app.poller import db_run_cleanup
+
+        stale = datetime.utcnow() - timedelta(days=60)
+        session = Session()
+        try:
+            owner = self._make_user(session, 'janitor_owner', is_guest=True, last_activity=stale)
+            self._add_template(session, owner)
+            self._add_full_library(session, owner, 'room-janitor')
+
+            self._make_user(session, 'janitor_plain', is_guest=True, last_activity=stale)
+            self._make_user(session, 'janitor_active', is_guest=True)
+
+            # An orphaned room, cleaned up in the same transaction as the guests.
+            session.add(TrackedRoom(room_id='room-orphan', last_successful_poll=stale))
+            session.commit()
+        finally:
+            Session.remove()
+
+        db_run_cleanup()
+
+        session = Session()
+        try:
+            survivors = {u.discord_id for u in session.query(User).all()}
+            self.assertEqual(survivors, {'janitor_active'})
+            self.assertEqual(session.query(MilestoneTemplate).count(), 0)
+            self.assertEqual(session.query(UserTrackedSlot).count(), 0)
+            rooms = {r.room_id for r in session.query(TrackedRoom).all()}
+            self.assertNotIn(
+                'room-orphan', rooms,
+                "the orphaned room survived, so the guest delete took the room "
+                "cleanup down with it",
+            )
         finally:
             Session.remove()
 

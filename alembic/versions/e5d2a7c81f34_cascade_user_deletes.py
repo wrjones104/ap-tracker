@@ -43,7 +43,9 @@ depends_on: Union[str, Sequence[str], None] = None
 # but stops at milestone_template_items has not deleted anything.
 #
 # tracked_rooms is deliberately absent. A room is shared by everyone tracking it
-# and outlives any one of them.
+# and outlives any one of them, so the room delete path stays ORM-only by design:
+# db_run_cleanup in poller.py removes orphaned rooms through the session, and a
+# raw DELETE FROM tracked_rooms is meant to be refused.
 OWNED_FKS = [
     ('devices', ['user_id'], 'users', ['id']),
     ('user_room_subscriptions', ['user_id'], 'users', ['id']),
@@ -60,12 +62,18 @@ OWNED_FKS = [
     ('threshold_groups', ['user_tracked_slot_id'], 'user_tracked_slots', ['id']),
     ('threshold_group_items', ['group_id'], 'threshold_groups', ['id']),
     ('milestone_template_items', ['template_id'], 'milestone_templates', ['id']),
+    ('cheese_dismissed_trackers', ['user_id'], 'users', ['id']),
 ]
 
-# add_milestone_templates already created this one with CASCADE. It is listed
-# above so a deployment that somehow lacks it still gets it, but the downgrade
-# leaves it alone rather than stripping a cascade it did not add.
-PRE_EXISTING_CASCADE = {('milestone_template_items', 'milestone_templates')}
+# Created with CASCADE already, by add_milestone_templates and add_cheese_link_state
+# respectively. They are listed above so the list is a complete statement of the
+# owned subtree, and so a deployment that somehow lacks the cascade still gets it.
+# The upgrade skips them as no-ops; the downgrade leaves them alone rather than
+# stripping a cascade it did not add.
+PRE_EXISTING_CASCADE = {
+    ('milestone_template_items', 'milestone_templates'),
+    ('cheese_dismissed_trackers', 'users'),
+}
 
 
 def _matching_fk(inspector, table, local_cols, referred_table):
@@ -89,6 +97,20 @@ def _rewrite(ondelete):
             bind.dialect.name,
         )
         return
+
+    # Every constraint rewrite takes ACCESS EXCLUSIVE on the referencing table,
+    # and alembic/env.py runs the whole upgrade in one transaction, so the locks
+    # accumulate and are held until it commits. Three of these tables are ones
+    # the poller writes to continuously. Uncontended that is milliseconds; behind
+    # an open poller transaction the ALTER waits with no upper bound, and Postgres
+    # queues every later reader behind the pending request. The API container is
+    # not serving yet at that point, so it would be a silent stall rather than a
+    # failed deploy.
+    #
+    # Fail fast instead. This runs from create_app(), and every container is
+    # restart: always, so giving up hands the job to the restart loop, which tries
+    # again on a quieter moment. SET LOCAL is scoped to alembic's transaction.
+    bind.execute(sa.text("SET LOCAL lock_timeout = '4s'"))
 
     inspector = sa.inspect(bind)
     existing_tables = set(inspector.get_table_names())
@@ -122,6 +144,10 @@ def _rewrite(ondelete):
             referred_cols,
             ondelete=ondelete,
         )
+
+    # Handed back so a later migration sharing this transaction does not inherit
+    # a timeout it never asked for.
+    bind.execute(sa.text("SET LOCAL lock_timeout = DEFAULT"))
 
 
 def upgrade() -> None:
