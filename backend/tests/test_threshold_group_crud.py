@@ -12,7 +12,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app import create_app, Session, engine
 from app.models import (
-    Base, User, TrackedRoom, UserTrackedSlot, ThresholdGroup, ThresholdGroupItem
+    Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot, ThresholdGroup,
+    ThresholdGroupItem
 )
 
 ROOM_UUID = 'room-uuid-crud'
@@ -68,6 +69,13 @@ class TestThresholdGroupUpdate(unittest.TestCase):
             session.add(room)
             session.flush()
             self.room_db_id = room.id
+
+            # A tracked slot has a composite foreign key to its subscription, so the
+            # subscription has to exist first. Postgres has always required this.
+            session.add(UserRoomSubscription(
+                user_id=user.id, room_id=room.id, alias='Test Room'
+            ))
+            session.flush()
 
             slot = UserTrackedSlot(user_id=user.id, room_id=room.id, slot_id=SLOT_ID)
             session.add(slot)
