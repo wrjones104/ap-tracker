@@ -76,12 +76,21 @@ class User(Base):
     cheese_dismissed_trackers = relationship(
         "CheeseDismissedTracker", back_populates="user", cascade="all, delete-orphan"
     )
+    # Every table with a users.id foreign key needs a collection here carrying a
+    # delete-orphan cascade, or account deletion raises ForeignKeyViolation on
+    # Postgres and takes the whole transaction down with it. The one exception is
+    # user_tracked_slots, whose real parent is the subscription: it is deleted
+    # through UserRoomSubscription.tracked_slots, and its composite foreign key
+    # makes a slot without a subscription impossible. See #331.
+    milestone_templates = relationship(
+        "MilestoneTemplate", back_populates="user", cascade="all, delete-orphan"
+    )
 
 class Device(Base):
     __tablename__ = 'devices'
     id = Column(Integer, primary_key=True)
     fcm_token = Column(String, nullable=False, unique=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     android_id = Column(String, nullable=True, index=True)
     platform = Column(String, nullable=False, default='android', server_default='android')
     user = relationship("User", back_populates="devices")
@@ -121,7 +130,7 @@ class TrackedRoom(Base):
 
 class UserRoomSubscription(Base):
     __tablename__ = 'user_room_subscriptions'
-    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)
     room_id = Column(Integer, ForeignKey('tracked_rooms.id'), primary_key=True)
     alias = Column(String, nullable=False)
     icon_name = Column(String, default="default_icon")
@@ -142,7 +151,7 @@ class UserRoomSubscription(Base):
 class UserTrackedSlot(Base):
     __tablename__ = 'user_tracked_slots'
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     room_id = Column(Integer, ForeignKey('tracked_rooms.id'), nullable=False)
     slot_id = Column(Integer, nullable=False)
     added_at = Column(DateTime, default=datetime.utcnow)
@@ -182,7 +191,15 @@ class UserTrackedSlot(Base):
     user = relationship("User", viewonly=True)    
     
     __table_args__ = (
-        ForeignKeyConstraint(['user_id', 'room_id'], ['user_room_subscriptions.user_id', 'user_room_subscriptions.room_id']),
+        # ON DELETE CASCADE here as well as on user_id: deleting a user fires both
+        # cascades, and Postgres does not promise which lands first. Without it the
+        # subscription's own cascade can hit a slot row that is still present and
+        # refuse the delete. See #331.
+        ForeignKeyConstraint(
+            ['user_id', 'room_id'],
+            ['user_room_subscriptions.user_id', 'user_room_subscriptions.room_id'],
+            ondelete='CASCADE',
+        ),
         UniqueConstraint('user_id', 'room_id', 'slot_id', name='_user_room_slot_uc'),
         Index('ix_usertrackedslot_user_room', 'user_id', 'room_id'),
     )
@@ -192,7 +209,7 @@ class UserTrackedSlot(Base):
 class ThresholdGroup(Base):
     __tablename__ = 'threshold_groups'
     id = Column(Integer, primary_key=True)
-    user_tracked_slot_id = Column(Integer, ForeignKey('user_tracked_slots.id'), nullable=False)
+    user_tracked_slot_id = Column(Integer, ForeignKey('user_tracked_slots.id', ondelete='CASCADE'), nullable=False)
     name = Column(String(255), nullable=True)
     is_triggered = Column(Boolean, default=False, nullable=False)
     
@@ -202,7 +219,7 @@ class ThresholdGroup(Base):
 class ThresholdGroupItem(Base):
     __tablename__ = 'threshold_group_items'
     id = Column(Integer, primary_key=True)
-    group_id = Column(Integer, ForeignKey('threshold_groups.id'), nullable=False)
+    group_id = Column(Integer, ForeignKey('threshold_groups.id', ondelete='CASCADE'), nullable=False)
     item_name = Column(String(255), nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
     is_group = Column(Boolean, default=False, nullable=False)
@@ -212,7 +229,7 @@ class ThresholdGroupItem(Base):
 class MilestoneTemplate(Base):
     __tablename__ = 'milestone_templates'
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
     game_name = Column(String(255), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -220,7 +237,7 @@ class MilestoneTemplate(Base):
     # on the first poll that knows the slot's game, never retroactively.
     auto_apply = Column(Boolean, nullable=False, default=False, server_default=sa_false())
 
-    user = relationship("User", viewonly=True)
+    user = relationship("User", back_populates="milestone_templates")
     items = relationship("MilestoneTemplateItem", back_populates="template", cascade="all, delete-orphan")
 
     __table_args__ = (
@@ -231,7 +248,7 @@ class MilestoneTemplate(Base):
 class MilestoneTemplateItem(Base):
     __tablename__ = 'milestone_template_items'
     id = Column(Integer, primary_key=True)
-    template_id = Column(Integer, ForeignKey('milestone_templates.id'), nullable=False)
+    template_id = Column(Integer, ForeignKey('milestone_templates.id', ondelete='CASCADE'), nullable=False)
     item_name = Column(String(255), nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
     is_group = Column(Boolean, nullable=False, default=False)
@@ -242,7 +259,7 @@ class MilestoneTemplateItem(Base):
 class UserIgnoreItem(Base):
     __tablename__ = 'user_ignore_items'
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     item_name = Column(String(255), nullable=False)
     game_name = Column(String(255), nullable=True) 
     is_group = Column(Boolean, default=False, nullable=False, server_default='f')
@@ -279,7 +296,7 @@ class CheeseDismissedTracker(Base):
 class UserWhitelistItem(Base):
     __tablename__ = 'user_whitelist_items'
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     item_name = Column(String(255), nullable=False)
     game_name = Column(String(255), nullable=True)
     is_group = Column(Boolean, default=False, nullable=False, server_default='f')

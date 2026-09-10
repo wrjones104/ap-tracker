@@ -87,12 +87,16 @@ engine = create_engine(
 if is_sqlite:
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma_instance(dbapi_connection, connection_record):
-        """Issues PRAGMA for WAL mode on connection for SQLite."""
+        """Issues PRAGMA for WAL mode and foreign key enforcement on SQLite."""
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
+        # Off by default in SQLite, on always in Postgres. Without it the tests
+        # silently accept cascade gaps that raise ForeignKeyViolation in
+        # production, which is how #331 reached users.
+        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
-    
-    logging.info("SQLite database detected. WAL mode enabled.")
+
+    logging.info("SQLite database detected. WAL mode and foreign key enforcement enabled.")
 
 session_factory = sessionmaker(bind=engine)
 Session = scoped_session(session_factory)
