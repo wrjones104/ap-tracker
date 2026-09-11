@@ -115,8 +115,19 @@ def purge_expired_notification_events(retention_days=None):
     try:
         cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
 
+        # Un-indexed rows are left alone. They predate the item_index migration,
+        # and the poller owns their disposal: when a poll meets them it deletes
+        # them AND resets that room's SlotItemCount, so the backfill that follows
+        # rebuilds the counts from zero. Deleting them here skips that reset, and
+        # a room revived afterwards would seed its counts from the surviving
+        # SlotItemCount rows and then increment again, doubling them for good now
+        # that nothing recomputes counts downward.
+        #
+        # Production had 3,060 rooms in exactly this state on 2026-09-11: all
+        # suspended or complete, all with history carrying no index at all.
         deleted_items, items_remaining = _purge_in_batches(
-            session, NotifiedItem, NotifiedItem.timestamp < cutoff_date
+            session, NotifiedItem,
+            (NotifiedItem.timestamp < cutoff_date) & NotifiedItem.item_index.isnot(None)
         )
         deleted_hints, hints_remaining = _purge_in_batches(
             session, NotifiedHint, NotifiedHint.timestamp < cutoff_date
