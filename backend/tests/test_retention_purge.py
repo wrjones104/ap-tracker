@@ -92,6 +92,34 @@ class TestRetentionPurge(RetentionTestBase):
         self.assertEqual(self.session.query(NotifiedItem).count(), 3)
         self.assertEqual(self.session.query(NotifiedHint).count(), 1)
 
+    def test_leaves_legacy_unindexed_rows_to_the_poller(self):
+        """Un-indexed history is the poller's to dispose of, not retention's.
+
+        When a poll meets rows with no item_index it deletes them and resets that
+        room's SlotItemCount, so the backfill rebuilds the counts from zero.
+        Retention deleting them first skips the reset, and a room revived later
+        seeds its counts from the surviving SlotItemCount and increments again.
+        With no downward correction left, that doubling is permanent.
+        """
+        self._room("room-legacy")
+        self._items("room-legacy", 3, age_days=200)
+        # Same age, but from before the item_index migration.
+        for i in range(4):
+            self.session.add(NotifiedItem(
+                room_id="room-legacy", receiving_slot_id=1, sending_slot_id=2,
+                item_id=900 + i, location_id=9000 + i, item_index=None,
+                timestamp=datetime.utcnow() - timedelta(days=200),
+            ))
+        self.session.commit()
+
+        result = retention_service.purge_expired_notification_events(retention_days=90)
+
+        self.assertEqual(result['purged_items'], 3, "indexed rows should still age out")
+        surviving = self.session.query(NotifiedItem).filter_by(room_id="room-legacy").all()
+        self.assertEqual(len(surviving), 4)
+        self.assertTrue(all(r.item_index is None for r in surviving),
+                        "retention removed rows the poller has to reset counts for")
+
     def test_leaves_slot_item_counts_alone(self):
         """The counts are the authority for milestone progress across the window."""
         self._room("room-a")
