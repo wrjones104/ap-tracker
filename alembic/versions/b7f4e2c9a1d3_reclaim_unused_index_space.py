@@ -57,6 +57,24 @@ OLD_INDEX = 'ix_notifieditem_item_index'
 NATURAL_KEY = '_checksum_entity_uc'
 
 
+def _index_is_valid(bind, name):
+    """True only for an index that exists and is usable.
+
+    A CREATE INDEX CONCURRENTLY that fails partway leaves the index present but
+    marked invalid. Reflection still reports it, so a plain name check would
+    decide the work was already done and leave a dead index in place forever.
+    """
+    row = bind.execute(
+        sa.text(
+            "SELECT 1 FROM pg_class c "
+            "JOIN pg_index i ON i.indexrelid = c.oid "
+            "WHERE c.relname = :name AND i.indisvalid"
+        ),
+        {'name': name},
+    ).first()
+    return row is not None
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != 'postgresql':
@@ -104,21 +122,32 @@ def upgrade() -> None:
 
     # --- 2. notified_items: full btree -> partial ------------------------------
     if 'notified_items' in tables:
-        indexes = {i['name'] for i in inspector.get_indexes('notified_items')}
-
-        if PARTIAL_INDEX not in indexes:
-            # Builds in one scan and holds a lock on notified_items for its
-            # duration. The result is a handful of kilobytes because the backfill
-            # this serves has already run for almost every row.
-            op.create_index(
-                PARTIAL_INDEX,
-                'notified_items',
-                ['room_id'],
-                postgresql_where=sa.text('item_index IS NULL'),
-            )
+        # Built CONCURRENTLY, which cannot run inside a transaction, so this
+        # steps outside the one alembic/env.py wraps around the whole upgrade.
+        #
+        # Worth the awkwardness. A plain CREATE INDEX here scans 10.3 million
+        # rows while holding a lock that blocks every write to notified_items,
+        # and the poller writes to it continuously. lock_timeout does not help:
+        # it bounds how long we wait to acquire a lock, not how long we hold
+        # one. CONCURRENTLY pays for a second scan and blocks no writers.
+        if not _index_is_valid(bind, PARTIAL_INDEX):
+            with op.get_context().autocommit_block():
+                # A CONCURRENTLY build that failed leaves an invalid index
+                # behind. Postgres never uses it but the name stays taken, so
+                # clear it rather than skipping the rebuild forever.
+                op.execute(f'DROP INDEX IF EXISTS {PARTIAL_INDEX}')
+                op.execute(
+                    f'CREATE INDEX CONCURRENTLY {PARTIAL_INDEX} '
+                    f'ON notified_items (room_id) WHERE item_index IS NULL'
+                )
             logging.info("[MIGRATION] Created partial index %s.", PARTIAL_INDEX)
 
-        if OLD_INDEX in indexes:
+        # autocommit_block ended the transaction that carried the SET LOCAL, so
+        # the timeout has to be re-armed for the drop below.
+        bind.execute(sa.text("SET LOCAL lock_timeout = '4s'"))
+
+        if OLD_INDEX in {i['name'] for i in sa.inspect(bind).get_indexes('notified_items')}:
+            # Catalog-only once the lock is held, unlike the build above.
             op.drop_index(OLD_INDEX, table_name='notified_items')
             logging.info("[MIGRATION] Dropped %s.", OLD_INDEX)
 
@@ -145,8 +174,15 @@ def downgrade() -> None:
 
     if 'notified_items' in tables:
         indexes = {i['name'] for i in inspector.get_indexes('notified_items')}
-        if OLD_INDEX not in indexes:
-            op.create_index(OLD_INDEX, 'notified_items', ['item_index'])
+        if not _index_is_valid(bind, OLD_INDEX):
+            # CONCURRENTLY for the same reason as the upgrade: this one indexes
+            # every row rather than the handful with a null item_index, so it is
+            # the more expensive of the two builds, not the cheaper.
+            with op.get_context().autocommit_block():
+                op.execute(f'DROP INDEX IF EXISTS {OLD_INDEX}')
+                op.execute(
+                    f'CREATE INDEX CONCURRENTLY {OLD_INDEX} ON notified_items (item_index)'
+                )
         if PARTIAL_INDEX in indexes:
             op.drop_index(PARTIAL_INDEX, table_name='notified_items')
 
