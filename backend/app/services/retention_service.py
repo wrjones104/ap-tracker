@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, exists
+from sqlalchemy import or_
 
 from app import Session
 from app.models import (
@@ -39,6 +39,26 @@ def get_retention_days():
         return 90
     if value < 1:
         logging.warning("[RETENTION] RETENTION_DAYS below 1; using 90.")
+        return 90
+    return value
+
+
+def get_guest_inactivity_days():
+    """Days before an inactive guest account is removed.
+
+    Deliberately not RETENTION_DAYS. That one governs how much history we keep,
+    and an operator tightening it to reclaim disk must not discover it deleted
+    user accounts as a side effect: a guest purge takes the account's
+    subscriptions, tracked slots and devices with it through cascades, and none
+    of that comes back. The floor is there for the same reason.
+    """
+    try:
+        value = int(os.environ.get('GUEST_INACTIVITY_DAYS', '90'))
+    except (TypeError, ValueError):
+        logging.warning("[RETENTION] GUEST_INACTIVITY_DAYS is not an integer; using 90.")
+        return 90
+    if value < 30:
+        logging.warning("[RETENTION] GUEST_INACTIVITY_DAYS below 30; using 90.")
         return 90
     return value
 
@@ -131,11 +151,36 @@ def purge_orphaned_room_events():
     """
     session = Session()
     try:
-        item_orphan = ~exists().where(TrackedRoom.room_id == NotifiedItem.room_id)
-        hint_orphan = ~exists().where(TrackedRoom.room_id == NotifiedHint.room_id)
+        # Resolved once, rather than as a NOT EXISTS inside the batch predicate.
+        # notified_items.room_id has no index that helps an anti-join against the
+        # whole of tracked_rooms, so that form re-scanned a 977 MB heap for every
+        # batch, up to forty times per table per run. Deleting by a known room
+        # list rides ix_notified_items_room_id instead, and the one distinct scan
+        # replaces all of them.
+        live_rooms = {r[0] for r in session.query(TrackedRoom.room_id).all()}
 
-        deleted_items, items_remaining = _purge_in_batches(session, NotifiedItem, item_orphan)
-        deleted_hints, hints_remaining = _purge_in_batches(session, NotifiedHint, hint_orphan)
+        dead_item_rooms = [
+            r[0] for r in session.query(NotifiedItem.room_id).distinct().all()
+            if r[0] not in live_rooms
+        ]
+        dead_hint_rooms = [
+            r[0] for r in session.query(NotifiedHint.room_id).distinct().all()
+            if r[0] not in live_rooms
+        ]
+
+        if dead_item_rooms:
+            deleted_items, items_remaining = _purge_in_batches(
+                session, NotifiedItem, NotifiedItem.room_id.in_(dead_item_rooms)
+            )
+        else:
+            deleted_items, items_remaining = 0, False
+
+        if dead_hint_rooms:
+            deleted_hints, hints_remaining = _purge_in_batches(
+                session, NotifiedHint, NotifiedHint.room_id.in_(dead_hint_rooms)
+            )
+        else:
+            deleted_hints, hints_remaining = 0, False
 
         if deleted_items or deleted_hints:
             logging.info(
@@ -162,7 +207,7 @@ def purge_inactive_guest_accounts(inactivity_days=None):
     Cascading deletes remove associated subscriptions, slots, devices, ignore lists, etc.
     """
     if inactivity_days is None:
-        inactivity_days = get_retention_days()
+        inactivity_days = get_guest_inactivity_days()
 
     session = Session()
     try:
@@ -215,17 +260,37 @@ def purge_expired_jwt_blocklist():
 def run_all_retention_tasks(retention_days=None):
     """Runs all retention cleanup operations.
 
-    Each step owns its own session and swallows its own failures, so one of them
-    failing does not cost the others their work. That is deliberate: the previous
-    arrangement put unrelated deletions in a single transaction, and a foreign
-    key violation in one half silently discarded the other.
+    Each step owns its own session and commits its own work, so one failing does
+    not cost the others theirs. That is deliberate: the arrangement this replaced
+    put unrelated deletions in a single transaction, and a foreign key violation
+    in one half silently discarded the other.
+
+    Each call is also guarded here, not only inside the function. The inner
+    handlers catch database errors, which is what actually goes wrong, but they
+    cannot catch something raised before their own try block. Without this the
+    first unexpected failure would skip every step after it, and the steps are
+    ordered by cost rather than importance.
     """
     if retention_days is None:
         retention_days = get_retention_days()
 
+    # No argument to the guest purge: guest lifetime is its own setting, not a
+    # slice of the history window. See get_guest_inactivity_days.
+    steps = (
+        ('orphaned room events', purge_orphaned_room_events),
+        ('expired notification events',
+         lambda: purge_expired_notification_events(retention_days=retention_days)),
+        ('inactive guest accounts', purge_inactive_guest_accounts),
+        ('expired JWT blocklist', purge_expired_jwt_blocklist),
+    )
+
     results = {}
-    results.update(purge_orphaned_room_events())
-    results.update(purge_expired_notification_events(retention_days=retention_days))
-    results.update(purge_inactive_guest_accounts(inactivity_days=retention_days))
-    results.update(purge_expired_jwt_blocklist())
+    for label, step in steps:
+        try:
+            results.update(step() or {})
+        except Exception as e:
+            logging.error(
+                "[RETENTION_ERROR] Step '%s' failed; continuing with the rest: %s",
+                label, e, exc_info=True,
+            )
     return results

@@ -122,6 +122,15 @@ class TrackedRoom(Base):
     # rewrite the whole TOAST value every poll. This one stays small enough to
     # live inline. Only assigned when a count actually changed.
     cached_checks_json = Column(String, default='{}', server_default='{}')
+    # {slot_id: highest item_index processed}. The dedup floor for received
+    # items, and the reason it lives here rather than being derived per poll:
+    # the poller used to decide what was new by comparing the Archipelago feed
+    # against surviving notified_items rows, and that table is purged on a
+    # retention window. The feed replays every item a slot has ever received,
+    # re-enumerated from zero, so a purged index read as brand new and was
+    # re-inserted, re-notified, and counted again. A floor derived from the rows
+    # retention deletes cannot survive retention. See a3e71c94b8d2.
+    item_index_watermark_json = Column(String, default='{}', server_default='{}')
     is_setup = Column(Boolean, default=False, nullable=False)
     last_remote_activity = Column(DateTime, nullable=True)
     last_revive_attempt = Column(DateTime, nullable=True)

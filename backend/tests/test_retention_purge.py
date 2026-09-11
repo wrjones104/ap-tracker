@@ -170,23 +170,86 @@ class TestRetentionPurge(RetentionTestBase):
         finally:
             del os.environ['RETENTION_DAYS']
 
-    def test_run_all_survives_one_failing_step(self):
-        """Each step owns its transaction, so one failure costs only its own work."""
+    def test_run_all_continues_past_a_failing_step(self):
+        """A step blowing up must not cost the later steps their work.
+
+        The earlier version of this test patched the guest purge to raise and
+        asserted the error propagated. That demonstrated ordering, not
+        isolation, and it passed against a version of run_all_retention_tasks
+        that abandoned everything after the first failure.
+        """
         self._room("room-a")
         self._items("room-a", 2, age_days=200)
         self.session.add(JWTBlocklist(jti="expired", expires_at=datetime.utcnow() - timedelta(days=1)))
         self.session.commit()
 
-        broken = retention_service.purge_inactive_guest_accounts
-        retention_service.purge_inactive_guest_accounts = lambda **kw: (_ for _ in ()).throw(RuntimeError("boom"))
-        try:
-            with self.assertRaises(RuntimeError):
-                retention_service.run_all_retention_tasks()
-        finally:
-            retention_service.purge_inactive_guest_accounts = broken
+        original = retention_service.purge_inactive_guest_accounts
 
-        # The item purge ran before the failure and committed on its own.
+        def exploding(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        retention_service.purge_inactive_guest_accounts = exploding
+        try:
+            results = retention_service.run_all_retention_tasks()
+        finally:
+            retention_service.purge_inactive_guest_accounts = original
+
+        # Ran before the failure.
         self.assertEqual(self.session.query(NotifiedItem).count(), 0)
+        # Ran after it. This is the part the old test never reached.
+        self.assertEqual(self.session.query(JWTBlocklist).count(), 0)
+        self.assertEqual(results.get('purged_jwts'), 1)
+        # The failed step contributes nothing rather than a wrong number.
+        self.assertNotIn('purged_guests', results)
+
+    def test_guest_purge_has_its_own_window(self):
+        """RETENTION_DAYS must not reach account deletion.
+
+        It reads as a history knob, and an operator tightening it to reclaim
+        disk must not find it removing guest accounts, and their subscriptions
+        and devices through cascades, as a side effect.
+        """
+        os.environ['RETENTION_DAYS'] = '7'
+        try:
+            self.assertEqual(retention_service.get_retention_days(), 7)
+            self.assertEqual(retention_service.get_guest_inactivity_days(), 90)
+        finally:
+            del os.environ['RETENTION_DAYS']
+
+        # Its own knob works, and refuses a value low enough to be a mistake.
+        os.environ['GUEST_INACTIVITY_DAYS'] = '120'
+        try:
+            self.assertEqual(retention_service.get_guest_inactivity_days(), 120)
+        finally:
+            del os.environ['GUEST_INACTIVITY_DAYS']
+
+        os.environ['GUEST_INACTIVITY_DAYS'] = '3'
+        try:
+            self.assertEqual(retention_service.get_guest_inactivity_days(), 90)
+        finally:
+            del os.environ['GUEST_INACTIVITY_DAYS']
+
+    def test_janitor_does_not_prune_guests(self):
+        """Guest lifetime has one owner.
+
+        db_run_cleanup used to prune guests on a hardcoded 30 day window while
+        retention_service did it on a configurable 90 day one. Because the
+        janitor runs the former first, guests went 60 days earlier than every
+        doc promised and RETENTION_DAYS had no effect on them.
+        """
+        from app.poller import db_run_cleanup
+
+        long_ago = datetime.utcnow() - timedelta(days=45)
+        stale = User(guest_uuid="g-45-days", is_guest=True, last_activity=long_ago)
+        self.session.add(stale)
+        self.session.commit()
+
+        db_run_cleanup()
+        self.session.expire_all()
+
+        survivors = {u.guest_uuid for u in self.session.query(User).all()}
+        self.assertIn("g-45-days", survivors,
+                      "the janitor pruned a guest inside the 90 day window")
 
 
 class TestJanitorRoomCleanup(RetentionTestBase):
@@ -237,15 +300,16 @@ class TestJanitorRoomCleanup(RetentionTestBase):
             self.session.query(SlotItemCount).filter_by(room_id="room-keeper").count(), 1
         )
 
-    def test_prunes_stale_guests_even_alongside_room_deletion(self):
-        """The two halves commit separately now.
+    def test_guest_purge_is_retentions_job_and_spares_the_rest(self):
+        """Room deletion and guest removal are separate concerns now.
 
-        They used to share a transaction, and the foreign key violation raised by
-        every room delete rolled this back with it.
+        db_run_cleanup deletes the orphaned room without touching any account;
+        purge_inactive_guest_accounts owns guest lifetime, on its own window, and
+        never touches a Discord account.
         """
         from app.poller import db_run_cleanup
 
-        long_ago = datetime.utcnow() - timedelta(days=60)
+        long_ago = datetime.utcnow() - timedelta(days=200)
         self._room("room-orphan", last_poll=long_ago)
         self.session.add(SlotItemCount(room_id="room-orphan", slot_id=1, item_id=100, count=7))
 
@@ -258,8 +322,19 @@ class TestJanitorRoomCleanup(RetentionTestBase):
         db_run_cleanup()
         self.session.expire_all()
 
+        # The room goes, which is the foreign key fix working.
+        self.assertEqual(self.session.query(TrackedRoom).count(), 0)
+        self.assertEqual(
+            self.session.query(SlotItemCount).filter_by(room_id="room-orphan").count(), 0
+        )
+        # No account is touched by the janitor.
+        self.assertEqual(self.session.query(User).count(), 3)
+
+        retention_service.purge_inactive_guest_accounts()
+        self.session.expire_all()
+
         remaining = {u.guest_uuid or u.discord_id for u in self.session.query(User).all()}
-        self.assertNotIn("g-stale", remaining, "stale guest survived the janitor")
+        self.assertNotIn("g-stale", remaining, "stale guest survived the retention purge")
         self.assertIn("g-fresh", remaining)
         self.assertIn("42", remaining, "a Discord account was pruned")
 

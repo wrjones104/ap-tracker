@@ -80,30 +80,35 @@ def _rewrite(ondelete):
     # up hands the job to the restart loop and a quieter moment.
     bind.execute(sa.text("SET LOCAL lock_timeout = '4s'"))
 
-    inspector = sa.inspect(bind)
-    if TABLE not in set(inspector.get_table_names()):
-        logging.warning("[MIGRATION] Table %s missing; skipping.", TABLE)
-        return
+    # try/finally because every skip below is an early return, and the handback
+    # at the end is not optional: a later migration sharing this transaction
+    # would otherwise inherit a 4 second timeout it never asked for, which is
+    # precisely the leak this handback exists to prevent.
+    try:
+        inspector = sa.inspect(bind)
+        if TABLE not in set(inspector.get_table_names()):
+            logging.warning("[MIGRATION] Table %s missing; skipping.", TABLE)
+            return
 
-    fk = _matching_fk(inspector)
-    if fk is None:
-        logging.warning(
-            "[MIGRATION] No foreign key on %s.%s -> %s; skipping.",
-            TABLE, ','.join(LOCAL_COLS), REFERRED,
-        )
-        return
+        fk = _matching_fk(inspector)
+        if fk is None:
+            logging.warning(
+                "[MIGRATION] No foreign key on %s.%s -> %s; skipping.",
+                TABLE, ','.join(LOCAL_COLS), REFERRED,
+            )
+            return
 
-    current = (fk.get('options') or {}).get('ondelete')
-    if (current or '').upper() == (ondelete or '').upper():
-        logging.info("[MIGRATION] %s already has the requested ON DELETE; skipping.", TABLE)
-        return
+        current = (fk.get('options') or {}).get('ondelete')
+        if (current or '').upper() == (ondelete or '').upper():
+            logging.info("[MIGRATION] %s already has the requested ON DELETE; skipping.", TABLE)
+            return
 
-    name = fk['name']
-    op.drop_constraint(name, TABLE, type_='foreignkey')
-    op.create_foreign_key(name, TABLE, REFERRED, LOCAL_COLS, REFERRED_COLS, ondelete=ondelete)
-    logging.info("[MIGRATION] Rewrote %s.%s ON DELETE %s.", TABLE, name, ondelete or 'NO ACTION')
-
-    bind.execute(sa.text("SET LOCAL lock_timeout = DEFAULT"))
+        name = fk['name']
+        op.drop_constraint(name, TABLE, type_='foreignkey')
+        op.create_foreign_key(name, TABLE, REFERRED, LOCAL_COLS, REFERRED_COLS, ondelete=ondelete)
+        logging.info("[MIGRATION] Rewrote %s.%s ON DELETE %s.", TABLE, name, ondelete or 'NO ACTION')
+    finally:
+        bind.execute(sa.text("SET LOCAL lock_timeout = DEFAULT"))
 
 
 def upgrade() -> None:

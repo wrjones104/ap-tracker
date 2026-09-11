@@ -169,6 +169,11 @@ def downgrade() -> None:
         logging.info("[MIGRATION] Skipping index reclamation rollback on %s dialect.", bind.dialect.name)
         return
 
+    # The upgrade fails fast rather than queueing readers behind a lock request.
+    # The downgrade takes the same locks, and its table rewrite is the more
+    # expensive of the two, so it gets the same bound.
+    bind.execute(sa.text("SET LOCAL lock_timeout = '4s'"))
+
     inspector = sa.inspect(bind)
     tables = set(inspector.get_table_names())
 
@@ -192,6 +197,10 @@ def downgrade() -> None:
             # SERIAL creates the owning sequence and populates every existing row
             # as part of the rewrite, which plain add_column cannot do for a NOT
             # NULL column with no default.
+            # Re-arm: the autocommit_block above ended the transaction that
+            # carried the SET LOCAL.
+            bind.execute(sa.text("SET LOCAL lock_timeout = '4s'"))
             op.execute('ALTER TABLE datapackage_cache ADD COLUMN id SERIAL')
             op.execute('ALTER TABLE datapackage_cache ADD PRIMARY KEY (id)')
             op.execute('ALTER TABLE datapackage_cache REPLICA IDENTITY DEFAULT')
+            bind.execute(sa.text("SET LOCAL lock_timeout = DEFAULT"))

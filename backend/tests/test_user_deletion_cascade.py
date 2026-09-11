@@ -370,14 +370,18 @@ class TestUserDeletionCascade(unittest.TestCase):
             Session.remove()
 
     def test_janitor_cleanup_survives_a_template_owning_guest(self):
-        """db_run_cleanup is the purge that actually runs, on the supervisor's daily tick.
+        """The daily janitor tick, end to end: orphaned room, then stale guests.
 
-        It deletes orphaned rooms and stale guests in one transaction and commits
-        once, so a single blocked guest used to roll back the room cleanup too.
+        Both halves used to share one transaction, so a single blocked guest
+        rolled the room cleanup back with it. They are separate jobs now:
+        db_run_cleanup owns rooms, and purge_inactive_guest_accounts owns guest
+        lifetime on its own configurable window, because the janitor's hardcoded
+        30 days silently overrode the documented 90. The supervisor calls both on
+        the same tick, which is what this reproduces.
         """
         from app.poller import db_run_cleanup
 
-        stale = datetime.utcnow() - timedelta(days=60)
+        stale = datetime.utcnow() - timedelta(days=200)
         session = Session()
         try:
             owner = self._make_user(session, 'janitor_owner', is_guest=True, last_activity=stale)
@@ -387,13 +391,13 @@ class TestUserDeletionCascade(unittest.TestCase):
             self._make_user(session, 'janitor_plain', is_guest=True, last_activity=stale)
             self._make_user(session, 'janitor_active', is_guest=True)
 
-            # An orphaned room, cleaned up in the same transaction as the guests.
             session.add(TrackedRoom(room_id='room-orphan', last_successful_poll=stale))
             session.commit()
         finally:
             Session.remove()
 
         db_run_cleanup()
+        purge_inactive_guest_accounts()
 
         session = Session()
         try:
@@ -404,8 +408,7 @@ class TestUserDeletionCascade(unittest.TestCase):
             rooms = {r.room_id for r in session.query(TrackedRoom).all()}
             self.assertNotIn(
                 'room-orphan', rooms,
-                "the orphaned room survived, so the guest delete took the room "
-                "cleanup down with it",
+                "the orphaned room survived, so the room cleanup failed",
             )
         finally:
             Session.remove()
