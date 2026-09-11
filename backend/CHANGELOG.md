@@ -10,6 +10,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.13.0] - 2026-09-11
+
+_The Room Library Is Yours, And The Cleanup Finally Runs_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - Per-room Cheese Tracker linking. A room mirrors to Cheese per subscription rather than per account: `user_room_subscriptions.cheese_link` (`none` | `linked`), set through `PUT /rooms/<id>/cheese_link`. The link governs what Cheese may write, so a sync can no longer delete a subscription. Migration `a1c93f70d5e2` backfills every subscription whose room already carries a `cheese_tracker_id` as linked, so nothing changes state on deploy.
+> - Cheese tracker suggestions. `GET /integrations/cheese/available` offers dashboard trackers the app has not seen, with `POST /integrations/cheese/available/dismiss` and `POST /integrations/cheese/available/import`. A dismissal is remembered in the new `cheese_dismissed_trackers` table; importing the room clears it.
+> - `users.cheese_publish_new_rooms` seeds the add-room dialog's "also create this on Cheese Tracker" choice. A client that sends nothing gets the stored default, which is what older builds have always done.
+>
+> ### Changed
+> - Cheese sync reports rather than acts. A linked room missing from the dashboard sets `cheese_unlisted_at` and is surfaced to the user; nothing is removed on the strength of it.
+> - Retention is enforced rather than described. `run_all_retention_tasks` now runs from the poller's 24-hour janitor, ageing out history past the window, history whose room no longer exists, inactive guests, and expired blocklist entries. Every purge commits in batches and stops at a per-run ceiling, so it never holds locks against live polling.
+> - Two new settings. `RETENTION_DAYS` (default 90) governs how much history is kept. `GUEST_INACTIVITY_DAYS` (default 90, floor 30) governs guest account lifetime, deliberately separate so that tightening the history window to reclaim disk cannot delete accounts as a side effect.
+>
+> ### Fixed
+> - Account deletion failed outright for any user who owned a milestone template, and took the inactive-guest purge down with it. `MilestoneTemplate` gains the collection it was missing, and `e5d2a7c81f34` adds `ON DELETE CASCADE` across the user-owned subtree as a database-level backstop. Closes #331.
+> - A guest upgrading to Discord lost the rooms they had added.
+> - A revoked guest token could still bind its account to a Discord identity. The callback checks the blocklist now, like every other authenticated path.
+>
+> ### Maintenance
+> No user-visible effect. This is why the database had been growing without bound.
+>
+> - The orphaned-room janitor had never completed a run. `slot_item_counts.room_id` referenced `tracked_rooms` with no `ON DELETE` clause and there is no ORM relationship for a cascade to travel along, so every room delete raised `ForeignKeyViolation`; because both halves shared one transaction, the rollback discarded the stale-guest pruning too. `b4a1c8f5e207` adds the cascade, and the halves commit separately.
+> - The janitor's timer was initialised to the current time, so it first fired 24 hours after boot and every deploy reset the clock. On a service that redeploys more often than daily it never ran at all.
+> - History keyed to a deleted room is now purged. `notified_items` and `notified_hints` key on the room UUID as a plain string with no foreign key, so nothing had ever removed them.
+> - 367 MB of index reclaimed. `datapackage_cache_pkey` cost 268 MB and had been scanned twice in the lifetime of the table, and the `id` column behind it is read by nothing. `ix_notifieditem_item_index` cost 99 MB for 141 lifetime scans and is replaced by a partial index over the rows its only callers ask for, built `CONCURRENTLY`. `b7f4e2c9a1d3`.
+> - `tracked_rooms.item_index_watermark_json` is a per-slot dedup floor that outlives a purge. The Archipelago feed is cumulative and re-enumerated from index zero every poll, so without a floor a purged index reads as new and would be re-inserted, re-notified and counted a second time. Backfilled by `a3e71c94b8d2`, which runs before retention can delete anything.
+> - `backend/purge_backlog.py` drains a large first-time backlog under supervision rather than waiting out the nightly per-run cap. Space is only returned to the filesystem by a subsequent repack.
+> ```
+
+### Added
+- **Per-Room Cheese Linking**: `user_room_subscriptions.cheese_link` plus `PUT /rooms/<id>/cheese_link`. The link decides what gets pushed rather than what survives a sync. Migration `a1c93f70d5e2`.
+- **Cheese Tracker Suggestions**: `GET /integrations/cheese/available`, with dismiss and import routes beside it. A dismissal is remembered in the new `cheese_dismissed_trackers` table.
+
+### Changed
+- **Sync Reports Instead Of Removing**: A linked room missing from the Cheese dashboard is flagged for the user rather than acted on. Nothing is removed on the strength of it.
+- **Retention Is Enforced, Not Just Documented**: `run_all_retention_tasks` runs from the 24-hour janitor, in committed batches with a per-run ceiling. `RETENTION_DAYS` and `GUEST_INACTIVITY_DAYS` are separate settings on purpose.
+- **367 MB Of Index Reclaimed**: `datapackage_cache_pkey` had served 2 lifetime scans for 268 MB; `ix_notifieditem_item_index` 141 for 99 MB. Migration `b7f4e2c9a1d3`.
+
+### Fixed
+- **Account Deletion Blocked By A Milestone Template**: Deletion raised `ForeignKeyViolation` on `milestone_templates` and rolled the inactive-guest purge back with it. Closes #331.
+- **Guest Upgrade Lost The User's Rooms**: Signing in with Discord after using the app as a guest discarded the rooms already added.
+- **A Revoked Guest Token Could Still Claim An Account**: The Discord callback did not check the blocklist, unlike every other authenticated path. A revoked token now falls through to an ordinary login.
+- **The Orphaned-Room Janitor Had Never Run**: A missing `ON DELETE CASCADE` on `slot_item_counts` failed every room delete, and a timer that reset on each deploy meant the janitor rarely fired at all. Migration `b4a1c8f5e207`.
+
+---
+
 ## [1.12.0] - 2026-09-08
 
 _Templates Apply Themselves, And Quieter Hints_
