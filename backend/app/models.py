@@ -382,7 +382,12 @@ class JWTBlocklist(Base):
 class SlotItemCount(Base):
     __tablename__ = 'slot_item_counts'
     id = Column(Integer, primary_key=True)
-    room_id = Column(String, ForeignKey('tracked_rooms.room_id'), nullable=False)
+    # ON DELETE CASCADE, because there is no ORM relationship from TrackedRoom
+    # to this table for a cascade to travel along. Without it, deleting an
+    # orphaned room raises ForeignKeyViolation, and db_run_cleanup in poller.py
+    # loses its whole transaction including the stale-guest pruning that shares
+    # it. That is why no orphaned room had been collected. See b4a1c8f5e207.
+    room_id = Column(String, ForeignKey('tracked_rooms.room_id', ondelete='CASCADE'), nullable=False)
     slot_id = Column(Integer, nullable=False)
     item_id = Column(BigInteger, nullable=False)
     count = Column(Integer, default=0, nullable=False)

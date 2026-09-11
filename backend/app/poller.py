@@ -34,6 +34,7 @@ from app.services.cheese_service import process_cheese_update
 from app.services.redis_service import get_redis_client, publish_event
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 from app.services import milestone_template_service
+from app.services.retention_service import run_all_retention_tasks
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -2574,7 +2575,13 @@ _global_setup_cooldowns = {}
 async def poller_supervisor(app, loop):
     logging.info("[POLLER] Background polling service starting...")
     running_tasks = {}
-    last_cleanup_time = datetime.utcnow()
+    # Backdated so the janitor runs on the first supervisor pass, matching
+    # last_cache_check and last_revive_check below. Initialised to utcnow() it
+    # only fired 24 hours after boot, and every deploy or crash reset the clock,
+    # so on a service that restarts more often than daily it never ran at all.
+    # Each task it calls is bounded and cheap when there is nothing to do, so
+    # running once per restart is affordable.
+    last_cleanup_time = datetime.utcnow() - timedelta(hours=24)
 
     setup_queue = asyncio.Queue()
     setup_semaphore = asyncio.Semaphore(2) 
@@ -2725,12 +2732,19 @@ async def poller_supervisor(app, loop):
                     task_to_stop.cancel()
 
             if datetime.utcnow() - last_cleanup_time > timedelta(hours=24):
-                # 1. Delete orphaned rooms (No subscribers)
+                # 1. Delete orphaned rooms (No subscribers), and their history
                 await loop.run_in_executor(None, db_run_cleanup)
-                
+
                 # 2. Suspend stale active rooms (Has subscribers, but no activity)
                 await loop.run_in_executor(None, db_check_stale_rooms)
-                
+
+                # 3. Age out history past the retention window, inactive guests
+                # and expired blocklist entries. Written long before this call
+                # existed: nothing outside the test suite had ever invoked it,
+                # while LLM.md and architecture.md both described the policy as
+                # active. Each task is batched and capped per run.
+                await loop.run_in_executor(None, run_all_retention_tasks)
+
                 last_cleanup_time = datetime.utcnow()
 
         except Exception as e:
@@ -2762,11 +2776,24 @@ def db_has_unindexed_items():
     finally:
         Session.remove()
 
+# Rooms removed per transaction. Bounds both the lock footprint and the size of
+# the IN list used to reach their history.
+ROOM_CLEANUP_CHUNK = 100
+
+
 def db_run_cleanup():
+    """Remove orphaned rooms and stale guest accounts.
+
+    The two halves commit separately. They used to share one transaction, and
+    every room delete raised ForeignKeyViolation on slot_item_counts (see
+    b4a1c8f5e207), so the rollback took the guest pruning with it and neither
+    half ever completed.
+    """
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+
+    # --- 1. Orphaned rooms: nobody subscribes, and nothing has polled recently.
     session = Session()
     try:
-        # 1. Clean up Orphaned Rooms (Existing Logic)
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
         rooms_to_delete = session.query(TrackedRoom).filter(
             TrackedRoom.subscriptions.any() == False,
             or_(
@@ -2774,11 +2801,43 @@ def db_run_cleanup():
                 TrackedRoom.last_successful_poll < thirty_days_ago
             )
         ).all()
-        for room in rooms_to_delete:
-            session.delete(room)
-        
-        # 2. Clean up Stale Guest Accounts (e.g., > 30 days inactive)
-        # We ONLY delete 'is_guest' users. We never touch Discord users.
+
+        total_rooms = total_items = total_hints = 0
+        for start in range(0, len(rooms_to_delete), ROOM_CLEANUP_CHUNK):
+            chunk = rooms_to_delete[start:start + ROOM_CLEANUP_CHUNK]
+            uuids = [r.room_id for r in chunk]
+
+            # notified_items and notified_hints key on the room UUID string with
+            # no foreign key, so no cascade reaches them. Delete them here or
+            # they outlive the room forever as rows no query can return.
+            total_items += session.query(NotifiedItem).filter(
+                NotifiedItem.room_id.in_(uuids)
+            ).delete(synchronize_session=False)
+            total_hints += session.query(NotifiedHint).filter(
+                NotifiedHint.room_id.in_(uuids)
+            ).delete(synchronize_session=False)
+
+            for room in chunk:
+                session.delete(room)  # slot_item_counts cascades
+
+            session.commit()
+            total_rooms += len(chunk)
+
+        if total_rooms:
+            logging.info(
+                "[JANITOR] Removed %s orphaned rooms, %s items and %s hints.",
+                total_rooms, total_items, total_hints,
+            )
+    except Exception as e:
+        logging.error(f"[JANITOR_DB_ERROR] Failed to remove orphaned rooms: {e}", exc_info=True)
+        session.rollback()
+    finally:
+        Session.remove()
+
+    # --- 2. Stale guest accounts. Only is_guest users; Discord users are never
+    # touched. Cascades remove their subscriptions, slots and devices.
+    session = Session()
+    try:
         stale_guests = session.query(User).filter(
             User.is_guest == True,
             User.last_activity < thirty_days_ago
@@ -2787,11 +2846,10 @@ def db_run_cleanup():
         if stale_guests:
             logging.info(f"[JANITOR] Pruning {len(stale_guests)} stale guest accounts.")
             for guest in stale_guests:
-                session.delete(guest) # Cascade deletes their subscriptions/devices too
-
-        session.commit()
+                session.delete(guest)
+            session.commit()
     except Exception as e:
-        logging.error(f"[JANITOR_DB_ERROR] Failed to run cleanup: {e}", exc_info=True)
+        logging.error(f"[JANITOR_DB_ERROR] Failed to prune stale guests: {e}", exc_info=True)
         session.rollback()
     finally:
         Session.remove()
@@ -2959,22 +3017,26 @@ def db_check_stale_rooms():
             last_hint = session.query(NotifiedHint.timestamp).filter_by(room_id=room.room_id).order_by(NotifiedHint.timestamp.desc()).first()
             last_hint_time = last_hint[0] if last_hint else None
             
-            # 3. Determine latest activity
-            latest_activity = None
-            if last_item_time and last_hint_time:
-                latest_activity = max(last_item_time, last_hint_time)
-            elif last_item_time:
-                latest_activity = last_item_time
-            elif last_hint_time:
-                latest_activity = last_hint_time
+            # 3. Determine latest activity.
+            # room.last_remote_activity is included because history is purgeable
+            # now. With the default settings it cannot actually matter: retention
+            # keeps 90 days and this window is 30, so any room active inside the
+            # window still has the rows proving it. It matters if RETENTION_DAYS
+            # is ever set below 30, where a purge would otherwise read as
+            # silence and suspend a live room.
+            # Normalised to naive UTC before comparing: max() raises outright on a
+            # mix of aware and naive values, and these three reach us from
+            # different write paths.
+            candidates = [
+                t.replace(tzinfo=None) if t.tzinfo else t
+                for t in (last_item_time, last_hint_time, room.last_remote_activity) if t
+            ]
+            latest_activity = max(candidates) if candidates else None
             
             # 4. Check vs Limit
             # Note: We enforce naive UTC comparison by stripping info if present, or assuming native is UTC.
             # (Adjust based on your DB driver behavior, assuming naive UTC for now as per api.py)
             if latest_activity:
-                if latest_activity.tzinfo:
-                    latest_activity = latest_activity.replace(tzinfo=None)
-                
                 if latest_activity < limit_date:
                     room.is_suspended = True
                     room.failed_poll_count = 0 # Distinct from Error Suspension (which is >= 60)
