@@ -36,7 +36,7 @@ def heal_all_datapackages(limit, delay):
         for game_name in game_names:
             # Check if this game is cached using the old completion marker '_completed'
             # (which means it doesn't have the updated groups structure)
-            has_old = session.query(DatapackageCache.id).filter_by(
+            has_old = session.query(DatapackageCache.checksum).filter_by(
                 game=game_name,
                 entity_type='_metadata',
                 entity_name='_completed'
@@ -46,13 +46,13 @@ def heal_all_datapackages(limit, delay):
                 outdated_games.append(game_name)
             else:
                 # Also check if it has groups but lacks group members
-                has_groups = session.query(DatapackageCache.id).filter_by(
+                has_groups = session.query(DatapackageCache.checksum).filter_by(
                     game=game_name, 
                     entity_type='item_group'
                 ).limit(1).scalar() is not None
                 
                 if has_groups:
-                    has_json = session.query(DatapackageCache.id).filter_by(
+                    has_json = session.query(DatapackageCache.checksum).filter_by(
                         game=game_name, 
                         entity_type='item_name_groups_json'
                     ).limit(1).scalar() is not None

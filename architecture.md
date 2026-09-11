@@ -93,7 +93,7 @@ The poller handles background polling and event detection across active Archipel
 * **[notification_service.py](backend/app/services/notification_service.py):** Aggregates and dispatches FCM push payloads, including the Android channel id and priority for each event category.
 * **[cheese_service.py](backend/app/services/cheese_service.py):** Handles Cheese Tracker background sync and grace-period unclaim logic. Lost claims demote a slot from `play` to `watch` rather than untracking it; only a slot that vanishes from the tracker is deleted.
 * **[datapackage_service.py](backend/app/services/datapackage_service.py):** Datapackage caching, healing, and group name expansion.
-* **[retention_service.py](backend/app/services/retention_service.py):** Runs automated 90-day retention purges for event logs and inactive guest accounts, plus expiry of the JWT blocklist.
+* **[retention_service.py](backend/app/services/retention_service.py):** Runs automated 90-day retention purges for event logs and inactive guest accounts, plus expiry of the JWT blocklist and history whose room no longer exists. Called from the poller's 24-hour janitor. Every purge deletes in committed batches (`PURGE_BATCH_SIZE`) and stops at a per-run ceiling (`PURGE_MAX_ROWS_PER_RUN`), leaving the remainder for the next run.
 
 The supervisor (`poller.py::poller_supervisor`) runs on a 60-second tick: it queues new rooms for setup with backoff on repeated failures, revives suspended rooms, suspends active rooms that have gone quiet, deletes rooms with no subscribers, and starts a separate Cheese poller task per room that needs one.
 
@@ -107,11 +107,16 @@ SQLite is supported for local development only, where `create_app()` builds the 
 * **Composite and supporting indexes:**
   - `ix_usertrackedslot_user_room`: `(user_id, room_id)`
   - `ix_notifieditem_room_receiving_time`: `(room_id, receiving_slot_id, timestamp)`
+  - `ix_notifieditem_unindexed`: partial, `(room_id) WHERE item_index IS NULL`. Serves only the legacy backfill probes, and replaces a full btree on `item_index` that cost 99 MB to answer 141 lifetime queries.
   - `ix_notifiedhint_room_owner_time`: `(room_id, item_owner_id, timestamp)`
   - `ix_notifieditem_timestamp` / `ix_notifiedhint_timestamp`: single-column timestamp indexes serving the retention purge and cross-room feeds.
-* **`SlotItemCount`** (`room_id`, `slot_id`, `item_id`, `count`, uniquely constrained together) is the poller's running per-slot tally. It is the authority for milestone progress: unlike client history it survives the retention window and is unaffected by ignore rules, and it is the only source that can count an item-group requirement.
-* **90-Day Retention Window:**
+* **`SlotItemCount`** (`room_id`, `slot_id`, `item_id`, `count`, uniquely constrained together) is the poller's running per-slot tally. It is the authority for milestone progress: unlike client history it survives the retention window and is unaffected by ignore rules, and it is the only source that can count an item-group requirement. Because it outlives the window, `NotifiedItem` is only ever a floor for it: `reconcile_slot_item_counts` raises counts toward surviving history and never lowers or deletes them, and the premature-trigger audit reads these counts rather than the history. `room_id` cascades on room delete, without which the orphaned-room janitor cannot delete a room at all.
+* **Item index watermark:** `TrackedRoom.item_index_watermark_json` holds `{slot_id: highest item_index processed}` and is the dedup floor for received items. The Archipelago feed is cumulative and re-enumerated from index zero every poll, so once retention deletes a `NotifiedItem` row the index it held is indistinguishable from one never received: it would be re-inserted, re-notified over FCM, and counted into `SlotItemCount` again. Nothing derived from `NotifiedItem` can serve as this floor, because those are the rows retention deletes. Written in the same transaction as the rows it describes.
+* **90-Day Retention Window** (`RETENTION_DAYS`):
   - `NotifiedItem` and `NotifiedHint` records older than 90 days are purged automatically to maintain small database size and sub-millisecond query performance.
+  - History keyed to a room that no longer exists is purged on the same cycle. Both tables key on the room UUID as a plain string with no foreign key, so no cascade reaches them when a room is deleted.
+  - Client sync is unaffected: the history cursor is a monotonic `id` watermark per room and slot, and it already resets itself on an out-of-bounds value. Purged rows simply never appear again.
+  - Guest account lifetime is governed separately by `GUEST_INACTIVITY_DAYS` (default 90, floor 30), owned solely by `purge_inactive_guest_accounts`. `db_run_cleanup` handles rooms only: it used to prune guests on a hardcoded 30 days, which silently overrode the documented window.
   - Guest accounts inactive for more than 90 days are cleaned up.
   - Expired `JWTBlocklist` entries are dropped once the tokens they revoke have expired on their own.
 

@@ -455,6 +455,34 @@ def parse_cached_checks(cached_checks_json):
     return counts
 
 
+def serialize_index_watermarks(watermarks):
+    """
+    Encodes {slot_id: highest item_index processed} for
+    TrackedRoom.item_index_watermark_json. Same encoding as cached_checks, and
+    byte-stable for the same reason: the poller only writes when it changes.
+    """
+    return serialize_cached_checks(watermarks)
+
+
+def parse_index_watermarks(item_index_watermark_json):
+    """
+    Decodes TrackedRoom.item_index_watermark_json into {slot_id: highest index}.
+
+    This is the dedup floor that has to outlive the retention purge. The
+    Archipelago feed replays every item a slot has ever received, re-enumerated
+    from zero every poll, so an index whose notified_items row was purged is
+    otherwise indistinguishable from one the slot has never received: it gets
+    re-inserted, re-notified, and counted into SlotItemCount a second time.
+    Anything derived from notified_items cannot serve as the floor, because
+    those are the rows retention deletes.
+
+    Bad or missing data yields {}, which means "no floor" and falls back to the
+    history set. That is the pre-retention behaviour, so a room that somehow has
+    no watermark is no worse off than before.
+    """
+    return parse_cached_checks(item_index_watermark_json)
+
+
 # --- Slot track modes -------------------------------------------------------
 #
 # A tracked slot answers two independent questions: "should this slot send me

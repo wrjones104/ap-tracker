@@ -279,8 +279,16 @@ def compute_requirement_progress(session, room, slot_id, requirements):
 
 def reconcile_slot_item_counts(session=None):
     """
-    Recalculates SlotItemCount table directly from NotifiedItem table room by room.
-    Also audits triggered ThresholdGroups for each room and resets is_triggered=False if the actual count no longer satisfies requirements.
+    Repairs undercounts in SlotItemCount from NotifiedItem, room by room.
+
+    Counts only move upward. NotifiedItem is purged on a retention window and
+    SlotItemCount is not, so history is a floor for the true count rather than
+    the value of it, and recomputing downward from it would reset milestone
+    progress as soon as a room's early history aged out. The only drift this
+    needs to fix is the undercount left by the legacy item_index backfill.
+
+    Also audits triggered ThresholdGroups and resets is_triggered=False where the
+    authoritative counts no longer satisfy the requirement.
     Runs asynchronously/in background to avoid blocking API startup or causing OOM memory spikes.
     """
     close_session = False
@@ -325,11 +333,23 @@ def reconcile_slot_item_counts(session=None):
             ).all()
             existing_map = {(c.slot_id, c.item_id): c for c in existing_counts}
 
-            # Update or insert accurate counts
+            # Update or insert accurate counts.
+            #
+            # Counts only ever move upward here, and rows absent from actual_map
+            # are left alone. notified_items is purged on a retention window
+            # while slot_item_counts is not, which makes NotifiedItem a floor
+            # for the true count rather than the value of it. Recomputing
+            # downward from it would silently reset milestone progress on every
+            # long-running async multiworld the moment its early history aged
+            # out, and un-trigger threshold groups that had legitimately fired.
+            #
+            # That makes this a repair for undercounts, which is all the legacy
+            # item_index backfill this serves can cause. An overcount is not
+            # reachable from here; it would need the row-level fix.
             for (s_id, i_id), actual_cnt in actual_map.items():
                 if (s_id, i_id) in existing_map:
                     obj = existing_map[(s_id, i_id)]
-                    if obj.count != actual_cnt:
+                    if actual_cnt > obj.count:
                         obj.count = actual_cnt
                         total_updated += 1
                 else:
@@ -341,13 +361,21 @@ def reconcile_slot_item_counts(session=None):
                     ))
                     total_updated += 1
 
-            # Delete orphan SlotItemCount entries for this room
-            for key, obj in existing_map.items():
-                if key not in actual_map:
-                    session.delete(obj)
-                    total_updated += 1
+            # 3. Check triggered ThresholdGroups for slots in this room.
+            #
+            # Audited against SlotItemCount rather than actual_map. The counts
+            # are the authority that survives the retention purge; actual_map is
+            # only a floor derived from whatever history has not aged out yet.
+            # Auditing against the floor would un-trigger groups that fired on
+            # items the player really did receive, months after the fact.
+            session.flush()
+            authoritative_map = {
+                (s_id, i_id): cnt
+                for s_id, i_id, cnt in session.query(
+                    SlotItemCount.slot_id, SlotItemCount.item_id, SlotItemCount.count
+                ).filter(SlotItemCount.room_id == room_uuid).all()
+            }
 
-            # 3. Check triggered ThresholdGroups for slots in this room
             slots_in_room = session.query(UserTrackedSlot).filter(UserTrackedSlot.room_id == room_db_id).all()
             if slots_in_room:
                 slot_id_to_num = {s.id: s.slot_id for s in slots_in_room}
@@ -419,13 +447,13 @@ def reconcile_slot_item_counts(session=None):
                                 for member_name in members:
                                     m_id = name_to_id.get(member_name)
                                     if m_id is not None:
-                                        total += actual_map.get((num_slot_id, m_id), 0)
+                                        total += authoritative_map.get((num_slot_id, m_id), 0)
                                 if total < item_req.quantity:
                                     all_met = False
                                     break
                             else:
                                 m_id = name_to_id.get(item_req.item_name.lower().strip())
-                                if m_id is None or actual_map.get((num_slot_id, m_id), 0) < item_req.quantity:
+                                if m_id is None or authoritative_map.get((num_slot_id, m_id), 0) < item_req.quantity:
                                     all_met = False
                                     break
 

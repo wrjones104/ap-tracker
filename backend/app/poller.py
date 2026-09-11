@@ -26,7 +26,7 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
-from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks, parse_cached_checks
+from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks, parse_cached_checks, serialize_index_watermarks, parse_index_watermarks
 # Single source of truth for Cheese sync. This module used to carry its own
 # copy, which silently went stale; re-exported here because run_cheese_poll
 # and api_cheese.refresh_tracker_cache both reach for app.poller.
@@ -34,6 +34,7 @@ from app.services.cheese_service import process_cheese_update
 from app.services.redis_service import get_redis_client, publish_event
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 from app.services import milestone_template_service
+from app.services.retention_service import run_all_retention_tasks
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -462,9 +463,15 @@ def _check_player_completion(tracker_data, players_list, room_db_id, users_by_id
 
     return notifications_by_user, goaled_ids, all_checks_ids, checks_counts, checks_known, players_list_updated
 
-def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_in_db, tracked_slots_by_user, game_map, game_checksums, has_item_history):
+def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_in_db, tracked_slots_by_user, game_map, game_checksums, has_item_history, index_floor_by_slot=None):
     """
     Iterates player_items_received, dedupes against DB, creates objects, and preps notifications.
+
+    `index_floor_by_slot` is {slot_id: highest item_index already processed},
+    read from TrackedRoom.item_index_watermark_json. It is the half of the dedup
+    that survives a retention purge; `existing_items_in_db` is derived from the
+    very rows retention deletes, so on its own it lets a purged index look new.
+    Absent or empty, the behaviour is exactly what it was before retention.
     """
     items_to_add = []
     new_items_for_notify = []
@@ -500,8 +507,16 @@ def _process_received_items(tracker_data, room_uuid, room_db_id, existing_items_
         if not is_tracked_by_anyone:
             continue
 
+        # Everything at or below the watermark has been processed before, whether
+        # or not its row still exists. Checked ahead of the history set because
+        # the history set is the part retention erodes.
+        index_floor = (index_floor_by_slot or {}).get(rid)
+
         for item_index, item_tuple_data in enumerate(p_items.get('items', [])):
             items_processed_count += 1
+            if index_floor is not None and item_index <= index_floor:
+                items_skipped_duplicate += 1
+                continue
             try:
                 if len(item_tuple_data) < 4: continue
                 item_id, loc_id, send_id, flags = item_tuple_data
@@ -1395,6 +1410,19 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         has_hint_history = session.query(NotifiedHint.id).filter_by(room_id=room_uuid).limit(1).scalar() is not None
 
         existing_items_in_db = set(session.query(NotifiedItem.receiving_slot_id, NotifiedItem.item_index, NotifiedItem.item_id, NotifiedItem.location_id).filter_by(room_id=room_uuid).all())
+
+        # The dedup floor that outlives a retention purge. Seeded from surviving
+        # rows for any room that predates the column, which is safe only because
+        # the backfill in a3e71c94b8d2 ran before retention could delete
+        # anything; a room purged first would seed a floor that is too low.
+        index_floor_by_slot = parse_index_watermarks(room.item_index_watermark_json)
+        if not index_floor_by_slot and existing_items_in_db:
+            for entry in existing_items_in_db:
+                r_id, idx = entry[0], entry[1]
+                if idx is None:
+                    continue
+                if index_floor_by_slot.get(r_id) is None or idx > index_floor_by_slot[r_id]:
+                    index_floor_by_slot[r_id] = idx
         existing_hints_map = {
             (h.item_owner_id, h.location_owner_id, h.item_id, h.location_id): h
             for h in session.query(NotifiedHint).filter_by(room_id=room_uuid)
@@ -1492,7 +1520,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         # --- LOGIC STEP 2: Process Items ---
         items_to_add, new_items_notif, item_cache_keys, items_added_count = _process_received_items(
             tracker_data, room_uuid, db_id, existing_items_in_db, tracked_slots_by_user, 
-            game_map, game_checksums, has_item_history
+            game_map, game_checksums, has_item_history, index_floor_by_slot
         )
 
         # --- LOGIC STEP 3: Process Hints ---
@@ -1585,8 +1613,23 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
             session.bulk_save_objects(items_to_add)
             if not has_item_history:
                 logging.debug(f"[POLLER][RoomDBID:{db_id}] Silently backfilled {len(items_to_add)} historical items.")
-            elif not new_items_notif: 
+            elif not new_items_notif:
                 logging.debug(f"[POLLER][RoomDBID:{db_id}] Silently added {len(items_to_add)} new items (Suppressed/Untracked).")
+
+            # Advance the dedup floor in the same transaction as the rows it
+            # describes. Committed together or not at all: a watermark ahead of
+            # the rows would silently swallow items, and one behind them is the
+            # duplicate-notification bug this exists to close.
+            advanced = dict(index_floor_by_slot)
+            for item in items_to_add:
+                if item.item_index is None:
+                    continue
+                current = advanced.get(item.receiving_slot_id)
+                if current is None or item.item_index > current:
+                    advanced[item.receiving_slot_id] = item.item_index
+            new_watermark_json = serialize_index_watermarks(advanced)
+            if new_watermark_json != (room.item_index_watermark_json or '{}'):
+                room.item_index_watermark_json = new_watermark_json
 
         if hints_to_add:
             session.bulk_save_objects(hints_to_add)
@@ -2574,7 +2617,13 @@ _global_setup_cooldowns = {}
 async def poller_supervisor(app, loop):
     logging.info("[POLLER] Background polling service starting...")
     running_tasks = {}
-    last_cleanup_time = datetime.utcnow()
+    # Backdated so the janitor runs on the first supervisor pass, matching
+    # last_cache_check and last_revive_check below. Initialised to utcnow() it
+    # only fired 24 hours after boot, and every deploy or crash reset the clock,
+    # so on a service that restarts more often than daily it never ran at all.
+    # Each task it calls is bounded and cheap when there is nothing to do, so
+    # running once per restart is affordable.
+    last_cleanup_time = datetime.utcnow() - timedelta(hours=24)
 
     setup_queue = asyncio.Queue()
     setup_semaphore = asyncio.Semaphore(2) 
@@ -2725,13 +2774,25 @@ async def poller_supervisor(app, loop):
                     task_to_stop.cancel()
 
             if datetime.utcnow() - last_cleanup_time > timedelta(hours=24):
-                # 1. Delete orphaned rooms (No subscribers)
+                # Stamped before the work, not after. It used to be set at the
+                # end, inside the try, so any exception from the three calls
+                # below skipped it and the next 60 second tick re-ran the whole
+                # janitor. A failure that repeats turns into a retry loop against
+                # the largest tables in the database.
+                last_cleanup_time = datetime.utcnow()
+
+                # 1. Delete orphaned rooms (No subscribers), and their history
                 await loop.run_in_executor(None, db_run_cleanup)
-                
+
                 # 2. Suspend stale active rooms (Has subscribers, but no activity)
                 await loop.run_in_executor(None, db_check_stale_rooms)
-                
-                last_cleanup_time = datetime.utcnow()
+
+                # 3. Age out history past the retention window, inactive guests
+                # and expired blocklist entries. Written long before this call
+                # existed: nothing outside the test suite had ever invoked it,
+                # while LLM.md and architecture.md both described the policy as
+                # active. Each task is batched and capped per run.
+                await loop.run_in_executor(None, run_all_retention_tasks)
 
         except Exception as e:
             logging.error(f"[SUPERVISOR] An unhandled error occurred: {e}", exc_info=True)
@@ -2762,39 +2823,77 @@ def db_has_unindexed_items():
     finally:
         Session.remove()
 
+# Rooms removed per transaction. Bounds both the lock footprint and the size of
+# the IN list used to reach their history.
+ROOM_CLEANUP_CHUNK = 100
+
+
 def db_run_cleanup():
+    """Remove orphaned rooms and the history that keys on them.
+
+    Guest accounts are not pruned here. This used to do it on a hardcoded 30 day
+    window while retention_service did the same job on a configurable 90 day
+    one, and because this runs first in the janitor it silently won: guests were
+    removed 60 days earlier than every doc promised, and RETENTION_DAYS had no
+    effect on them. purge_inactive_guest_accounts is the single owner now.
+
+    Rooms are read as plain (id, uuid) tuples rather than ORM instances. The
+    commit at the end of each chunk expires every instance still loaded, so
+    reading .room_id on the next chunk issued a SELECT per room, and
+    session.delete() on an expired instance issued another. Against the 1,651
+    orphaned rooms in production that was thousands of round trips.
+    """
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+
     session = Session()
     try:
-        # 1. Clean up Orphaned Rooms (Existing Logic)
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-        rooms_to_delete = session.query(TrackedRoom).filter(
+        orphaned_rooms = session.query(TrackedRoom.id, TrackedRoom.room_id).filter(
             TrackedRoom.subscriptions.any() == False,
             or_(
                 TrackedRoom.last_successful_poll == None,
                 TrackedRoom.last_successful_poll < thirty_days_ago
             )
         ).all()
-        for room in rooms_to_delete:
-            session.delete(room)
-        
-        # 2. Clean up Stale Guest Accounts (e.g., > 30 days inactive)
-        # We ONLY delete 'is_guest' users. We never touch Discord users.
-        stale_guests = session.query(User).filter(
-            User.is_guest == True,
-            User.last_activity < thirty_days_ago
-        ).all()
 
-        if stale_guests:
-            logging.info(f"[JANITOR] Pruning {len(stale_guests)} stale guest accounts.")
-            for guest in stale_guests:
-                session.delete(guest) # Cascade deletes their subscriptions/devices too
+        total_rooms = total_items = total_hints = 0
+        for start in range(0, len(orphaned_rooms), ROOM_CLEANUP_CHUNK):
+            chunk = orphaned_rooms[start:start + ROOM_CLEANUP_CHUNK]
+            chunk_ids = [r[0] for r in chunk]
+            uuids = [r[1] for r in chunk]
 
-        session.commit()
+            # notified_items and notified_hints key on the room UUID string with
+            # no foreign key, so no cascade reaches them. Delete them here or
+            # they outlive the room forever as rows no query can return.
+            total_items += session.query(NotifiedItem).filter(
+                NotifiedItem.room_id.in_(uuids)
+            ).delete(synchronize_session=False)
+            total_hints += session.query(NotifiedHint).filter(
+                NotifiedHint.room_id.in_(uuids)
+            ).delete(synchronize_session=False)
+
+            # Bulk delete rather than session.delete per room. The only ORM
+            # cascade on TrackedRoom is subscriptions, and these rooms have none
+            # by definition; slot_item_counts cascades in the database. If one
+            # gains a subscriber between the query and here, the foreign key
+            # refuses the delete rather than quietly removing it.
+            session.query(TrackedRoom).filter(
+                TrackedRoom.id.in_(chunk_ids)
+            ).delete(synchronize_session=False)
+
+            session.commit()
+            total_rooms += len(chunk)
+
+        if total_rooms:
+            logging.info(
+                "[JANITOR] Removed %s orphaned rooms, %s items and %s hints.",
+                total_rooms, total_items, total_hints,
+            )
     except Exception as e:
-        logging.error(f"[JANITOR_DB_ERROR] Failed to run cleanup: {e}", exc_info=True)
+        logging.error(f"[JANITOR_DB_ERROR] Failed to remove orphaned rooms: {e}", exc_info=True)
         session.rollback()
     finally:
         Session.remove()
+
 
 def trigger_immediate_room_poll(room_db_id, publish_to_redis=True):
     """
@@ -2959,22 +3058,26 @@ def db_check_stale_rooms():
             last_hint = session.query(NotifiedHint.timestamp).filter_by(room_id=room.room_id).order_by(NotifiedHint.timestamp.desc()).first()
             last_hint_time = last_hint[0] if last_hint else None
             
-            # 3. Determine latest activity
-            latest_activity = None
-            if last_item_time and last_hint_time:
-                latest_activity = max(last_item_time, last_hint_time)
-            elif last_item_time:
-                latest_activity = last_item_time
-            elif last_hint_time:
-                latest_activity = last_hint_time
+            # 3. Determine latest activity.
+            # room.last_remote_activity is included because history is purgeable
+            # now. With the default settings it cannot actually matter: retention
+            # keeps 90 days and this window is 30, so any room active inside the
+            # window still has the rows proving it. It matters if RETENTION_DAYS
+            # is ever set below 30, where a purge would otherwise read as
+            # silence and suspend a live room.
+            # Normalised to naive UTC before comparing: max() raises outright on a
+            # mix of aware and naive values, and these three reach us from
+            # different write paths.
+            candidates = [
+                t.replace(tzinfo=None) if t.tzinfo else t
+                for t in (last_item_time, last_hint_time, room.last_remote_activity) if t
+            ]
+            latest_activity = max(candidates) if candidates else None
             
             # 4. Check vs Limit
             # Note: We enforce naive UTC comparison by stripping info if present, or assuming native is UTC.
             # (Adjust based on your DB driver behavior, assuming naive UTC for now as per api.py)
             if latest_activity:
-                if latest_activity.tzinfo:
-                    latest_activity = latest_activity.replace(tzinfo=None)
-                
                 if latest_activity < limit_date:
                     room.is_suspended = True
                     room.failed_poll_count = 0 # Distinct from Error Suspension (which is >= 60)

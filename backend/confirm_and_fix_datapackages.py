@@ -93,7 +93,7 @@ def run_diagnostics():
             # Query entry counts grouped by entity_type
             counts = session.query(
                 DatapackageCache.entity_type, 
-                func.count(DatapackageCache.id)
+                func.count()
             ).filter(
                 DatapackageCache.checksum == checksum
             ).group_by(
