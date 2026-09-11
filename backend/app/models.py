@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import (
     create_engine, func, Column, Integer, String, ForeignKey, DateTime, 
     UniqueConstraint, Boolean, ForeignKeyConstraint, BigInteger,
-    Index, false as sa_false
+    Index, text, false as sa_false
 )
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
@@ -310,13 +310,23 @@ class UserWhitelistItem(Base):
 
 class DatapackageCache(Base):
     __tablename__ = 'datapackage_cache'
-    id = Column(Integer, primary_key=True)
+    # No surrogate key. (checksum, entity_type, entity_id) is the real identity:
+    # it is what the upsert in services/datapackage_service.py conflicts on, and
+    # nothing ever read the old `id` column. Its primary key index had been
+    # scanned twice in the lifetime of the table while costing 268 MB, so the
+    # column was dropped. See b7f4e2c9a1d3.
+    #
+    # Postgres enforces this triple with the pre-existing _checksum_entity_uc
+    # unique constraint rather than a primary key, because that index could not
+    # be promoted without rebuilding 1.5 GB of it. A schema built from this file
+    # gets a composite primary key instead. The two are equivalent for every
+    # purpose this table has: both reject a duplicate triple, and ON CONFLICT
+    # resolves its arbiter by column list either way.
     game = Column(String, nullable=False, index=True)
-    checksum = Column(String, nullable=False, index=True)
-    entity_type = Column(String, nullable=False)
-    entity_id = Column(BigInteger, nullable=False)
+    checksum = Column(String, nullable=False, primary_key=True, index=True)
+    entity_type = Column(String, nullable=False, primary_key=True)
+    entity_id = Column(BigInteger, nullable=False, primary_key=True)
     entity_name = Column(String, nullable=False)
-    __table_args__ = (UniqueConstraint('checksum', 'entity_type', 'entity_id', name='_checksum_entity_uc'),)
 
 class NotifiedItem(Base):
     __tablename__ = 'notified_items'
@@ -326,11 +336,21 @@ class NotifiedItem(Base):
     sending_slot_id = Column(Integer, nullable=True) 
     item_id = Column(BigInteger, nullable=False)
     location_id = Column(BigInteger, nullable=False)
-    item_index = Column(Integer, nullable=True, index=True)
+    item_index = Column(Integer, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     item_flags = Column(Integer, nullable=True)
     __table_args__ = (
         UniqueConstraint('room_id', 'receiving_slot_id', 'item_index', name='_item_event_index_uc'),
+        # Only the legacy backfill probes read item_index, and both of them ask
+        # for rows where it IS NULL (poller.py db_has_unindexed_items, and the
+        # per-room purge). A partial index over just those rows answers the same
+        # questions for kilobytes; the full btree it replaces cost 99 MB for 141
+        # lifetime scans.
+        Index(
+            'ix_notifieditem_unindexed', 'room_id',
+            postgresql_where=text('item_index IS NULL'),
+            sqlite_where=text('item_index IS NULL'),
+        ),
         Index('ix_notifieditem_timestamp', 'timestamp'),
         Index('ix_notifieditem_room_receiving_time', 'room_id', 'receiving_slot_id', 'timestamp'),
     )
