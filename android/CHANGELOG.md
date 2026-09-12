@@ -10,6 +10,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.12.0] - 2026-09-11
+
+_Cheese Rooms Ask First_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **App 1.12.0 is out**
+>
+> • **Cheese rooms are invitations now.** Rooms you claim on Cheese show up as suggestions, and you pick which ones to add. Tap the Cheese button on the Rooms screen to see what is waiting.
+> • **Per-room sharing.** Choose which of your rooms mirror to Cheese Tracker, instead of all or nothing.
+> • **Fixed:** signing in with Discord after using the app as a guest no longer loses the rooms you added.
+>
+> If new Cheese rooms stopped appearing for you today, this is the update that fixes it.
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> Cheese Tracker rooms are invitations now. Rooms you claim on Cheese are offered as suggestions, and you pick which ones join your library instead of them appearing on their own.
+>
+> You can also choose per room whether it mirrors to Cheese Tracker, rather than all or nothing.
+>
+> Fixed: signing in with Discord after using the app as a guest no longer loses the rooms you added.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - Cheese Tracker suggestions. Trackers on your Cheese dashboard that are not yet rooms are offered through a sheet on the Rooms screen rather than being imported by the sync. Backed by `GET /integrations/cheese/available`, with import and dismiss beside it. A dismissal is remembered and can be undone by reopening the sheet with dismissed entries included.
+> - Per-room Cheese linking. Each room decides for itself whether it mirrors to Cheese, through `PUT /rooms/<id>/cheese_link`, instead of the account-wide behaviour it replaces. The add-room dialog carries the matching choice, seeded from a stored default.
+>
+> ### Changed
+> - Cheese no longer adds or removes rooms on its own. The app owns the room library; Cheese offers and the user accepts. See #323.
+> - Cheese controls leave the interface when the account is disconnected, rather than lingering with nothing behind them.
+> - Connect and manual sync say when they are running instead of appearing to do nothing.
+>
+> ### Fixed
+> - A guest upgrading to Discord lost the rooms they had already added.
+> - The stashed guest session expired in a way that caused the loss it existed to prevent.
+> - The suggestions sheet opened on whichever tab happened to be showing rather than the one the user asked from, and could be dismissed mid-import leaving the work half done.
+>
+> ### Note
+> Requires server 1.13.0 or later. The suggestions endpoints do not exist on earlier servers, and on 1.13.0 without this app update newly claimed Cheese rooms have no way to reach your library.
+> ```
+
+### Added
+- **Cheese Tracker Suggestions**: A sheet on the Rooms screen offering dashboard trackers that are not yet rooms. Import or dismiss in bulk; a dismissal is remembered and reversible.
+- **Per-Room Cheese Linking**: `PUT /rooms/<id>/cheese_link` per room, plus the matching choice in the add-room dialog seeded from a stored default.
+
+### Changed
+- **Cheese Leaves The Interface When Disconnected**: Controls for an account that is not connected no longer linger with nothing behind them.
+- **Connect And Sync Say When They Are Running**: Both report progress rather than appearing to do nothing until they finish.
+
+### Fixed
+- **Guest Upgrade Lost The User's Rooms**: Signing in with Discord after using the app as a guest discarded the rooms already added.
+- **The Stash Expiry Caused The Loss It Guarded Against**: The stashed guest session could expire in exactly the window it existed to cover.
+- **The Suggestions Sheet Opened On The Wrong Tab**: It followed whichever tab was showing rather than the one the user asked from, and could be dismissed mid-import.
+
+---
+
 ## [1.11.0] - 2026-09-08
 
 _Templates Do The Repetitive Part_
