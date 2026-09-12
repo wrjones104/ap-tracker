@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app import create_app, Session, engine
 from app.models import Base, TrackedRoom, User, UserRoomSubscription
-from app.poller import db_get_active_rooms, db_run_cleanup
+from app.poller import db_check_stale_rooms, db_get_active_rooms, db_run_cleanup
 
 
 class UnwatchedRoomTestBase(unittest.TestCase):
@@ -45,6 +45,14 @@ class UnwatchedRoomTestBase(unittest.TestCase):
     def tearDown(self):
         self.session.close()
         Session.remove()
+        # Before unlinking the file, not after. Without this the pool keeps
+        # connections open against the path; on Linux the unlink succeeds and
+        # those connections go on serving the now-unlinked inode, so the next
+        # test's create_all builds its tables there while a freshly opened
+        # connection sees an empty file and raises "no such table". On Windows
+        # the unlink fails while a handle is open and the except below hides it,
+        # which is why this only ever failed in CI.
+        engine.dispose()
         if os.path.exists(TEST_DB_PATH):
             try:
                 os.remove(TEST_DB_PATH)
@@ -158,6 +166,58 @@ class TestActiveRoomSelection(UnwatchedRoomTestBase):
         self.session.commit()
 
         self.assertEqual(self._active_uuids(), set())
+
+
+class TestStaleCheckSkipsUnwatched(UnwatchedRoomTestBase):
+    """db_check_stale_rooms carries the same filter, and not by accident.
+
+    Suspending a room nothing polls achieves nothing, and every room it does
+    suspend joins the healing pool, which then fetches room_status over HTTP for
+    it every two hours (#345). The janitor's call order happens to delete
+    orphaned rooms before this runs, but that is ordering rather than an
+    invariant, and it does not hold during the 30-day drain after the polling
+    filter ships -- the orphans exist and are not yet old enough to delete.
+    """
+
+    def test_unwatched_room_is_not_suspended(self):
+        room = self._room("orphan", last_poll=datetime.utcnow())
+        room.last_remote_activity = datetime.utcnow() - timedelta(days=45)
+        self.session.commit()
+
+        db_check_stale_rooms()
+        self.session.expire_all()
+
+        stale = self.session.query(TrackedRoom).filter_by(room_id="orphan").first()
+        self.assertFalse(
+            stale.is_suspended,
+            "an unwatched room was suspended, which only feeds the healing pool")
+
+    def test_watched_room_is_still_suspended_when_stale(self):
+        """The filter must not stop the suspension it exists to do."""
+        user = self._user("1")
+        room = self._room("mine", last_poll=datetime.utcnow())
+        room.last_remote_activity = datetime.utcnow() - timedelta(days=45)
+        self._subscribe(user, room)
+        self.session.commit()
+
+        db_check_stale_rooms()
+        self.session.expire_all()
+
+        stale = self.session.query(TrackedRoom).filter_by(room_id="mine").first()
+        self.assertTrue(stale.is_suspended)
+
+    def test_watched_room_with_recent_activity_is_left_alone(self):
+        user = self._user("1")
+        room = self._room("active", last_poll=datetime.utcnow())
+        room.last_remote_activity = datetime.utcnow() - timedelta(days=2)
+        self._subscribe(user, room)
+        self.session.commit()
+
+        db_check_stale_rooms()
+        self.session.expire_all()
+
+        fresh = self.session.query(TrackedRoom).filter_by(room_id="active").first()
+        self.assertFalse(fresh.is_suspended)
 
 
 class TestJanitorCanNowCollect(UnwatchedRoomTestBase):

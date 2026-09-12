@@ -3061,11 +3061,22 @@ def db_check_stale_rooms():
     session = Session()
     try:
         limit_date = datetime.utcnow() - timedelta(days=30)
-        
-        # Only check rooms that are currently Active
+
+        # Same subscription filter as db_get_active_rooms, and for the same
+        # reason: suspending a room nobody polls achieves nothing, and every
+        # room it does suspend joins the healing pool, which then fetches
+        # room_status over HTTP for it every two hours (#345).
+        #
+        # Not relying on the janitor's ordering to keep these out. Today
+        # db_run_cleanup runs first and deletes orphaned rooms before this can
+        # see them, but that is a property of the call order in the supervisor
+        # rather than an invariant, and it does not hold during the 30-day
+        # drain after this ships, when the orphans are not yet old enough to
+        # delete. Two queries per room per run, so it is worth not walking them.
         active_rooms = session.query(TrackedRoom).filter(
             TrackedRoom.is_complete == False,
-            TrackedRoom.is_suspended == False
+            TrackedRoom.is_suspended == False,
+            TrackedRoom.subscriptions.any()
         ).all()
         
         stale_count = 0
