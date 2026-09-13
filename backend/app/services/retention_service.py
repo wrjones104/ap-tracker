@@ -14,6 +14,7 @@ import os
 from datetime import datetime, timedelta
 
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 
 from app import Session
 from app.models import (
@@ -238,13 +239,24 @@ def purge_inactive_guest_accounts(inactivity_days=None):
             row[0] for row in session.query(User.id).filter(
                 User.is_guest == True,
                 or_(User.last_activity < cutoff_date, User.last_activity == None)
-            ).all()
+            ).order_by(User.id).all()
         ]
 
         pending = 0
         for guest_id in guest_ids:
-            user = session.get(User, guest_id)
-            if user is None:
+            # Locked, re-read and re-checked rather than trusted from the list.
+            # The ids are taken once and worked through across several commits,
+            # so under READ COMMITTED a guest selected at the start can upgrade
+            # to Discord (auth.py flips is_guest on this same row) or open the
+            # app (every authenticated request stamps last_activity) before its
+            # turn comes. Deleting on the strength of the stale list would
+            # cascade away a live account. The row lock holds the re-check true
+            # until this batch commits; SQLite ignores FOR UPDATE.
+            user = session.get(
+                User, guest_id, with_for_update=True, populate_existing=True)
+            if user is None or not user.is_guest:
+                continue
+            if user.last_activity is not None and user.last_activity >= cutoff_date:
                 continue
 
             # A savepoint per guest, so an undeletable one costs itself and
@@ -253,23 +265,33 @@ def purge_inactive_guest_accounts(inactivity_days=None):
             # single row discarded every other guest in the run. Because the
             # selection is deterministic it then failed identically on every run
             # after it, and the only signal was one line a day in the logs.
+            #
+            # IntegrityError only. A row-level fault is a constraint the delete
+            # cannot get past, and that is what this isolates. A dropped
+            # connection or a lock timeout is not about this guest, and catching
+            # it here would log once per remaining guest instead of stopping the
+            # run once in the handler below.
             try:
                 with session.begin_nested():
                     session.delete(user)
-            except Exception:
+            except IntegrityError:
                 skipped_count += 1
                 logging.exception(
                     "[RETENTION] Could not delete guest %s; skipping it.", guest_id)
                 continue
 
-            deleted_count += 1
             pending += 1
             if pending >= GUEST_PURGE_BATCH_SIZE:
                 session.commit()
+                # Credited after the commit, not at the savepoint. A failed
+                # commit rolls the whole batch back, and the count is what
+                # purge_backlog.py prints to the operator.
+                deleted_count += pending
                 pending = 0
 
         if pending:
             session.commit()
+            deleted_count += pending
 
         if deleted_count:
             logging.info(
@@ -286,6 +308,7 @@ def purge_inactive_guest_accounts(inactivity_days=None):
     except Exception as e:
         session.rollback()
         logging.error(f"[RETENTION_ERROR] Failed to purge guest accounts: {e}", exc_info=True)
+        # Committed batches only; the rollback discarded the one in progress.
         return {'purged_guests': deleted_count, 'skipped_guests': skipped_count}
     finally:
         Session.remove()

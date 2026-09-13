@@ -30,12 +30,21 @@ os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from unittest import mock
+
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session as OrmSession
 
 from app import create_app, Session, engine
-from app.models import Base, TrackedRoom, User
+import app.poller as poller
+from app.models import Base, NotifiedHint, NotifiedItem, TrackedRoom, User
 from app.poller import db_run_cleanup
 from app.services import retention_service
+
+
+def _outage(*args, **kwargs):
+    raise OperationalError("DELETE ...", {}, Exception("server closed the connection"))
 
 
 class JanitorIsolationTestBase(unittest.TestCase):
@@ -102,6 +111,46 @@ class JanitorIsolationTestBase(unittest.TestCase):
         self.session.add(room)
         self.session.flush()
         return room
+
+    def _history(self, room_uuid):
+        self.session.add(NotifiedItem(
+            room_id=room_uuid, receiving_slot_id=1, sending_slot_id=2,
+            item_id=100, location_id=1000, item_index=0,
+            timestamp=datetime.utcnow(),
+        ))
+        self.session.add(NotifiedHint(
+            room_id=room_uuid, item_owner_id=1, location_owner_id=2,
+            item_id=5, location_id=1, timestamp=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        ))
+
+    def _history_rooms(self):
+        self.session.expire_all()
+        return (
+            {r for (r,) in self.session.query(NotifiedItem.room_id).all()},
+            {r for (r,) in self.session.query(NotifiedHint.room_id).all()},
+        )
+
+    def _commit_then(self, after_first):
+        """Patch Session.commit to count calls and run `after_first` once,
+        straight after the first real commit.
+
+        This is how the tests stand in for a concurrent request: it lands
+        between two of the purge's batches, on its own connection, which is
+        exactly the window multi-commit batching opened.
+        """
+        commits = []
+        real_commit = OrmSession.commit
+
+        def counting_commit(s):
+            result = real_commit(s)
+            commits.append(1)
+            if len(commits) == 1 and after_first:
+                with engine.begin() as conn:
+                    after_first(conn)
+            return result
+
+        return commits, mock.patch.object(OrmSession, "commit", counting_commit)
 
     def _guest_uuids(self):
         self.session.expire_all()
@@ -174,24 +223,121 @@ class TestGuestPurgeIsolation(JanitorIsolationTestBase):
         self.assertEqual(result.get('skipped_guests', 0), 0)
 
     def test_purge_commits_in_batches(self):
-        """The siblings in this module are all bounded; this one was not.
+        """5 guests at batch size 2 must commit exactly three times: 2, 2, 1.
 
-        Run with a batch size of 2 across 5 guests, so completion cannot come
-        from a single final commit.
+        Counted directly, because the end state cannot show it on SQLite. With
+        pysqlite's default transaction handling a SELECT does not open a
+        transaction, so each SAVEPOINT becomes the outermost one and its RELEASE
+        commits the guest by itself. The guests disappear even if the purge
+        never commits, which is how an earlier version of this test passed with
+        commit patched out entirely. Postgres would roll the last partial batch
+        back instead.
         """
-        original = retention_service.GUEST_PURGE_BATCH_SIZE
-        retention_service.GUEST_PURGE_BATCH_SIZE = 2
-        try:
-            for i in range(5):
-                self._guest(f"g-{i}", days_idle=200)
-            self.session.commit()
+        for i in range(5):
+            self._guest(f"g-{i}", days_idle=200)
+        self.session.commit()
 
+        commits, patched = self._commit_then(None)
+        with mock.patch.object(retention_service, "GUEST_PURGE_BATCH_SIZE", 2), patched:
             result = retention_service.purge_inactive_guest_accounts()
-        finally:
-            retention_service.GUEST_PURGE_BATCH_SIZE = original
 
+        self.assertEqual(len(commits), 3, "batches did not commit as 2 + 2 + final 1")
         self.assertEqual(self._guest_uuids(), set())
         self.assertEqual(result.get('purged_guests'), 5)
+
+    def test_guest_who_upgrades_mid_run_is_not_deleted(self):
+        """The data-loss race multi-commit batching opened.
+
+        The id list is read once. A guest queued for a later batch who links a
+        Discord account in the meantime is now a registered user, and deleting
+        them would cascade away a live account and everything it owns.
+        """
+        self._guest("g-first", days_idle=200)
+        upgrader = self._guest("g-upgrades", days_idle=200)
+        self.session.commit()
+        upgrader_id = upgrader.id
+
+        def upgrade(conn):
+            conn.execute(
+                text("UPDATE users SET is_guest = 0, discord_id = '99' WHERE id = :id"),
+                {"id": upgrader_id},
+            )
+
+        commits, patched = self._commit_then(upgrade)
+        with mock.patch.object(retention_service, "GUEST_PURGE_BATCH_SIZE", 1), patched:
+            result = retention_service.purge_inactive_guest_accounts()
+
+        self.session.expire_all()
+        self.assertIsNotNone(
+            self.session.get(User, upgrader_id),
+            "an account that upgraded mid-run was deleted from a stale id list")
+        self.assertEqual(result.get('purged_guests'), 1)
+
+    def test_guest_who_comes_back_mid_run_is_not_deleted(self):
+        """Every authenticated request stamps last_activity. A guest who opens
+        the app while the run is working through the list is not inactive."""
+        self._guest("g-first", days_idle=200)
+        returner = self._guest("g-returns", days_idle=200)
+        self.session.commit()
+        returner_id = returner.id
+
+        def come_back(conn):
+            conn.execute(
+                text("UPDATE users SET last_activity = :now WHERE id = :id"),
+                {"now": datetime.utcnow(), "id": returner_id},
+            )
+
+        commits, patched = self._commit_then(come_back)
+        with mock.patch.object(retention_service, "GUEST_PURGE_BATCH_SIZE", 1), patched:
+            retention_service.purge_inactive_guest_accounts()
+
+        self.assertIn("g-returns", self._guest_uuids(),
+                      "a guest active again mid-run was deleted")
+
+    def test_an_outage_stops_the_run_instead_of_skipping_each_guest(self):
+        """Isolation is for row-level faults. A dropped connection is not about
+        any one guest, so it must reach the outer handler once rather than be
+        counted as a skip for every guest left in the list."""
+        for i in range(3):
+            self._guest(f"g-{i}", days_idle=200)
+        self.session.commit()
+
+        with mock.patch.object(OrmSession, "delete", _outage):
+            result = retention_service.purge_inactive_guest_accounts()
+
+        self.assertEqual(result.get('skipped_guests'), 0,
+                         "an outage was swallowed as per-guest skips")
+        self.assertEqual(result.get('purged_guests'), 0)
+        self.assertEqual(len(self._guest_uuids()), 3)
+
+    def test_a_failed_commit_is_not_counted_as_purged(self):
+        """Counts are credited when a batch commits, not when its savepoint is
+        released. A commit that fails rolls the batch back, and the returned
+        number is what purge_backlog.py prints to the operator.
+
+        Asserts the return value only. On SQLite the savepoint RELEASE has
+        already committed each guest, so the end state cannot show a rollback.
+        """
+        for i in range(4):
+            self._guest(f"g-{i}", days_idle=200)
+        self.session.commit()
+
+        real_commit = OrmSession.commit
+        calls = []
+
+        def second_commit_fails(s):
+            calls.append(1)
+            if len(calls) == 2:
+                raise OperationalError(
+                    "COMMIT", {}, Exception("server closed the connection"))
+            return real_commit(s)
+
+        with mock.patch.object(retention_service, "GUEST_PURGE_BATCH_SIZE", 2), \
+             mock.patch.object(OrmSession, "commit", second_commit_fails):
+            result = retention_service.purge_inactive_guest_accounts()
+
+        self.assertEqual(result.get('purged_guests'), 2,
+                         "a batch whose commit failed was reported as purged")
 
 
 class TestRoomCleanupIsolation(JanitorIsolationTestBase):
@@ -226,6 +372,53 @@ class TestRoomCleanupIsolation(JanitorIsolationTestBase):
         db_run_cleanup()
 
         self.assertEqual(self._room_uuids(), {"r-stuck"}, "a later run was still blocked")
+
+    def test_history_follows_its_room(self):
+        """Deletable rooms take their history with them. The stuck room's
+        history is rolled back with it, because the per-room retry deletes
+        history and room in one transaction."""
+        self._block_room_deletes()
+        stuck = self._orphan_room("r-stuck")
+        self._orphan_room("r-a")
+        for uuid in ("r-stuck", "r-a"):
+            self._history(uuid)
+        self._pin_room(stuck)
+        self.session.commit()
+
+        db_run_cleanup()
+
+        item_rooms, hint_rooms = self._history_rooms()
+        self.assertEqual(item_rooms, {"r-stuck"})
+        self.assertEqual(hint_rooms, {"r-stuck"})
+
+    def test_a_failed_chunk_does_not_stop_later_chunks(self):
+        """The guard used to sit outside the chunk loop. Chunks of 2 across 5
+        rooms, with the stuck room in the first, so later chunks have to run
+        after an earlier one failed and was retried."""
+        self._block_room_deletes()
+        stuck = self._orphan_room("r-0-stuck")
+        for i in range(1, 5):
+            self._orphan_room(f"r-{i}")
+        self._pin_room(stuck)
+        self.session.commit()
+
+        with mock.patch.object(poller, "ROOM_CLEANUP_CHUNK", 2):
+            db_run_cleanup()
+
+        self.assertEqual(self._room_uuids(), {"r-0-stuck"})
+
+    def test_an_outage_is_not_retried_room_by_room(self):
+        """A connection failure hits every chunk alike. Retrying each room
+        would turn one failed run into a log line per orphaned room."""
+        for i in range(3):
+            self._orphan_room(f"r-{i}")
+        self.session.commit()
+
+        with mock.patch.object(poller, "_delete_room_chunk", _outage), \
+             mock.patch.object(poller, "_delete_rooms_individually") as retry:
+            db_run_cleanup()
+
+        retry.assert_not_called()
 
     def test_clean_run_is_unchanged(self):
         self._orphan_room("r-old")

@@ -2872,12 +2872,14 @@ def _delete_room_chunk(session, chunk):
     # slot_item_counts cascades in the database. If one gains a subscriber
     # between the query and here, the foreign key refuses the delete rather than
     # quietly removing it.
-    session.query(TrackedRoom).filter(
+    # The row count, not len(chunk): a room already gone by the time this runs
+    # should not be reported as removed.
+    rooms = session.query(TrackedRoom).filter(
         TrackedRoom.id.in_(chunk_ids)
     ).delete(synchronize_session=False)
 
     session.commit()
-    return len(chunk), items, hints
+    return rooms, items, hints
 
 
 def _delete_rooms_individually(session, chunk):
@@ -2891,7 +2893,7 @@ def _delete_rooms_individually(session, chunk):
     for room in chunk:
         try:
             r, i, h = _delete_room_chunk(session, [room])
-        except Exception as e:
+        except IntegrityError as e:
             session.rollback()
             skipped += 1
             logging.error(
@@ -2941,13 +2943,25 @@ def db_run_cleanup():
             # and the selection is deterministic enough that the same chunk
             # failed again the next day. One bad room stopped the cleanup
             # permanently rather than costing itself.
+            #
+            # IntegrityError only, here and in the per-room retry. That is the
+            # row-level fault this isolates: a foreign key the delete cannot get
+            # past. A dropped connection or a lock timeout fails every chunk the
+            # same way, and retrying each room would turn one failed run into a
+            # log line per orphaned room. Anything else reaches the handler below
+            # and stops the run once.
+            #
+            # A warning without a traceback, because the retry is expected to
+            # recover. The per-room line and the summary are the signals to act
+            # on, and a stuck room would otherwise raise an error-level trace
+            # every day.
             try:
                 rooms, items, hints = _delete_room_chunk(session, chunk)
-            except Exception as e:
+            except IntegrityError as e:
                 session.rollback()
-                logging.error(
-                    "[JANITOR_DB_ERROR] Chunk of %s rooms failed (%s); retrying "
-                    "them one at a time.", len(chunk), e, exc_info=True,
+                logging.warning(
+                    "[JANITOR] Chunk of %s rooms hit a constraint (%s); retrying "
+                    "them one at a time.", len(chunk), e,
                 )
                 rooms, items, hints, skipped = _delete_rooms_individually(session, chunk)
                 skipped_rooms += skipped
