@@ -773,8 +773,10 @@ def import_available_cheese_rooms(current_user):
                 room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
                 if room and room.cheese_tracker_id:
                     # Another Cheese tracker already owns this Archipelago room.
-                    # That is legal on Cheese -- two people can each make a
-                    # tracker for one room -- but a room holds one tracker id.
+                    # Cheese allows that, though not by the obvious route: it
+                    # keeps one tracker per upstream tracker page, but room_link
+                    # is free text, so a second tracker can name a room another
+                    # one covers. A room here holds one tracker id.
                     #
                     # Refused before anything is written. This used to decline
                     # the re-point and then fall through anyway: the incoming
