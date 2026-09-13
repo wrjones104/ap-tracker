@@ -751,6 +751,9 @@ def import_available_cheese_rooms(current_user):
 
     stats = {'imported': 0, 'slots_synced': 0, 'demoted': 0}
     failed = []
+    # Kept apart from `failed` on purpose. The app reads `failed` as "Cheese
+    # didn't answer, try again", and retrying one of these can never succeed.
+    linked_elsewhere = []
 
     for ct_id in sorted(wanted & set(by_id)):
         full_data = details.get(ct_id)
@@ -768,7 +771,25 @@ def import_available_cheese_rooms(current_user):
             ap_room_id = extract_ap_room_id(room_link)
             if ap_room_id:
                 room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
-                if room and not room.cheese_tracker_id:
+                if room and room.cheese_tracker_id:
+                    # Another Cheese tracker already owns this Archipelago room.
+                    # That is legal on Cheese -- two people can each make a
+                    # tracker for one room -- but a room holds one tracker id.
+                    #
+                    # Refused before anything is written. This used to decline
+                    # the re-point and then fall through anyway: the incoming
+                    # tracker's payload was cached onto the room, its claims were
+                    # reconciled and the subscription was linked, so the room
+                    # pointed at one tracker while holding another's state, and
+                    # every later write went to a tracker the cache had not come
+                    # from (#332).
+                    logging.warning(
+                        f"[CHEESE_IMPORT] Tracker {ct_id} resolves to room {ap_room_id}, "
+                        f"which already belongs to tracker {room.cheese_tracker_id}. Skipping."
+                    )
+                    linked_elsewhere.append(ct_id)
+                    continue
+                if room:
                     room.cheese_tracker_id = ct_id
                     logging.info(f"[CHEESE_IMPORT] Linked existing AP room {ap_room_id} to Cheese ID {ct_id}")
 
@@ -837,6 +858,7 @@ def import_available_cheese_rooms(current_user):
         'slots_synced': stats['slots_synced'],
         'demoted': stats['demoted'],
         'failed': failed + missing + deferred,
+        'linked_elsewhere': linked_elsewhere,
     })
 
 

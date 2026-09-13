@@ -574,6 +574,133 @@ class TestSuggestions(CheeseLinkTestBase):
             fresh.close()
         self.assertEqual(remaining, 0)
 
+    def _seed_room_owned_by_another_tracker(self):
+        """An Archipelago room the app already has, linked to someone else's
+        Cheese tracker, with a cache that is recognisably that tracker's."""
+        user = self._seed()
+        theirs = TrackedRoom(
+            room_id="shared_uuid", cheese_tracker_id="ct_theirs",
+            cached_cheese_json=json.dumps({'from': 'ct_theirs'}),
+        )
+        self.session.add(theirs)
+        self.session.commit()
+        return user, theirs.id
+
+    def _second_tracker_for_shared_room(self):
+        return {'tracker_id': 'ct_second', 'title': 'Second Tracker',
+                'room_link': 'https://archipelago.gg/room/shared_uuid',
+                'dashboard_override_visibility': True}
+
+    @patch('app.api_cheese._fetch_tracker_details')
+    @patch('app.api_cheese.requests.Session')
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_a_tracker_for_a_room_another_tracker_owns_is_refused_untouched(
+        self, mock_dash, mock_session_cls, mock_details
+    ):
+        """
+        Two Cheese trackers for one Archipelago room is legal. The import used to
+        decline to re-point the room and then carry on regardless -- caching the
+        second tracker's payload, reconciling its claims and linking the user --
+        leaving a room that pointed at one tracker while holding the other's
+        state. Nothing about the room or the user's library may change.
+        """
+        mock_dash.return_value = self._dashboard() + [self._second_tracker_for_shared_room()]
+        mock_details.return_value = {'ct_second': {
+            'updated_at': '2026-06-23T10:00:00Z',
+            'games': [{'id': 9, 'position': 1, 'claimed_by_ct_user_id': MY_CT_ID}],
+        }}
+        user, room_id = self._seed_room_owned_by_another_tracker()
+        user_id = user.id
+
+        resp = _call(api_cheese.import_available_cheese_rooms, user,
+                     body={'cheese_tracker_ids': ['ct_second']})
+        payload = json.loads(resp.get_data(as_text=True))
+
+        self.assertEqual(payload['linked_elsewhere'], ['ct_second'])
+        self.assertEqual(payload['failed'], [],
+                         "reported as a retryable failure, which it can never stop being")
+        self.assertEqual(payload['imported'], 0)
+
+        fresh = Session()
+        try:
+            room = fresh.get(TrackedRoom, room_id)
+            self.assertEqual(room.cheese_tracker_id, 'ct_theirs')
+            self.assertEqual(json.loads(room.cached_cheese_json), {'from': 'ct_theirs'},
+                             "the other tracker's payload was cached onto the room")
+            self.assertIsNone(
+                fresh.query(UserRoomSubscription).filter_by(
+                    user_id=user_id, room_id=room_id).first(),
+                "the user was linked to a room whose tracker is not the one they chose")
+            self.assertEqual(
+                fresh.query(UserTrackedSlot).filter_by(
+                    user_id=user_id, room_id=room_id).count(), 0,
+                "claims were reconciled against a tracker the room does not point at")
+        finally:
+            fresh.close()
+
+    @patch('app.api_cheese._fetch_tracker_details')
+    @patch('app.api_cheese.requests.Session')
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_a_refused_tracker_does_not_stop_the_rest_of_the_import(
+        self, mock_dash, mock_session_cls, mock_details
+    ):
+        mock_dash.return_value = self._dashboard() + [self._second_tracker_for_shared_room()]
+        mock_details.return_value = {
+            'ct_second': {'games': []},
+            'ct_new': {'games': []},
+        }
+        user, _ = self._seed_room_owned_by_another_tracker()
+
+        resp = _call(api_cheese.import_available_cheese_rooms, user,
+                     body={'cheese_tracker_ids': ['ct_second', 'ct_new']})
+        payload = json.loads(resp.get_data(as_text=True))
+
+        self.assertEqual(payload['imported'], 1)
+        self.assertEqual(payload['linked_elsewhere'], ['ct_second'])
+
+        fresh = Session()
+        try:
+            self.assertIsNotNone(
+                fresh.query(TrackedRoom).filter_by(cheese_tracker_id='ct_new').first())
+        finally:
+            fresh.close()
+
+    @patch('app.api_cheese._fetch_tracker_details')
+    @patch('app.api_cheese.requests.Session')
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_an_unlinked_room_the_app_already_has_is_still_linked(
+        self, mock_dash, mock_session_cls, mock_details
+    ):
+        """The refusal is for rooms another tracker owns, not for every room the
+        app already knows. One nobody has linked is adopted, as before."""
+        mock_dash.return_value = [{
+            'tracker_id': 'ct_free', 'title': 'Free Room',
+            'room_link': 'https://archipelago.gg/room/free_uuid',
+            'dashboard_override_visibility': True,
+        }]
+        mock_details.return_value = {'ct_free': {'games': []}}
+        user = self._seed()
+        user_id = user.id
+        free = TrackedRoom(room_id="free_uuid")
+        self.session.add(free)
+        self.session.commit()
+        free_id = free.id
+
+        resp = _call(api_cheese.import_available_cheese_rooms, user,
+                     body={'cheese_tracker_ids': ['ct_free']})
+        payload = json.loads(resp.get_data(as_text=True))
+
+        self.assertEqual(payload['linked_elsewhere'], [])
+        self.assertEqual(payload['imported'], 1)
+        fresh = Session()
+        try:
+            self.assertEqual(fresh.get(TrackedRoom, free_id).cheese_tracker_id, 'ct_free')
+            self.assertIsNotNone(
+                fresh.query(UserRoomSubscription).filter_by(
+                    user_id=user_id, room_id=free_id).first())
+        finally:
+            fresh.close()
+
 
 class TestPublishingIsOptIn(CheeseLinkTestBase):
     """

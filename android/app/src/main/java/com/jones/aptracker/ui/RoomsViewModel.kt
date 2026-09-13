@@ -419,17 +419,27 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 // count alone read as success when half the request had failed.
                 val failed = result.failed.size
                 val roomWord = if (result.imported == 1) "room" else "rooms"
-                val message = if (failed > 0) {
+                val base = if (failed > 0) {
                     val failedWord = if (failed == 1) "room" else "rooms"
                     "Added ${result.imported} $roomWord. Cheese Tracker didn't answer " +
                         "for $failed more $failedWord -- try those again."
                 } else {
                     "Added ${result.imported} $roomWord from Cheese Tracker."
                 }
+                // Said separately, and without "try again": the room is already
+                // linked to someone else's tracker, so asking again cannot change
+                // the answer.
+                val linkedElsewhere = result.linked_elsewhere.size
+                val message = if (linkedElsewhere > 0) {
+                    val subject = if (linkedElsewhere == 1) "1 room is" else "$linkedElsewhere rooms are"
+                    "$base $subject already linked to a different Cheese tracker."
+                } else {
+                    base
+                }
                 Toast.makeText(
                     getApplication(),
                     message,
-                    if (failed > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                    if (failed > 0 || linkedElsewhere > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
                 ).show()
             } catch (e: Exception) {
                 e.printStackTrace()
