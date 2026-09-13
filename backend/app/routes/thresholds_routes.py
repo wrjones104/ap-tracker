@@ -91,7 +91,22 @@ def create_threshold_group(current_user, room_db_id, slot_id):
         ).first()
         if not tracked_slot:
             return jsonify({'error': 'Tracked slot not found'}), 404
-            
+
+        # The same cap the bulk endpoint and auto-apply enforce, for the same reason: every
+        # untriggered group is re-evaluated on every poll for every slot that received items, so
+        # a slot with hundreds of them is a real cost. This was the one path without it, and the
+        # cap read as an invariant everywhere else (#322).
+        #
+        # `>=` on the current count blocks growth only. A slot already over the limit keeps
+        # every group it has and can still edit or delete them; it just cannot add another
+        # until it is back under. `reason` matches the bulk endpoint's skip reason so a client
+        # can tell this apart from a bad request.
+        if count_groups(session, tracked_slot.id) >= MAX_GROUPS_PER_SLOT:
+            return jsonify({
+                'error': f'A slot can hold at most {MAX_GROUPS_PER_SLOT} milestone groups',
+                'reason': 'slot_group_limit',
+            }), 400
+
         group = ThresholdGroup(
             user_tracked_slot_id=tracked_slot.id,
             name=(data.get('name') or '').strip() or None,
