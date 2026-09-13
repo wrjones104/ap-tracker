@@ -2848,6 +2848,65 @@ def db_has_unindexed_items():
 ROOM_CLEANUP_CHUNK = 100
 
 
+def _delete_room_chunk(session, chunk):
+    """Delete a block of orphaned rooms and their history in one transaction.
+
+    Returns (rooms, items, hints). Raises on failure, leaving the caller to
+    decide between rolling the block back and retrying it row by row.
+    """
+    chunk_ids = [r[0] for r in chunk]
+    uuids = [r[1] for r in chunk]
+
+    # notified_items and notified_hints key on the room UUID string with no
+    # foreign key, so no cascade reaches them. Delete them here or they outlive
+    # the room forever as rows no query can return.
+    items = session.query(NotifiedItem).filter(
+        NotifiedItem.room_id.in_(uuids)
+    ).delete(synchronize_session=False)
+    hints = session.query(NotifiedHint).filter(
+        NotifiedHint.room_id.in_(uuids)
+    ).delete(synchronize_session=False)
+
+    # Bulk delete rather than session.delete per room. The only ORM cascade on
+    # TrackedRoom is subscriptions, and these rooms have none by definition;
+    # slot_item_counts cascades in the database. If one gains a subscriber
+    # between the query and here, the foreign key refuses the delete rather than
+    # quietly removing it.
+    # The row count, not len(chunk): a room already gone by the time this runs
+    # should not be reported as removed.
+    rooms = session.query(TrackedRoom).filter(
+        TrackedRoom.id.in_(chunk_ids)
+    ).delete(synchronize_session=False)
+
+    session.commit()
+    return rooms, items, hints
+
+
+def _delete_rooms_individually(session, chunk):
+    """Retry a failed block one room at a time.
+
+    Without this a single undeletable room costs the other 99 in its block, on
+    every run, because the same block is selected again each day. Returns
+    (rooms, items, hints, skipped).
+    """
+    rooms = items = hints = skipped = 0
+    for room in chunk:
+        try:
+            r, i, h = _delete_room_chunk(session, [room])
+        except IntegrityError as e:
+            session.rollback()
+            skipped += 1
+            logging.error(
+                "[JANITOR_DB_ERROR] Could not delete orphaned room %s (%s); "
+                "skipping it.", room[1], e,
+            )
+            continue
+        rooms += r
+        items += i
+        hints += h
+    return rooms, items, hints, skipped
+
+
 def db_run_cleanup():
     """Remove orphaned rooms and the history that keys on them.
 
@@ -2875,38 +2934,53 @@ def db_run_cleanup():
             )
         ).all()
 
-        total_rooms = total_items = total_hints = 0
+        total_rooms = total_items = total_hints = skipped_rooms = 0
         for start in range(0, len(orphaned_rooms), ROOM_CLEANUP_CHUNK):
             chunk = orphaned_rooms[start:start + ROOM_CLEANUP_CHUNK]
-            chunk_ids = [r[0] for r in chunk]
-            uuids = [r[1] for r in chunk]
 
-            # notified_items and notified_hints key on the room UUID string with
-            # no foreign key, so no cascade reaches them. Delete them here or
-            # they outlive the room forever as rows no query can return.
-            total_items += session.query(NotifiedItem).filter(
-                NotifiedItem.room_id.in_(uuids)
-            ).delete(synchronize_session=False)
-            total_hints += session.query(NotifiedHint).filter(
-                NotifiedHint.room_id.in_(uuids)
-            ).delete(synchronize_session=False)
+            # Guarded per chunk, not once around the whole loop. It used to sit
+            # outside, so a chunk that failed took every chunk after it with it,
+            # and the selection is deterministic enough that the same chunk
+            # failed again the next day. One bad room stopped the cleanup
+            # permanently rather than costing itself.
+            #
+            # IntegrityError only, here and in the per-room retry. That is the
+            # row-level fault this isolates: a foreign key the delete cannot get
+            # past. A dropped connection or a lock timeout fails every chunk the
+            # same way, and retrying each room would turn one failed run into a
+            # log line per orphaned room. Anything else reaches the handler below
+            # and stops the run once.
+            #
+            # A warning without a traceback, because the retry is expected to
+            # recover. The per-room line and the summary are the signals to act
+            # on, and a stuck room would otherwise raise an error-level trace
+            # every day.
+            try:
+                rooms, items, hints = _delete_room_chunk(session, chunk)
+            except IntegrityError as e:
+                session.rollback()
+                logging.warning(
+                    "[JANITOR] Chunk of %s rooms hit a constraint (%s); retrying "
+                    "them one at a time.", len(chunk), e,
+                )
+                rooms, items, hints, skipped = _delete_rooms_individually(session, chunk)
+                skipped_rooms += skipped
 
-            # Bulk delete rather than session.delete per room. The only ORM
-            # cascade on TrackedRoom is subscriptions, and these rooms have none
-            # by definition; slot_item_counts cascades in the database. If one
-            # gains a subscriber between the query and here, the foreign key
-            # refuses the delete rather than quietly removing it.
-            session.query(TrackedRoom).filter(
-                TrackedRoom.id.in_(chunk_ids)
-            ).delete(synchronize_session=False)
-
-            session.commit()
-            total_rooms += len(chunk)
+            total_rooms += rooms
+            total_items += items
+            total_hints += hints
 
         if total_rooms:
             logging.info(
                 "[JANITOR] Removed %s orphaned rooms, %s items and %s hints.",
                 total_rooms, total_items, total_hints,
+            )
+        if skipped_rooms:
+            # A number that does not move day to day is the signal that a room
+            # needs looking at, without anyone having to read a stack trace.
+            logging.warning(
+                "[JANITOR] %s orphaned room(s) could not be deleted and were "
+                "left in place.", skipped_rooms,
             )
     except Exception as e:
         logging.error(f"[JANITOR_DB_ERROR] Failed to remove orphaned rooms: {e}", exc_info=True)
