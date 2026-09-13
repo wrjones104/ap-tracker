@@ -418,24 +418,32 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 // A room Cheese would not hand over is reported, not swallowed. The
                 // count alone read as success when half the request had failed.
                 val failed = result.failed.size
+                val linkedElsewhere = result.linked_elsewhere.size
                 val roomWord = if (result.imported == 1) "room" else "rooms"
-                val base = if (failed > 0) {
+                val parts = mutableListOf<String>()
+                // The count leads only when something was added or nothing else
+                // happened. "Added 0 rooms" in front of a refusal or a timeout
+                // told the user nothing.
+                if (result.imported > 0 || (failed == 0 && linkedElsewhere == 0)) {
+                    parts += if (failed > 0 || linkedElsewhere > 0) {
+                        "Added ${result.imported} $roomWord."
+                    } else {
+                        "Added ${result.imported} $roomWord from Cheese Tracker."
+                    }
+                }
+                if (failed > 0) {
                     val failedWord = if (failed == 1) "room" else "rooms"
-                    "Added ${result.imported} $roomWord. Cheese Tracker didn't answer " +
-                        "for $failed more $failedWord -- try those again."
-                } else {
-                    "Added ${result.imported} $roomWord from Cheese Tracker."
+                    val more = if (result.imported > 0) " more" else ""
+                    parts += "Cheese Tracker didn't answer for $failed$more $failedWord -- try those again."
                 }
                 // Said separately, and without "try again": the room is already
                 // linked to someone else's tracker, so asking again cannot change
                 // the answer.
-                val linkedElsewhere = result.linked_elsewhere.size
-                val message = if (linkedElsewhere > 0) {
+                if (linkedElsewhere > 0) {
                     val subject = if (linkedElsewhere == 1) "1 room is" else "$linkedElsewhere rooms are"
-                    "$base $subject already linked to a different Cheese tracker."
-                } else {
-                    base
+                    parts += "$subject already linked to a different Cheese tracker."
                 }
+                val message = parts.joinToString(" ")
                 Toast.makeText(
                     getApplication(),
                     message,

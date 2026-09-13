@@ -701,6 +701,83 @@ class TestSuggestions(CheeseLinkTestBase):
         finally:
             fresh.close()
 
+    def _offered(self, user, **query):
+        resp = _call(api_cheese.list_available_cheese_rooms, user, query=query or None)
+        payload = json.loads(resp.get_data(as_text=True))
+        return {a['cheese_tracker_id'] for a in payload['available']}
+
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_a_tracker_the_import_would_refuse_is_not_offered(self, mock_dash):
+        """
+        The app refetches suggestions straight after an import. Offering a
+        tracker the import always refuses put the banner straight back, with
+        no way to clear it short of dismissing a room the user wanted.
+        """
+        mock_dash.return_value = self._dashboard() + [self._second_tracker_for_shared_room()]
+        user, _ = self._seed_room_owned_by_another_tracker()
+
+        offered = self._offered(user)
+        self.assertNotIn('ct_second', offered)
+        self.assertIn('ct_new', offered, "the filter must not hide ordinary suggestions")
+
+        self.assertNotIn('ct_second', self._offered(user, include_dismissed='1'),
+                         "un-hiding it would only lead back to the same refusal")
+
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_a_tracker_whose_own_room_exists_is_offered_whatever_its_link_says(self, mock_dash):
+        """
+        Mirrors the import's lookup order. A room already carrying this tracker
+        id is found first and subscribed to, so the tracker is importable even
+        when its room_link now names a room another tracker owns. Checking the
+        link alone would hide a suggestion the import accepts.
+        """
+        mock_dash.return_value = [{
+            'tracker_id': 'ct_moved', 'title': 'Link Edited Since',
+            'room_link': 'https://archipelago.gg/room/shared_uuid',
+            'dashboard_override_visibility': True,
+        }]
+        user, _ = self._seed_room_owned_by_another_tracker()
+        self.session.add(TrackedRoom(room_id="old_uuid", cheese_tracker_id="ct_moved"))
+        self.session.commit()
+
+        self.assertIn('ct_moved', self._offered(user))
+
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_a_room_nobody_has_linked_is_still_offered(self, mock_dash):
+        mock_dash.return_value = [{
+            'tracker_id': 'ct_free', 'title': 'Free Room',
+            'room_link': 'https://archipelago.gg/room/free_uuid',
+            'dashboard_override_visibility': True,
+        }]
+        user = self._seed()
+        self.session.add(TrackedRoom(room_id="free_uuid"))
+        self.session.commit()
+
+        self.assertIn('ct_free', self._offered(user))
+
+    @patch('app.api_cheese._fetch_tracker_details')
+    @patch('app.api_cheese.requests.Session')
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_what_the_import_refuses_the_list_does_not_offer(
+        self, mock_dash, mock_session_cls, mock_details
+    ):
+        """
+        The two endpoints each express the ownership rule, one per tracker and
+        one batched. This pins them to the same answer across the round trip the
+        app actually makes: import, then refetch the list.
+        """
+        mock_dash.return_value = self._dashboard() + [self._second_tracker_for_shared_room()]
+        mock_details.return_value = {'ct_second': {'games': []}, 'ct_new': {'games': []}}
+        user, _ = self._seed_room_owned_by_another_tracker()
+
+        resp = _call(api_cheese.import_available_cheese_rooms, user,
+                     body={'cheese_tracker_ids': ['ct_second', 'ct_new']})
+        refused = set(json.loads(resp.get_data(as_text=True))['linked_elsewhere'])
+        self.assertEqual(refused, {'ct_second'})
+
+        self.assertFalse(refused & self._offered(user),
+                         "the list still offers a tracker the import just refused")
+
 
 class TestPublishingIsOptIn(CheeseLinkTestBase):
     """

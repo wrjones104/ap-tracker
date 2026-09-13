@@ -633,11 +633,42 @@ def list_available_cheese_rooms(current_user):
         '1', 'true', 'yes'
     )
 
+    # The import refuses a tracker whose Archipelago room already belongs to a
+    # different tracker (#332), so offering one is a suggestion that can never be
+    # accepted. The app refetches this list straight after an import, so tapping
+    # Add refused it and the banner came straight back, with nothing to clear it
+    # short of dismissing a room the user wanted.
+    #
+    # Mirrors the import's lookup order. A room already holding this tracker id
+    # wins, because the import subscribes to that room; otherwise the room named
+    # by room_link decides. Two batched queries rather than one per tracker.
+    dashboard_ids = [t.get('tracker_id') for t in trackers if t.get('tracker_id')]
+    tracker_ids_with_rooms = {
+        ct_id for (ct_id,) in session.query(TrackedRoom.cheese_tracker_id)
+        .filter(TrackedRoom.cheese_tracker_id.in_(dashboard_ids)).all()
+    } if dashboard_ids else set()
+    link_room_ids = {
+        rid for rid in (extract_ap_room_id(t.get('room_link')) for t in trackers if t.get('room_link'))
+        if rid
+    }
+    owner_by_room_id = dict(
+        session.query(TrackedRoom.room_id, TrackedRoom.cheese_tracker_id)
+        .filter(TrackedRoom.room_id.in_(link_room_ids), TrackedRoom.cheese_tracker_id.isnot(None))
+        .all()
+    ) if link_room_ids else {}
+
     available = []
     for tracker in trackers:
         ct_id = tracker.get('tracker_id')
         if not ct_id or ct_id in known_tracker_ids:
             continue
+
+        # Not offered even when dismissals are listed: un-hiding it would only
+        # lead back to the same refusal.
+        if ct_id not in tracker_ids_with_rooms and tracker.get('room_link'):
+            owner = owner_by_room_id.get(extract_ap_room_id(tracker['room_link']))
+            if owner and owner != ct_id:
+                continue
 
         is_dismissed = ct_id in dismissed_ids
         if is_dismissed and not include_dismissed:
