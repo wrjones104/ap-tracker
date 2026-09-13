@@ -2800,11 +2800,31 @@ async def poller_supervisor(app, loop):
         await asyncio.sleep(SUPERVISOR_INTERVAL_SECONDS)
 
 def db_get_active_rooms():
+    """Rooms the supervisor should be running tasks for.
+
+    The subscription filter is what stops a room nobody tracks from keeping
+    itself alive. Polling stamps last_successful_poll, and that is the field
+    db_run_cleanup reads to decide a room has gone unused long enough to
+    delete, so an unwatched room that stayed active upstream refreshed its own
+    liveness on every cycle and was never collected. Suspension did not catch
+    it either: that needs 30 days of upstream silence, which a long-running
+    async nobody tracks never provides. Production reached 1,651 such rooms.
+
+    Safe against the window where a room exists without a subscription: both
+    creation paths (rooms_routes.add_room, api_cheese.import_available_cheese_rooms)
+    add the room and the subscription in one transaction, so no other session
+    observes the gap. An archived subscription is still a subscription, and
+    those rooms keep polling -- deliberately not filtered on is_archived.
+
+    Both the Archipelago and the Cheese task hang off this list, so an
+    unwatched Cheese room stops costing a tracker fetch as well.
+    """
     session = Session()
     try:
         return session.query(TrackedRoom).filter(
             TrackedRoom.is_complete == False,
-            TrackedRoom.is_suspended == False
+            TrackedRoom.is_suspended == False,
+            TrackedRoom.subscriptions.any()
         ).all()
     except Exception as e:
         logging.error(f"[SUPERVISOR_DB_ERROR] Failed to get active rooms: {e}", exc_info=True)
@@ -3041,11 +3061,22 @@ def db_check_stale_rooms():
     session = Session()
     try:
         limit_date = datetime.utcnow() - timedelta(days=30)
-        
-        # Only check rooms that are currently Active
+
+        # Same subscription filter as db_get_active_rooms, and for the same
+        # reason: suspending a room nobody polls achieves nothing, and every
+        # room it does suspend joins the healing pool, which then fetches
+        # room_status over HTTP for it every two hours (#345).
+        #
+        # Not relying on the janitor's ordering to keep these out. Today
+        # db_run_cleanup runs first and deletes orphaned rooms before this can
+        # see them, but that is a property of the call order in the supervisor
+        # rather than an invariant, and it does not hold during the 30-day
+        # drain after this ships, when the orphans are not yet old enough to
+        # delete. Two queries per room per run, so it is worth not walking them.
         active_rooms = session.query(TrackedRoom).filter(
             TrackedRoom.is_complete == False,
-            TrackedRoom.is_suspended == False
+            TrackedRoom.is_suspended == False,
+            TrackedRoom.subscriptions.any()
         ).all()
         
         stale_count = 0
