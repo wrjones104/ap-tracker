@@ -29,6 +29,11 @@ PURGE_BATCH_SIZE = 5000
 # never comes close. It only bites while working through a backlog.
 PURGE_MAX_ROWS_PER_RUN = 200_000
 
+# Guests committed per transaction. Far smaller than PURGE_BATCH_SIZE because a
+# guest delete is not one row: it cascades into subscriptions, tracked slots,
+# devices, ignore lists and more, so the write amplification per item is high.
+GUEST_PURGE_BATCH_SIZE = 200
+
 
 def get_retention_days():
     """Days of history to keep. RETENTION_DAYS overrides the 90 day default."""
@@ -221,26 +226,67 @@ def purge_inactive_guest_accounts(inactivity_days=None):
         inactivity_days = get_guest_inactivity_days()
 
     session = Session()
+    deleted_count = 0
+    skipped_count = 0
     try:
         cutoff_date = datetime.utcnow() - timedelta(days=inactivity_days)
 
-        inactive_guests = session.query(User).filter(
-            User.is_guest == True,
-            or_(User.last_activity < cutoff_date, User.last_activity == None)
-        ).all()
+        # Ids rather than instances. Each commit below expires every instance
+        # still loaded, so holding User objects across the loop would issue a
+        # reload per guest on next access.
+        guest_ids = [
+            row[0] for row in session.query(User.id).filter(
+                User.is_guest == True,
+                or_(User.last_activity < cutoff_date, User.last_activity == None)
+            ).all()
+        ]
 
-        deleted_count = len(inactive_guests)
-        for user in inactive_guests:
-            session.delete(user)
+        pending = 0
+        for guest_id in guest_ids:
+            user = session.get(User, guest_id)
+            if user is None:
+                continue
 
-        session.commit()
+            # A savepoint per guest, so an undeletable one costs itself and
+            # nothing else. This used to be one loop behind one commit: #331 was
+            # a guest owning a milestone template that had no cascade, and that
+            # single row discarded every other guest in the run. Because the
+            # selection is deterministic it then failed identically on every run
+            # after it, and the only signal was one line a day in the logs.
+            try:
+                with session.begin_nested():
+                    session.delete(user)
+            except Exception:
+                skipped_count += 1
+                logging.exception(
+                    "[RETENTION] Could not delete guest %s; skipping it.", guest_id)
+                continue
+
+            deleted_count += 1
+            pending += 1
+            if pending >= GUEST_PURGE_BATCH_SIZE:
+                session.commit()
+                pending = 0
+
+        if pending:
+            session.commit()
+
         if deleted_count:
-            logging.info(f"[RETENTION] Purged {deleted_count} inactive guest accounts (inactive for >{inactivity_days} days).")
-        return {'purged_guests': deleted_count}
+            logging.info(
+                "[RETENTION] Purged %s inactive guest accounts (inactive for >%s days).",
+                deleted_count, inactivity_days)
+        if skipped_count:
+            # A count, not a stack trace to go hunting for. A number that stays
+            # the same day after day is the signal that something needs a
+            # cascade.
+            logging.warning(
+                "[RETENTION] %s guest account(s) could not be deleted and were "
+                "left in place.", skipped_count)
+        return {'purged_guests': deleted_count, 'skipped_guests': skipped_count}
     except Exception as e:
         session.rollback()
         logging.error(f"[RETENTION_ERROR] Failed to purge guest accounts: {e}", exc_info=True)
-        return {'purged_guests': 0}
+        return {'purged_guests': deleted_count, 'skipped_guests': skipped_count}
     finally:
         Session.remove()
 
