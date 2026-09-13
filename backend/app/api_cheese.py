@@ -633,11 +633,42 @@ def list_available_cheese_rooms(current_user):
         '1', 'true', 'yes'
     )
 
+    # The import refuses a tracker whose Archipelago room already belongs to a
+    # different tracker (#332), so offering one is a suggestion that can never be
+    # accepted. The app refetches this list straight after an import, so tapping
+    # Add refused it and the banner came straight back, with nothing to clear it
+    # short of dismissing a room the user wanted.
+    #
+    # Mirrors the import's lookup order. A room already holding this tracker id
+    # wins, because the import subscribes to that room; otherwise the room named
+    # by room_link decides. Two batched queries rather than one per tracker.
+    dashboard_ids = [t.get('tracker_id') for t in trackers if t.get('tracker_id')]
+    tracker_ids_with_rooms = {
+        ct_id for (ct_id,) in session.query(TrackedRoom.cheese_tracker_id)
+        .filter(TrackedRoom.cheese_tracker_id.in_(dashboard_ids)).all()
+    } if dashboard_ids else set()
+    link_room_ids = {
+        rid for rid in (extract_ap_room_id(t.get('room_link')) for t in trackers if t.get('room_link'))
+        if rid
+    }
+    owner_by_room_id = dict(
+        session.query(TrackedRoom.room_id, TrackedRoom.cheese_tracker_id)
+        .filter(TrackedRoom.room_id.in_(link_room_ids), TrackedRoom.cheese_tracker_id.isnot(None))
+        .all()
+    ) if link_room_ids else {}
+
     available = []
     for tracker in trackers:
         ct_id = tracker.get('tracker_id')
         if not ct_id or ct_id in known_tracker_ids:
             continue
+
+        # Not offered even when dismissals are listed: un-hiding it would only
+        # lead back to the same refusal.
+        if ct_id not in tracker_ids_with_rooms and tracker.get('room_link'):
+            owner = owner_by_room_id.get(extract_ap_room_id(tracker['room_link']))
+            if owner and owner != ct_id:
+                continue
 
         is_dismissed = ct_id in dismissed_ids
         if is_dismissed and not include_dismissed:
@@ -751,6 +782,9 @@ def import_available_cheese_rooms(current_user):
 
     stats = {'imported': 0, 'slots_synced': 0, 'demoted': 0}
     failed = []
+    # Kept apart from `failed` on purpose. The app reads `failed` as "Cheese
+    # didn't answer, try again", and retrying one of these can never succeed.
+    linked_elsewhere = []
 
     for ct_id in sorted(wanted & set(by_id)):
         full_data = details.get(ct_id)
@@ -768,7 +802,27 @@ def import_available_cheese_rooms(current_user):
             ap_room_id = extract_ap_room_id(room_link)
             if ap_room_id:
                 room = session.query(TrackedRoom).filter_by(room_id=ap_room_id).first()
-                if room and not room.cheese_tracker_id:
+                if room and room.cheese_tracker_id:
+                    # Another Cheese tracker already owns this Archipelago room.
+                    # Cheese allows that, though not by the obvious route: it
+                    # keeps one tracker per upstream tracker page, but room_link
+                    # is free text, so a second tracker can name a room another
+                    # one covers. A room here holds one tracker id.
+                    #
+                    # Refused before anything is written. This used to decline
+                    # the re-point and then fall through anyway: the incoming
+                    # tracker's payload was cached onto the room, its claims were
+                    # reconciled and the subscription was linked, so the room
+                    # pointed at one tracker while holding another's state, and
+                    # every later write went to a tracker the cache had not come
+                    # from (#332).
+                    logging.warning(
+                        f"[CHEESE_IMPORT] Tracker {ct_id} resolves to room {ap_room_id}, "
+                        f"which already belongs to tracker {room.cheese_tracker_id}. Skipping."
+                    )
+                    linked_elsewhere.append(ct_id)
+                    continue
+                if room:
                     room.cheese_tracker_id = ct_id
                     logging.info(f"[CHEESE_IMPORT] Linked existing AP room {ap_room_id} to Cheese ID {ct_id}")
 
@@ -837,6 +891,7 @@ def import_available_cheese_rooms(current_user):
         'slots_synced': stats['slots_synced'],
         'demoted': stats['demoted'],
         'failed': failed + missing + deferred,
+        'linked_elsewhere': linked_elsewhere,
     })
 
 

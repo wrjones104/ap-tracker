@@ -398,7 +398,10 @@ data class ImportCheeseRoomsResponse(
     val imported: Int = 0,
     val slots_synced: Int = 0,
     val demoted: Int = 0,
-    val failed: List<String> = emptyList()
+    val failed: List<String> = emptyList(),
+    // Trackers whose room the app already follows through a different Cheese
+    // tracker. Never retryable, so never counted in `failed`.
+    val linked_elsewhere: List<String> = emptyList()
 )
 
 data class UpdateRoomRequest(
