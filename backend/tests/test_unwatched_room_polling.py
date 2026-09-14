@@ -32,7 +32,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app import create_app, Session, engine
 from app.models import Base, TrackedRoom, User, UserRoomSubscription
-from app.poller import db_check_stale_rooms, db_get_active_rooms, db_run_cleanup
+from app.poller import (
+    db_check_stale_rooms, db_get_active_rooms, db_get_suspended_rooms_for_healing,
+    db_run_cleanup,
+)
 
 
 class UnwatchedRoomTestBase(unittest.TestCase):
@@ -218,6 +221,49 @@ class TestStaleCheckSkipsUnwatched(UnwatchedRoomTestBase):
 
         fresh = self.session.query(TrackedRoom).filter_by(room_id="active").first()
         self.assertFalse(fresh.is_suspended)
+
+
+class TestHealingSkipsUnwatched(UnwatchedRoomTestBase):
+    """db_get_suspended_rooms_for_healing carries the same filter (#345).
+
+    Each room it returns costs an HTTP request to room_status every two hours,
+    and reviving a room nobody watches is pointless: db_get_active_rooms would
+    still not return it, so it is never polled.
+    """
+
+    def _healing_uuids(self):
+        return {r['room_uuid'] for r in db_get_suspended_rooms_for_healing()}
+
+    def test_unwatched_suspended_room_is_not_healed(self):
+        self._room("orphan", suspended=True)
+        self.session.commit()
+
+        self.assertEqual(self._healing_uuids(), set())
+
+    def test_watched_suspended_room_is_still_healed(self):
+        """The filter must not stop the healing it exists to do. Archived
+        counts as watched here too, as it does for polling."""
+        user = self._user("1")
+        for uuid, archived in (("mine", False), ("archived-but-mine", True)):
+            room = self._room(uuid, suspended=True)
+            self._subscribe(user, room, archived=archived)
+        self.session.commit()
+
+        self.assertEqual(self._healing_uuids(), {"mine", "archived-but-mine"})
+
+    def test_room_is_healed_again_once_someone_subscribes(self):
+        """Skipping an orphan is not permanent: gaining a subscriber puts it
+        straight back in the pool."""
+        self._room("returning", suspended=True)
+        self.session.commit()
+        self.assertEqual(self._healing_uuids(), set())
+
+        # The query's Session.remove() detached everything loaded above.
+        room = self.session.query(TrackedRoom).filter_by(room_id="returning").one()
+        self._subscribe(self._user("1"), room)
+        self.session.commit()
+
+        self.assertEqual(self._healing_uuids(), {"returning"})
 
 
 class TestJanitorCanNowCollect(UnwatchedRoomTestBase):

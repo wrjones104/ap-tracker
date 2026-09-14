@@ -3203,6 +3203,13 @@ def db_get_suspended_rooms_for_healing():
     """
     Retrieves rooms that are suspended and not complete, but either have no last_remote_activity,
     or last_remote_activity is within the past 30 days.
+
+    Only rooms somebody subscribes to (#345). Healing costs one HTTP request
+    per room, and reviving an unwatched room changes nothing: db_get_active_rooms
+    filters on subscriptions too, so it would still never be polled. Nothing is
+    lost by skipping them -- once a room gains a subscriber it matches this
+    query again, and rooms_routes.add_room clears is_suspended on subscribe
+    anyway.
     """
     session = Session()
     try:
@@ -3210,6 +3217,7 @@ def db_get_suspended_rooms_for_healing():
         rooms = session.query(TrackedRoom).filter(
             TrackedRoom.is_suspended == True,
             TrackedRoom.is_complete == False,
+            TrackedRoom.subscriptions.any(),
             or_(
                 TrackedRoom.last_remote_activity == None,
                 TrackedRoom.last_remote_activity > thirty_days_ago
