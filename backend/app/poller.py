@@ -2376,16 +2376,22 @@ def room_checksums(raw):
     """The checksum values in a room's game_checksums_json, or None if unreadable.
 
     None rather than an empty list, so a caller can tell a room with no games yet
-    from one whose data is broken. The hash check is there because every caller
-    puts these into a set, and a nested JSON value would raise there instead.
+    from one whose data is broken. The column is written from Archipelago's
+    datapackage_checksums, a map of game name to checksum string, so anything
+    else counts as broken. A null or empty value is the dangerous case: it can
+    never match a cached datapackage, so it would hold its room in the setup
+    retry loop forever without looking like bad data.
     """
     try:
-        values = list(json.loads(raw or '{}').values())
-        for value in values:
-            hash(value)
-        return values
-    except (ValueError, TypeError, AttributeError):
+        parsed = json.loads(raw or '{}')
+    except (ValueError, TypeError, RecursionError):
         return None
+    if not isinstance(parsed, dict):
+        return None
+    values = list(parsed.values())
+    if not all(isinstance(value, str) and value.strip() for value in values):
+        return None
+    return values
 
 
 def collect_required_checksums(rooms):
@@ -2421,9 +2427,10 @@ def log_unresolved_checksums(missing, required, rooms):
     held = sum(
         1 for room in rooms
         if any(c in missing for c in (room_checksums(room.game_checksums_json) or ())))
+    sample = sorted(missing)[:5]
     logging.warning(
-        f"[CACHE_CHECK] {len(missing)} of {len(required)} checksums unresolved, "
-        f"holding {held} room(s) in the setup retry loop.")
+        f"[CACHE_CHECK] {len(missing)} of {len(required)} checksums unresolved "
+        f"(e.g. {sample}), holding {held} room(s) in the setup retry loop.")
 
 
 def db_get_missing_checksums(checksums_to_check):

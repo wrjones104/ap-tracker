@@ -42,6 +42,20 @@ class TestRoomChecksums(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertIsNone(room_checksums(raw))
 
+    def test_values_that_are_not_checksums_return_none(self):
+        """These parsed without error under the old code and went straight into
+        the missing-checksum query. A null or empty one can never be cached, so
+        its room would retry setup forever while looking healthy."""
+        for raw in ('{"A": null}', '{"A": 123}', '{"A": true}', '{"A": ""}',
+                    '{"A": "   "}', '{"A": "c1", "B": null}'):
+            with self.subTest(raw=raw):
+                self.assertIsNone(room_checksums(raw))
+
+    def test_absurdly_deep_nesting_is_unreadable_not_an_exception(self):
+        """json.loads raises RecursionError here, which is not a ValueError.
+        Escaping would end the supervisor tick for every room after this one."""
+        self.assertIsNone(room_checksums('{"A": ' + '[' * 100000))
+
 
 class TestCollectRequiredChecksums(unittest.TestCase):
     def test_malformed_rooms_are_named_and_the_rest_still_count(self):
@@ -85,6 +99,7 @@ class TestLogUnresolvedChecksums(unittest.TestCase):
         message = logs.records[0].getMessage()
         self.assertIn("1 of 2 checksums", message)
         self.assertIn("2 room(s)", message)
+        self.assertIn("dead", message, "the warning should name what to look up")
 
     def test_nothing_unresolved_logs_nothing(self):
         """Today's production state. The warning must mean something when it appears."""
