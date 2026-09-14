@@ -15,6 +15,7 @@ from app.models import (
     Base, User, TrackedRoom, UserRoomSubscription, UserTrackedSlot, ThresholdGroup,
     ThresholdGroupItem
 )
+from app.services.milestone_template_service import MAX_GROUPS_PER_SLOT
 
 ROOM_UUID = 'room-uuid-crud'
 CHECKSUM = 'chk_zelda'
@@ -274,6 +275,135 @@ class TestThresholdGroupUpdate(unittest.TestCase):
         group = self._fetch_group(group_id)
         self.assertEqual(group['name'], 'Milestone')
         self.assertEqual([i['item_name'] for i in group['items']], ['Wooden Sword'])
+
+
+
+
+class TestThresholdGroupCreateCap(unittest.TestCase):
+    """
+    Covers the per-slot cap on POST .../threshold-groups, the "Create Milestone Group" sheet.
+
+    The bulk endpoint and auto-apply both stop at MAX_GROUPS_PER_SLOT because every untriggered
+    group is re-evaluated on every poll. The single create was the one path without it (#322).
+    The cap blocks growth only: a slot already over it keeps every group, can still edit and
+    delete them, and can add again once it is back under.
+    """
+
+    # Same slot fixture as the update tests, without inheriting their tests.
+    setUp = TestThresholdGroupUpdate.setUp
+    _auth = TestThresholdGroupUpdate._auth
+    _put = TestThresholdGroupUpdate._put
+
+    def tearDown(self):
+        Session.remove()
+        # Before unlinking, so the pool cannot go on serving an unlinked inode on Linux.
+        engine.dispose()
+        if os.path.exists(TEST_DB_PATH):
+            try:
+                os.remove(TEST_DB_PATH)
+            except Exception:
+                pass
+
+    def _fill(self, count, tracked_slot_id=None):
+        """Add `count` groups to a slot in one transaction. Returns their ids."""
+        session = Session()
+        try:
+            ids = []
+            for i in range(count):
+                group = ThresholdGroup(
+                    user_tracked_slot_id=tracked_slot_id or self.tracked_slot_id,
+                    name=f'Existing {i}', is_triggered=False,
+                )
+                session.add(group)
+                session.flush()
+                session.add(ThresholdGroupItem(
+                    group_id=group.id, item_name='Bow', quantity=1, is_group=False
+                ))
+                ids.append(group.id)
+            session.commit()
+            return ids
+        finally:
+            Session.remove()
+
+    def _count(self, tracked_slot_id=None):
+        session = Session()
+        try:
+            return session.query(ThresholdGroup).filter_by(
+                user_tracked_slot_id=tracked_slot_id or self.tracked_slot_id
+            ).count()
+        finally:
+            Session.remove()
+
+    def _create(self, slot_id=SLOT_ID, name='New One'):
+        return self.client.post(
+            f'/rooms/{self.room_db_id}/slots/{slot_id}/threshold-groups',
+            json={'name': name, 'items': [{'item_name': 'Hookshot', 'quantity': 1}]},
+            headers=self._auth(),
+        )
+
+    def _delete(self, group_id):
+        return self.client.delete(
+            f'/rooms/{self.room_db_id}/slots/{SLOT_ID}/threshold-groups/{group_id}',
+            headers=self._auth(),
+        )
+
+    def test_create_is_refused_at_the_cap_and_writes_nothing(self):
+        self._fill(MAX_GROUPS_PER_SLOT)
+
+        r = self._create()
+
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json().get('reason'), 'slot_group_limit')
+        self.assertEqual(self._count(), MAX_GROUPS_PER_SLOT)
+
+    def test_the_last_group_under_the_cap_is_still_created(self):
+        """Exactly at the boundary: a slot one short of the cap may take one more."""
+        self._fill(MAX_GROUPS_PER_SLOT - 1)
+
+        r = self._create()
+
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(self._count(), MAX_GROUPS_PER_SLOT)
+
+    def test_a_slot_already_over_the_cap_is_grandfathered_not_trimmed(self):
+        """
+        Blocking growth, not validating the whole set. A slot that got past the cap through
+        the old uncapped path keeps every group, can still edit and delete them, and can add
+        again once deletions bring it back under.
+        """
+        ids = self._fill(MAX_GROUPS_PER_SLOT + 5)
+
+        self.assertEqual(self._create().status_code, 400)
+        self.assertEqual(self._count(), MAX_GROUPS_PER_SLOT + 5, "existing groups were touched")
+
+        edit = self._put(ids[0], {'name': 'Renamed', 'items': [{'item_name': 'Bow', 'quantity': 2}]})
+        self.assertEqual(edit.status_code, 200, "an over-cap slot could not edit its groups")
+
+        for group_id in ids[-6:]:
+            self.assertIn(self._delete(group_id).status_code, (200, 204))
+        self.assertEqual(self._count(), MAX_GROUPS_PER_SLOT - 1)
+
+        self.assertEqual(self._create().status_code, 201,
+                         "still refused after deleting back under the cap")
+
+    def test_the_cap_is_per_slot(self):
+        session = Session()
+        try:
+            other_slot = UserTrackedSlot(
+                user_id=self.user_id, room_id=self.room_db_id, slot_id=SLOT_ID + 1
+            )
+            session.add(other_slot)
+            session.commit()
+            other_tracked_slot_id = other_slot.id
+        finally:
+            Session.remove()
+        self._fill(MAX_GROUPS_PER_SLOT)
+
+        r = self._create(slot_id=SLOT_ID + 1)
+
+        self.assertEqual(r.status_code, 201, "a full slot blocked a different slot")
+        self.assertEqual(self._count(other_tracked_slot_id), 1)
+
 
 
 if __name__ == '__main__':
