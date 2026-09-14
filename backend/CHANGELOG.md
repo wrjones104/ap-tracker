@@ -10,6 +10,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.13.1] - 2026-09-14
+
+_Right Tracker, Quieter Cleanup_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - Rooms with no subscribers are skipped by polling (`db_get_active_rooms`), the stale check and suspended-room healing, so the 30-day janitor can finally collect them. Closes #339, #345.
+> - The janitor isolates row-level faults: an undeletable guest or room is skipped and counted, not rolled back with the run. Guests are re-checked under a row lock before delete. Closes #335.
+>
+> ### Fixed
+> - Cheese import refused a room another tracker already owns only after writing that tracker's cache and claims onto it. It now refuses first and reports the tracker in the new `linked_elsewhere` list; the suggestions list stops offering it. Closes #332.
+> - `POST /rooms/<id>/slots/<slot_id>/threshold-groups` enforces `MAX_GROUPS_PER_SLOT`. Growth only: slots already over keep their groups. Closes #322.
+> - Retention no longer purges history rows without an `item_index`, which skipped the poller's count reset and could double a revived room's counts.
+>
+> ### Compatibility
+> - No migrations. `linked_elsewhere` is additive; older apps ignore it, and the app's message for it ships in app 1.13.0.
+> ```
+
+### Changed
+- **Unwatched Rooms Are Left Alone**: Polling, the stale check and healing skip rooms with no subscribers, so the 30-day cleanup can collect them. Closes #339, #345.
+- **One Bad Row Costs One Row**: An undeletable guest or room is skipped and counted instead of rolling back the whole cleanup run. Closes #335.
+
+### Fixed
+- **Cheese Import Bound A Room To The Wrong Tracker**: Refused before anything is written, reported in `linked_elsewhere`, and no longer offered as a suggestion. Closes #332.
+- **Single Create Skipped The Milestone Cap**: Now refused at 50 groups per slot with `slot_group_limit`, matching bulk create and auto-apply. Closes #322.
+- **Retention Could Double A Revived Room's Counts**: History with no item index is left for the poller, which resets the room's counts when it removes it.
+
+---
+
 ## [1.13.0] - 2026-09-11
 
 _The Room Library Is Yours, And The Cleanup Finally Runs_
