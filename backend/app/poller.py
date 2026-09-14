@@ -26,11 +26,11 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
-from .utils import get_user_agent_string, get_cheese_headers, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks, parse_cached_checks, serialize_index_watermarks, parse_index_watermarks
+from .utils import get_user_agent_string, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks, parse_cached_checks, serialize_index_watermarks, parse_index_watermarks
 # Single source of truth for Cheese sync. This module used to carry its own
 # copy, which silently went stale; re-exported here because run_cheese_poll
 # and api_cheese.refresh_tracker_cache both reach for app.poller.
-from app.services.cheese_service import process_cheese_update
+from app.services.cheese_service import process_cheese_update, unlink_deleted_tracker
 from app.services.redis_service import get_redis_client, publish_event
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 from app.services import milestone_template_service
@@ -243,6 +243,44 @@ async def fetch_json(url, headers=None):
     except Exception as e:
         logging.warning(f"[HTTP_ERROR] Failed to fetch {url}: {e}")
         return None
+
+async def fetch_cheese_tracker(url):
+    """GET a Cheese tracker: (payload, status, answered_by_cheese).
+
+    fetch_json collapses every failure to None, which cannot tell a deleted
+    tracker from an outage (#352). The status is not enough on its own either:
+    a proxy or a wrong CHEESE_BASE_URL can 404 too, and treating that as
+    deletion would unlink every library at once. Cheese stamps x-ct-settings on
+    its own responses, 404s included, so a 404 carrying it is Cheese saying the
+    tracker does not exist.
+
+    payload is only set for a 200 with a JSON object. status is 0 when the
+    request never got a response.
+    """
+    session = get_aiohttp_session()
+    try:
+        async with session.get(url, timeout=30) as response:
+            answered_by_cheese = 'x-ct-settings' in response.headers
+            if response.status == 429:
+                retry_after = response.headers.get("Retry-After", "unknown")
+                logging.warning(f"[HTTP_429] Rate limited on {url}. Retry-After: {retry_after}")
+                return None, response.status, answered_by_cheese
+            if response.status != 200:
+                if not (response.status == 404 and answered_by_cheese):
+                    logging.warning(f"[HTTP_ERROR] Failed to fetch {url}: status {response.status}")
+                return None, response.status, answered_by_cheese
+            try:
+                payload = await response.json(content_type=None)
+            except ValueError:
+                # A misrouted base URL answers 200 with the site's HTML shell.
+                payload = None
+            if not isinstance(payload, dict):
+                logging.warning(f"[HTTP_ERROR] {url} did not return a JSON object.")
+                return None, response.status, answered_by_cheese
+            return payload, response.status, answered_by_cheese
+    except Exception as e:
+        logging.warning(f"[HTTP_ERROR] Failed to fetch {url}: {e}")
+        return None, 0, False
 
 # =============================================================================
 # POLL LOGIC & SUBROUTINES
@@ -1866,9 +1904,16 @@ async def run_cheese_poll(room_info, loop):
 
     # Use semaphore to limit concurrent requests to Cheese API
     async with cheese_semaphore:
-        new_data = await fetch_json(url, headers=get_cheese_headers())
-    
-    if not new_data: 
+        new_data, status, answered_by_cheese = await fetch_cheese_tracker(url)
+
+    # Only an explicit not-found from Cheese itself counts as deletion. A
+    # timeout, 5xx, 429 or a 404 from anything in front of Cheese keeps the link,
+    # so an outage can never unlink anyone's library.
+    if status == 404 and answered_by_cheese:
+        await loop.run_in_executor(None, unlink_deleted_tracker, db_id, ct_id)
+        return
+
+    if not new_data:
         return
 
     # 2. Timestamp Efficiency Check
