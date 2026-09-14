@@ -2372,6 +2372,67 @@ async def run_room_setup(room_info, loop):
     finally:
         Session.remove()
 
+def room_checksums(raw):
+    """The checksum values in a room's game_checksums_json, or None if unreadable.
+
+    None rather than an empty list, so a caller can tell a room with no games yet
+    from one whose data is broken. The column is written from Archipelago's
+    datapackage_checksums, a map of game name to checksum string, so anything
+    else counts as broken. A null or empty value is the dangerous case: it can
+    never match a cached datapackage, so it would hold its room in the setup
+    retry loop forever without looking like bad data.
+    """
+    try:
+        parsed = json.loads(raw or '{}')
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    values = list(parsed.values())
+    if not all(isinstance(value, str) and value.strip() for value in values):
+        return None
+    return values
+
+
+def collect_required_checksums(rooms):
+    """Every checksum the given rooms need, naming any room whose data is unreadable.
+
+    Such a room used to be skipped by a bare except with nothing in the logs (#336).
+    """
+    required = set()
+    unreadable = []
+    for room in rooms:
+        values = room_checksums(room.game_checksums_json)
+        if values is None:
+            unreadable.append(room.id)
+            continue
+        required.update(values)
+    if unreadable:
+        logging.warning(
+            f"[CACHE_CHECK] Skipped {len(unreadable)} room(s) with unreadable "
+            f"game_checksums_json: {unreadable[:20]}")
+    return required
+
+
+def log_unresolved_checksums(missing, required, rooms):
+    """Warn when checksums cannot be resolved, and how many rooms that holds back.
+
+    Each such room is re-queued for setup behind a backoff that caps at five
+    minutes and never gives up. On 2026-09-11 that was ~1,577 checksums and the
+    only way to see it was a database query (#336). Zero after #339, so this is
+    the signal that it has come back.
+    """
+    if not missing:
+        return
+    held = sum(
+        1 for room in rooms
+        if any(c in missing for c in (room_checksums(room.game_checksums_json) or ())))
+    sample = sorted(missing)[:5]
+    logging.warning(
+        f"[CACHE_CHECK] {len(missing)} of {len(required)} checksums unresolved "
+        f"(e.g. {sample}), holding {held} room(s) in the setup retry loop.")
+
+
 def db_get_missing_checksums(checksums_to_check):
     if not checksums_to_check: return set()
     session = Session()
@@ -2673,14 +2734,10 @@ async def poller_supervisor(app, loop):
             # --- SMART HEALING: Batch check for missing cache entries ---
             if now - last_cache_check > timedelta(minutes=15):
                 logging.info("[SUPERVISOR] Running batch cache check...")
-                all_required_checksums = set()
-                for room in active_rooms_in_db:
-                    try:
-                        c_map = json.loads(room.game_checksums_json or '{}')
-                        all_required_checksums.update(c_map.values())
-                    except: continue
-                
+                all_required_checksums = collect_required_checksums(active_rooms_in_db)
+
                 missing_checksums = await loop.run_in_executor(None, db_get_missing_checksums, list(all_required_checksums))
+                log_unresolved_checksums(missing_checksums, all_required_checksums, active_rooms_in_db)
                 last_cache_check = now
             
             current_active_room_ids = {room.id for room in active_rooms_in_db}
@@ -2705,11 +2762,10 @@ async def poller_supervisor(app, loop):
                     has_total_locations = '"total_locations":' in (room.cached_players_json or "")
                     
                     # Detect if the underlying cache for this room's games is missing
-                    is_missing_cache = False
-                    try:
-                        room_checksums = json.loads(room.game_checksums_json or '{}').values()
-                        is_missing_cache = any(c in missing_checksums for c in room_checksums)
-                    except: pass
+                    # Silent on unreadable JSON: this runs every tick, and the
+                    # batch cache check already names those rooms every 15 minutes.
+                    checksums_for_room = room_checksums(room.game_checksums_json)
+                    is_missing_cache = bool(checksums_for_room) and any(c in missing_checksums for c in checksums_for_room)
 
                     needs_setup = (not room.is_setup) or (room.is_setup and is_missing_data) or (not has_total_locations) or is_missing_players or is_missing_cache
 
