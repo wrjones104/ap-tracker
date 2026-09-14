@@ -47,9 +47,28 @@ def _outage(*args, **kwargs):
     raise OperationalError("DELETE ...", {}, Exception("server closed the connection"))
 
 
+STRAY_TABLES = ("undeletable_user_ref", "undeletable_room_ref")
+
+
+def _drop_stray_tables():
+    """The blocker tables are not in Base.metadata, so drop_all never drops
+    them, and their foreign keys stop it dropping users and tracked_rooms too.
+
+    Deleting the database file in tearDown is not enough on its own. The app
+    builds one engine per process, so when several test files run together
+    they all share whichever file was imported first, and these tables broke
+    every setUp in the next module (#353).
+    """
+    with engine.begin() as conn:
+        for table in STRAY_TABLES:
+            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+
+
 class JanitorIsolationTestBase(unittest.TestCase):
     def setUp(self):
         self.app = create_app()
+        # Also here, so a database left poisoned by an interrupted run heals.
+        _drop_stray_tables()
         Base.metadata.drop_all(engine)
         Base.metadata.create_all(engine)
         self.session = Session()
@@ -57,6 +76,7 @@ class JanitorIsolationTestBase(unittest.TestCase):
     def tearDown(self):
         self.session.close()
         Session.remove()
+        _drop_stray_tables()
         # Before unlinking, so the pool cannot go on serving an unlinked inode.
         engine.dispose()
         if os.path.exists(TEST_DB_PATH):
