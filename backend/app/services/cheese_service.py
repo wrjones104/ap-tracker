@@ -11,6 +11,7 @@ from app.utils import (
     TRACK_MODE_WATCH,
     normalize_track_mode,
     CHEESE_LINK_LINKED,
+    CHEESE_LINK_NONE,
 )
 
 
@@ -83,6 +84,63 @@ def _build_demotion_payload(session, room, demotions):
         payload[user_id] = {'notifications': notifications, 'tokens': tokens}
 
     return payload
+
+
+def unlink_deleted_tracker(room_db_id, ct_id):
+    """Detach a room from a Cheese tracker that Cheese says no longer exists (#352).
+
+    Nothing used to clear a dead tracker id. The room kept polling a 404 forever,
+    and because a room holds one tracker id, a replacement tracker for the same
+    room was refused by the import and hidden from suggestions as belonging to a
+    "different tracker" that was already gone.
+
+    Clears the id and the dead tracker's cached state, so a replacement starts as
+    a first sync. Linked subscriptions go to 'none' in the same commit: the sync's
+    healing phase pushes any linked room with no tracker id to Cheese as a new
+    tracker, so leaving them linked would recreate the tracker the user deleted.
+
+    Only acts if the room still points at ct_id. A merge or an import can re-point
+    it between the fetch and this call, and that newer link must survive.
+    Returns True when something was unlinked.
+
+    The room itself stays, pending rooms included: the app owns the library and
+    rooms leave it only when the user removes them (#323).
+    """
+    session = Session()
+    try:
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).with_for_update().first()
+        if not room:
+            return False
+        if room.cheese_tracker_id != ct_id:
+            logging.info(
+                f"[CHEESE_UNLINK] Room {room_db_id} now points at tracker "
+                f"{room.cheese_tracker_id}, not {ct_id}; leaving it linked."
+            )
+            return False
+
+        linked_subs = session.query(UserRoomSubscription).filter_by(
+            room_id=room.id, cheese_link=CHEESE_LINK_LINKED
+        ).all()
+
+        room.cheese_tracker_id = None
+        room.cached_cheese_json = None
+        room.cheese_updated_at = None
+        for sub in linked_subs:
+            sub.cheese_link = CHEESE_LINK_NONE
+            sub.cheese_unlisted_at = None
+
+        session.commit()
+        logging.warning(
+            f"[CHEESE_UNLINK] Cheese tracker {ct_id} no longer exists. Unlinked room "
+            f"{room_db_id} and {len(linked_subs)} linked subscription(s)."
+        )
+        return True
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[CHEESE_UNLINK] Failed to unlink room {room_db_id} from tracker {ct_id}: {e}", exc_info=True)
+        return False
+    finally:
+        Session.remove()
 
 
 def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
