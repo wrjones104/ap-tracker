@@ -868,6 +868,47 @@
   ],
   "server_releases": [
     {
+      "version": "1.13.2",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-09-15",
+      "title": "Deleted Trackers Let Go",
+      "highlights": [
+        {
+          "title": "Replaced Cheese Trackers Can Be Linked",
+          "description": "When a Cheese tracker is deleted, its room lets go of it, so a new tracker for the same room can be added."
+        },
+        {
+          "title": "A Cheese Outage Never Unlinks A Room",
+          "description": "A tracker only counts as deleted when Cheese itself says so twice in a row; timeouts and errors change nothing."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "The Cache Check Speaks Up",
+            "description": "Warns when checksums cannot be resolved, with a sample and the rooms held back, and names rooms with unreadable checksum data. Closes #336."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "A Deleted Cheese Tracker Kept Its Room",
+            "description": "Rooms unlink from a tracker Cheese confirms is gone, so its replacement imports instead of being refused. Closes #352."
+          },
+          {
+            "title": "Poller Stuck On A Replaced Tracker",
+            "description": "A Cheese poll task restarts when its room changes tracker, instead of polling the old id until the poller restarts."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Changed\n- The batch cache check warns with the unresolved checksum count, a sample, and the rooms held in the setup retry loop, and names rooms whose `game_checksums_json` is not a map of non-empty strings. Closes #336.\n\n### Fixed\n- A tracker deleted on Cheese stayed linked to its room and blocked its replacement. The Cheese poll now unlinks after two consecutive 404s carrying Cheese's `x-ct-settings` header: it clears `cheese_tracker_id` and the cached payload and sets linked subscriptions to `cheese_link = none`. Unlinks are capped at 10 per hour. Closes #352.\n- A Cheese poll task kept polling its original tracker id after its room was re-pointed. The supervisor now restarts it.\n\n### Compatibility\n- No migrations or API changes. In the app, importing the replacement for a room the user already has reads \"Added 0 rooms\" until #359 ships."
+      }
+    },
+    {
       "version": "1.13.1",
       "component": "server",
       "component_label": "Server",

@@ -10,6 +10,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.13.2] - 2026-09-15
+
+_Deleted Trackers Let Go_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - The batch cache check warns with the unresolved checksum count, a sample, and the rooms held in the setup retry loop, and names rooms whose `game_checksums_json` is not a map of non-empty strings. Closes #336.
+>
+> ### Fixed
+> - A tracker deleted on Cheese stayed linked to its room and blocked its replacement. The Cheese poll now unlinks after two consecutive 404s carrying Cheese's `x-ct-settings` header: it clears `cheese_tracker_id` and the cached payload and sets linked subscriptions to `cheese_link = none`. Unlinks are capped at 10 per hour. Closes #352.
+> - A Cheese poll task kept polling its original tracker id after its room was re-pointed. The supervisor now restarts it.
+>
+> ### Compatibility
+> - No migrations or API changes. In the app, importing the replacement for a room the user already has reads "Added 0 rooms" until #359 ships.
+> ```
+
+### Changed
+- **The Cache Check Speaks Up**: Warns when checksums cannot be resolved, with a sample and the rooms held back, and names rooms with unreadable checksum data. Closes #336.
+
+### Fixed
+- **A Deleted Cheese Tracker Kept Its Room**: Rooms unlink from a tracker Cheese confirms is gone, so its replacement imports instead of being refused. Closes #352.
+- **Poller Stuck On A Replaced Tracker**: A Cheese poll task restarts when its room changes tracker, instead of polling the old id until the poller restarts.
+
+---
+
 ## [1.13.1] - 2026-09-14
 
 _Right Tracker, Quieter Cleanup_
