@@ -19,7 +19,7 @@ import asyncio
 import json
 import os
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 TEST_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test_cheese_deleted_tracker.db'))
@@ -149,7 +149,10 @@ class TestUnlinkDeletedTracker(DeletedTrackerTestBase):
 
     def test_a_room_re_pointed_since_the_fetch_is_left_alone(self):
         """An import or a merge can move the room to another tracker between the
-        poll's request and this write. The newer link must survive."""
+        poll's request and this write. The newer link must survive.
+
+        This pins the tracker id guard, which is what protects the room. The row
+        lock taken alongside it is a no-op on SQLite and is not exercised here."""
         linked_id, _, room_id = self._room_on_dead_tracker()
         room = self.session.get(TrackedRoom, room_id)
         room.cheese_tracker_id = "ct_replacement"
@@ -247,32 +250,61 @@ class TestWhatTheUnlinkMakesPossible(DeletedTrackerTestBase):
         mock_push.assert_called_once()
 
 
-def _run_poll(fetch_result):
-    """Run run_cheese_poll once against a canned fetch result."""
-    unlink = MagicMock(return_value=True)
+GONE = (None, 404, True)
+
+
+def _run_polls(*fetch_results, unlink_result=True, recent=None):
+    """Run run_cheese_poll once per canned fetch result, on one task's room_info,
+    the way a long-lived poll task does."""
+    unlink = MagicMock(return_value=unlink_result)
     process = MagicMock(return_value={})
     room_info = {'db_id': 7, 'cheese_tracker_id': 'ct_dead', 'cheese_updated_at': None}
+    returned = []
 
     async def go():
-        await poller.run_cheese_poll(room_info, asyncio.get_running_loop())
+        loop = asyncio.get_running_loop()
+        for _ in fetch_results:
+            returned.append(await poller.run_cheese_poll(room_info, loop))
 
-    with patch.object(poller, 'fetch_cheese_tracker', AsyncMock(return_value=fetch_result)), \
+    with patch.object(poller, 'fetch_cheese_tracker', AsyncMock(side_effect=list(fetch_results))), \
          patch.object(poller, 'unlink_deleted_tracker', unlink), \
-         patch.object(poller, 'process_cheese_update', process):
+         patch.object(poller, 'process_cheese_update', process), \
+         patch.object(poller, '_recent_cheese_unlinks', [] if recent is None else recent):
         asyncio.run(go())
-    return unlink, process
+    return unlink, process, returned
 
 
 class TestPollDecidesWhenATrackerIsGone(unittest.TestCase):
-    def test_a_404_from_cheese_unlinks(self):
-        unlink, process = _run_poll((None, 404, True))
+    def test_one_not_found_is_not_enough(self):
+        """A Cheese-side incident answers 404 with Cheese's own header too, and
+        nothing re-links a room once it is unlinked."""
+        unlink, process, returned = _run_polls(GONE)
+
+        unlink.assert_not_called()
+        process.assert_not_called()
+        self.assertEqual(returned, [True], "the task has to keep polling to confirm")
+
+    def test_a_second_consecutive_not_found_unlinks_and_ends_the_task(self):
+        unlink, process, returned = _run_polls(GONE, GONE)
 
         unlink.assert_called_once_with(7, 'ct_dead')
         process.assert_not_called()
+        self.assertIs(returned[-1], False, "a task holding a dead tracker id kept running")
+
+    def test_any_other_answer_in_between_restarts_the_count(self):
+        for label, between in (
+            ("server error", (None, 500, True)),
+            ("no response", (None, 0, False)),
+            ("tracker is back", ({'updated_at': '2026-09-14T10:00:00Z'}, 200, True)),
+        ):
+            with self.subTest(label):
+                unlink, _, _ = _run_polls(GONE, between, GONE)
+                unlink.assert_not_called()
 
     def test_nothing_else_unlinks(self):
         """Every one of these is an outage, a throttle or something in front of
-        Cheese, not Cheese saying the tracker is gone."""
+        Cheese, not Cheese saying the tracker is gone. Repeated, so a count that
+        was not reset would show."""
         for label, result in (
             ("404 from a proxy or wrong base URL", (None, 404, False)),
             ("server error", (None, 500, True)),
@@ -281,15 +313,71 @@ class TestPollDecidesWhenATrackerIsGone(unittest.TestCase):
             ("gone, but phrased as 410", (None, 410, True)),
         ):
             with self.subTest(label):
-                unlink, process = _run_poll(result)
+                unlink, process, returned = _run_polls(result, result)
                 unlink.assert_not_called()
                 process.assert_not_called()
+                self.assertNotIn(False, returned)
 
     def test_a_live_tracker_is_processed_as_before(self):
-        unlink, process = _run_poll(({'updated_at': '2026-09-14T10:00:00Z'}, 200, True))
+        unlink, process, _ = _run_polls(({'updated_at': '2026-09-14T10:00:00Z'}, 200, True))
 
         unlink.assert_not_called()
         process.assert_called_once()
+
+    def test_a_burst_of_unlinks_trips_the_breaker(self):
+        """If Cheese answers 404 for everything for longer than one poll, every
+        room reaches its second not-found within a cycle. Past the hourly limit
+        rooms are held, and they keep polling so a real deletion still lands."""
+        full = [datetime.utcnow()] * poller.CHEESE_UNLINK_LIMIT_PER_HOUR
+
+        with self.assertLogs(level='ERROR'):
+            unlink, _, returned = _run_polls(GONE, GONE, recent=full)
+
+        unlink.assert_not_called()
+        self.assertEqual(returned, [True, True])
+
+    def test_unlinks_older_than_an_hour_do_not_count(self):
+        stale = [datetime.utcnow() - timedelta(hours=2)] * poller.CHEESE_UNLINK_LIMIT_PER_HOUR
+
+        unlink, _, _ = _run_polls(GONE, GONE, recent=stale)
+
+        unlink.assert_called_once()
+
+    def test_a_skipped_unlink_still_ends_the_task(self):
+        """unlink returns False when the room was re-pointed since. This task's
+        tracker id is stale either way; the supervisor starts a fresh task for
+        whatever the room holds now."""
+        _, _, returned = _run_polls(GONE, GONE, unlink_result=False)
+
+        self.assertIs(returned[-1], False)
+
+
+class TestPollLoopStops(unittest.TestCase):
+    def test_the_loop_exits_when_the_poll_says_its_tracker_is_stale(self):
+        """A loop that ignores the signal must fail here, not hang the suite. The
+        fake sleep yields to the event loop so the timeout can fire, and the fake
+        poll keeps saying "go on" rather than running out of answers."""
+        answers = iter([True, None, False])
+        poll = AsyncMock(side_effect=lambda *a, **k: next(answers, True))
+        real_sleep = asyncio.sleep
+
+        # An async function, not a lambda returning a coroutine: AsyncMock awaits
+        # an async side_effect but hands back a plain function's return value
+        # unawaited, which would never yield and hang the suite instead of failing.
+        async def yielding_sleep(*args, **kwargs):
+            await real_sleep(0)
+
+        async def go():
+            await poller.poll_cheese_with_interval({'db_id': 7}, asyncio.get_running_loop())
+
+        with patch.object(poller, 'run_cheese_poll', poll), \
+             patch('app.poller.asyncio.sleep', AsyncMock(side_effect=yielding_sleep)):
+            try:
+                asyncio.run(asyncio.wait_for(go(), timeout=2))
+            except asyncio.TimeoutError:
+                self.fail("the loop kept polling a stale tracker id")
+
+        self.assertEqual(poll.await_count, 3, "polled past a stale tracker id")
 
 
 class _FakeResponse:
@@ -342,6 +430,48 @@ class TestFetchCheeseTracker(unittest.TestCase):
 
     def test_a_network_failure_is_status_zero(self):
         self.assertEqual(_fetch(raises=asyncio.TimeoutError()), (None, 0, False))
+
+
+class TestSupervisorKeepsTasksOnTheRoomsTracker(unittest.TestCase):
+    """The supervisor used to start a Cheese task only when none existed. A task
+    holds its tracker id for life, so after a replacement was imported the old
+    task went on polling the dead id and the replacement was never polled."""
+
+    @staticmethod
+    def _task(ct_id, done=False):
+        task = MagicMock(spec=['done', 'cancel'])
+        task.done.return_value = done
+        task.cheese_tracker_id = ct_id
+        return task
+
+    def test_a_task_on_the_rooms_tracker_is_kept(self):
+        self.assertTrue(poller.cheese_task_is_current(self._task('ct_a'), 'ct_a'))
+
+    def test_a_room_re_pointed_to_a_replacement_needs_a_new_task(self):
+        self.assertFalse(poller.cheese_task_is_current(self._task('ct_dead'), 'ct_replacement'))
+
+    def test_a_finished_task_is_replaced(self):
+        """The poll task ends itself after an unlink attempt."""
+        self.assertFalse(poller.cheese_task_is_current(self._task('ct_a', done=True), 'ct_a'))
+
+    def test_no_task_or_an_untagged_one_is_not_current(self):
+        untagged = MagicMock(spec=['done', 'cancel'])
+        untagged.done.return_value = False
+
+        self.assertFalse(poller.cheese_task_is_current(None, 'ct_a'))
+        self.assertFalse(poller.cheese_task_is_current(untagged, 'ct_a'))
+
+    def test_a_real_asyncio_task_can_carry_its_tracker_id(self):
+        """The supervisor tags the Task object itself. Pinned on a real one, so a
+        runtime whose Task rejects attributes fails here and not in production."""
+        async def go():
+            task = asyncio.create_task(asyncio.sleep(10))
+            task.cheese_tracker_id = 'ct_a'
+            current = poller.cheese_task_is_current(task, 'ct_a')
+            task.cancel()
+            return current
+
+        self.assertTrue(asyncio.run(go()))
 
 
 if __name__ == '__main__':

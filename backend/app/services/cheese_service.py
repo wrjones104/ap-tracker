@@ -109,7 +109,13 @@ def unlink_deleted_tracker(room_db_id, ct_id):
     session = Session()
     try:
         room = session.query(TrackedRoom).filter_by(id=room_db_id).with_for_update().first()
-        if not room or room.cheese_tracker_id != ct_id:
+        if not room:
+            return False
+        if room.cheese_tracker_id != ct_id:
+            logging.info(
+                f"[CHEESE_UNLINK] Room {room_db_id} now points at tracker "
+                f"{room.cheese_tracker_id}, not {ct_id}; leaving it linked."
+            )
             return False
 
         linked_subs = session.query(UserRoomSubscription).filter_by(

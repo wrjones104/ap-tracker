@@ -54,6 +54,18 @@ def chunked_iterable(iterable, size):
 CHEESE_POLL_SEMAPHORE_LIMIT = 3
 cheese_semaphore = asyncio.Semaphore(CHEESE_POLL_SEMAPHORE_LIMIT)
 
+# #352: consecutive Cheese not-founds, one poll apart, before a tracker counts as
+# deleted. The x-ct-settings check rules out proxies, not Cheese itself: a
+# restored database or a bad deploy answers 404 with Cheese's own header too, and
+# nothing re-links a room automatically once it is unlinked.
+CHEESE_DELETED_CONFIRMATIONS = 2
+# A breaker on top of that, for a Cheese incident that outlasts the confirmation.
+# Real deletions are rare; this many in an hour means Cheese is wrong, not that
+# everyone deleted their trackers at once. Held rooms keep polling and unlink
+# once the window clears.
+CHEESE_UNLINK_LIMIT_PER_HOUR = 10
+_recent_cheese_unlinks = []
+
 # Limit concurrent requests to Archipelago API
 AP_POLL_SEMAPHORE_LIMIT = 5 
 ap_poll_semaphore = asyncio.Semaphore(AP_POLL_SEMAPHORE_LIMIT)
@@ -1893,6 +1905,9 @@ async def run_room_poll(room_info, loop):
 async def run_cheese_poll(room_info, loop):
     """
     Async task to check Cheese Tracker for updates.
+
+    Returns False when the task running it should stop: its tracker id is stale.
+    Anything else means keep polling.
     """
     db_id = room_info['db_id']
     ct_id = room_info['cheese_tracker_id']
@@ -1907,11 +1922,32 @@ async def run_cheese_poll(room_info, loop):
         new_data, status, answered_by_cheese = await fetch_cheese_tracker(url)
 
     # Only an explicit not-found from Cheese itself counts as deletion. A
-    # timeout, 5xx, 429 or a 404 from anything in front of Cheese keeps the link,
-    # so an outage can never unlink anyone's library.
+    # timeout, 5xx, 429 or a 404 from anything in front of Cheese keeps the link.
     if status == 404 and answered_by_cheese:
-        await loop.run_in_executor(None, unlink_deleted_tracker, db_id, ct_id)
-        return
+        misses = room_info.get('cheese_404_streak', 0) + 1
+        room_info['cheese_404_streak'] = misses
+        if misses < CHEESE_DELETED_CONFIRMATIONS:
+            logging.info(
+                f"[CHEESE_UNLINK] Tracker {ct_id} not found "
+                f"({misses}/{CHEESE_DELETED_CONFIRMATIONS}); confirming on the next poll.")
+            return True
+
+        cutoff = datetime.utcnow() - timedelta(hours=1)
+        _recent_cheese_unlinks[:] = [t for t in _recent_cheese_unlinks if t > cutoff]
+        if len(_recent_cheese_unlinks) >= CHEESE_UNLINK_LIMIT_PER_HOUR:
+            logging.error(
+                f"[CHEESE_UNLINK] {len(_recent_cheese_unlinks)} trackers already unlinked in "
+                f"the last hour; holding tracker {ct_id} for room {db_id} in case Cheese is "
+                f"answering 404 in error.")
+            return True
+
+        if await loop.run_in_executor(None, unlink_deleted_tracker, db_id, ct_id):
+            _recent_cheese_unlinks.append(datetime.utcnow())
+        # Stale whatever happened: unlinked, re-pointed since, or a failed write.
+        # The supervisor starts a fresh task for whatever the room holds now.
+        return False
+
+    room_info['cheese_404_streak'] = 0
 
     if not new_data:
         return
@@ -2675,6 +2711,22 @@ async def poll_room_with_interval(room_info, loop):
         except asyncio.CancelledError:
             break
 
+def cheese_task_is_current(task, ct_id):
+    """Whether a room's running Cheese task is still polling the room's tracker.
+
+    A task keeps the room_info it started with, tracker id included, for its whole
+    life. When a room is re-pointed -- a replacement imported after an unlink
+    (#352), or a pending-room merge -- a task that only had to exist would go on
+    polling the old id forever and the new tracker would never be polled. A task
+    that has finished, which it does after any unlink attempt, is not current
+    either.
+    """
+    return (
+        task is not None
+        and not task.done()
+        and getattr(task, 'cheese_tracker_id', None) == ct_id
+    )
+
 async def poll_cheese_with_interval(room_info, loop):
     """
     Dedicated loop for Cheese polling to keep it independent of AP polling errors.
@@ -2684,7 +2736,8 @@ async def poll_cheese_with_interval(room_info, loop):
     
     while True:
         try:
-            await run_cheese_poll(room_info, loop)
+            if await run_cheese_poll(room_info, loop) is False:
+                break
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -2851,9 +2904,13 @@ async def poller_supervisor(app, loop):
                 cheese_task_key = f"cheese_{room.id}"
                 
                 if room.cheese_tracker_id:
-                    if cheese_task_key not in running_tasks:
-                        logging.info(f"[SUPERVISOR] Starting Cheese poller for room {room.id}")
+                    existing = running_tasks.get(cheese_task_key)
+                    if not cheese_task_is_current(existing, room.cheese_tracker_id):
+                        if existing is not None and not existing.done():
+                            existing.cancel()
+                        logging.info(f"[SUPERVISOR] Starting Cheese poller for room {room.id} (tracker {room.cheese_tracker_id})")
                         c_task = asyncio.create_task(poll_cheese_with_interval(room_info, loop))
+                        c_task.cheese_tracker_id = room.cheese_tracker_id
                         running_tasks[cheese_task_key] = c_task
                         # THROTTLE: Stagger cheese startup
                         await asyncio.sleep(0.02)
