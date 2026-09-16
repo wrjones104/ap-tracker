@@ -165,17 +165,37 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
             if real_uuid:
                 existing_real_room = session.query(TrackedRoom).filter_by(room_id=real_uuid).first()
                 if existing_real_room:
-                    logging.info(f"[POLLER_MERGE] Merging Pending Room {room.id} into Existing Room {existing_real_room.id}")
-                    
+                    # Another tracker already owns the real room. Cheese allows that:
+                    # room_link is free text, so a second tracker can name a room one
+                    # covers. The room holds one tracker id, and re-pointing it would
+                    # move every user linked through the owner onto a tracker none of
+                    # them chose, and stop mirroring the owner (#350).
+                    #
+                    # The importing user still gets the room, unlinked. Leaving it
+                    # pending would lose nothing but show nothing: pending rooms are
+                    # hidden from the room list, so the import would look like a no-op.
+                    owner_ct_id = existing_real_room.cheese_tracker_id
+                    owned_elsewhere = bool(owner_ct_id) and owner_ct_id != room.cheese_tracker_id
+
+                    if owned_elsewhere:
+                        logging.warning(
+                            f"[POLLER_MERGE] Pending Room {room.id} (tracker {room.cheese_tracker_id}) "
+                            f"resolves to Room {existing_real_room.id}, which belongs to tracker "
+                            f"{owner_ct_id}. Merging its subscribers unlinked."
+                        )
+                    else:
+                        logging.info(f"[POLLER_MERGE] Merging Pending Room {room.id} into Existing Room {existing_real_room.id}")
+
                     pending_subs = session.query(UserRoomSubscription).filter_by(room_id=room.id).all()
                     pending_slots = session.query(UserTrackedSlot).filter_by(room_id=room.id).all()
 
-                    ct_id_val = room.cheese_tracker_id
-                    room.cheese_tracker_id = None
-                    session.flush() 
+                    if not owned_elsewhere:
+                        ct_id_val = room.cheese_tracker_id
+                        room.cheese_tracker_id = None
+                        session.flush()
 
-                    existing_real_room.cheese_tracker_id = ct_id_val
-                    
+                        existing_real_room.cheese_tracker_id = ct_id_val
+
                     slots_by_user = {}
                     for s in pending_slots:
                         slots_by_user.setdefault(s.user_id, []).append(s)
@@ -191,7 +211,10 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                                 user_id=user_id, 
                                 room_id=existing_real_room.id,
                                 alias=p_sub.alias,
-                                is_archived=p_sub.is_archived
+                                is_archived=p_sub.is_archived,
+                                # Must stay 'none' when the room is owned elsewhere:
+                                # linked would authorise claims on the owner's tracker.
+                                cheese_link=CHEESE_LINK_NONE,
                             )
                             session.add(real_sub)
                             session.flush()
@@ -210,7 +233,11 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                         session.delete(p_sub)
                     
                     session.delete(room)
-                    session.commit() 
+                    session.commit()
+                    if owned_elsewhere:
+                        # This payload is the incoming tracker's. Caching it onto a
+                        # room that points at the owner is #332's bug again.
+                        return {}
                     room = existing_real_room
                 else:
                     logging.info(f"[POLLER_HEAL] Updating Pending Room {room.id} to UUID {real_uuid}")
