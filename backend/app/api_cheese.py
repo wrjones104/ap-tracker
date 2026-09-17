@@ -15,7 +15,8 @@ from datetime import datetime, timedelta, timezone
 
 from . import Session
 from .models import (
-    User, TrackedRoom, UserRoomSubscription, UserTrackedSlot, CheeseDismissedTracker
+    User, TrackedRoom, UserRoomSubscription, UserTrackedSlot, CheeseDismissedTracker,
+    CheesePendingPush,
 )
 from .api import token_required, log_api_call, handle_db_errors
 from .encryption import encrypt_api_key, decrypt_api_key
@@ -67,6 +68,15 @@ _cheese_session = _build_cheese_session()
 
 # How many trackers one import request will take. See import_available_cheese_rooms.
 MAX_IMPORT_PER_REQUEST = 25
+
+# What became of one slot's push. See send_state and #304.
+PUSH_OK = 'ok'
+PUSH_RETRY = 'retry'
+PUSH_FINAL = 'final'
+
+# Retries for one slot before the poller stops trying. Each attempt follows a poll
+# Cheese answered, so a push that keeps failing is not a slow-Cheese problem.
+CHEESE_PENDING_MAX_ATTEMPTS = 5
     
 def _fetch_tracker_details(req_session, tracker_ids):
     """
@@ -1047,12 +1057,20 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         except Exception as e:
             logging.error(f"[CHEESE_DEBUG] Error triggering slot push: {e}")
 
-def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots, my_ct_id, base_headers):
+def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots, my_ct_id, base_headers, tracker_details=None):
     """
     Dedicated worker function to handle multiple slot pushes with a single DB session.
+
+    Returns {slot_id: PUSH_*} for every slot it was given. A slot the worker never
+    got to is PUSH_RETRY: the push may or may not have landed, and pushing a
+    slot's current mode again is harmless either way.
+
+    `tracker_details` lets a caller that already holds a fresh snapshot, like the
+    poller, skip the fetch.
     """
     logging.info(f"[CHEESE_DEBUG_WORKER] Starting synchronous slot push for user {user_id} on tracker {tracker_id}")
     notifications_outbox = []
+    outcomes = {slot_id: PUSH_RETRY for slot_id in list(removed_slots) + list(added_slots)}
     with app.app_context():
         session = Session()
         try:
@@ -1060,27 +1078,28 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
             # so an N-slot push made N full tracker downloads -- N chances to hit the read
             # timeout that silently drops a claim, which is why large rooms were worst
             # affected. See #304.
-            try:
-                detail_resp = _cheese_session.get(
-                    f"{CHEESE_BASE_URL}/tracker/{tracker_id}",
-                    headers=base_headers,
-                    timeout=10
-                )
-                if not detail_resp.ok:
-                    logging.warning(f"[CHEESE_DEBUG_WORKER] Tracker {tracker_id} fetch returned {detail_resp.status_code}; no slots pushed.")
-                    return
-                tracker_details = detail_resp.json()
-            except Exception as fetch_err:
-                logging.error(f"[CHEESE_DEBUG_WORKER] Could not read tracker {tracker_id}; no slots pushed: {fetch_err}", exc_info=True)
-                return
+            if tracker_details is None:
+                try:
+                    detail_resp = _cheese_session.get(
+                        f"{CHEESE_BASE_URL}/tracker/{tracker_id}",
+                        headers=base_headers,
+                        timeout=10
+                    )
+                    if not detail_resp.ok:
+                        logging.warning(f"[CHEESE_DEBUG_WORKER] Tracker {tracker_id} fetch returned {detail_resp.status_code}; no slots pushed.")
+                        return outcomes
+                    tracker_details = detail_resp.json()
+                except Exception as fetch_err:
+                    logging.error(f"[CHEESE_DEBUG_WORKER] Could not read tracker {tracker_id}; no slots pushed: {fetch_err}", exc_info=True)
+                    return outcomes
 
             # Process removals
             for slot_id in removed_slots:
-                send_state(session, app, slot_id, False, user_id, my_ct_id, tracker_id, base_headers, tracker_details, notifications_outbox)
-            
+                outcomes[slot_id] = send_state(session, app, slot_id, False, user_id, my_ct_id, tracker_id, base_headers, tracker_details, notifications_outbox)
+
             # Process additions
             for slot_id in added_slots:
-                send_state(session, app, slot_id, True, user_id, my_ct_id, tracker_id, base_headers, tracker_details, notifications_outbox)
+                outcomes[slot_id] = send_state(session, app, slot_id, True, user_id, my_ct_id, tracker_id, base_headers, tracker_details, notifications_outbox)
 
             session.commit()
             logging.info(f"[CHEESE_DEBUG_WORKER] Finished slot push.")
@@ -1099,15 +1118,135 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
             logging.error(f"[CHEESE_DEBUG_WORKER] Worker failed for user {user_id}: {e}")
         finally:
             Session.remove()
+    return outcomes
 
-def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_slots):
+
+def _record_push_outcomes(user_id, tracker_id, outcomes):
+    """
+    Remember the slots whose push should be retried, and forget the rest (#304).
+
+    Runs in its own session after the worker, so a failure here never costs the
+    worker its commit, and a lost race with a concurrent push for the same slot
+    costs only this bookkeeping. The other push records its own outcome.
+    """
+    session = Session()
+    try:
+        settled = [slot_id for slot_id, outcome in outcomes.items() if outcome != PUSH_RETRY]
+        if settled:
+            session.query(CheesePendingPush).filter(
+                CheesePendingPush.cheese_tracker_id == tracker_id,
+                CheesePendingPush.user_id == user_id,
+                CheesePendingPush.slot_id.in_(settled),
+            ).delete(synchronize_session=False)
+
+        for slot_id, outcome in outcomes.items():
+            if outcome != PUSH_RETRY:
+                continue
+            row = session.query(CheesePendingPush).filter_by(
+                cheese_tracker_id=tracker_id, user_id=user_id, slot_id=slot_id
+            ).first()
+            if row is None:
+                logging.warning(
+                    f"[CHEESE_PENDING] Push for slot {slot_id} on tracker {tracker_id} "
+                    f"(user {user_id}) did not land; retrying on the next poll."
+                )
+                session.add(CheesePendingPush(
+                    user_id=user_id, cheese_tracker_id=tracker_id, slot_id=slot_id, attempts=1
+                ))
+            elif row.attempts >= CHEESE_PENDING_MAX_ATTEMPTS:
+                # Cheese is answering polls but this push keeps failing, so something
+                # other than a slow request is wrong. Dropping the row hands the slot
+                # back to the sync, which demotes an unconfirmed claim to watch and
+                # tells the user.
+                logging.error(
+                    f"[CHEESE_PENDING] Giving up on slot {slot_id} on tracker {tracker_id} "
+                    f"(user {user_id}) after {row.attempts} attempts."
+                )
+                session.delete(row)
+            else:
+                row.attempts += 1
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logging.error(
+            f"[CHEESE_PENDING] Could not record push outcomes for user {user_id} on tracker {tracker_id}: {e}",
+            exc_info=True,
+        )
+    finally:
+        Session.remove()
+
+
+def retry_pending_cheese_pushes(app, tracker_id, tracker_details):
+    """
+    Retry the pushes that did not reach Cheese for one tracker (#304).
+
+    Called by the poller after a successful poll, which is the evidence that
+    Cheese is answering again, and handed that poll's snapshot so a retry costs
+    no extra fetch.
+
+    Each slot is pushed as its current mode asks: claimed if it is still Playing,
+    released otherwise, which includes a slot the user has since untracked. What
+    the user did last is what reaches Cheese, whatever failed before it.
+    """
+    with app.app_context():
+        session = Session()
+        try:
+            rows = session.query(CheesePendingPush.user_id, CheesePendingPush.slot_id).filter_by(
+                cheese_tracker_id=tracker_id
+            ).all()
+            if not rows:
+                return
+            room = session.query(TrackedRoom.id).filter_by(cheese_tracker_id=tracker_id).first()
+            slots_by_user = {}
+            for user_id, slot_id in rows:
+                slots_by_user.setdefault(user_id, set()).add(slot_id)
+            playing = {
+                (user_id, slot_id)
+                for user_id, slot_id, mode in session.query(
+                    UserTrackedSlot.user_id, UserTrackedSlot.slot_id, UserTrackedSlot.track_mode
+                ).filter(
+                    UserTrackedSlot.room_id == room.id,
+                    UserTrackedSlot.user_id.in_(list(slots_by_user)),
+                ).all()
+                if normalize_track_mode(mode) == TRACK_MODE_PLAY
+            } if room else set()
+        except Exception as e:
+            logging.error(f"[CHEESE_PENDING] Could not read pending pushes for tracker {tracker_id}: {e}", exc_info=True)
+            return
+        finally:
+            Session.remove()
+
+    for user_id, slot_ids in slots_by_user.items():
+        claims = {s for s in slot_ids if (user_id, s) in playing}
+        releases = slot_ids - claims
+        logging.info(
+            f"[CHEESE_PENDING] Retrying {len(claims)} claim(s) and {len(releases)} release(s) "
+            f"for user {user_id} on tracker {tracker_id}."
+        )
+        outcomes = None
+        if room:
+            outcomes = push_slot_changes_to_cheese(
+                app, user_id, room.id, claims, releases, tracker_details=tracker_details
+            )
+        if outcomes is None:
+            # Nothing is left that could push these: no room holds the tracker, or
+            # the user has no key. Keeping the rows would only retry them forever.
+            _record_push_outcomes(user_id, tracker_id, {s: PUSH_FINAL for s in slot_ids})
+
+
+def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_slots, tracker_details=None):
     """
     Pushes changes to Cheese Tracker.
     NOW RUNS SYNCHRONOUSLY.
+
+    Returns {slot_id: PUSH_*} once it has reached the worker, or None when the
+    pre-flight stopped it before anything was attempted. Slots whose push should
+    be retried are recorded for the poller (#304).
     """
     api_key = None
     tracker_id = None
     my_ct_id = None
+    dropped_claims = set()
     
     # === 1. PRE-FLIGHT ===
     with app.app_context():
@@ -1151,6 +1290,7 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
                     f"[CHEESE_DEBUG] Room {room_db_id} is unlinked for user {user_id}; "
                     f"releasing {len(removed_slots)} slot(s) and claiming none."
                 )
+                dropped_claims = set(added_slots)
                 added_slots = set()
 
             tracker_id = local_room.cheese_tracker_id
@@ -1161,19 +1301,34 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
             Session.remove()
 
     # === 2. BACKGROUND WORKER (Synchronous) ===
-    
+
     base_headers = get_cheese_headers()
     base_headers["Authorization"] = f"Bearer {api_key}"
 
-    try: 
+    outcomes = {slot_id: PUSH_RETRY for slot_id in set(added_slots) | set(removed_slots)}
+    try:
         # Called directly to block execution until finished
-        _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots, my_ct_id, base_headers)
+        result = _background_push_worker(
+            app, user_id, tracker_id, added_slots, removed_slots, my_ct_id, base_headers,
+            tracker_details=tracker_details,
+        )
+        if isinstance(result, dict):
+            outcomes.update(result)
     except Exception as e:
         logging.error(f"Failed to run push worker for user {user_id}: {e}")
+
+    # A claim the link no longer authorises is settled, not pending.
+    outcomes.update({slot_id: PUSH_FINAL for slot_id in dropped_claims})
+    _record_push_outcomes(user_id, tracker_id, outcomes)
+    return outcomes
 
 def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread, initial_ct_id, tracker_id, base_headers, tracker_details, notifications_outbox=None):
     """
     Helper function to send the state to Cheese Tracker.
+
+    Returns PUSH_OK when Cheese took the write, PUSH_RETRY when it may take it
+    later, and PUSH_FINAL when retrying cannot help: the slot is gone, someone
+    else holds it, or Cheese refused the write outright.
     """
     try:
         my_ct_id = initial_ct_id
@@ -1194,7 +1349,7 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
 
         if not game_object:
             logging.warning(f"[CHEESE_DEBUG] No game_object for position {ap_position} in {tracker_id}.")
-            return
+            return PUSH_FINAL
 
         cheese_game_id = game_object.get('id')
         updated_at_timestamp = tracker_details.get('updated_at')
@@ -1204,7 +1359,7 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
 
         if not cheese_game_id or not updated_at_timestamp:
             logging.error(f"[CHEESE_DEBUG] Fetched details for {tracker_id} are invalid.")
-            return
+            return PUSH_FINAL
 
         # 3. Guardrail Check
         user = session.query(User).filter_by(id=current_user_id_for_thread).first()
@@ -1304,7 +1459,7 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                                     logging.info(f"[CHEESE_DEBUG] Sent collision push notification immediately to user {current_user_id_for_thread}")
                         except Exception as p_err:
                             logging.error(f"[CHEESE_DEBUG] Failed to queue collision push: {p_err}")
-            return
+            return PUSH_FINAL
 
         # 4. Prepare URL and Payload
         url = f"{CHEESE_BASE_URL}/tracker/{tracker_id}/game/{cheese_game_id}"
@@ -1351,11 +1506,19 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                     if thread_user:
                         thread_user.cheese_user_id = new_ct_id
                         # We do NOT commit here; we let the parent worker commit once at the end
-        else:
-            logging.warning(f"[CHEESE_DEBUG] Failed to set pos {ap_position} (game {cheese_game_id}): {response.status_code} {response.text}")
+            return PUSH_OK
 
+        logging.warning(f"[CHEESE_DEBUG] Failed to set pos {ap_position} (game {cheese_game_id}): {response.status_code} {response.text}")
+        # The session already retried these. A 4xx, the owner precondition
+        # included, is Cheese's answer, and the next poll reconciles from it.
+        return PUSH_RETRY if response.status_code >= 500 or response.status_code == 429 else PUSH_FINAL
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"[CHEESE_DEBUG] Error pushing pos {ap_position}: {e}", exc_info=True)
+        return PUSH_RETRY
     except Exception as e:
         logging.error(f"[CHEESE_DEBUG] Error pushing pos {ap_position}: {e}", exc_info=True)
+        return PUSH_FINAL
 
 # Progression statuses that, when set, should also stamp last_checked (mirrors
 # CT's web UI: setting BK/Soft BK updates "last checked").

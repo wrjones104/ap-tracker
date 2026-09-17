@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import selectinload
 
 from app import Session
-from app.models import Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot
+from app.models import CheesePendingPush, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot
 from app.utils import (
     extract_ap_room_id,
     TRACK_MODE_WATCH,
@@ -212,9 +212,13 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                                 room_id=existing_real_room.id,
                                 alias=p_sub.alias,
                                 is_archived=p_sub.is_archived,
-                                # Must stay 'none' when the room is owned elsewhere:
-                                # linked would authorise claims on the owner's tracker.
-                                cheese_link=CHEESE_LINK_NONE,
+                                # The tracker moved with the user, so their link does
+                                # too. Leaving it 'none' silently stopped mirroring the
+                                # tracker they had just imported (#362). Must stay
+                                # 'none' when the room is owned elsewhere: linked would
+                                # authorise claims on the owner's tracker.
+                                cheese_link=CHEESE_LINK_NONE if owned_elsewhere else p_sub.cheese_link,
+                                cheese_unlisted_at=None if owned_elsewhere else p_sub.cheese_unlisted_at,
                             )
                             session.add(real_sub)
                             session.flush()
@@ -291,6 +295,16 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
         demotions = {}
         player_names = _build_player_name_map(room)
 
+        # Slots whose last claim never reached Cheese. Seeing them unclaimed is
+        # expected, not a release: the poller retries the claim right after this
+        # sync, and demoting first would tell the user a slot they just picked had
+        # been let go (#304).
+        pending_pushes = {
+            (uid, slot_id) for uid, slot_id in session.query(
+                CheesePendingPush.user_id, CheesePendingPush.slot_id
+            ).filter(CheesePendingPush.cheese_tracker_id == room.cheese_tracker_id).all()
+        } if room.cheese_tracker_id else set()
+
         for ts in current_tracked_slots:
             user = ts.user
             if not user or not user.cheese_user_id:
@@ -333,6 +347,9 @@ def process_cheese_update(room_db_id, new_tracker_data, remote_updated_at):
                 elif remote_owner_id is None and claim_discord_clean is None:
                     if is_first_sync:
                         logging.info(f"[POLLER_SYNC] GRACE PERIOD: Keeping Slot {ts.slot_id} (First Sync).")
+                        continue
+                    if (ts.user_id, ts.slot_id) in pending_pushes:
+                        logging.info(f"[POLLER_SYNC] Keeping Slot {ts.slot_id} (claim pending a retry).")
                         continue
                     # Covers auto-release: the host's tracker released the slot
                     # out from under a player who still wants to watch it.
