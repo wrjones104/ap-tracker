@@ -32,6 +32,7 @@ from app import create_app, Session, engine
 from app.models import (
     Base,
     CheeseDismissedTracker,
+    CheesePendingPush,
     Device,
     MilestoneTemplate,
     MilestoneTemplateItem,
@@ -146,6 +147,11 @@ class TestUserDeletionCascade(unittest.TestCase):
             user_id=user.id,
             cheese_tracker_id=f'ct-{room_id}',
         ))
+        session.add(CheesePendingPush(
+            user_id=user.id,
+            cheese_tracker_id=f'ct-{room_id}',
+            slot_id=1,
+        ))
         session.flush()
         return room
 
@@ -162,6 +168,7 @@ class TestUserDeletionCascade(unittest.TestCase):
             'ignores': session.query(UserIgnoreItem).filter_by(user_id=user_id).count(),
             'whitelists': session.query(UserWhitelistItem).filter_by(user_id=user_id).count(),
             'dismissed': session.query(CheeseDismissedTracker).filter_by(user_id=user_id).count(),
+            'pending_pushes': session.query(CheesePendingPush).filter_by(user_id=user_id).count(),
         }
 
     # ------------------------------------------------------------------

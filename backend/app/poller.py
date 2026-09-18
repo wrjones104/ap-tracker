@@ -1989,10 +1989,16 @@ async def run_cheese_poll(room_info, loop):
     # 5. Retry pushes that did not reach Cheese (#304). Only now, after Cheese has
     # answered this poll, and after the sync, which leaves a pending claim alone
     # rather than demoting it.
+    #
+    # Held under the Cheese semaphore: a retry is blocking I/O on the shared
+    # executor, and a slow Cheese can make one take many seconds per slot. Without
+    # the cap, every tracker with pending rows would hold a thread at once and
+    # starve AP polling along with it.
     flask_app = room_info.get('app')
     if flask_app is not None:
         from app.api_cheese import retry_pending_cheese_pushes
-        await loop.run_in_executor(None, retry_pending_cheese_pushes, flask_app, ct_id, new_data)
+        async with cheese_semaphore:
+            await loop.run_in_executor(None, retry_pending_cheese_pushes, flask_app, ct_id, new_data)
 
 def db_read_room_poll_state(db_id):
     session = Session()

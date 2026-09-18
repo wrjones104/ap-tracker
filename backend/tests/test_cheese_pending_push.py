@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import requests
+from sqlalchemy.exc import OperationalError
 
 TEST_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test_cheese_pending_push.db'))
 os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
@@ -20,7 +21,8 @@ os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='
 from app import create_app, Session, engine
 from app import api_cheese
 from app.api_cheese import (
-    CHEESE_PENDING_MAX_ATTEMPTS, push_slot_changes_to_cheese, retry_pending_cheese_pushes,
+    CHEESE_PENDING_MAX_ATTEMPTS, PREFLIGHT_FAILED, PUSH_RETRY,
+    push_slot_changes_to_cheese, retry_pending_cheese_pushes, send_state,
 )
 from app.encryption import encrypt_api_key
 from app.models import (
@@ -186,6 +188,29 @@ class TestAFailedPushIsRemembered(PendingPushTestBase):
 
         self.assertEqual(self.pending(), {})
 
+    def test_a_tracker_cheese_says_is_gone_is_not_retried(self, mock_get, mock_put):
+        """A 4xx on the snapshot is Cheese's answer, the same as on the write."""
+        mock_get.return_value = response(404)
+
+        push_slot_changes_to_cheese(self.app, 1, 10, {1}, {2})
+
+        mock_put.assert_not_called()
+        self.assertEqual(self.pending(), {})
+
+    def test_a_database_error_in_the_pre_flight_keeps_the_rows(self, mock_get, mock_put):
+        """Our database failing is not Cheese refusing. Dropping the rows would
+        bring back the false 'Slot Released' on the next poll."""
+        self.slot(1)
+        self.pend(1)
+
+        with patch.object(api_cheese, 'decrypt_api_key',
+                          side_effect=OperationalError('SELECT', {}, Exception('failover'))):
+            self.assertIs(push_slot_changes_to_cheese(self.app, 1, 10, {1}, set()), PREFLIGHT_FAILED)
+            retry_pending_cheese_pushes(self.app, TRACKER, tracker(game(1)))
+
+        mock_put.assert_not_called()
+        self.assertEqual(self.pending(), {1: 2}, "kept, and counted as an attempt")
+
     def test_a_claim_the_link_no_longer_allows_is_not_pending(self, mock_get, mock_put):
         """Unlinked: the release still goes, the claim is dropped, and a dropped
         claim must not wait around to be retried."""
@@ -199,6 +224,19 @@ class TestAFailedPushIsRemembered(PendingPushTestBase):
         push_slot_changes_to_cheese(self.app, 1, 10, {2}, {1})
 
         self.assertEqual(self.pending(), {1: 1})
+
+
+class TestADatabaseErrorIsNotCheesesAnswer(unittest.TestCase):
+    def test_send_state_retries_on_a_database_error(self):
+        """The worker's session is unusable after the first error, so every later
+        slot in the batch fails the same way. None of them is a refusal."""
+        session = MagicMock()
+        session.query.side_effect = OperationalError('SELECT', {}, Exception('failover'))
+
+        outcome = send_state(session, None, 1, True, 1, MY_CT_ID, TRACKER, {},
+                             tracker(game(1)))
+
+        self.assertEqual(outcome, PUSH_RETRY)
 
 
 class TestTheSyncLeavesAPendingClaimAlone(PendingPushTestBase):
@@ -259,6 +297,37 @@ class TestThePollerRetries(PendingPushTestBase):
         self.assertEqual(mock_put.call_count, 1)
         self.assertEqual(mock_put.call_args.kwargs['json']['claimed_by_ct_user_id'], MY_CT_ID)
         self.assertEqual(self.pending(), {})
+
+    def test_a_row_settled_during_an_earlier_users_push_is_skipped(self):
+        """One user's retry can take many seconds against a slow Cheese. If another
+        user switches a slot to Watching meanwhile, their own push settles the row,
+        and the retry must not then claim the slot they just released."""
+        self.session.add(User(id=2, discord_username='other', cheese_api_key=encrypt_api_key('key'),
+                              cheese_user_id=OTHER_CT_ID, is_guest=False))
+        self.session.flush()
+        self.session.add(UserRoomSubscription(user_id=2, room_id=10, alias='Room',
+                                              cheese_link=CHEESE_LINK_LINKED))
+        self.session.add(UserTrackedSlot(user_id=2, room_id=10, slot_id=2, track_mode='play'))
+        self.session.add(CheesePendingPush(user_id=2, cheese_tracker_id=TRACKER, slot_id=2))
+        self.session.commit()
+        self.slot(1)
+        self.pend(1)
+
+        def slow_push(app, user_id, *args, **kwargs):
+            # While this user's push runs, the other one releases their slot in
+            # the app, and that push lands.
+            other = 2 if user_id == 1 else 1
+            fresh = Session()
+            fresh.query(UserTrackedSlot).filter_by(user_id=other).update({'track_mode': 'watch'})
+            fresh.query(CheesePendingPush).filter_by(user_id=other).delete()
+            fresh.commit()
+            fresh.close()
+            return {}
+
+        with patch.object(api_cheese, 'push_slot_changes_to_cheese', side_effect=slow_push) as push:
+            retry_pending_cheese_pushes(self.app, TRACKER, tracker(game(1), game(2)))
+
+        self.assertEqual(push.call_count, 1, "the settled row was pushed again")
 
     def test_nothing_pending_pushes_nothing(self):
         with patch.object(api_cheese, 'push_slot_changes_to_cheese') as push:

@@ -9,7 +9,7 @@ import time
 import re
 from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify, current_app
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 
@@ -77,6 +77,9 @@ PUSH_FINAL = 'final'
 # Retries for one slot before the poller stops trying. Each attempt follows a poll
 # Cheese answered, so a push that keeps failing is not a slow-Cheese problem.
 CHEESE_PENDING_MAX_ATTEMPTS = 5
+
+# What push_slot_changes_to_cheese returns when its own pre-flight read failed.
+PREFLIGHT_FAILED = object()
     
 def _fetch_tracker_details(req_session, tracker_ids):
     """
@@ -1087,6 +1090,10 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
                     )
                     if not detail_resp.ok:
                         logging.warning(f"[CHEESE_DEBUG_WORKER] Tracker {tracker_id} fetch returned {detail_resp.status_code}; no slots pushed.")
+                        # A deleted tracker or a revoked key answers the same way
+                        # next time, so only a server error is worth a retry.
+                        if detail_resp.status_code < 500 and detail_resp.status_code != 429:
+                            return {slot_id: PUSH_FINAL for slot_id in outcomes}
                         return outcomes
                     tracker_details = detail_resp.json()
                 except Exception as fetch_err:
@@ -1114,6 +1121,8 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
                 except Exception as p_err:
                     logging.error(f"[CHEESE_DEBUG] Failed to send collision push after commit: {p_err}")
         except Exception as e:
+            # Outcomes already set stand. A PUT that landed is on Cheese whatever
+            # happens to this commit, so its slot stays PUSH_OK, not a retry.
             session.rollback()
             logging.error(f"[CHEESE_DEBUG_WORKER] Worker failed for user {user_id}: {e}")
         finally:
@@ -1176,6 +1185,34 @@ def _record_push_outcomes(user_id, tracker_id, outcomes):
         Session.remove()
 
 
+def _pending_split(tracker_id, room_id, user_id):
+    """One user's still-pending slots on a tracker, split by the slot's mode now:
+    (claims, releases). Playing is claimed; anything else, untracked included, is
+    released."""
+    session = Session()
+    try:
+        slot_ids = {
+            slot_id for (slot_id,) in session.query(CheesePendingPush.slot_id).filter_by(
+                cheese_tracker_id=tracker_id, user_id=user_id
+            ).all()
+        }
+        if not slot_ids or room_id is None:
+            return set(), slot_ids
+        claims = {
+            slot_id for slot_id, mode in session.query(
+                UserTrackedSlot.slot_id, UserTrackedSlot.track_mode
+            ).filter(
+                UserTrackedSlot.room_id == room_id,
+                UserTrackedSlot.user_id == user_id,
+                UserTrackedSlot.slot_id.in_(slot_ids),
+            ).all()
+            if normalize_track_mode(mode) == TRACK_MODE_PLAY
+        }
+        return claims, slot_ids - claims
+    finally:
+        Session.remove()
+
+
 def retry_pending_cheese_pushes(app, tracker_id, tracker_details):
     """
     Retry the pushes that did not reach Cheese for one tracker (#304).
@@ -1187,51 +1224,62 @@ def retry_pending_cheese_pushes(app, tracker_id, tracker_details):
     Each slot is pushed as its current mode asks: claimed if it is still Playing,
     released otherwise, which includes a slot the user has since untracked. What
     the user did last is what reaches Cheese, whatever failed before it.
+
+    Rows and modes are read again right before each user's push, not once for the
+    whole tracker. One user's push can take many seconds against a slow Cheese,
+    and in that time another user can change a slot in the app. Their push then
+    settles the row, and a retry working from the earlier read would claim a slot
+    they had just released. The snapshot cannot catch that: before a claim and a
+    release alike, the slot looks the same, open.
     """
     with app.app_context():
         session = Session()
         try:
-            rows = session.query(CheesePendingPush.user_id, CheesePendingPush.slot_id).filter_by(
-                cheese_tracker_id=tracker_id
-            ).all()
-            if not rows:
+            user_ids = [
+                user_id for (user_id,) in session.query(CheesePendingPush.user_id).filter_by(
+                    cheese_tracker_id=tracker_id
+                ).distinct().all()
+            ]
+            if not user_ids:
                 return
             room = session.query(TrackedRoom.id).filter_by(cheese_tracker_id=tracker_id).first()
-            slots_by_user = {}
-            for user_id, slot_id in rows:
-                slots_by_user.setdefault(user_id, set()).add(slot_id)
-            playing = {
-                (user_id, slot_id)
-                for user_id, slot_id, mode in session.query(
-                    UserTrackedSlot.user_id, UserTrackedSlot.slot_id, UserTrackedSlot.track_mode
-                ).filter(
-                    UserTrackedSlot.room_id == room.id,
-                    UserTrackedSlot.user_id.in_(list(slots_by_user)),
-                ).all()
-                if normalize_track_mode(mode) == TRACK_MODE_PLAY
-            } if room else set()
+            room_id = room.id if room else None
         except Exception as e:
             logging.error(f"[CHEESE_PENDING] Could not read pending pushes for tracker {tracker_id}: {e}", exc_info=True)
             return
         finally:
             Session.remove()
 
-    for user_id, slot_ids in slots_by_user.items():
-        claims = {s for s in slot_ids if (user_id, s) in playing}
-        releases = slot_ids - claims
-        logging.info(
-            f"[CHEESE_PENDING] Retrying {len(claims)} claim(s) and {len(releases)} release(s) "
-            f"for user {user_id} on tracker {tracker_id}."
-        )
-        outcomes = None
-        if room:
-            outcomes = push_slot_changes_to_cheese(
-                app, user_id, room.id, claims, releases, tracker_details=tracker_details
+        for user_id in user_ids:
+            try:
+                claims, releases = _pending_split(tracker_id, room_id, user_id)
+            except Exception as e:
+                logging.error(
+                    f"[CHEESE_PENDING] Could not read pending pushes for user {user_id} "
+                    f"on tracker {tracker_id}: {e}", exc_info=True,
+                )
+                continue
+            if not claims and not releases:
+                continue
+            if room_id is None:
+                # No room holds the tracker any more, so nothing can push these.
+                _record_push_outcomes(user_id, tracker_id, {s: PUSH_FINAL for s in releases})
+                continue
+            logging.info(
+                f"[CHEESE_PENDING] Retrying {len(claims)} claim(s) and {len(releases)} release(s) "
+                f"for user {user_id} on tracker {tracker_id}."
             )
-        if outcomes is None:
-            # Nothing is left that could push these: no room holds the tracker, or
-            # the user has no key. Keeping the rows would only retry them forever.
-            _record_push_outcomes(user_id, tracker_id, {s: PUSH_FINAL for s in slot_ids})
+            outcomes = push_slot_changes_to_cheese(
+                app, user_id, room_id, claims, releases, tracker_details=tracker_details
+            )
+            if outcomes is None:
+                # The pre-flight settled it: no key left, or only claims the link no
+                # longer allows. Keeping the rows would only retry them forever.
+                _record_push_outcomes(user_id, tracker_id, {s: PUSH_FINAL for s in claims | releases})
+            elif outcomes is PREFLIGHT_FAILED:
+                # Our database, not an answer. It counts as an attempt, so the cap
+                # still bounds a failure that never clears.
+                _record_push_outcomes(user_id, tracker_id, {s: PUSH_RETRY for s in claims | releases})
 
 
 def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_slots, tracker_details=None):
@@ -1239,8 +1287,9 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
     Pushes changes to Cheese Tracker.
     NOW RUNS SYNCHRONOUSLY.
 
-    Returns {slot_id: PUSH_*} once it has reached the worker, or None when the
-    pre-flight stopped it before anything was attempted. Slots whose push should
+    Returns {slot_id: PUSH_*} once it has reached the worker, None when the
+    pre-flight found nothing it may push, or PREFLIGHT_FAILED when the pre-flight
+    itself failed. Slots whose push should
     be retried are recorded for the poller (#304).
     """
     api_key = None
@@ -1296,7 +1345,9 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
             tracker_id = local_room.cheese_tracker_id
         except Exception as e:
             logging.error(f"[CHEESE_DEBUG] Error in pre-flight: {e}", exc_info=True)
-            return
+            # Distinct from None: a database hiccup must not read as "nobody can
+            # ever push this", or the retry drops the rows it exists to keep.
+            return PREFLIGHT_FAILED
         finally:
             Session.remove()
 
@@ -1515,6 +1566,11 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
 
     except requests.exceptions.RequestException as e:
         logging.error(f"[CHEESE_DEBUG] Error pushing pos {ap_position}: {e}", exc_info=True)
+        return PUSH_RETRY
+    except SQLAlchemyError as e:
+        # Our database, not Cheese's answer. The worker's session is unusable for
+        # the rest of the batch after this, so every later slot lands here too.
+        logging.error(f"[CHEESE_DEBUG] Database error pushing pos {ap_position}: {e}", exc_info=True)
         return PUSH_RETRY
     except Exception as e:
         logging.error(f"[CHEESE_DEBUG] Error pushing pos {ap_position}: {e}", exc_info=True)
