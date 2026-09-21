@@ -10,6 +10,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.14.0] - 2026-09-21
+
+_Cheese Claims That Stick_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - Failed Cheese claim and release pushes (timeout, 5xx, 429) are stored in `cheese_pending_pushes` and retried after the next sync, up to 5 attempts; the sync no longer demotes a slot whose claim is pending. Rows older than 7 days are purged by the janitor. Closes #304.
+>
+> ### Fixed
+> - A pending room no longer re-points a room another tracker owns; its users join unlinked. Closes #350.
+> - The ordinary pending-room merge keeps the importing user's Cheese link. Closes #362.
+>
+> ### Compatibility
+> - Migration `c5d82a4f1e90` (additive) runs on boot. No API changes. A claim still in flight can still be demoted (#367).
+> ```
+
+### Added
+- **Failed Cheese Pushes Retry**: Claims and releases that time out or hit a Cheese error are retried on the next poll, and the slot is not demoted meanwhile. Closes #304.
+
+### Fixed
+- **An Owned Room Kept Its Tracker**: Importing a tracker for a room another tracker already covers joins you to that room unlinked, and the room keeps its tracker. Closes #350.
+- **Merged Rooms Keep Your Link**: When a pending room merges into its real room, your Cheese link survives the merge. Closes #362.
+
+---
+
 ## [1.13.2] - 2026-09-15
 
 _Deleted Trackers Let Go_
