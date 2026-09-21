@@ -173,6 +173,21 @@ class TestUnownedRoomStillMerges(PendingMergeTestBase):
         finally:
             fresh.close()
 
+    def test_the_importer_keeps_their_link(self):
+        """#362: the tracker moved onto the room, so the user who imported it still
+        mirrors it. Their subscription used to be created unlinked, which silently
+        stopped their slots syncing."""
+        real_id, pending_id = self._rooms(owner_ct_id=None)
+
+        self._sync_pending(pending_id)
+
+        fresh = Session()
+        try:
+            self.assertEqual(fresh.get(UserRoomSubscription, (2, real_id)).cheese_link,
+                             CHEESE_LINK_LINKED)
+        finally:
+            fresh.close()
+
 
 if __name__ == '__main__':
     unittest.main()

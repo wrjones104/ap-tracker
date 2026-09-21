@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import Session
 from app.models import (
-    NotifiedItem, NotifiedHint, User, JWTBlocklist, TrackedRoom,
+    NotifiedItem, NotifiedHint, User, JWTBlocklist, TrackedRoom, CheesePendingPush,
 )
 
 # Rows per transaction. Small enough that the poller never waits long on a lock,
@@ -337,6 +337,36 @@ def purge_expired_jwt_blocklist():
         Session.remove()
 
 
+# A pending Cheese push is retried on its tracker's next poll and dropped after a
+# few attempts, so a row this old belongs to a tracker nothing polls any more:
+# unlinked, deleted, or merged away. See #304.
+CHEESE_PENDING_PUSH_MAX_AGE_DAYS = 7
+
+
+def purge_stale_cheese_pending_pushes():
+    """
+    Purges pending Cheese pushes whose tracker stopped being polled before they
+    could be retried or given up on.
+    """
+    session = Session()
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=CHEESE_PENDING_PUSH_MAX_AGE_DAYS)
+        deleted = session.query(CheesePendingPush).filter(
+            CheesePendingPush.created_at < cutoff
+        ).delete(synchronize_session=False)
+
+        session.commit()
+        if deleted > 0:
+            logging.info(f"[RETENTION] Purged {deleted} stale pending Cheese pushes.")
+        return {'purged_cheese_pending_pushes': deleted}
+    except Exception as e:
+        session.rollback()
+        logging.error(f"[RETENTION_ERROR] Failed to purge pending Cheese pushes: {e}", exc_info=True)
+        return {'purged_cheese_pending_pushes': 0}
+    finally:
+        Session.remove()
+
+
 def run_all_retention_tasks(retention_days=None):
     """Runs all retention cleanup operations.
 
@@ -362,6 +392,7 @@ def run_all_retention_tasks(retention_days=None):
          lambda: purge_expired_notification_events(retention_days=retention_days)),
         ('inactive guest accounts', purge_inactive_guest_accounts),
         ('expired JWT blocklist', purge_expired_jwt_blocklist),
+        ('stale pending Cheese pushes', purge_stale_cheese_pending_pushes),
     )
 
     results = {}

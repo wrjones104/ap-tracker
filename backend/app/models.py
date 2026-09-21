@@ -76,6 +76,9 @@ class User(Base):
     cheese_dismissed_trackers = relationship(
         "CheeseDismissedTracker", back_populates="user", cascade="all, delete-orphan"
     )
+    cheese_pending_pushes = relationship(
+        "CheesePendingPush", back_populates="user", cascade="all, delete-orphan"
+    )
     # Every table with a users.id foreign key needs a collection here carrying a
     # delete-orphan cascade, or account deletion raises ForeignKeyViolation on
     # Postgres and takes the whole transaction down with it. The one exception is
@@ -300,6 +303,35 @@ class CheeseDismissedTracker(Base):
 
     __table_args__ = (
         UniqueConstraint('user_id', 'cheese_tracker_id', name='_user_dismissed_tracker_uc'),
+    )
+
+class CheesePendingPush(Base):
+    """
+    A slot whose last claim or release did not reach Cheese Tracker (#304).
+
+    The slot route commits locally and pushes afterwards, so a push that fails is
+    otherwise gone: the app says Playing while the slot stays open on Cheese, or
+    the reverse. The poller retries these on the next successful poll of the
+    tracker.
+
+    Deliberately stores no action. The retry pushes whatever the slot's current
+    mode asks for, so a later change in the app can never be undone by replaying
+    an older one. Keyed by tracker rather than room, so a room re-pointed to
+    another tracker simply stops matching and its rows age out.
+    """
+    __tablename__ = 'cheese_pending_pushes'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    cheese_tracker_id = Column(String(64), nullable=False)
+    slot_id = Column(Integer, nullable=False)
+    attempts = Column(Integer, nullable=False, default=1, server_default='1')
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="cheese_pending_pushes")
+
+    __table_args__ = (
+        # Leads with the tracker: the poller looks rows up by tracker on every poll.
+        UniqueConstraint('cheese_tracker_id', 'user_id', 'slot_id', name='_cheese_pending_push_uc'),
     )
 
 class UserWhitelistItem(Base):
