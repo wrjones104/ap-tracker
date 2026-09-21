@@ -433,6 +433,7 @@ fun HistoryFilterSheet(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp)
             .navigationBarsPadding()
     ) {
@@ -648,6 +649,9 @@ fun HistoryDetailSheet(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // Long group and game names wrap each ignore/whitelist button onto several
+            // lines, which can push the last buttons below the screen (#368).
+            .verticalScroll(rememberScrollState())
             .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 48.dp)
             .navigationBarsPadding()
     ) {
@@ -1718,6 +1722,7 @@ fun HintDetailSheet(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp)
             .navigationBarsPadding()
     ) {
