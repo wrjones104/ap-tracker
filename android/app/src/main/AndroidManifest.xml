@@ -85,9 +85,13 @@
             android:name="firebase_crashlytics_collection_enabled"
             android:value="false" />
 
+        <!-- The UI is all Compose, which re-lays itself out on a size change. Letting the
+             activity be recreated instead threw away every open dialog and sheet, whose
+             state lives in plain `remember` (#344). -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.APTracker">
             <intent-filter>
