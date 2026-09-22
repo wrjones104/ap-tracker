@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -509,7 +510,15 @@ fun WhitelistRuleSheet(
         // Everything above Cancel/Save scrolls as one list. When it was a fixed stack with
         // only the results scrolling, a tall keyboard (Samsung's, with its toolbar row) left
         // less room than the stack needed and hid the search field behind the keyboard (#371).
-        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        // Picking a game, or changing it, swaps what this list holds. Without a fresh state the
+        // list keeps its old scroll offset and opens part-way down, with the search field above
+        // the top edge.
+        val listState = remember(selectedTypeIndex, selectedGame != null) { LazyListState() }
+
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth()
+        ) {
             item {
                 Text(
                     text = if (existingItem == null) "Add Whitelist Rule" else "Edit Whitelist Rule",
@@ -611,7 +620,9 @@ fun WhitelistRuleSheet(
                     }
 
                     Spacer(Modifier.height(12.dp))
+                }
 
+                item {
                     Text("Whitelist Type", style = MaterialTheme.typography.labelMedium)
                     Spacer(Modifier.height(4.dp))
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -637,7 +648,9 @@ fun WhitelistRuleSheet(
                     }
 
                     Spacer(Modifier.height(12.dp))
+                }
 
+                item {
                     OutlinedTextField(
                         value = itemQuery,
                         onValueChange = {
