@@ -506,186 +506,192 @@ fun WhitelistRuleSheet(
             .imePadding()
             .fillMaxHeight(0.85f)
     ) {
-        Text(
-            text = if (existingItem == null) "Add Whitelist Rule" else "Edit Whitelist Rule",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(vertical = 16.dp)
-        )
-
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            SegmentedButton(
-                selected = selectedTypeIndex == 0,
-                onClick = { selectedTypeIndex = 0 },
-                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
-            ) { Text("Global") }
-
-            SegmentedButton(
-                selected = selectedTypeIndex == 1,
-                onClick = { selectedTypeIndex = 1 },
-                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
-            ) { Text("Game Specific") }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        if (selectedTypeIndex == 0) {
-            OutlinedTextField(
-                value = itemName,
-                onValueChange = { itemName = it },
-                label = { Text("Item Name (e.g. *Key)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.weight(1f))
-        } else {
-            if (selectedGame == null) {
-                Text("Select Game", style = MaterialTheme.typography.labelMedium)
-                OutlinedTextField(
-                    value = gameNameQuery,
-                    onValueChange = { gameNameQuery = it },
-                    placeholder = { Text("Search games...") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    leadingIcon = { Icon(Icons.Default.Search, null) }
+        // Everything above Cancel/Save scrolls as one list. When it was a fixed stack with
+        // only the results scrolling, a tall keyboard (Samsung's, with its toolbar row) left
+        // less room than the stack needed and hid the search field behind the keyboard (#371).
+        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            item {
+                Text(
+                    text = if (existingItem == null) "Add Whitelist Rule" else "Edit Whitelist Rule",
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.padding(vertical = 16.dp)
                 )
-                Spacer(Modifier.height(8.dp))
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    if (filteredGames.isEmpty()) {
-                        item {
-                            Text(
-                                "No games found.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
-                    } else {
-                        items(filteredGames) { game ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        selectedGame = game
-                                        gameNameQuery = game
-                                    }
-                                    .padding(vertical = 12.dp, horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (gameNameQuery.equals(game, ignoreCase = true)) {
-                                    Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                    Spacer(Modifier.width(8.dp))
+
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = selectedTypeIndex == 0,
+                        onClick = { selectedTypeIndex = 0 },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                    ) { Text("Global") }
+
+                    SegmentedButton(
+                        selected = selectedTypeIndex == 1,
+                        onClick = { selectedTypeIndex = 1 },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                    ) { Text("Game Specific") }
+                }
+
+                Spacer(Modifier.height(16.dp))
+            }
+
+            if (selectedTypeIndex == 0) {
+                item {
+                    OutlinedTextField(
+                        value = itemName,
+                        onValueChange = { itemName = it },
+                        label = { Text("Item Name (e.g. *Key)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            } else if (selectedGame == null) {
+                item {
+                    Text("Select Game", style = MaterialTheme.typography.labelMedium)
+                    OutlinedTextField(
+                        value = gameNameQuery,
+                        onValueChange = { gameNameQuery = it },
+                        placeholder = { Text("Search games...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.Search, null) }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (filteredGames.isEmpty()) {
+                    item {
+                        Text(
+                            "No games found.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                } else {
+                    items(filteredGames) { game ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedGame = game
+                                    gameNameQuery = game
                                 }
-                                Text(game, style = MaterialTheme.typography.bodyLarge)
+                                .padding(vertical = 12.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (gameNameQuery.equals(game, ignoreCase = true)) {
+                                Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.width(8.dp))
                             }
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            Text(game, style = MaterialTheme.typography.bodyLarge)
                         }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     }
                 }
             } else {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                     ) {
-                        Text(selectedGame!!, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                        TextButton(onClick = {
-                            selectedGame = null
-                            gameNameQuery = ""
-                            itemName = ""
-                            itemQuery = ""
-                        }) {
-                            Text("Change Game")
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(selectedGame!!, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                            TextButton(onClick = {
+                                selectedGame = null
+                                gameNameQuery = ""
+                                itemName = ""
+                                itemQuery = ""
+                            }) {
+                                Text("Change Game")
+                            }
                         }
                     }
-                }
 
-                Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(12.dp))
 
-                Text("Whitelist Type", style = MaterialTheme.typography.labelMedium)
-                Spacer(Modifier.height(4.dp))
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    SegmentedButton(
-                        selected = selectedCategory == 0,
-                        onClick = {
-                            selectedCategory = 0
-                            itemName = ""
-                            itemQuery = ""
+                    Text("Whitelist Type", style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.height(4.dp))
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        SegmentedButton(
+                            selected = selectedCategory == 0,
+                            onClick = {
+                                selectedCategory = 0
+                                itemName = ""
+                                itemQuery = ""
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                        ) { Text("Single Item") }
+
+                        SegmentedButton(
+                            selected = selectedCategory == 1,
+                            onClick = {
+                                selectedCategory = 1
+                                itemName = ""
+                                itemQuery = ""
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                        ) { Text("Item Group") }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = itemQuery,
+                        onValueChange = {
+                            itemQuery = it
+                            itemName = it
                         },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
-                    ) { Text("Single Item") }
-
-                    SegmentedButton(
-                        selected = selectedCategory == 1,
-                        onClick = {
-                            selectedCategory = 1
-                            itemName = ""
-                            itemQuery = ""
-                        },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
-                    ) { Text("Item Group") }
+                        label = { Text(if (selectedCategory == 1) "Search or Type Group..." else "Search or Type Item...") },
+                        placeholder = { Text(if (selectedCategory == 1) "e.g. Boos" else "e.g. Power Star") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.Search, null) }
+                    )
+                    Spacer(Modifier.height(8.dp))
                 }
-
-                Spacer(Modifier.height(12.dp))
-
-                OutlinedTextField(
-                    value = itemQuery,
-                    onValueChange = {
-                        itemQuery = it
-                        itemName = it
-                    },
-                    label = { Text(if (selectedCategory == 1) "Search or Type Group..." else "Search or Type Item...") },
-                    placeholder = { Text(if (selectedCategory == 1) "e.g. Boos" else "e.g. Power Star") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    leadingIcon = { Icon(Icons.Default.Search, null) }
-                )
-                Spacer(Modifier.height(8.dp))
 
                 if (isItemsLoading) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                } else if (filteredItems.isEmpty()) {
+                    item {
+                        Text(
+                            if (selectedCategory == 1) "No matching groups found." else "No matching items found.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(8.dp)
+                        )
                     }
                 } else {
-                    LazyColumn(modifier = Modifier.weight(1f)) {
-                        if (filteredItems.isEmpty()) {
-                            item {
-                                Text(
-                                    if (selectedCategory == 1) "No matching groups found." else "No matching items found.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(8.dp)
-                                )
-                            }
-                        } else {
-                            items(filteredItems) { opt ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            itemName = opt.name
-                                            itemQuery = opt.name
-                                        }
-                                        .padding(vertical = 12.dp, horizontal = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (itemName.equals(opt.name, ignoreCase = true)) {
-                                        Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                        Spacer(Modifier.width(8.dp))
-                                    }
-                                    Text(opt.name, style = MaterialTheme.typography.bodyLarge)
+                    items(filteredItems) { opt ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    itemName = opt.name
+                                    itemQuery = opt.name
                                 }
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                .padding(vertical = 12.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (itemName.equals(opt.name, ignoreCase = true)) {
+                                Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.width(8.dp))
                             }
+                            Text(opt.name, style = MaterialTheme.typography.bodyLarge)
                         }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     }
                 }
             }
