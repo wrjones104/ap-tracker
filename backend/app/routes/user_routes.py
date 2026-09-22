@@ -35,16 +35,6 @@ def register_device(current_user):
 
     session = Session()
 
-    stale_devices = session.query(Device).filter(
-        Device.fcm_token == fcm_token,
-        Device.user_id != current_user.id
-    ).all()
-
-    if stale_devices:
-        for stale in stale_devices:
-            logging.info(f"[API] Unlinking FCM token from old User {stale.user_id} to assign to Current User {current_user.id}")
-            session.delete(stale)
-
     device = None
     if device_id:
         device = session.query(Device).filter_by(
@@ -52,26 +42,42 @@ def register_device(current_user):
             android_id=device_id,
             platform=platform
         ).first()
-
-        if device:
-            if device.fcm_token != fcm_token:
-                device.fcm_token = fcm_token
-                logging.info(f"[API] Refreshed FCM token for existing device ({platform.capitalize()} ID: {device_id}) for user {current_user.id}")
-        else:
-            device = Device(
-                fcm_token=fcm_token, 
-                user_id=current_user.id, 
-                android_id=device_id,
-                platform=platform
-            )
-            session.add(device)
-            logging.info(f"[API] Registered new device ({platform.capitalize()} ID: {device_id}) for user {current_user.id}")
     else:
         device = session.query(Device).filter_by(fcm_token=fcm_token, user_id=current_user.id).first()
-        if not device:
-            device = Device(fcm_token=fcm_token, user_id=current_user.id, platform=platform)
-            session.add(device)
-            logging.info(f"[API] Registered new device (legacy) for user {current_user.id}")
+
+    # A token is unique across all devices, so any other row holding it has to
+    # go before this device can take it: another account on the same phone, or
+    # this account's row for an old device ID after a phone transfer (#365).
+    stale_devices = session.query(Device).filter(Device.fcm_token == fcm_token)
+    if device is not None:
+        stale_devices = stale_devices.filter(Device.id != device.id)
+    stale_devices = stale_devices.all()
+
+    if stale_devices:
+        for stale in stale_devices:
+            logging.info(f"[API] Unlinking FCM token from old User {stale.user_id} device {stale.android_id} to assign to User {current_user.id}")
+            session.delete(stale)
+        # The unit of work runs INSERT/UPDATE before DELETE within a table, so
+        # without this flush the new row collides with the one being removed.
+        session.flush()
+
+    if device:
+        if device.fcm_token != fcm_token:
+            device.fcm_token = fcm_token
+            logging.info(f"[API] Refreshed FCM token for existing device ({platform.capitalize()} ID: {device_id}) for user {current_user.id}")
+    elif device_id:
+        device = Device(
+            fcm_token=fcm_token, 
+            user_id=current_user.id, 
+            android_id=device_id,
+            platform=platform
+        )
+        session.add(device)
+        logging.info(f"[API] Registered new device ({platform.capitalize()} ID: {device_id}) for user {current_user.id}")
+    else:
+        device = Device(fcm_token=fcm_token, user_id=current_user.id, platform=platform)
+        session.add(device)
+        logging.info(f"[API] Registered new device (legacy) for user {current_user.id}")
 
     session.commit()
     return jsonify({'message': 'Device registered successfully'}), 201
