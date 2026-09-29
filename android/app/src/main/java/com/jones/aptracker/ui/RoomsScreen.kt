@@ -373,27 +373,30 @@ fun RoomsScreen(
                             textAlign = TextAlign.Center
                         )
                     }
+                }
 
-                    // Rooms waiting on Cheese are offered above the list rather than
-                    // appearing in it unannounced. Deliberately not a list item: every
-                    // item in the list below is a room, one to one, and the reorder
-                    // math depends on that.
-                    // Hidden ones ride along in the same list when the sheet was
-                    // opened from the Me tab. They are not news, so they do not put
-                    // a banner back on screen.
-                    val offered = availableCheeseRooms.count { !it.dismissed }
-                    if (offered > 0 && !isSearching) {
-                        CheeseSuggestionsBanner(
-                            count = offered,
-                            // Shut while a sync is running. The two write the same
-                            // rooms from opposite ends, and the sheet would be
-                            // answering with a list that is mid-change.
-                            enabled = !isSyncingCheese,
-                            // What is new, not what was hidden. The Me tab is the
-                            // door to the hidden ones.
-                            onClick = { roomsViewModel.openCheeseSuggestions(includeDismissed = false) }
-                        )
-                    }
+                // Rooms waiting on Cheese are offered above the list rather than
+                // appearing in it unannounced. Deliberately not a list item: every
+                // item in the list below is a room, one to one, and the reorder
+                // math depends on that.
+                // Hidden ones ride along in the same list when the sheet was
+                // opened from the Me tab. They are not news, so they do not put
+                // a banner back on screen.
+                // Outside the "has rooms" block: someone who cleared out every
+                // finished room is exactly who needs to be told new ones are
+                // waiting, and an empty list used to hide the banner (#378).
+                val offered = availableCheeseRooms.count { !it.dismissed }
+                if (offered > 0 && !isSearching && !(isLoading && rooms.isEmpty())) {
+                    CheeseSuggestionsBanner(
+                        count = offered,
+                        // Shut while a sync is running. The two write the same
+                        // rooms from opposite ends, and the sheet would be
+                        // answering with a list that is mid-change.
+                        enabled = !isSyncingCheese,
+                        // What is new, not what was hidden. The Me tab is the
+                        // door to the hidden ones.
+                        onClick = { roomsViewModel.openCheeseSuggestions(includeDismissed = false) }
+                    )
                 }
 
                 // weight rather than fillMaxSize: this takes whatever the pinned chrome
