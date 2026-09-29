@@ -701,6 +701,47 @@ class TestSuggestions(CheeseLinkTestBase):
         finally:
             fresh.close()
 
+    @patch('app.api_cheese._fetch_tracker_details')
+    @patch('app.api_cheese.requests.Session')
+    @patch('app.api_cheese._fetch_dashboard')
+    def test_a_room_the_user_already_follows_is_counted_as_relinked(
+        self, mock_dash, mock_session_cls, mock_details
+    ):
+        """Importing a tracker for a room the user already follows links their
+        subscription and says so. `imported` stays 0, since nothing was added,
+        and the app reads `relinked` instead of toasting "Added 0 rooms" (#359)."""
+        mock_dash.return_value = [{
+            'tracker_id': 'ct_mine', 'title': 'My Room',
+            'room_link': 'https://archipelago.gg/room/mine_uuid',
+            'dashboard_override_visibility': True,
+        }]
+        mock_details.return_value = {'ct_mine': {'games': []}}
+        user = self._seed()
+        user_id = user.id
+        mine = TrackedRoom(room_id="mine_uuid")
+        self.session.add(mine)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=mine.id, alias='My Room', cheese_link=CHEESE_LINK_NONE,
+            is_archived=True))
+        self.session.commit()
+        mine_id = mine.id
+
+        resp = _call(api_cheese.import_available_cheese_rooms, user,
+                     body={'cheese_tracker_ids': ['ct_mine']})
+        payload = json.loads(resp.get_data(as_text=True))
+
+        self.assertEqual(payload['imported'], 0)
+        self.assertEqual(payload['relinked'], 1)
+        fresh = Session()
+        try:
+            sub = fresh.query(UserRoomSubscription).filter_by(
+                user_id=user_id, room_id=mine_id).one()
+            self.assertEqual(sub.cheese_link, CHEESE_LINK_LINKED)
+            self.assertFalse(sub.is_archived)
+        finally:
+            fresh.close()
+
     def _offered(self, user, **query):
         resp = _call(api_cheese.list_available_cheese_rooms, user, query=query or None)
         payload = json.loads(resp.get_data(as_text=True))

@@ -396,6 +396,9 @@ data class CheeseTrackerIdsRequest(val cheese_tracker_ids: List<String>)
 data class ImportCheeseRoomsResponse(
     val message: String? = null,
     val imported: Int = 0,
+    // Rooms the user already followed that the import linked to Cheese. Absent
+    // from servers before 1.14.1, so it defaults to 0 there (#359).
+    val relinked: Int = 0,
     val slots_synced: Int = 0,
     val demoted: Int = 0,
     val failed: List<String> = emptyList(),
