@@ -1002,7 +1002,7 @@ fun ItemHistoryTab(
                 is HistoryFilter.Specific -> item.room_db_id == f.roomId
             }
 
-            val matchesPlayer = selectedPlayer == null || item.playerName == selectedPlayer
+            val matchesPlayer = selectedPlayer?.matches(item.room_db_id, item.playerName) ?: true
 
             val isFinished = if (item.room_db_id != null) {
                 finishedKeys.contains(item.room_db_id to item.playerName)
@@ -1080,10 +1080,11 @@ fun ItemHistoryTab(
                     }
                     items(availablePlayers) { playerInfo ->
                         FilterChip(
-                            selected = playerInfo.originalName == selectedPlayer,
-                            onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.originalName) },
+                            selected = playerInfo.key == selectedPlayer,
+                            onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.key) },
                             label = {
-                                Text(getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed))
+                                val name = getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed)
+                                Text(playerInfo.roomLabel?.let { "$name · $it" } ?: name)
                             },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -1096,7 +1097,7 @@ fun ItemHistoryTab(
         }
 
         if (itemsToShow.isEmpty() && !historyViewModel.isLoading.collectAsState().value) {
-            val selectedPlayerInfo = availablePlayers.find { it.originalName == selectedPlayer }
+            val selectedPlayerInfo = availablePlayers.find { it.key == selectedPlayer }
             val isBackfilling = if (selectedPlayer != null) {
                 selectedPlayerInfo?.needsBackfill == true
             } else {
@@ -1502,10 +1503,11 @@ fun HintHistoryTab(
                     }
                     items(availablePlayers) { playerInfo ->
                         FilterChip(
-                            selected = playerInfo.originalName == selectedPlayer,
-                            onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.originalName) },
+                            selected = playerInfo.key == selectedPlayer,
+                            onClick = { historyViewModel.onPlayerFilterSelected(playerInfo.key) },
                             label = {
-                                Text(getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed))
+                                val name = getDisplayName(playerInfo.originalName, playerInfo.alias, useCondensed)
+                                Text(playerInfo.roomLabel?.let { "$name · $it" } ?: name)
                             },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -1778,7 +1780,7 @@ private fun filterHints(
     query: String,
     showFinished: Boolean,
     finishedKeys: Set<Pair<Int, String>>,
-    selectedPlayer: String?,
+    selectedPlayer: PlayerKey?,
     historyFilter: HistoryFilter,
     activeRoomIds: Set<Int>,
     archivedRoomIds: Set<Int>,
@@ -1810,9 +1812,9 @@ private fun filterHints(
 
         val matchesPlayer = if (selectedPlayer == null) true else {
             if (hint.hintType == "for_you") {
-                hint.itemOwnerName == selectedPlayer
+                selectedPlayer.matches(hint.roomDbId, hint.itemOwnerName)
             } else {
-                hint.locationOwnerName == selectedPlayer
+                selectedPlayer.matches(hint.roomDbId, hint.locationOwnerName)
             }
         }
 
