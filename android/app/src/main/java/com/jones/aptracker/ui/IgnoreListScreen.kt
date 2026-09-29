@@ -80,6 +80,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jones.aptracker.network.IgnoreItem
 import com.jones.aptracker.network.AutocompleteOption
@@ -478,7 +479,11 @@ fun IgnoreItemCard(
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (item.gameName != null) {
+                        // Takes only the width left after the Group chip, so a long
+                        // game name wraps inside its own chip instead of squeezing
+                        // "Group" into a column of letters (#377).
                         Surface(
+                            modifier = Modifier.weight(1f, fill = false),
                             color = if (isSelected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.primaryContainer,
                             shape = MaterialTheme.shapes.small
                         ) {
@@ -486,6 +491,8 @@ fun IgnoreItemCard(
                                 text = item.gameName,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
@@ -512,6 +519,8 @@ fun IgnoreItemCard(
                                 text = "Group",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
