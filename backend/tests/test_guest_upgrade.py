@@ -21,8 +21,11 @@ os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
 os.environ['FLASK_ENV'] = 'development'
 os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='  # Valid Fernet key
 
-from backend.app import create_app, Session, engine
-from backend.app.models import Base, User, TrackedRoom, UserRoomSubscription, JWTBlocklist
+# Import through `app.*` only, never `backend.app.*` -- see the note in
+# test_slot_track_mode.py. The routes import `app`, so `backend.app` would give
+# this module a second engine that Linux keeps on the previous test's file (#375).
+from app import create_app, Session, engine
+from app.models import Base, User, TrackedRoom, UserRoomSubscription, JWTBlocklist
 
 REDIRECT_URI = 'com.jones.aptracker:/oauth2redirect'
 DISCORD_ID = '999'
@@ -106,8 +109,8 @@ class GuestUpgradeTestBase(unittest.TestCase):
         me_resp = MagicMock(ok=True)
         me_resp.json.return_value = {'id': discord_id, 'username': 'realuser', 'avatar': None}
 
-        with patch('backend.app.auth.requests.post', return_value=token_resp), \
-             patch('backend.app.auth.requests.get', return_value=me_resp):
+        with patch('app.auth.requests.post', return_value=token_resp), \
+             patch('app.auth.requests.get', return_value=me_resp):
             return self.app.test_client().post(
                 '/auth/callback',
                 json={'code': 'c', 'redirect_uri': REDIRECT_URI, 'code_verifier': 'v'},
