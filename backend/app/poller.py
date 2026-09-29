@@ -233,6 +233,11 @@ def db_remove_invalid_tokens(tokens_to_remove):
     """Synchronously removes invalid FCM tokens from the database."""
     session = Session()
     try:
+        # Named per device so a user's "no notifications" report can be traced
+        # to the prune that caused it (#364).
+        for user_id, android_id in session.query(Device.user_id, Device.android_id).filter(
+                Device.fcm_token.in_(tokens_to_remove)):
+            logging.info(f"[FCM] Removing invalid token for user {user_id} device {android_id or 'legacy'}.")
         session.query(Device).filter(Device.fcm_token.in_(tokens_to_remove)).delete(synchronize_session=False)
         session.commit()
     except Exception as e:
