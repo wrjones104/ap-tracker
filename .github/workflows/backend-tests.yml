@@ -38,8 +38,8 @@ jobs:
 
       - name: Run backend unit tests
         env:
-          # Root (for `backend.app...` imports) plus `backend` (for `app...` imports),
-          # mirroring the local dev invocation.
+          # `backend` for the app itself (tests import `app.*`, never `backend.app.*`;
+          # see test_import_paths.py) plus the root, so each module runs as `backend.tests.<name>`.
           PYTHONPATH: 'backend:.'
         run: |
           # Each test module manages its own module-level engine/DB, so they must

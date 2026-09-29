@@ -4,7 +4,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
-from backend.app.db_migrations import _find_alembic_ini, _reconcile_overlapping_heads
+from app.db_migrations import _find_alembic_ini, _reconcile_overlapping_heads
 
 
 class TestDbMigrationsReconciliation(unittest.TestCase):
