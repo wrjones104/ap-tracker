@@ -17,7 +17,7 @@ import time
 from unittest.mock import patch
 
 import jwt as pyjwt
-from firebase_admin import messaging
+from firebase_admin import exceptions, messaging
 
 # Set up test DB and config before importing the app
 TEST_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test_register_device.db'))
@@ -47,6 +47,12 @@ def _remove_test_db():
 
 class RegisterDeviceTestBase(unittest.TestCase):
     def setUp(self):
+        # No Firebase unless a test asks for it: a local service-account key
+        # would otherwise send real dry runs to FCM.
+        firebase = patch('app.routes.user_routes.get_firebase_app', return_value=None)
+        firebase.start()
+        self.addCleanup(firebase.stop)
+
         self.app = create_app()
         self.app_context = self.app.app_context()
         self.app_context.push()
@@ -211,6 +217,31 @@ class DeadTokenTest(RegisterDeviceTestBase):
         self.assertEqual(resp.status_code, 201, resp.get_json())
         self.assertEqual(self.devices(), [(self.alice, TOKEN, 'phone-1')])
 
+    def test_a_bare_404_fails_open(self, _app):
+        # A 404 without FCM's UNREGISTERED detail, e.g. a wrong project, must
+        # not refuse every registration.
+        with patch.object(user_routes.messaging, 'send', side_effect=exceptions.NotFoundError('x')):
+            resp = self.register(self.alice, TOKEN, 'phone-1')
+
+        self.assertEqual(resp.status_code, 201, resp.get_json())
+        self.assertEqual(self.devices(), [(self.alice, TOKEN, 'phone-1')])
+
+    def test_a_check_that_cannot_start_fails_open(self, _app):
+        with patch.object(user_routes._token_check_pool, 'submit', side_effect=RuntimeError('shut down')):
+            resp = self.register(self.alice, TOKEN, 'phone-1')
+
+        self.assertEqual(resp.status_code, 201, resp.get_json())
+        self.assertEqual(self.devices(), [(self.alice, TOKEN, 'phone-1')])
+
+    def test_a_blank_or_non_string_token_is_rejected_unchecked(self, _app):
+        with patch.object(user_routes.messaging, 'send') as send:
+            for bad in ('   ', 123):
+                resp = self.register(self.alice, bad, 'phone-1')
+                self.assertEqual(resp.status_code, 400, bad)
+
+        send.assert_not_called()
+        self.assertEqual(self.devices(), [])
+
     def test_a_slow_fcm_fails_open(self, _app):
         with patch.object(user_routes, '_TOKEN_CHECK_TIMEOUT_SECONDS', 0.05), \
              patch.object(user_routes.messaging, 'send', side_effect=lambda *a, **k: time.sleep(0.5)):
@@ -248,7 +279,7 @@ class DeadTokenTest(RegisterDeviceTestBase):
                 raise _unregistered()
             return 'projects/x/messages/1'
 
-        with patch.object(user_routes.messaging, 'send', side_effect=send):
+        with patch.object(user_routes.messaging, 'send', side_effect=send) as sent:
             resp = self.app.test_client().post(
                 '/users/me/test-notification', headers=self.auth(self.alice))
 
@@ -256,6 +287,9 @@ class DeadTokenTest(RegisterDeviceTestBase):
         self.assertEqual(resp.status_code, 200, body)
         self.assertEqual((body['sent'], body['failed'], body['removed']), (1, 1, 1))
         self.assertEqual(self.devices(), [(self.alice, 'live-token', 'new-phone')])
+        # Sent through the device's own platform app, not the default one.
+        _app.assert_called_with(platform='android')
+        self.assertIs(sent.call_args.kwargs['app'], _app.return_value)
 
 
 if __name__ == '__main__':
