@@ -793,7 +793,10 @@ def import_available_cheese_rooms(current_user):
     my_cheese_id = user.cheese_user_id
     discord_username = user.discord_username.strip().lower() if user.discord_username else None
 
-    stats = {'imported': 0, 'slots_synced': 0, 'demoted': 0}
+    # `relinked` counts rooms the user already had, now mirrored from Cheese.
+    # Counted apart from `imported` so the app does not report "Added 0 rooms"
+    # for an import that linked one (#359).
+    stats = {'imported': 0, 'relinked': 0, 'slots_synced': 0, 'demoted': 0}
     failed = []
     # Kept apart from `failed` on purpose. The app reads `failed` as "Cheese
     # didn't answer, try again", and retrying one of these can never succeed.
@@ -882,6 +885,7 @@ def import_available_cheese_rooms(current_user):
             # Already tracked, so this is really "start mirroring it".
             sub.cheese_link = CHEESE_LINK_LINKED
             sub.is_archived = False
+            stats['relinked'] += 1
         sub.cheese_unlisted_at = None
 
         my_cheese_id = _reconcile_claims(
@@ -899,8 +903,9 @@ def import_available_cheese_rooms(current_user):
         logging.warning(f"[CHEESE_IMPORT] User {current_user.id} asked for trackers not on their dashboard: {missing}")
 
     return jsonify({
-        'message': f"Added {stats['imported']} room(s).",
+        'message': f"Added {stats['imported']} room(s), linked {stats['relinked']}.",
         'imported': stats['imported'],
+        'relinked': stats['relinked'],
         'slots_synced': stats['slots_synced'],
         'demoted': stats['demoted'],
         'failed': failed + missing + deferred,

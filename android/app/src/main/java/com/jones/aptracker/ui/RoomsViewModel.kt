@@ -395,6 +395,8 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun roomCount(n: Int) = if (n == 1) "1 room" else "$n rooms"
+
     /**
      * Accept suggestions: the only path that puts a Cheese room in the library.
      *
@@ -419,21 +421,31 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 // count alone read as success when half the request had failed.
                 val failed = result.failed.size
                 val linkedElsewhere = result.linked_elsewhere.size
-                val roomWord = if (result.imported == 1) "room" else "rooms"
+                val relinked = result.relinked
                 val parts = mutableListOf<String>()
-                // The count leads only when something was added or nothing else
-                // happened. "Added 0 rooms" in front of a refusal or a timeout
-                // told the user nothing.
-                if (result.imported > 0 || (failed == 0 && linkedElsewhere == 0)) {
+                // The count leads only when something was added or linked, or
+                // nothing else happened. "Added 0 rooms" in front of a refusal or
+                // a timeout told the user nothing, and neither did it for a room
+                // they already had that is now linked (#359).
+                val succeeded = result.imported > 0 || relinked > 0
+                if (succeeded || (failed == 0 && linkedElsewhere == 0)) {
+                    val lead = when {
+                        result.imported > 0 && relinked > 0 ->
+                            "Added ${roomCount(result.imported)} and linked $relinked"
+                        relinked > 0 -> "Linked ${roomCount(relinked)}"
+                        else -> "Added ${roomCount(result.imported)}"
+                    }
                     parts += if (failed > 0 || linkedElsewhere > 0) {
-                        "Added ${result.imported} $roomWord."
+                        "$lead."
+                    } else if (relinked > 0 && result.imported == 0) {
+                        "$lead to Cheese Tracker."
                     } else {
-                        "Added ${result.imported} $roomWord from Cheese Tracker."
+                        "$lead from Cheese Tracker."
                     }
                 }
                 if (failed > 0) {
                     val failedWord = if (failed == 1) "room" else "rooms"
-                    val more = if (result.imported > 0) " more" else ""
+                    val more = if (succeeded) " more" else ""
                     parts += "Cheese Tracker didn't answer for $failed$more $failedWord -- try those again."
                 }
                 // Said separately, and without "try again": the room is already
