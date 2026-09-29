@@ -6,6 +6,7 @@ unclaimed and demoted it with a "Slot Released" push. Now the failed slot is
 remembered, the sync leaves it alone, and the poller pushes it again.
 """
 import os
+import threading
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -224,6 +225,80 @@ class TestAFailedPushIsRemembered(PendingPushTestBase):
         push_slot_changes_to_cheese(self.app, 1, 10, {2}, {1})
 
         self.assertEqual(self.pending(), {1: 1})
+
+
+@patch('app.api_cheese._cheese_session.put')
+@patch('app.api_cheese._cheese_session.get')
+class TestAClaimInFlightIsProtected(PendingPushTestBase):
+    """A poll landing while a claim is still on its way must not demote it (#367)."""
+
+    def _poll_from_another_thread(self, snapshot):
+        # The poller runs in its own process; a thread gives it its own session.
+        result = {}
+        worker = threading.Thread(target=lambda: result.update(
+            payload=process_cheese_update(10, snapshot, '2026-09-17T10:00:00Z')))
+        worker.start()
+        worker.join()
+        return result['payload']
+
+    def test_a_poll_during_the_push_keeps_the_slot_playing(self, mock_get, mock_put):
+        self.slot(1)
+        seen = {}
+
+        def slow_cheese_read(*args, **kwargs):
+            # Mid-push: the claim has not reached Cheese, so the poll sees it open.
+            seen['pending'] = self.pending()
+            seen['payload'] = self._poll_from_another_thread(tracker(game(1)))
+            return response(200, tracker(game(1)))
+
+        mock_get.side_effect = slow_cheese_read
+        mock_put.return_value = response(200)
+
+        push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
+
+        self.assertEqual(seen['payload'], {}, "no 'Slot Released' push")
+        self.assertEqual(self.mode(1), 'play')
+        self.assertEqual(seen['pending'], {1: 0}, "recorded before the push, at 0 attempts")
+        self.assertEqual(self.pending(), {}, "settled once the push landed")
+
+    def test_an_existing_row_keeps_its_count_while_in_flight(self, mock_get, mock_put):
+        self.pend(1, attempts=3)
+        seen = {}
+
+        def read(*args, **kwargs):
+            seen['pending'] = self.pending()
+            raise requests.exceptions.ReadTimeout("read timed out")
+
+        mock_get.side_effect = read
+
+        push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
+
+        self.assertEqual(seen['pending'], {1: 3})
+        self.assertEqual(self.pending(), {1: 4})
+
+    def test_a_retry_racing_an_in_flight_claim_is_harmless(self, mock_get, mock_put):
+        """The poller may retry a row whose first push is still running. If that
+        push lands first, Cheese refuses the duplicate on the owner precondition,
+        which is final: the row goes and the slot stays Playing."""
+        self.slot(1)
+        self.pend(1, attempts=0)
+        mock_put.return_value = response(412)
+
+        retry_pending_cheese_pushes(self.app, TRACKER, tracker(game(1)))
+
+        self.assertEqual(mock_put.call_count, 1)
+        self.assertEqual(mock_put.call_args.kwargs['json']['claimed_by_ct_user_id'], MY_CT_ID)
+        self.assertEqual(self.pending(), {})
+        self.assertEqual(self.mode(1), 'play')
+
+    def test_a_push_goes_ahead_if_the_row_cannot_be_written(self, mock_get, mock_put):
+        mock_get.return_value = response(200, tracker(game(1)))
+        mock_put.return_value = response(200)
+
+        with patch.object(api_cheese, 'CheesePendingPush', side_effect=RuntimeError('db')):
+            push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
+
+        self.assertEqual(mock_put.call_count, 1)
 
 
 class TestADatabaseErrorIsNotCheesesAnswer(unittest.TestCase):

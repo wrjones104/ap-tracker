@@ -1130,6 +1130,51 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
     return outcomes
 
 
+def _mark_pushes_in_flight(user_id, tracker_id, slot_ids):
+    """
+    Record the slots about to be pushed before the push starts (#367).
+
+    Against a slow Cheese a push can take fifteen seconds or more, and a poll
+    landing in that window sees a just-picked slot still unclaimed. The sync
+    already leaves a slot with a row alone, so writing the row first covers the
+    in-flight window as well as a failed push. A new row starts at 0 attempts, so
+    the cap still counts retries; an existing row keeps its count.
+    _record_push_outcomes settles every row afterwards.
+
+    Bookkeeping only: if it fails, the push goes ahead unprotected, as before.
+    """
+    if not slot_ids:
+        return
+    for attempt in range(2):
+        session = Session()
+        try:
+            existing = {
+                slot_id for (slot_id,) in session.query(CheesePendingPush.slot_id).filter(
+                    CheesePendingPush.cheese_tracker_id == tracker_id,
+                    CheesePendingPush.user_id == user_id,
+                    CheesePendingPush.slot_id.in_(slot_ids),
+                ).all()
+            }
+            for slot_id in set(slot_ids) - existing:
+                session.add(CheesePendingPush(
+                    user_id=user_id, cheese_tracker_id=tracker_id, slot_id=slot_id, attempts=0
+                ))
+            session.commit()
+            return
+        except IntegrityError:
+            # A concurrent push for the same slot wrote its row first. Read again.
+            session.rollback()
+        except Exception as e:
+            session.rollback()
+            logging.error(
+                f"[CHEESE_PENDING] Could not mark pushes in flight for user {user_id} "
+                f"on tracker {tracker_id}: {e}", exc_info=True,
+            )
+            return
+        finally:
+            Session.remove()
+
+
 def _record_push_outcomes(user_id, tracker_id, outcomes):
     """
     Remember the slots whose push should be retried, and forget the rest (#304).
@@ -1162,6 +1207,14 @@ def _record_push_outcomes(user_id, tracker_id, outcomes):
                 session.add(CheesePendingPush(
                     user_id=user_id, cheese_tracker_id=tracker_id, slot_id=slot_id, attempts=1
                 ))
+            elif row.attempts == 0:
+                # Written before the push by _mark_pushes_in_flight; this is its
+                # first failure.
+                logging.warning(
+                    f"[CHEESE_PENDING] Push for slot {slot_id} on tracker {tracker_id} "
+                    f"(user {user_id}) did not land; retrying on the next poll."
+                )
+                row.attempts = 1
             elif row.attempts >= CHEESE_PENDING_MAX_ATTEMPTS:
                 # Cheese is answering polls but this push keeps failing, so something
                 # other than a slow request is wrong. Dropping the row hands the slot
@@ -1357,6 +1410,7 @@ def push_slot_changes_to_cheese(app, user_id, room_db_id, added_slots, removed_s
     base_headers["Authorization"] = f"Bearer {api_key}"
 
     outcomes = {slot_id: PUSH_RETRY for slot_id in set(added_slots) | set(removed_slots)}
+    _mark_pushes_in_flight(user_id, tracker_id, set(outcomes))
     try:
         # Called directly to block execution until finished
         result = _background_push_worker(
