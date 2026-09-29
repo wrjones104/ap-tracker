@@ -7,9 +7,17 @@
     <cloud-backup>
         <!-- Exclude encrypted preferences because the Keystore key to decrypt them is hardware-bound and not backed up -->
         <exclude domain="sharedpref" path="secret_user_prefs.xml"/>
+        <!-- Firebase caches the push token here. Restored onto another device it is the old
+             install's token, which FCM has retired, so that device gets no pushes (#364). -->
+        <exclude domain="sharedpref" path="com.google.android.gms.appid.xml"/>
+        <exclude domain="sharedpref" path="com.google.firebase.messaging.xml"/>
     </cloud-backup>
     <device-transfer>
         <!-- Exclude encrypted preferences during device-to-device transfers for the same reason -->
         <exclude domain="sharedpref" path="secret_user_prefs.xml"/>
+        <!-- Firebase caches the push token here. Restored onto another device it is the old
+             install's token, which FCM has retired, so that device gets no pushes (#364). -->
+        <exclude domain="sharedpref" path="com.google.android.gms.appid.xml"/>
+        <exclude domain="sharedpref" path="com.google.firebase.messaging.xml"/>
     </device-transfer>
 </data-extraction-rules>

@@ -8,4 +8,7 @@
 <full-backup-content>
     <!-- Exclude encrypted preferences because the Keystore key to decrypt them is hardware-bound and not backed up -->
     <exclude domain="sharedpref" path="secret_user_prefs.xml"/>
+    <!-- Firebase's cached push token; see data_extraction_rules.xml (#364). -->
+    <exclude domain="sharedpref" path="com.google.android.gms.appid.xml"/>
+    <exclude domain="sharedpref" path="com.google.firebase.messaging.xml"/>
 </full-backup-content>
