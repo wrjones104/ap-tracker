@@ -55,7 +55,7 @@ def register_device(current_user):
 
     if stale_devices:
         for stale in stale_devices:
-            logging.info(f"[API] Unlinking FCM token from old User {stale.user_id} device {stale.android_id} to assign to User {current_user.id}")
+            logging.info(f"[API] Moving FCM token from User {stale.user_id} device {stale.android_id or 'legacy'} to User {current_user.id} device {device_id or 'legacy'}")
             session.delete(stale)
         # The unit of work runs INSERT/UPDATE before DELETE within a table, so
         # without this flush the new row collides with the one being removed.
@@ -67,8 +67,8 @@ def register_device(current_user):
             logging.info(f"[API] Refreshed FCM token for existing device ({platform.capitalize()} ID: {device_id}) for user {current_user.id}")
     elif device_id:
         device = Device(
-            fcm_token=fcm_token, 
-            user_id=current_user.id, 
+            fcm_token=fcm_token,
+            user_id=current_user.id,
             android_id=device_id,
             platform=platform
         )
