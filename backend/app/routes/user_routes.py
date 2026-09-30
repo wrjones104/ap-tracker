@@ -1,10 +1,12 @@
 import logging
 import json
+import threading
 import jwt
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from flask import Blueprint, request, jsonify, current_app
 
-from firebase_admin import messaging
+from firebase_admin import exceptions, messaging
 from datetime import datetime, timezone
 
 from app import Session, get_firebase_app
@@ -18,6 +20,67 @@ user_bp = Blueprint('user_routes', __name__)
 # ping_preference enum). Used to validate cheese_default_ping updates.
 VALID_CHEESE_PING_PREFERENCES = {'liberally', 'sparingly', 'hints', 'see_notes', 'never'}
 
+# Registration checks a token with an FCM dry run (#364). The app registers on
+# every launch, and firebase_admin waits up to 120 s by default, so the check
+# runs on its own small pool and the request waits at most this long. When the
+# pool is busy (FCM slow or down) the check is skipped. Either way the token is
+# stored as it always was: the check can only refuse a token FCM has
+# positively said is dead.
+_TOKEN_CHECK_TIMEOUT_SECONDS = 3
+_TOKEN_CHECK_WORKERS = 4
+_token_check_pool = ThreadPoolExecutor(max_workers=_TOKEN_CHECK_WORKERS, thread_name_prefix='fcm-token-check')
+_token_check_slots = threading.BoundedSemaphore(_TOKEN_CHECK_WORKERS)
+
+
+def is_unregistered_token_error(exc):
+    """Any FCM 404, the same rule the poller prunes on.
+
+    Broader than UnregisteredError (which is itself a NotFoundError): a 404
+    from a wrong project counts too. Fine for pruning after a send, but
+    registration trusts only UnregisteredError; see fcm_token_is_dead.
+    """
+    return isinstance(exc, exceptions.NotFoundError)
+
+
+def _dry_run(fcm_token, firebase_app):
+    try:
+        messaging.send(messaging.Message(token=fcm_token), dry_run=True, app=firebase_app)
+        return False
+    finally:
+        _token_check_slots.release()
+
+
+def fcm_token_is_dead(fcm_token, platform):
+    """True only when an FCM dry run says the token is no longer registered.
+
+    A dry run delivers nothing. No credentials, a slow or failing FCM, or any
+    other error fails open and returns False.
+    """
+    firebase_app = get_firebase_app(platform=platform)
+    if not firebase_app:
+        return False
+    if not _token_check_slots.acquire(blocking=False):
+        logging.warning("[API] Skipping FCM token check: earlier checks are still waiting on FCM.")
+        return False
+    try:
+        future = _token_check_pool.submit(_dry_run, fcm_token, firebase_app)
+    except Exception as e:
+        _token_check_slots.release()
+        logging.warning(f"[API] Could not start FCM token check ({type(e).__name__}: {e}); storing the token unchecked.")
+        return False
+    try:
+        return future.result(timeout=_TOKEN_CHECK_TIMEOUT_SECONDS)
+    except FutureTimeout:
+        logging.warning(f"[API] FCM token check took over {_TOKEN_CHECK_TIMEOUT_SECONDS}s; storing the token unchecked.")
+        return False
+    except messaging.UnregisteredError:
+        # Only FCM's explicit UNREGISTERED detail. A bare 404 (wrong project,
+        # bad URL) would otherwise refuse every registration.
+        return True
+    except Exception as e:
+        logging.warning(f"[API] FCM token check failed ({type(e).__name__}: {e}); storing the token unchecked.")
+        return False
+
 @user_bp.route('/devices', methods=['POST'])
 @handle_db_errors
 @log_api_call
@@ -30,8 +93,26 @@ def register_device(current_user):
     if platform not in ['android', 'ios']:
         platform = 'android'
 
-    if not fcm_token:
+    if not isinstance(fcm_token, str) or not fcm_token.strip():
         return jsonify({'error': 'Missing fcm_token'}), 400
+
+    # A device restored from a backup or transfer can carry the old install's
+    # cached token, which FCM has already retired. Storing it only gets it
+    # pruned at the next send, and the app registers it again at next launch,
+    # so the user silently gets nothing. Refuse it with a code the app can act
+    # on: delete its token and register a fresh one (#364). An older app just
+    # logs the failure, which leaves it where it already was. The app must
+    # retry at most once per launch, so a wrong 410 cannot become a loop.
+    if fcm_token_is_dead(fcm_token, platform):
+        logging.info(f"[API] Refused a dead FCM token for user {current_user.id} device {device_id or 'legacy'}")
+        # Any row still holding it would only be pruned at the next send.
+        session = Session()
+        session.query(Device).filter(Device.fcm_token == fcm_token).delete(synchronize_session=False)
+        session.commit()
+        return jsonify({
+            'error': 'fcm_token_unregistered',
+            'message': 'This push token is no longer valid. Request a new one and register again.',
+        }), 410
 
     session = Session()
 
@@ -324,17 +405,23 @@ def delete_current_user(current_user):
 @log_api_call
 @token_required
 def send_test_notification(current_user):
-    get_firebase_app()
     session = Session()
     try:
         devices = session.query(Device).filter_by(user_id=current_user.id).all()
         if not devices:
             return jsonify({'error': 'No devices registered. Open the app to register.'}), 404
 
-        tokens = [d.fcm_token for d in devices]
         success_count = 0
-        
-        for token in tokens:
+        dead_devices = []
+
+        for device in devices:
+            token = device.fcm_token
+            # Each platform has its own Firebase project. Sending through the
+            # wrong one could answer 404 and prune a live device.
+            firebase_app = get_firebase_app(platform=device.platform)
+            if not firebase_app:
+                logging.warning(f"[API_WARN] Skipping test push to token {token[:10]}...: no Firebase app for '{device.platform}'.")
+                continue
             try:
                 message = messaging.Message(
                     notification=messaging.Notification(
@@ -354,11 +441,28 @@ def send_test_notification(current_user):
                     },
                     token=token
                 )
-                messaging.send(message)
+                messaging.send(message, app=firebase_app)
                 success_count += 1
             except Exception as e:
                 logging.error(f"[API_WARN] Failed to send test push to token {token[:10]}...: {e}")
+                if is_unregistered_token_error(e):
+                    dead_devices.append(device)
 
-        return jsonify({'message': f'Sent test notification to {success_count} devices.'})
+        # Pruned here as the poller would, so the test does not report a device
+        # that can never receive anything (#364).
+        # A bulk delete, like the poller's, so a row another request already
+        # pruned is simply skipped.
+        for device in dead_devices:
+            logging.info(f"[FCM] Removing dead token for user {current_user.id} device {device.android_id or 'legacy'} after a test push.")
+        if dead_devices:
+            session.query(Device).filter(Device.id.in_([d.id for d in dead_devices])).delete(synchronize_session=False)
+            session.commit()
+
+        return jsonify({
+            'message': f'Sent test notification to {success_count} devices.',
+            'sent': success_count,
+            'failed': len(devices) - success_count,
+            'removed': len(dead_devices),
+        })
     finally:
         Session.remove()
