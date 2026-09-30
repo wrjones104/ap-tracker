@@ -868,6 +868,63 @@
   ],
   "server_releases": [
     {
+      "version": "1.14.1",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-09-30",
+      "title": "Pushes That Survive a Phone Transfer",
+      "highlights": [
+        {
+          "title": "Notifications Follow You to a New Phone",
+          "description": "A phone moved over from an old one can register for notifications again."
+        },
+        {
+          "title": "Milestones Name Their Slot",
+          "description": "A combined notification now says which slot reached each milestone."
+        },
+        {
+          "title": "Fewer False \"Slot Released\" Alerts",
+          "description": "A Cheese claim still on its way is no longer mistaken for a release."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Milestones Name Their Slot",
+            "description": "Combined notifications list each milestone with its slot, like \"Boss Keys [Alice]\". Part of #337."
+          },
+          {
+            "title": "Test Push Cleans Up",
+            "description": "A test push removes devices that can no longer receive anything and reports how many it reached. Part of #364."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Push Tokens Move With the Phone",
+            "description": "A phone transfer on the same account no longer leaves the new device unable to register. Closes #365."
+          },
+          {
+            "title": "Dead Push Tokens Refused",
+            "description": "The server turns away a push token Firebase has retired, so the app can fetch a fresh one. Server half of #364."
+          },
+          {
+            "title": "Claims In Flight Stay Claimed",
+            "description": "A poll that lands while a claim is being sent to Cheese no longer releases the slot. Closes #367."
+          },
+          {
+            "title": "Import Counts Linked Rooms",
+            "description": "Importing a tracker for a room you already have now reports the room as linked. Server half of #359."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Changed\n- Milestone pushes carry `item_context`, so a combined notification reads \"Boss Keys [Alice], Boss Keys [Bob]\". Refs #337 (part 1; the Activity-tab half is still open).\n- `POST /users/me/test-notification` sends through each device's own Firebase app, prunes unregistered tokens, and returns `sent`, `failed` and `removed`. Part of #364.\n- `POST /integrations/cheese/available/import` returns `relinked` for rooms the user already had that are now linked. Server half of #359.\n- Device prunes are logged per user and device, so a missing-notifications report can be traced.\n\n### Fixed\n- `POST /devices` removes any other row holding the token before storing it, so a token can move to a new device ID on the same account. Closes #365.\n- `POST /devices` dry-runs the token against FCM and answers `410 fcm_token_unregistered` for a retired one. Capped at 3 s on a 4-slot pool; any other outcome stores the token as before. Server half of #364.\n- A Cheese claim or release is recorded in `cheese_pending_pushes` before it is sent, so a poll mid-push no longer demotes the slot. Closes #367. A narrower window after the push lands is tracked in #390.\n\n### Compatibility\n- No migration, no new settings, no API removals. App 1.12.0 behaves as before; `relinked` and the 410 are used by app 1.13.0.\n- Test-only: `test_guest_upgrade` imports the app one way, and a new guard test keeps it that way. Closes #375."
+      }
+    },
+    {
       "version": "1.14.0",
       "component": "server",
       "component_label": "Server",
