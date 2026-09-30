@@ -1,6 +1,7 @@
 package com.jones.aptracker.ui
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
@@ -27,6 +28,9 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+private const val UI_HINTS_PREFS = "ui_hints"
+private const val KEY_CHEESE_HIDE_HINT_SHOWN = "cheese_hide_hint_shown"
 
 class RoomsViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -505,13 +509,37 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         if (trackerIds.isEmpty()) return
         viewModelScope.launch {
             try {
-                RetrofitClient.instance.dismissCheeseRooms(CheeseTrackerIdsRequest(trackerIds))
+                val response = RetrofitClient.instance.dismissCheeseRooms(CheeseTrackerIdsRequest(trackerIds))
+                // Response<Unit> does not throw on a 4xx/5xx. Without this check a
+                // failed hide would burn the one-time hint on rooms that never hid.
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Couldn't dismiss those. Check connection."
+                    return@launch
+                }
+                showHiddenRoomsHintOnce()
                 fetchAvailableCheeseRooms()
             } catch (e: Exception) {
                 e.printStackTrace()
                 _errorMessage.value = "Couldn't dismiss those. Check connection."
             }
         }
+    }
+
+    /**
+     * The first time someone hides Cheese rooms, say where they went. Hidden rooms
+     * never come back as a banner, and people did not know the Me tab lists them
+     * (#378). Once only: after that it is a nag.
+     */
+    private fun showHiddenRoomsHintOnce() {
+        val prefs = getApplication<Application>()
+            .getSharedPreferences(UI_HINTS_PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_CHEESE_HIDE_HINT_SHOWN, false)) return
+        prefs.edit().putBoolean(KEY_CHEESE_HIDE_HINT_SHOWN, true).apply()
+        Toast.makeText(
+            getApplication(),
+            "Hidden. Find them under Me > Integrations.",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     /**

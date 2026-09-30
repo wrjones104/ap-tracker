@@ -148,6 +148,13 @@ fun RoomsScreen(
     val expandedRoomIds by userViewModel.expandedRoomIds.collectAsState()
     val layoutDensityKey by userViewModel.layoutDensity.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
+    // The search field only exists while there are rooms. Archiving the last match
+    // mid-search would otherwise strand a query nobody can see or clear: it keeps
+    // the Cheese banner hidden on the empty list and silently filters whatever
+    // room comes back next (#378).
+    LaunchedEffect(rooms.isEmpty()) {
+        if (rooms.isEmpty()) searchQuery = ""
+    }
 
     // --- Lifecycle & Data Loading ---
     //
@@ -373,27 +380,32 @@ fun RoomsScreen(
                             textAlign = TextAlign.Center
                         )
                     }
+                }
 
-                    // Rooms waiting on Cheese are offered above the list rather than
-                    // appearing in it unannounced. Deliberately not a list item: every
-                    // item in the list below is a room, one to one, and the reorder
-                    // math depends on that.
-                    // Hidden ones ride along in the same list when the sheet was
-                    // opened from the Me tab. They are not news, so they do not put
-                    // a banner back on screen.
-                    val offered = availableCheeseRooms.count { !it.dismissed }
-                    if (offered > 0 && !isSearching) {
-                        CheeseSuggestionsBanner(
-                            count = offered,
-                            // Shut while a sync is running. The two write the same
-                            // rooms from opposite ends, and the sheet would be
-                            // answering with a list that is mid-change.
-                            enabled = !isSyncingCheese,
-                            // What is new, not what was hidden. The Me tab is the
-                            // door to the hidden ones.
-                            onClick = { roomsViewModel.openCheeseSuggestions(includeDismissed = false) }
-                        )
-                    }
+                // Rooms waiting on Cheese are offered above the list rather than
+                // appearing in it unannounced. Deliberately not a list item: every
+                // item in the list below is a room, one to one, and the reorder
+                // math depends on that.
+                // Hidden ones ride along in the same list when the sheet was
+                // opened from the Me tab. They are not news, so they do not put
+                // a banner back on screen.
+                // Outside the "has rooms" block: someone who cleared out every
+                // finished room is exactly who needs to be told new ones are
+                // waiting, and an empty list used to hide the banner (#378).
+                val offered = availableCheeseRooms.count { !it.dismissed }
+                // No loading guard: it blinked the banner off for every refresh of an
+                // empty list, and above a spinner it sits exactly where it would above rooms.
+                if (offered > 0 && !isSearching) {
+                    CheeseSuggestionsBanner(
+                        count = offered,
+                        // Shut while a sync is running. The two write the same
+                        // rooms from opposite ends, and the sheet would be
+                        // answering with a list that is mid-change.
+                        enabled = !isSyncingCheese,
+                        // What is new, not what was hidden. The Me tab is the
+                        // door to the hidden ones.
+                        onClick = { roomsViewModel.openCheeseSuggestions(includeDismissed = false) }
+                    )
                 }
 
                 // weight rather than fillMaxSize: this takes whatever the pinned chrome
