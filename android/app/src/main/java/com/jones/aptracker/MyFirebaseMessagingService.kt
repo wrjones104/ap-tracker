@@ -11,11 +11,11 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.jones.aptracker.network.DeviceRegistration
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.TokenManager
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.HistorySyncWorker
-import com.jones.aptracker.network.DeviceRegistration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
