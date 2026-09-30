@@ -10,6 +10,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.14.1] - 2026-09-30
+
+_Pushes That Survive a Phone Transfer_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - Milestone pushes carry `item_context`, so a combined notification reads "Boss Keys [Alice], Boss Keys [Bob]". Refs #337 (part 1; the Activity-tab half is still open).
+> - `POST /users/me/test-notification` sends through each device's own Firebase app, prunes unregistered tokens, and returns `sent`, `failed` and `removed`. Part of #364.
+> - `POST /integrations/cheese/available/import` returns `relinked` for rooms the user already had that are now linked. Server half of #359.
+> - Device prunes are logged per user and device, so a missing-notifications report can be traced.
+>
+> ### Fixed
+> - `POST /devices` removes any other row holding the token before storing it, so a token can move to a new device ID on the same account. Closes #365.
+> - `POST /devices` dry-runs the token against FCM and answers `410 fcm_token_unregistered` for a retired one. Capped at 3 s on a 4-slot pool; any other outcome stores the token as before. Server half of #364.
+> - A Cheese claim or release is recorded in `cheese_pending_pushes` before it is sent, so a poll mid-push no longer demotes the slot. Closes #367. A narrower window after the push lands is tracked in #390.
+>
+> ### Compatibility
+> - No migration, no new settings, no API removals. App 1.12.0 behaves as before; `relinked` and the 410 are used by app 1.13.0.
+> - Test-only: `test_guest_upgrade` imports the app one way, and a new guard test keeps it that way. Closes #375.
+> ```
+
+### Changed
+- **Milestones Name Their Slot**: Combined notifications list each milestone with its slot, like "Boss Keys [Alice]". Part of #337.
+- **Test Push Cleans Up**: A test push removes devices that can no longer receive anything and reports how many it reached. Part of #364.
+
+### Fixed
+- **Push Tokens Move With the Phone**: A phone transfer on the same account no longer leaves the new device unable to register. Closes #365.
+- **Dead Push Tokens Refused**: The server turns away a push token Firebase has retired, so the app can fetch a fresh one. Server half of #364.
+- **Claims In Flight Stay Claimed**: A poll that lands while a claim is being sent to Cheese no longer releases the slot. Closes #367.
+- **Import Counts Linked Rooms**: Importing a tracker for a room you already have now reports the room as linked. Server half of #359.
+
+---
+
 ## [1.14.0] - 2026-09-21
 
 _Cheese Claims That Stick_
