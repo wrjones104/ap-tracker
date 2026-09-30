@@ -11,6 +11,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.jones.aptracker.network.DeviceRegistration
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.TokenManager
 import com.jones.aptracker.repository.HistoryRepository
@@ -76,7 +77,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.d("FCM", "New token generated: $token")
+        Log.d("FCM", "New token generated.")
+        // Only logged before, so a token Firebase rotated reached the server at the
+        // next launch at the earliest, and pushes went nowhere until then (#364).
+        serviceScope.launch { DeviceRegistration.register(applicationContext, token) }
     }
 
     private fun sendSystemNotification(

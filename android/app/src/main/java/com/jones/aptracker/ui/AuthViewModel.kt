@@ -1,11 +1,11 @@
 package com.jones.aptracker.ui
 
 import android.content.Context
-import android.provider.Settings
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.messaging.FirebaseMessaging
+import com.jones.aptracker.network.DeviceRegistration
 import com.jones.aptracker.network.RegisterDeviceRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.SessionManager
@@ -192,51 +192,7 @@ class AuthViewModel : ViewModel() {
     }
 
     fun registerDeviceToken(context: Context) {
-        val tokenManager = TokenManager(context)
-        if (tokenManager.getToken() == null) {
-            Log.w("AuthViewModel", "User not logged in. Cannot register FCM token.")
-            return
-        }
-
-        viewModelScope.launch {
-            // A forced logout invalidates the FCM token on a detached coroutine. Fetching
-            // before that finishes would hand the server the very token the pending delete
-            // is about to destroy, leaving the device silently unreachable. Wait it out.
-            SessionManager.awaitTokenInvalidation()
-
-            val fcmToken = try {
-                FirebaseMessaging.getInstance().token.await()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w("AuthViewModel", "Fetching FCM registration token failed", e)
-                return@launch
-            }
-
-            Log.d("AuthViewModel", "FCM Token retrieved: $fcmToken. Sending to server...")
-
-            val androidId = Settings.Secure.getString(
-                context.contentResolver,
-                Settings.Secure.ANDROID_ID
-            )
-
-            try {
-                val request = RegisterDeviceRequest(
-                    fcm_token = fcmToken,
-                    android_id = androidId
-                )
-
-                val response = RetrofitClient.instance.registerDevice(request)
-                if (response.isSuccessful) {
-                    Log.i("AuthViewModel", "FCM token and Android ID registered with backend successfully.")
-                } else {
-                    Log.e("AuthViewModel", "Backend FCM registration failed: ${response.code()} - ${response.errorBody()?.string()}")
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e("AuthViewModel", "Error sending FCM token to server", e)
-            }
-        }
+        val appContext = context.applicationContext
+        viewModelScope.launch { DeviceRegistration.register(appContext) }
     }
 }
