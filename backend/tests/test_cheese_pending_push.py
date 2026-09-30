@@ -12,7 +12,9 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import requests
+from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session as OrmSession
 
 TEST_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test_cheese_pending_push.db'))
 os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
@@ -276,12 +278,35 @@ class TestAClaimInFlightIsProtected(PendingPushTestBase):
         self.assertEqual(seen['pending'], {1: 3})
         self.assertEqual(self.pending(), {1: 4})
 
-    def test_a_retry_racing_an_in_flight_claim_is_harmless(self, mock_get, mock_put):
-        """The poller may retry a row whose first push is still running. If that
-        push lands first, Cheese refuses the duplicate on the owner precondition,
-        which is final: the row goes and the slot stays Playing."""
+    def test_the_poller_leaves_a_fresh_in_flight_row_to_its_push(self, mock_get, mock_put):
+        """A poll landing mid-push must not push the same slot a second time: it
+        would hold a Cheese slot against a slow server and count a failure twice."""
         self.slot(1)
         self.pend(1, attempts=0)
+
+        retry_pending_cheese_pushes(self.app, TRACKER, tracker(game(1)))
+
+        mock_put.assert_not_called()
+        self.assertEqual(self.pending(), {1: 0})
+
+    def test_the_poller_takes_over_an_orphaned_in_flight_row(self, mock_get, mock_put):
+        """Past the grace period the push that wrote the row is assumed dead."""
+        self.slot(1)
+        self.pend(1, attempts=0, created_at=datetime.utcnow() - timedelta(minutes=5))
+        mock_put.return_value = response(200)
+
+        retry_pending_cheese_pushes(self.app, TRACKER, tracker(game(1)))
+
+        self.assertEqual(mock_put.call_count, 1)
+        self.assertEqual(self.pending(), {})
+
+    def test_a_retry_racing_an_in_flight_claim_is_harmless(self, mock_get, mock_put):
+        """A row that already failed once is retried even while the user's new push
+        for it is running. If that push lands first, Cheese refuses the duplicate on
+        the owner precondition, which is final: the row goes and the slot stays
+        Playing."""
+        self.slot(1)
+        self.pend(1, attempts=1)
         mock_put.return_value = response(412)
 
         retry_pending_cheese_pushes(self.app, TRACKER, tracker(game(1)))
@@ -291,14 +316,39 @@ class TestAClaimInFlightIsProtected(PendingPushTestBase):
         self.assertEqual(self.pending(), {})
         self.assertEqual(self.mode(1), 'play')
 
+    def _fail_the_next_row_write(self):
+        """Fail the next flush that adds a pending row, as a database failover
+        would. Only the first, so the outcome step after the push writes normally."""
+        fired = []
+
+        def fail_once(session, flush_context, instances):
+            if not fired and any(isinstance(obj, CheesePendingPush) for obj in session.new):
+                fired.append(True)
+                raise OperationalError('INSERT', {}, Exception('failover'))
+
+        event.listen(OrmSession, 'before_flush', fail_once)
+        self.addCleanup(event.remove, OrmSession, 'before_flush', fail_once)
+        return fired
+
     def test_a_push_goes_ahead_if_the_row_cannot_be_written(self, mock_get, mock_put):
         mock_get.return_value = response(200, tracker(game(1)))
         mock_put.return_value = response(200)
+        fired = self._fail_the_next_row_write()
 
-        with patch.object(api_cheese, 'CheesePendingPush', side_effect=RuntimeError('db')):
-            push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
+        push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
 
+        self.assertTrue(fired, "the mark step's write failed")
         self.assertEqual(mock_put.call_count, 1)
+        self.assertEqual(self.pending(), {})
+
+    def test_a_failed_push_is_remembered_if_the_row_cannot_be_written(self, mock_get, mock_put):
+        mock_get.side_effect = requests.exceptions.ReadTimeout("read timed out")
+        fired = self._fail_the_next_row_write()
+
+        push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
+
+        self.assertTrue(fired, "the mark step's write failed")
+        self.assertEqual(self.pending(), {1: 1})
 
 
 class TestADatabaseErrorIsNotCheesesAnswer(unittest.TestCase):

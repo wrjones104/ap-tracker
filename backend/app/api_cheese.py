@@ -78,6 +78,15 @@ PUSH_FINAL = 'final'
 # Cheese answered, so a push that keeps failing is not a slow-Cheese problem.
 CHEESE_PENDING_MAX_ATTEMPTS = 5
 
+# How long a row written by _mark_pushes_in_flight belongs to the push that wrote
+# it. Until then the poller leaves it alone, so a poll landing mid-push does not
+# push the same slot a second time. Past it, the push is assumed dead (a crashed
+# process) and the poller takes the row over. A one-slot push against a slow
+# Cheese takes under a minute: a 10 s GET and a 5 s PUT, each tried three times.
+# A push of many slots can outlast this; the late retry is then a duplicate,
+# which Cheese refuses on the owner precondition.
+CHEESE_IN_FLIGHT_GRACE = timedelta(minutes=2)
+
 # What push_slot_changes_to_cheese returns when its own pre-flight read failed.
 PREFLIGHT_FAILED = object()
     
@@ -1145,7 +1154,7 @@ def _mark_pushes_in_flight(user_id, tracker_id, slot_ids):
     """
     if not slot_ids:
         return
-    for attempt in range(2):
+    for _ in range(2):
         session = Session()
         try:
             existing = {
@@ -1173,6 +1182,11 @@ def _mark_pushes_in_flight(user_id, tracker_id, slot_ids):
             return
         finally:
             Session.remove()
+    else:
+        logging.warning(
+            f"[CHEESE_PENDING] Could not mark pushes in flight for user {user_id} "
+            f"on tracker {tracker_id}: lost the race for a row twice."
+        )
 
 
 def _record_push_outcomes(user_id, tracker_id, outcomes):
@@ -1199,21 +1213,18 @@ def _record_push_outcomes(user_id, tracker_id, outcomes):
             row = session.query(CheesePendingPush).filter_by(
                 cheese_tracker_id=tracker_id, user_id=user_id, slot_id=slot_id
             ).first()
-            if row is None:
+            if row is None or row.attempts == 0:
+                # No row yet, or one written before the push by
+                # _mark_pushes_in_flight: either way, this is its first failure.
                 logging.warning(
                     f"[CHEESE_PENDING] Push for slot {slot_id} on tracker {tracker_id} "
                     f"(user {user_id}) did not land; retrying on the next poll."
                 )
-                session.add(CheesePendingPush(
-                    user_id=user_id, cheese_tracker_id=tracker_id, slot_id=slot_id, attempts=1
-                ))
-            elif row.attempts == 0:
-                # Written before the push by _mark_pushes_in_flight; this is its
-                # first failure.
-                logging.warning(
-                    f"[CHEESE_PENDING] Push for slot {slot_id} on tracker {tracker_id} "
-                    f"(user {user_id}) did not land; retrying on the next poll."
-                )
+                if row is None:
+                    row = CheesePendingPush(
+                        user_id=user_id, cheese_tracker_id=tracker_id, slot_id=slot_id
+                    )
+                    session.add(row)
                 row.attempts = 1
             elif row.attempts >= CHEESE_PENDING_MAX_ATTEMPTS:
                 # Cheese is answering polls but this push keeps failing, so something
@@ -1241,12 +1252,16 @@ def _record_push_outcomes(user_id, tracker_id, outcomes):
 def _pending_split(tracker_id, room_id, user_id):
     """One user's still-pending slots on a tracker, split by the slot's mode now:
     (claims, releases). Playing is claimed; anything else, untracked included, is
-    released."""
+    released. A row still owned by the push that wrote it is left to that push."""
     session = Session()
     try:
+        in_flight_cutoff = datetime.utcnow() - CHEESE_IN_FLIGHT_GRACE
         slot_ids = {
-            slot_id for (slot_id,) in session.query(CheesePendingPush.slot_id).filter_by(
-                cheese_tracker_id=tracker_id, user_id=user_id
+            slot_id for (slot_id,) in session.query(CheesePendingPush.slot_id).filter(
+                CheesePendingPush.cheese_tracker_id == tracker_id,
+                CheesePendingPush.user_id == user_id,
+                ~((CheesePendingPush.attempts == 0)
+                  & (CheesePendingPush.created_at > in_flight_cutoff)),
             ).all()
         }
         if not slot_ids or room_id is None:
