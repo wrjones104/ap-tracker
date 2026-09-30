@@ -1173,6 +1173,47 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
     return notifications_by_user
 
 
+def _milestone_notification(group, room_alias, player_name, room_db_id, user_id, remove_emojis):
+    """
+    The push for one milestone group a slot has reached.
+
+    Carries `item_context` like an item push does, so a combined notification
+    lists it as "Boss Keys [PlayerName]". Without it the bundler kept only the
+    title, and a bundle of several milestones never said which slot hit which
+    (#337).
+    """
+    icon_milestone = "" if remove_emojis else "🚩 "
+
+    # Build title
+    if group.name:
+        label = f"{icon_milestone}{group.name}"
+    else:
+        # Dynamic fallback: "Milestone Reached! Item1 + N others"
+        first_item = group.items[0].item_name if group.items else "Unknown"
+        if len(group.items) > 1:
+            label = f"{icon_milestone}Milestone Reached! {first_item} + {len(group.items) - 1} others"
+        else:
+            label = f"{icon_milestone}Milestone Reached! {first_item}"
+
+    # Build body: list all items with quantities
+    item_parts = []
+    for item_req in group.items:
+        suffix = " (Group)" if item_req.is_group else ""
+        item_parts.append(f"{item_req.quantity}× {item_req.item_name}{suffix}")
+
+    return {
+        'title': f"{label} - [{room_alias}]",
+        'body': f"{player_name}: {', '.join(item_parts)}",
+        'type': 'item_milestone',
+        'details': (room_db_id, user_id, group.id),
+        'item_context': {
+            'item_name': label,
+            'alias': None,
+            'original': player_name,
+        },
+    }
+
+
 def _evaluate_threshold_groups(session, room_db_id, room_uuid, game_checksums, groups_by_slot, new_items_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, now_utc):
     """
     Evaluates threshold groups for slots that received items in this batch.
@@ -1321,35 +1362,11 @@ def _evaluate_threshold_groups(session, room_db_id, room_uuid, game_checksums, g
                 if slot_prefs and slot_prefs.remove_emojis is not None:
                     remove_emojis = slot_prefs.remove_emojis
                 
-                icon_milestone = "" if remove_emojis else "🚩 "
                 room_alias = aliases_by_user.get(user_id, "Unknown Room")
-                
-                # Build title
-                if group.name:
-                    title = f"{icon_milestone}{group.name} - [{room_alias}]"
-                else:
-                    # Dynamic fallback: "Milestone Reached! Item1 + N others"
-                    first_item = group.items[0].item_name if group.items else "Unknown"
-                    if len(group.items) > 1:
-                        title = f"{icon_milestone}Milestone Reached! {first_item} + {len(group.items) - 1} others - [{room_alias}]"
-                    else:
-                        title = f"{icon_milestone}Milestone Reached! {first_item} - [{room_alias}]"
-                
-                # Build body: list all items with quantities
-                item_parts = []
-                for item_req in group.items:
-                    suffix = " (Group)" if item_req.is_group else ""
-                    item_parts.append(f"{item_req.quantity}× {item_req.item_name}{suffix}")
-                
                 player_name = full_name_map.get(slot_id, f"Slot {slot_id}")
-                body = f"{player_name}: {', '.join(item_parts)}"
-                
-                notifications_by_user.setdefault(user_id, []).append({
-                    'title': title,
-                    'body': body,
-                    'type': 'item_milestone',
-                    'details': (room_db_id, user_id, group.id)
-                })
+                notifications_by_user.setdefault(user_id, []).append(
+                    _milestone_notification(group, room_alias, player_name, room_db_id, user_id, remove_emojis)
+                )
     
     return notifications_by_user
 
