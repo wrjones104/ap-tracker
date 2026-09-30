@@ -497,7 +497,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         if (trackerIds.isEmpty()) return
         viewModelScope.launch {
             try {
-                RetrofitClient.instance.dismissCheeseRooms(CheeseTrackerIdsRequest(trackerIds))
+                val response = RetrofitClient.instance.dismissCheeseRooms(CheeseTrackerIdsRequest(trackerIds))
+                // Response<Unit> does not throw on a 4xx/5xx. Without this check a
+                // failed hide would burn the one-time hint on rooms that never hid.
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Couldn't dismiss those. Check connection."
+                    return@launch
+                }
                 showHiddenRoomsHintOnce()
                 fetchAvailableCheeseRooms()
             } catch (e: Exception) {

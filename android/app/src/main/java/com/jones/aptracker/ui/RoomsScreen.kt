@@ -148,6 +148,13 @@ fun RoomsScreen(
     val expandedRoomIds by userViewModel.expandedRoomIds.collectAsState()
     val layoutDensityKey by userViewModel.layoutDensity.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
+    // The search field only exists while there are rooms. Archiving the last match
+    // mid-search would otherwise strand a query nobody can see or clear: it keeps
+    // the Cheese banner hidden on the empty list and silently filters whatever
+    // room comes back next (#378).
+    LaunchedEffect(rooms.isEmpty()) {
+        if (rooms.isEmpty()) searchQuery = ""
+    }
 
     // --- Lifecycle & Data Loading ---
     //
@@ -386,7 +393,9 @@ fun RoomsScreen(
                 // finished room is exactly who needs to be told new ones are
                 // waiting, and an empty list used to hide the banner (#378).
                 val offered = availableCheeseRooms.count { !it.dismissed }
-                if (offered > 0 && !isSearching && !(isLoading && rooms.isEmpty())) {
+                // No loading guard: it blinked the banner off for every refresh of an
+                // empty list, and above a spinner it sits exactly where it would above rooms.
+                if (offered > 0 && !isSearching) {
                     CheeseSuggestionsBanner(
                         count = offered,
                         // Shut while a sync is running. The two write the same
