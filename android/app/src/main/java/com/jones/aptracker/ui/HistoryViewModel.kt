@@ -215,15 +215,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private var currentRoomId: Int? = null
 
-    private val _selectedPlayerFilter = MutableStateFlow<String?>(null)
-    val selectedPlayerFilter: StateFlow<String?> = _selectedPlayerFilter
+    private val _selectedPlayerFilter = MutableStateFlow<PlayerKey?>(null)
+    val selectedPlayerFilter: StateFlow<PlayerKey?> = _selectedPlayerFilter
 
     val availablePlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
         _trackedPlayers,
         _historyFilter,
         _activeRoomIds,
-        _archivedRoomIds
-    ) { trackedPlayers, filter, activeIds, archivedIds ->
+        _archivedRoomIds,
+        _roomNames
+    ) { trackedPlayers, filter, activeIds, archivedIds, roomNames ->
         trackedPlayers
             .filter { player ->
                 when (filter) {
@@ -233,12 +234,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     is HistoryFilter.Specific -> player.roomId == filter.roomId
                 }
             }
-            .groupBy { player -> player.playerName }
-            .map { (name, players) ->
+            // One chip per room and slot. Grouping by name alone merged two slots
+            // that share a name in different rooms into one chip that showed the
+            // items of both (#376).
+            .groupBy { player -> player.roomId to player.playerName }
+            .map { (key, players) ->
                 val bestAlias = players.firstNotNullOfOrNull { it.playerAlias }
                 val backfillNeeded = players.any { it.needsBackfill }
-                PlayerDisplayInfo(name, bestAlias, backfillNeeded)
+                PlayerDisplayInfo(key.second, bestAlias, backfillNeeded, roomId = key.first)
             }
+            .withRoomLabelsOnSharedNames(roomNames)
             .sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -294,13 +299,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         initialValue = emptyList()
     )
 
+    private val hintRoomScope = combine(_historyFilter, _activeRoomIds, _archivedRoomIds, _roomNames) {
+            filter, activeIds, archivedIds, roomNames ->
+        HintRoomScope(filter, activeIds, archivedIds, roomNames)
+    }
+
     val availableHintPlayers: StateFlow<List<PlayerDisplayInfo>> = combine(
         hintsForYou,
         hintsByYou,
-        _historyFilter,
-        _activeRoomIds,
-        _archivedRoomIds
-    ) { forYou, byYou, filter, activeIds, archivedIds ->
+        hintRoomScope
+    ) { forYou, byYou, scope ->
+        val (filter, activeIds, archivedIds, roomNames) = scope
 
         fun shouldShow(roomId: Int?): Boolean {
             if (roomId == null) return true // Global items
@@ -315,15 +324,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         val relevantForYou = forYou.filter { shouldShow(it.roomDbId) }
         val relevantByYou = byYou.filter { shouldShow(it.roomDbId) }
 
-        val allMentions = (relevantForYou.map { PlayerDisplayInfo(it.itemOwnerName, it.itemOwnerAlias) } +
-                relevantByYou.map { PlayerDisplayInfo(it.locationOwnerName, it.locationOwnerAlias) })
+        val allMentions = (relevantForYou.map { PlayerDisplayInfo(it.itemOwnerName, it.itemOwnerAlias, roomId = it.roomDbId) } +
+                relevantByYou.map { PlayerDisplayInfo(it.locationOwnerName, it.locationOwnerAlias, roomId = it.roomDbId) })
 
         allMentions
-            .groupBy { it.originalName }
-            .map { (name, mentions) ->
+            .groupBy { it.key }
+            .map { (key, mentions) ->
                 val bestAlias = mentions.firstNotNullOfOrNull { it.alias }
-                PlayerDisplayInfo(name, bestAlias)
+                PlayerDisplayInfo(key.name, bestAlias, roomId = key.roomId)
             }
+            .withRoomLabelsOnSharedNames(roomNames)
             .sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -339,7 +349,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     fun loadHistoryFor(roomId: Int?, initialSearchQuery: String? = null, initialPlayerFilter: String? = null) {
         currentRoomId = roomId
-        _selectedPlayerFilter.value = initialPlayerFilter
+        _selectedPlayerFilter.value = initialPlayerFilter?.let { PlayerKey(roomId, it) }
         searchQuery.value = initialSearchQuery ?: ""
 
         if (roomId != null) {
@@ -771,7 +781,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun clearErrorMessage() { errorMessage.value = null }
     fun clearActionMessage() { _actionMessage.value = null }
 
-    fun onPlayerFilterSelected(player: String?) {
+    fun onPlayerFilterSelected(player: PlayerKey?) {
         if (_selectedPlayerFilter.value == player) {
             _selectedPlayerFilter.value = null
         } else {
@@ -938,13 +948,49 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 }
 
+private data class HintRoomScope(
+    val filter: HistoryFilter,
+    val activeIds: Set<Int>,
+    val archivedIds: Set<Int>,
+    val roomNames: Map<Int, String>
+)
+
+/**
+ * One slot in the Activity filter: a slot name within a room. A null [roomId]
+ * matches the name in any room.
+ */
+data class PlayerKey(val roomId: Int?, val name: String) {
+    fun matches(roomDbId: Int?, playerName: String): Boolean =
+        playerName == name && (roomId == null || roomDbId == roomId)
+}
+
 data class PlayerDisplayInfo(
     val originalName: String,
     val alias: String?,
-    val needsBackfill: Boolean = false
+    val needsBackfill: Boolean = false,
+    val roomId: Int? = null,
+    // Set only when another chip shows the same name, so the two can be told apart.
+    val roomLabel: String? = null
 ) : Comparable<PlayerDisplayInfo> {
+    val key: PlayerKey get() = PlayerKey(roomId, originalName)
+
     override fun compareTo(other: PlayerDisplayInfo): Int {
-        return this.originalName.compareTo(other.originalName)
+        val byName = this.originalName.compareTo(other.originalName)
+        if (byName != 0) return byName
+        return (this.roomLabel ?: "").compareTo(other.roomLabel ?: "")
+    }
+}
+
+internal fun List<PlayerDisplayInfo>.withRoomLabelsOnSharedNames(
+    roomNames: Map<Int, String>
+): List<PlayerDisplayInfo> {
+    val shared = groupingBy { it.originalName }.eachCount().filterValues { it > 1 }.keys
+    return map { info ->
+        if (info.originalName in shared && info.roomId != null) {
+            info.copy(roomLabel = roomNames[info.roomId] ?: "Room ${info.roomId}")
+        } else {
+            info
+        }
     }
 }
 
