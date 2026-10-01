@@ -10,6 +10,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.13.0] - 2026-10-01
+
+_Notifications That Follow You_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **App 1.13.0 is out**
+>
+> • **Notifications after a phone switch.** If your new phone stopped getting notifications, this fixes it the next time you open the app.
+> • **Sheets fit the screen.** The item, filter and hint sheets scroll, and the ignore-rule search stays above the keyboard.
+> • **Rotation keeps your place.** Open dialogs and sheets stay open when you turn the phone.
+> • **Fixed:** long game names squashing the Group label, same-named slots in different rooms sharing one Activity chip, and "Added 0 rooms" when an import linked a room you already had.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> Notifications keep working after you move to a new phone or restore from a backup.
+>
+> Sheets scroll and fit the screen, and the ignore-rule search stays above the keyboard.
+>
+> Open dialogs stay open when you rotate the phone.
+>
+> Also fixed: long game names squashing labels, same-named slots in different rooms sharing one Activity filter, and import messages that said "Added 0 rooms".
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - The Cheese suggestions banner shows on an empty room list, and the first "Not these" says hidden rooms are under Me > Integrations. Refs #378.
+> - Import messages count rooms the import linked (`relinked`) and name rooms another tracker owns (`linked_elsewhere`). Closes #359; app half of #332.
+> - A token Firebase rotates is registered straight away instead of at the next launch. #392 tracks making that survive the app being stopped.
+>
+> ### Fixed
+> - On `410 fcm_token_unregistered` from `POST /devices`, the app deletes its FCM token, fetches a fresh one and registers again, once per launch. Backups and device transfers no longer carry Firebase's cached token. Closes #364.
+> - `MainActivity` handles rotation and size changes itself, so open dialogs and sheets survive. Closes #344.
+> - The item, filter and hint sheets scroll. Closes #368.
+> - The ignore and whitelist rule sheets scroll as one list with Cancel and Add pinned, keeping the search field above the keyboard. Closes #371.
+> - A long game name wraps in its own chip beside the Group label. Closes #377.
+> - Activity filter chips are per room and slot, with the room name added when names collide. Closes #376.
+> - A failed Cheese hide shows an error instead of silently doing nothing.
+>
+> ### Note
+> Works with server 1.13.0 or later. Dead-token recovery and the linked-room count need server 1.14.1, which is live.
+> ```
+
+### Changed
+- **Cheese Rooms on an Empty List**: Untracked Cheese rooms are offered even with no rooms yet, and the first hide says where hidden ones go. Part of #378.
+- **Clearer Import Messages**: An import says "Linked 1 room" for a room you already had, and names rooms another tracker covers. Closes #359.
+
+### Fixed
+- **Notifications After a Phone Switch**: A phone restored from a backup or transfer gets a fresh push token instead of silently missing notifications. Closes #364.
+- **Sheets Fit the Screen**: The item, filter and hint sheets scroll, so long names no longer push buttons off-screen. Closes #368.
+- **Search Above the Keyboard**: Adding an ignore or whitelist rule keeps the search field visible with the keyboard up. Closes #371.
+- **Rotation Keeps Your Place**: Rotating the phone keeps open dialogs and sheets, and what you typed in them. Closes #344.
+- **Long Game Names Fit**: A long game name in Ignored Items or Whitelist wraps instead of squashing the Group label. Closes #377.
+- **One Chip Per Room**: Same-named slots in different rooms each get their own Activity filter chip. Closes #376.
+
+---
+
 ## [1.12.0] - 2026-09-11
 
 _Cheese Rooms Ask First_
