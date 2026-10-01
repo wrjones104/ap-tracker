@@ -17,8 +17,12 @@ object RetrofitClient {
 
         SessionManager.init(context)
 
+        // Full request and response logging is for debug builds only. In release it wrote
+        // every body, and the session JWT that AuthInterceptor adds above it in the chain,
+        // to logcat (#398). The header stays redacted in debug too.
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
+            redactHeader("Authorization")
         }
 
         val httpClient = OkHttpClient.Builder()
