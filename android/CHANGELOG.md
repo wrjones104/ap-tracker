@@ -53,6 +53,7 @@ _Notifications That Follow You_
 > - A long game name wraps in its own chip beside the Group label. Closes #377.
 > - Activity filter chips are per room and slot, with the room name added when names collide. Closes #376.
 > - A failed Cheese hide shows an error instead of silently doing nothing.
+> - Release builds no longer log HTTP traffic: `HttpLoggingInterceptor` is `BODY` only when `BuildConfig.DEBUG`, and `Authorization` is redacted. Closes #398.
 >
 > ### Note
 > Works with server 1.13.0 or later. Dead-token recovery and the linked-room count need server 1.14.1, which is live.
@@ -69,6 +70,7 @@ _Notifications That Follow You_
 - **Rotation Keeps Your Place**: Rotating the phone keeps open dialogs and sheets, and what you typed in them. Closes #344.
 - **Long Game Names Fit**: A long game name in Ignored Items or Whitelist wraps instead of squashing the Group label. Closes #377.
 - **One Chip Per Room**: Same-named slots in different rooms each get their own Activity filter chip. Closes #376.
+- **Quieter Network Logging**: Release builds no longer write network traffic, including your sign-in token, to the device log. Closes #398.
 
 ---
 
