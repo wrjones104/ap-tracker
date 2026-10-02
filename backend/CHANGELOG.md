@@ -10,6 +10,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.14.3] - 2026-10-02
+
+_Faster Item Groups, Lighter Syncs_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **Server 1.14.3 is live** 🔧
+>
+> • **Item groups load fast:** tapping an item in History no longer waits several seconds for its groups.
+> • **Less mobile data:** background syncs download much less, so the app is lighter on your data plan.
+> • **Re-linked rooms reappear on Cheese:** linking a room again un-hides its tracker on your Cheese dashboard.
+>
+> No app update needed.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - The item-group and autocomplete routes no longer run the datapackage-cache self-heal on every request; the poller already heals by checksum every 15 minutes. Server half of #401, PR #405.
+> - `GET /users/me/tracked-slots` no longer returns `players`, each room's full player list. No app version read it, and it made this the largest egress source (~152 KB per call). Closes #412, PR #413.
+>
+> ### Fixed
+> - Linking a room again clears the Cheese dashboard hide its earlier delete set. Trackers the user pinned are left alone. Closes #403, PR #408.
+>
+> ### Compatibility
+> - No migration. The removed `players` field is safe for every app version, since none reads it.
+> ```
+
+### Changed
+- **Item Groups Load Fast**: Item-group and autocomplete lookups skip a slow cache check they ran on every request. Server half of #401.
+- **Less Mobile Data**: Room syncs no longer carry every room's full player list, which the app never used. Closes #412.
+
+### Fixed
+- **Re-Linked Rooms Reappear on Cheese**: Linking a deleted room again un-hides its Cheese tracker, and leaves trackers you pinned alone. Closes #403.
+
+---
+
 ## [1.14.2] - 2026-10-02
 
 _Deleting a Room Leaves Cheese Alone_
