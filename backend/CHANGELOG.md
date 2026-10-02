@@ -10,6 +10,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.14.2] - 2026-10-02
+
+_Deleting a Room Leaves Cheese Alone_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - `DELETE /rooms/<id>` hides the tracker on the user's Cheese dashboard only when the subscription is linked. An unlinked room is deleted without writing to Cheese, per the #323 rule. PR #402.
+> - Deleting a room with a `cheese_tracker_id` records a `CheeseDismissedTracker`, linked or not, so the suggestions banner does not offer it back. This also covers a linked delete whose hide request fails. Importing the tracker later clears the dismissal. PR #402.
+>
+> ### Known
+> - Re-adding a deleted linked room leaves its tracker hidden on Cheese. Tracked in #403.
+>
+> ### Compatibility
+> - No migration, no new settings, no API changes. Deployed on 2026-10-02 ahead of this entry; the entry brings the version label in line.
+> ```
+
+### Fixed
+- **Unlinked Rooms Stay on Cheese**: Deleting a room you unlinked no longer hides its tracker on your Cheese dashboard. PR #402.
+- **Deleted Rooms Stay Dismissed**: A room you delete is not offered straight back by the Cheese banner, even if Cheese did not hear about the delete. PR #402.
+
+---
+
 ## [1.14.1] - 2026-09-30
 
 _Pushes That Survive a Phone Transfer_
