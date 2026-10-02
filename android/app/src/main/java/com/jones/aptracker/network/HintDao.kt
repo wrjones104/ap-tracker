@@ -12,14 +12,14 @@ interface HintDao {
     @Query("SELECT * FROM hints WHERE roomDbId = :roomId AND hintType = :type AND isFound = 0 ORDER BY timestamp DESC")
     fun getUnfoundHintsForRoom(roomId: Int, type: String): Flow<List<HintEntity>>
 
-    @Query("SELECT * FROM hints WHERE roomDbId = :roomId AND hintType = :type ORDER BY timestamp DESC")
-    fun getAllHintsForRoom(roomId: Int, type: String): Flow<List<HintEntity>>
+    @Query("SELECT * FROM hints WHERE roomDbId = :roomId ORDER BY timestamp DESC")
+    fun getAllHintsForRoom(roomId: Int): Flow<List<HintEntity>>
 
     @Query("SELECT * FROM hints WHERE hintType = :type AND isFound = 0 ORDER BY timestamp DESC")
     fun getUnfoundGlobalHints(type: String): Flow<List<HintEntity>>
 
-    @Query("SELECT * FROM hints WHERE hintType = :type ORDER BY timestamp DESC")
-    fun getAllGlobalHints(type: String): Flow<List<HintEntity>>
+    @Query("SELECT * FROM hints ORDER BY timestamp DESC")
+    fun getAllGlobalHints(): Flow<List<HintEntity>>
 
     @Query("SELECT MAX(timestamp) FROM hints")
     suspend fun getLatestGlobalTimestamp(): String?

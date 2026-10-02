@@ -7,15 +7,11 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.jones.aptracker.network.DeviceRegistration
-import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.TokenManager
-import com.jones.aptracker.repository.HistoryRepository
-import com.jones.aptracker.repository.HistorySyncWorker
+import com.jones.aptracker.repository.HistorySyncManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,7 +38,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             sendSystemNotification(notification.title, notification.body, bundledItems, bundleType, channelId)
         }
 
-        // Both sync paths below call authenticated endpoints. A logged-out device keeps
+        // The sync below calls authenticated endpoints. A logged-out device keeps
         // receiving pushes until the server prunes its registration, so without this guard
         // every push fired five requests that could only ever 401. See #308.
         if (TokenManager(applicationContext).getToken() == null) {
@@ -50,29 +46,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
-        // 1. Enqueue guaranteed background sync worker with WorkManager (OS wake lock protection)
-        try {
-            val syncRequest = OneTimeWorkRequestBuilder<HistorySyncWorker>().build()
-            WorkManager.getInstance(applicationContext).enqueue(syncRequest)
-        } catch (e: Exception) {
-            Log.e("FCM", "Failed to enqueue WorkManager sync request", e)
-        }
-
-        // 2. Also run in-process background history sync for instantaneous widget update if process remains active
-        serviceScope.launch {
-            try {
-                val repository = HistoryRepository.getInstance(applicationContext)
-                val apiService = RetrofitClient.instance
-                val trackedRooms = apiService.getUserTrackedSlots()
-                repository.syncHistoryBatch(trackedRooms)
-                repository.refreshHintHistory(null)
-                com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(applicationContext)
-                com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdate(applicationContext, trackedRooms)
-                Log.d("FCM", "Background in-process history sync completed for incoming push.")
-            } catch (e: Exception) {
-                Log.e("FCM", "In-process FCM history sync failed (WorkManager fallback active)", e)
-            }
-        }
+        // One in-process sync, with a WorkManager job behind it in case the process dies. These
+        // used to run as two independent syncs, each with a full hint download (#411).
+        HistorySyncManager.syncForPush(applicationContext)
     }
 
     override fun onNewToken(token: String) {
