@@ -1006,6 +1006,14 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         if not (response_put.status_code == 200 or response_put.status_code == 204):
             logging.warning(f"[CHEESE_DEBUG] Failed (PUT) to update title/room_link for {cheese_tracker_id}: {response_put.status_code} {response_put.text}")
 
+        # POST /tracker is create-or-get, so a room the user deleted and is now
+        # adding back gets the same tracker, still hidden by that delete. See #403.
+        if tracker_data.get('dashboard_override_visibility') is False:
+            try:
+                _clear_dashboard_hide(headers, user_id, cheese_tracker_id)
+            except Exception as e:
+                logging.error(f"[CHEESE_VISIBILITY] Error clearing hide for {cheese_tracker_id}: {e}", exc_info=True)
+
     except requests.exceptions.ReadTimeout:
         logging.error(f"[CHEESE_DEBUG] Network timeout connecting to {CHEESE_BASE_URL}.", exc_info=True)
         return
@@ -1974,5 +1982,60 @@ def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):
 
         except Exception as e:
             logging.error(f"[CHEESE_VISIBILITY] Error updating visibility: {e}", exc_info=True)
+        finally:
+            Session.remove()
+
+
+def _clear_dashboard_hide(headers, user_id, cheese_tracker_id):
+    """
+    Remove the user's dashboard override on a tracker, so Cheese goes back to its
+    default: shown while they hold an unfinished claim. Clearing rather than
+    setting visibility True matters, because True pins the tracker on the
+    dashboard for good, even after every game in it is done.
+    """
+    url = f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}/dashboard_override"
+    resp = _cheese_session.put(url, json={"visibility": None}, headers=headers, timeout=10)
+    if resp.status_code in (200, 204):
+        logging.info(f"[CHEESE_VISIBILITY] Cleared the hide on tracker {cheese_tracker_id} (User {user_id})")
+        return True
+    logging.warning(f"[CHEESE_VISIBILITY] Failed to clear the hide on {cheese_tracker_id}: {resp.status_code}")
+    return False
+
+
+def restore_tracker_visibility(app, user_id, cheese_tracker_id):
+    """
+    Undo the dashboard hide that deleting a linked room sets, now that the user
+    has linked a room to this tracker again. See #403.
+
+    Only a hide is cleared. A tracker the user pinned to their dashboard
+    (visibility True) is their choice and is left as it is.
+    """
+    with app.app_context():
+        session = Session()
+        try:
+            user = session.query(User).get(user_id)
+            if not user or not user.cheese_api_key:
+                return
+
+            api_key = decrypt_api_key(user.cheese_api_key)
+            if not api_key:
+                return
+
+            headers = get_cheese_headers()
+            headers["Authorization"] = f"Bearer {api_key}"
+
+            url = f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}/dashboard_override"
+            resp = _cheese_session.get(url, headers=headers, timeout=10)
+            if not resp.ok:
+                logging.warning(f"[CHEESE_VISIBILITY] Could not read the override on {cheese_tracker_id}: {resp.status_code}")
+                return
+
+            if (resp.json() or {}).get('visibility') is not False:
+                return
+
+            _clear_dashboard_hide(headers, user_id, cheese_tracker_id)
+
+        except Exception as e:
+            logging.error(f"[CHEESE_VISIBILITY] Error restoring visibility: {e}", exc_info=True)
         finally:
             Session.remove()

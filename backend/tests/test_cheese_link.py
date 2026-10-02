@@ -1158,6 +1158,134 @@ class TestDeletingARoom(CheeseLinkTestBase):
             fresh.close()
 
 
+class TestRelinkingUndoesTheDeleteHide(CheeseLinkTestBase):
+    """
+    Deleting a linked room hides its tracker on the user's Cheese dashboard.
+    Linking a room to that tracker again has to undo it, or the app mirrors to a
+    tracker the user cannot see on Cheese and cannot find again through import.
+    See #403.
+
+    The undo clears the override instead of setting it to visible: visible pins
+    the tracker on the dashboard for good, even once every game is done.
+    """
+
+    OVERRIDE_URL = "/tracker/ct_room_1/dashboard_override"
+
+    def _room_for(self, user_id, link, tracker_id="ct_room_1"):
+        room = TrackedRoom(
+            room_id="room_uuid",
+            hostname="archipelago.gg",
+            tracker_id="ap_trk",
+            cheese_tracker_id=tracker_id,
+        )
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=room.id, alias="Room", cheese_link=link
+        ))
+        self.session.commit()
+        return room.id
+
+    def _cheese(self, override=None, tracker=None):
+        """A stand-in Cheese session: GET answers with the override or the tracker."""
+        def get(url, **kwargs):
+            resp = MagicMock(ok=True, status_code=200)
+            if url.endswith('/dashboard_override'):
+                resp.json.return_value = {} if override is None else {'visibility': override}
+            else:
+                resp.json.return_value = tracker or {}
+            return resp
+
+        session = MagicMock()
+        session.get.side_effect = get
+        post_resp = MagicMock(status_code=200)
+        post_resp.json.return_value = {'tracker_id': 'ct_room_1'}
+        session.post.return_value = post_resp
+        session.put.return_value = MagicMock(status_code=200)
+        return session
+
+    def _override_writes(self, cheese):
+        return [c.kwargs.get('json') for c in cheese.put.call_args_list
+                if c.args and c.args[0].endswith(self.OVERRIDE_URL)]
+
+    @patch('threading.Thread', side_effect=_run_inline)
+    @patch('app.api_cheese.restore_tracker_visibility')
+    def test_relinking_a_room_with_a_tracker_restores_it(self, mock_restore, mock_thread):
+        user = self.make_user()
+        room_id = self._room_for(user.id, CHEESE_LINK_NONE)
+
+        _call(rooms_routes.update_cheese_link, user, room_id, body={'linked': True})
+
+        mock_restore.assert_called_once()
+        self.assertEqual(mock_restore.call_args.args[1:], (1, "ct_room_1"))
+
+    @patch('threading.Thread', side_effect=_run_inline)
+    @patch('app.api_cheese.restore_tracker_visibility')
+    def test_unlinking_does_not_touch_the_dashboard(self, mock_restore, mock_thread):
+        user = self.make_user()
+        room_id = self._room_for(user.id, CHEESE_LINK_LINKED)
+
+        _call(rooms_routes.update_cheese_link, user, room_id, body={'linked': False})
+
+        mock_restore.assert_not_called()
+
+    def test_restoring_clears_a_hide(self):
+        user = self.make_user()
+        cheese = self._cheese(override=False)
+
+        with patch.object(api_cheese, '_cheese_session', cheese):
+            api_cheese.restore_tracker_visibility(self.app, user.id, "ct_room_1")
+
+        self.assertEqual(self._override_writes(cheese), [{'visibility': None}])
+
+    def test_restoring_leaves_a_pinned_or_default_tracker_alone(self):
+        user = self.make_user()
+        for override in (True, None):
+            with self.subTest(override=override):
+                cheese = self._cheese(override=override)
+
+                with patch.object(api_cheese, '_cheese_session', cheese):
+                    api_cheese.restore_tracker_visibility(self.app, user.id, "ct_room_1")
+
+                self.assertEqual(self._override_writes(cheese), [])
+
+    def _push(self, cheese):
+        with patch.object(api_cheese, '_cheese_session', cheese), \
+             patch.object(api_cheese.time, 'sleep', lambda *_: None):
+            api_cheese.push_new_room_to_cheese(
+                self.app, 1, "https://archipelago.gg/tracker/ap_trk", "room_uuid",
+                "https://archipelago.gg/room/room_uuid", "Room",
+            )
+
+    def test_adding_a_deleted_room_back_clears_the_hide(self):
+        """
+        A re-added room is pushed, and POST /tracker hands back the same tracker
+        with the delete's hide still on it.
+        """
+        self.make_user()
+        self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        cheese = self._cheese(tracker={'title': 'Room', 'dashboard_override_visibility': False})
+
+        self._push(cheese)
+
+        self.assertEqual(self._override_writes(cheese), [{'visibility': None}])
+        fresh = Session()
+        try:
+            self.assertEqual(fresh.query(TrackedRoom).filter_by(room_id="room_uuid").one().cheese_tracker_id,
+                             "ct_room_1", "the room still links to its tracker")
+        finally:
+            fresh.close()
+
+    def test_pushing_a_room_that_was_never_hidden_writes_no_override(self):
+        self.make_user()
+        self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        cheese = self._cheese(tracker={'title': 'Room'})
+
+        self._push(cheese)
+
+        self.assertEqual(self._override_writes(cheese), [])
+
+
 class TestAccountDeletion(CheeseLinkTestBase):
 
     def test_a_user_who_dismissed_a_suggestion_can_still_be_deleted(self):
