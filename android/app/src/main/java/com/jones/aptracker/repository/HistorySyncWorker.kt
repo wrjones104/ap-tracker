@@ -39,8 +39,11 @@ class HistorySyncWorker(
 
             val trackedRooms = apiService.getUserTrackedSlots()
 
+            // No full hint download here: the delta sync carries new hints and found-status
+            // changes. Running it on every periodic and push-triggered run was most of the
+            // app's data use (#411).
             repository.syncHistoryBatch(trackedRooms, priorityRoomId = targetRoomId)
-            repository.refreshHintHistory(targetRoomId)
+            HistorySyncManager.markSyncCompleted()
 
             com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(applicationContext)
             com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdate(applicationContext, trackedRooms)

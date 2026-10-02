@@ -252,8 +252,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _validTrackedSlots = MutableStateFlow<Set<Pair<Int, Int>>>(emptySet())
     val validTrackedSlots: StateFlow<Set<Pair<Int, Int>>> = _validTrackedSlots
 
-    // Reactive Hint flows matching the toggle + DB flow
-    val hintsForYou: StateFlow<List<HintEntity>> = combine(
+    // Reactive Hint flows matching the toggle + DB flow. Both lists come from one split of the
+    // scope's hints against the live tracked slots, not from the type stored with each hint (#411).
+    private val classifiedHints: StateFlow<ClassifiedHints> = combine(
         _historyFilter,
         _showFoundHints,
         _validTrackedSlots
@@ -261,43 +262,34 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         Triple(filter, showFound, validSlots)
     }.flatMapLatest { (filter, showFound, validSlots) ->
         val sourceFlow = when (filter) {
-            is HistoryFilter.Specific -> repository.getHintsForRoom(filter.roomId, "for_you")
-            else -> repository.getGlobalHints("for_you")
+            is HistoryFilter.Specific -> repository.getHintsForRoom(filter.roomId)
+            else -> repository.getGlobalHints()
         }
 
         sourceFlow.map { hintList ->
-            hintList.filter { hint ->
-                (showFound || !hint.isFound) && validSlots.contains(hint.roomDbId to hint.itemOwnerId)
-            }
+            classifyHints(hintList.filter { showFound || !it.isFound }, validSlots)
         }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
+        initialValue = ClassifiedHints(emptyList(), emptyList())
     )
 
-    val hintsByYou: StateFlow<List<HintEntity>> = combine(
-        _historyFilter,
-        _showFoundHints,
-        _validTrackedSlots
-    ) { filter, showFound, validSlots ->
-        Triple(filter, showFound, validSlots)
-    }.flatMapLatest { (filter, showFound, validSlots) ->
-        val sourceFlow = when (filter) {
-            is HistoryFilter.Specific -> repository.getHintsForRoom(filter.roomId, "by_you")
-            else -> repository.getGlobalHints("by_you")
-        }
+    val hintsForYou: StateFlow<List<HintEntity>> = classifiedHints
+        .map { it.forYou }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
-        sourceFlow.map { hintList ->
-            hintList.filter { hint ->
-                (showFound || !hint.isFound) && validSlots.contains(hint.roomDbId to hint.locationOwnerId)
-            }
-        }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
+    val hintsByYou: StateFlow<List<HintEntity>> = classifiedHints
+        .map { it.byYou }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     private val hintRoomScope = combine(_historyFilter, _activeRoomIds, _archivedRoomIds, _roomNames) {
             filter, activeIds, archivedIds, roomNames ->
@@ -556,7 +548,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private var refreshJob: kotlinx.coroutines.Job? = null
 
-    fun refreshAllHistory() {
+    /**
+     * @param userInitiated True only for the History screen's pull-to-refresh. It is the one
+     * caller that also re-downloads every hint, as a repair path for local hints (#411).
+     */
+    fun refreshAllHistory(userInitiated: Boolean = false) {
         Log.d("HistoryViewModel", "Triggering refresh for Room ID: ${currentRoomId ?: "Global"}")
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
@@ -671,7 +667,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 isLoading.value = false
 
                 // --- STEP 3: Delegate sync execution to HistorySyncManager (ApplicationScope & WorkManager) ---
-                HistorySyncManager.triggerSync(getApplication(), currentRoomId) {
+                HistorySyncManager.triggerSync(getApplication(), currentRoomId, repairHints = userInitiated) {
                     reloadHistory(showSpinner = false)
                 }
 

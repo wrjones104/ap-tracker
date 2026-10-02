@@ -870,11 +870,22 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         _gameAvailableItems.value = emptyList()
     }
 
+    // The server decides each hint's ignored and whitelisted flags from these rules, and a rule
+    // change does not touch any hint's updated_at, so the delta sync never re-sends them.
+    // Re-download the hints once so the History screen reflects the new rule. Every sync used to
+    // do this as a side effect, before #411.
+    private fun refreshHintFlagsAfterRuleChange() {
+        viewModelScope.launch {
+            historyRepository.refreshHintHistory(null)
+        }
+    }
+
     fun addIgnoreItem(itemName: String, gameName: String?, isGroup: Boolean = false) {
         viewModelScope.launch {
             try {
                 userRepository.addIgnoreItem(itemName, gameName, isGroup)
                 fetchIgnoreList()
+                refreshHintFlagsAfterRuleChange()
                 _integrationMessage.value = "Item ignored."
             } catch (e: HttpException) {
                 if (e.code() == 409) {
@@ -898,6 +909,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
                 if (response.isSuccessful) {
                     fetchIgnoreList()
+                    refreshHintFlagsAfterRuleChange()
                     _integrationMessage.value = "Rule updated."
                 } else {
                     if (response.code() == 409) {
@@ -921,6 +933,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 _ignoreList.value = currentList.filter { it.id != itemId }
 
                 userRepository.deleteIgnoreItem(itemId)
+                refreshHintFlagsAfterRuleChange()
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to remove rule", e)
                 _errorMessage.value = "Failed to remove rule."
@@ -949,6 +962,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 userRepository.addWhitelistItem(itemName, gameName, isGroup)
                 fetchWhitelist()
+                refreshHintFlagsAfterRuleChange()
                 _integrationMessage.value = "Item whitelisted."
             } catch (e: retrofit2.HttpException) {
                 if (e.code() == 409) {
@@ -969,6 +983,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 userRepository.updateWhitelistItem(id, itemName, gameName, isGroup)
                 fetchWhitelist()
+                refreshHintFlagsAfterRuleChange()
                 _integrationMessage.value = "Rule updated."
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to update rule", e)
@@ -985,6 +1000,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
                 _whitelist.value = currentList.filter { it.id != itemId }
 
                 userRepository.deleteWhitelistItem(itemId)
+                refreshHintFlagsAfterRuleChange()
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to remove whitelist rule", e)
                 _errorMessage.value = "Failed to remove rule."
