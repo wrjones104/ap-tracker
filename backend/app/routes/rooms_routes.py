@@ -392,6 +392,20 @@ def update_cheese_link(current_user, room_db_id):
             pushing = True
         except Exception as e:
             logging.error(f"[API_ERROR] Failed to start Cheese push thread: {e}", exc_info=True)
+    elif linked and room.cheese_tracker_id and not current_user.is_guest:
+        # No push here, so nothing else would undo a dashboard hide left by an
+        # earlier delete of this room. The push path handles it itself. See #403.
+        try:
+            from app.api_cheese import restore_tracker_visibility
+            import threading
+
+            app_context = current_app._get_current_object()
+            threading.Thread(
+                target=restore_tracker_visibility,
+                args=(app_context, current_user.id, room.cheese_tracker_id)
+            ).start()
+        except Exception as e:
+            logging.error(f"[API_ERROR] Failed to start Cheese visibility thread: {e}", exc_info=True)
 
     return jsonify({
         'message': 'Syncing this room to Cheese Tracker.' if linked else 'No longer syncing this room to Cheese Tracker.',
