@@ -8,6 +8,7 @@ never removes one. Rooms arrive from Cheese only when the user accepts a
 suggestion, and leave only when the user says so. See #323.
 """
 import json
+import requests
 import os
 import unittest
 from datetime import datetime
@@ -1273,6 +1274,51 @@ class TestRelinkingUndoesTheDeleteHide(CheeseLinkTestBase):
         try:
             self.assertEqual(fresh.query(TrackedRoom).filter_by(room_id="room_uuid").one().cheese_tracker_id,
                              "ct_room_1", "the room still links to its tracker")
+        finally:
+            fresh.close()
+
+    def test_a_room_unlinked_during_the_push_stays_hidden(self):
+        """
+        The push reads the hide a minute in and clears it a minute later. If the
+        user unlinked the room in between, the clear is no longer theirs to make.
+        """
+        self.make_user()
+        self._room_for(1, CHEESE_LINK_NONE, tracker_id=None)
+        cheese = self._cheese(tracker={'title': 'Room', 'dashboard_override_visibility': False})
+
+        self._push(cheese)
+
+        self.assertEqual(self._override_writes(cheese), [])
+
+    def test_a_room_deleted_again_during_the_push_stays_hidden(self):
+        """Re-added, then deleted again before the push got to the clear."""
+        self.make_user()
+        room_id = self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        self.session.query(UserRoomSubscription).filter_by(user_id=1, room_id=room_id).delete()
+        self.session.commit()
+        cheese = self._cheese(tracker={'title': 'Room', 'dashboard_override_visibility': False})
+
+        self._push(cheese)
+
+        self.assertEqual(self._override_writes(cheese), [])
+
+    def test_a_failed_clear_still_links_the_room(self):
+        self.make_user()
+        self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        cheese = self._cheese(tracker={'title': 'Room', 'dashboard_override_visibility': False})
+
+        def put(url, **kwargs):
+            if url.endswith('/dashboard_override'):
+                raise requests.exceptions.ReadTimeout("Cheese is slow")
+            return MagicMock(status_code=200)
+        cheese.put.side_effect = put
+
+        self._push(cheese)
+
+        fresh = Session()
+        try:
+            self.assertEqual(fresh.query(TrackedRoom).filter_by(room_id="room_uuid").one().cheese_tracker_id,
+                             "ct_room_1", "a timeout on the clear must not skip the link")
         finally:
             fresh.close()
 

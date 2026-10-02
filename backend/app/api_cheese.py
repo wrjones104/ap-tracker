@@ -977,6 +977,8 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
         tracker_data = {}
         if response_get.ok:
             tracker_data = response_get.json()
+        else:
+            logging.warning(f"[CHEESE_DEBUG] Failed (GET) to read tracker {cheese_tracker_id}: {response_get.status_code}. Title and dashboard hide left as they are.")
         
         # Step 3: Create the PUT payload
         current_title = tracker_data.get('title', '')
@@ -1008,9 +1010,14 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
 
         # POST /tracker is create-or-get, so a room the user deleted and is now
         # adding back gets the same tracker, still hidden by that delete. See #403.
+        # The read above is a minute old, and the user may have deleted or unlinked
+        # the room since. The link is what authorises this write (#323).
+        # Inside its own try, so neither the check nor the write can skip the
+        # database phase below, which is what links the room to its tracker.
         if tracker_data.get('dashboard_override_visibility') is False:
             try:
-                _clear_dashboard_hide(headers, user_id, cheese_tracker_id)
+                if _room_still_linked(app, user_id, ap_room_id):
+                    _clear_dashboard_hide(headers, user_id, cheese_tracker_id)
             except Exception as e:
                 logging.error(f"[CHEESE_VISIBILITY] Error clearing hide for {cheese_tracker_id}: {e}", exc_info=True)
 
@@ -1986,6 +1993,25 @@ def update_tracker_visibility(app, user_id, cheese_tracker_id, visibility):
             Session.remove()
 
 
+def _room_still_linked(app, user_id, ap_room_id):
+    """
+    Whether the user still mirrors this room to Cheese. A push runs for about two
+    minutes, and the user can unlink or delete the room in that time.
+    """
+    with app.app_context():
+        session = Session()
+        try:
+            sub = session.query(UserRoomSubscription.cheese_link).join(
+                TrackedRoom, TrackedRoom.id == UserRoomSubscription.room_id
+            ).filter(
+                UserRoomSubscription.user_id == user_id,
+                TrackedRoom.room_id == ap_room_id,
+            ).first()
+            return bool(sub) and normalize_cheese_link(sub.cheese_link) == CHEESE_LINK_LINKED
+        finally:
+            Session.remove()
+
+
 def _clear_dashboard_hide(headers, user_id, cheese_tracker_id):
     """
     Remove the user's dashboard override on a tracker, so Cheese goes back to its
@@ -2030,7 +2056,8 @@ def restore_tracker_visibility(app, user_id, cheese_tracker_id):
                 logging.warning(f"[CHEESE_VISIBILITY] Could not read the override on {cheese_tracker_id}: {resp.status_code}")
                 return
 
-            if (resp.json() or {}).get('visibility') is not False:
+            data = resp.json()
+            if not isinstance(data, dict) or data.get('visibility') is not False:
                 return
 
             _clear_dashboard_hide(headers, user_id, cheese_tracker_id)
