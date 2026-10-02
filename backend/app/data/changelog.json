@@ -937,6 +937,51 @@
   ],
   "server_releases": [
     {
+      "version": "1.14.3",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-02",
+      "title": "Faster Item Groups, Lighter Syncs",
+      "highlights": [
+        {
+          "title": "Item Groups Load Fast",
+          "description": "Tapping an item in History no longer waits several seconds for its groups."
+        },
+        {
+          "title": "Less Mobile Data",
+          "description": "Background syncs download much less, so the app is lighter on your data plan."
+        },
+        {
+          "title": "Re-Linked Rooms Reappear on Cheese",
+          "description": "Linking a room again un-hides its tracker on your Cheese dashboard."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Item Groups Load Fast",
+            "description": "Item-group and autocomplete lookups skip a slow cache check they ran on every request. Server half of #401."
+          },
+          {
+            "title": "Less Mobile Data",
+            "description": "Room syncs no longer carry every room's full player list, which the app never used. Closes #412."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Re-Linked Rooms Reappear on Cheese",
+            "description": "Linking a deleted room again un-hides its Cheese tracker, and leaves trackers you pinned alone. Closes #403."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "**Server 1.14.3 is live** 🔧\n\n• **Item groups load fast:** tapping an item in History no longer waits several seconds for its groups.\n• **Less mobile data:** background syncs download much less, so the app is lighter on your data plan.\n• **Re-linked rooms reappear on Cheese:** linking a room again un-hides its tracker on your Cheese dashboard.\n\nNo app update needed.",
+        "play_store": "",
+        "github": "### Changed\n- The item-group and autocomplete routes no longer run the datapackage-cache self-heal on every request; the poller already heals by checksum every 15 minutes. Server half of #401, PR #405.\n- `GET /users/me/tracked-slots` no longer returns `players`, each room's full player list. No app version read it, and it made this the largest egress source (~152 KB per call). Closes #412, PR #413.\n\n### Fixed\n- Linking a room again clears the Cheese dashboard hide its earlier delete set. Trackers the user pinned are left alone. Closes #403, PR #408.\n\n### Compatibility\n- No migration. The removed `players` field is safe for every app version, since none reads it."
+      }
+    },
+    {
         "version": "1.14.2",
         "component": "server",
         "component_label": "Server",
