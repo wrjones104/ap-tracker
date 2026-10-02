@@ -563,7 +563,8 @@ def get_user_tracked_slots(current_user):
                 'icon_name': sub.icon_name,
                 'is_archived': sub.is_archived,
                 'host': room_data.cached_full_address,
-                'players': players_json,
+                # No 'players': no app version reads it, and it made this the largest
+                # egress source. The Players screen uses GET /rooms/<id>/players. See #412.
                 'tracked_slots': tracked_slots_list
             })
 
