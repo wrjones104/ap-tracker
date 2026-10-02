@@ -1100,6 +1100,60 @@ class TestDeletingARoom(CheeseLinkTestBase):
             self.assertIsNone(
                 fresh.query(UserRoomSubscription).filter_by(user_id=user_id, room_id=room_id).first()
             )
+            self.assertIsNotNone(
+                fresh.query(CheeseDismissedTracker)
+                .filter_by(user_id=user_id, cheese_tracker_id="ct_room_1").first()
+            )
+        finally:
+            fresh.close()
+
+    @patch('app.api_cheese._fetch_dashboard')
+    @patch('threading.Thread', side_effect=_run_inline)
+    @patch('app.api_cheese.update_tracker_visibility')
+    def test_a_deleted_unlinked_room_is_not_offered_back(self, mock_visibility, mock_thread, mock_dash):
+        """
+        With no hide on Cheese, the tracker stays visible on the dashboard, so
+        only the local dismissal keeps the import banner from offering the room
+        the user just deleted.
+        """
+        mock_dash.return_value = [{
+            'tracker_id': 'ct_room_1', 'title': 'Room',
+            'room_link': 'https://archipelago.gg/room/room_uuid',
+            'dashboard_override_visibility': True,
+        }]
+        user = self.make_user()
+        room_id = self._room_for(user.id, CHEESE_LINK_NONE)
+
+        _call(rooms_routes.unsubscribe_from_room, user, room_id)
+
+        resp = _call(api_cheese.list_available_cheese_rooms, user)
+        offered = {a['cheese_tracker_id'] for a in json.loads(resp.get_data(as_text=True))['available']}
+        self.assertNotIn('ct_room_1', offered)
+
+        resp = _call(api_cheese.list_available_cheese_rooms, user, query={'include_dismissed': '1'})
+        listed = json.loads(resp.get_data(as_text=True))['available']
+        self.assertEqual([(a['cheese_tracker_id'], a['dismissed']) for a in listed], [('ct_room_1', True)],
+                         "it stays listed as hidden, so the user can add it back")
+
+    @patch('threading.Thread', side_effect=_run_inline)
+    @patch('app.api_cheese.update_tracker_visibility')
+    def test_deleting_a_room_already_dismissed_does_not_duplicate_it(self, mock_visibility, mock_thread):
+        user = self.make_user()
+        user_id = user.id
+        room_id = self._room_for(user_id, CHEESE_LINK_LINKED)
+        self.session.add(CheeseDismissedTracker(user_id=user_id, cheese_tracker_id="ct_room_1"))
+        self.session.commit()
+
+        _call(rooms_routes.unsubscribe_from_room, user, room_id)
+
+        fresh = Session()
+        try:
+            self.assertEqual(
+                fresh.query(CheeseDismissedTracker).filter_by(user_id=user_id).count(), 1
+            )
+            self.assertIsNone(
+                fresh.query(UserRoomSubscription).filter_by(user_id=user_id, room_id=room_id).first()
+            )
         finally:
             fresh.close()
 

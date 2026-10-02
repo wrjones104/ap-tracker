@@ -11,7 +11,7 @@ from ipaddress import ip_address
 from flask import Blueprint, request, jsonify, current_app
 
 from app import Session
-from app.models import TrackedRoom, UserRoomSubscription, UserTrackedSlot, DatapackageCache
+from app.models import TrackedRoom, UserRoomSubscription, UserTrackedSlot, DatapackageCache, CheeseDismissedTracker
 from app.utils import (
     verify_ap_server, get_web_base_url, parse_cached_checks, normalize_track_mode,
     CHEESE_LINK_NONE, CHEESE_LINK_LINKED, normalize_cheese_link
@@ -414,12 +414,24 @@ def unsubscribe_from_room(current_user, room_db_id):
     if not subscription:
         return jsonify({'error': 'Not subscribed to this room'}), 404
 
-    # Hiding the tracker on the user's Cheese dashboard is a write to Cheese, and
-    # the link is what authorises writes (see #323). A room the user unlinked is
-    # theirs to delete here without Cheese hearing about it.
+    room = subscription.room
     cheese_tracker_id = None
-    if subscription.room and normalize_cheese_link(subscription.cheese_link) == CHEESE_LINK_LINKED:
-        cheese_tracker_id = subscription.room.cheese_tracker_id
+    if room and room.cheese_tracker_id:
+        # Deleting is the user's "no" to this tracker, linked or not. Remembering it
+        # locally keeps the import banner from offering it straight back, and covers
+        # a linked delete whose hide request below never reaches Cheese. Importing
+        # the tracker later clears it.
+        if not session.query(CheeseDismissedTracker).filter_by(
+            user_id=current_user.id, cheese_tracker_id=room.cheese_tracker_id
+        ).first():
+            session.add(CheeseDismissedTracker(
+                user_id=current_user.id, cheese_tracker_id=room.cheese_tracker_id
+            ))
+        # Hiding the tracker on the user's Cheese dashboard is a write to Cheese, and
+        # the link is what authorises writes (see #323). A room the user unlinked is
+        # theirs to delete here without Cheese hearing about it.
+        if normalize_cheese_link(subscription.cheese_link) == CHEESE_LINK_LINKED:
+            cheese_tracker_id = room.cheese_tracker_id
 
     session.delete(subscription)
     session.commit()
