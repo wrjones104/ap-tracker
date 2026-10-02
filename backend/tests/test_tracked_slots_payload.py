@@ -92,6 +92,8 @@ class TestTrackedSlotsPayload(unittest.TestCase):
 
     def tearDown(self):
         Session.remove()
+        # Before unlinking, so the pool cannot go on serving an unlinked inode on Linux.
+        engine.dispose()
         _remove_test_db()
 
     def _get(self):

@@ -563,10 +563,8 @@ def get_user_tracked_slots(current_user):
                 'icon_name': sub.icon_name,
                 'is_archived': sub.is_archived,
                 'host': room_data.cached_full_address,
-                # No 'players' here. This endpoint is called on every push and every
-                # background sync, and the room's whole player list made it the largest
-                # source of egress, while no app version ever read it. The Players screen
-                # has its own endpoint, GET /rooms/<id>/players. See #412.
+                # No 'players': no app version reads it, and it made this the largest
+                # egress source. The Players screen uses GET /rooms/<id>/players. See #412.
                 'tracked_slots': tracked_slots_list
             })
 
