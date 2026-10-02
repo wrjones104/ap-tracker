@@ -609,7 +609,6 @@ data class RoomWithTrackedSlots(
     val room_alias: String,
     val icon_name: String,
     val tracked_slots: List<TrackedSlotDetail>,
-    val players: List<Player>? = null,
     val is_archived: Boolean = false,
     val host: String? = null
 )
