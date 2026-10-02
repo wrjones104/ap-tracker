@@ -1052,6 +1052,58 @@ class TestThePollerRespectsTheLink(CheeseLinkTestBase):
             fresh.close()
 
 
+class TestDeletingARoom(CheeseLinkTestBase):
+    """
+    Deleting a linked room hides its tracker on the user's Cheese dashboard.
+    Deleting an unlinked one must leave Cheese alone: the link is what
+    authorises writes to Cheese, and unlinking withdrew it.
+    """
+
+    def _room_for(self, user_id, link):
+        room = TrackedRoom(
+            room_id="room_uuid",
+            hostname="archipelago.gg",
+            tracker_id="ap_trk",
+            cheese_tracker_id="ct_room_1",
+        )
+        self.session.add(room)
+        self.session.flush()
+        self.session.add(UserRoomSubscription(
+            user_id=user_id, room_id=room.id, alias="Room", cheese_link=link
+        ))
+        self.session.commit()
+        return room.id
+
+    @patch('threading.Thread', side_effect=_run_inline)
+    @patch('app.api_cheese.update_tracker_visibility')
+    def test_deleting_a_linked_room_hides_it_on_the_dashboard(self, mock_visibility, mock_thread):
+        user = self.make_user()
+        room_id = self._room_for(user.id, CHEESE_LINK_LINKED)
+
+        _call(rooms_routes.unsubscribe_from_room, user, room_id)
+
+        mock_visibility.assert_called_once()
+        self.assertEqual(mock_visibility.call_args.args[2:], ("ct_room_1", False))
+
+    @patch('threading.Thread', side_effect=_run_inline)
+    @patch('app.api_cheese.update_tracker_visibility')
+    def test_deleting_an_unlinked_room_leaves_cheese_alone(self, mock_visibility, mock_thread):
+        user = self.make_user()
+        user_id = user.id
+        room_id = self._room_for(user_id, CHEESE_LINK_NONE)
+
+        _call(rooms_routes.unsubscribe_from_room, user, room_id)
+
+        mock_visibility.assert_not_called()
+        fresh = Session()
+        try:
+            self.assertIsNone(
+                fresh.query(UserRoomSubscription).filter_by(user_id=user_id, room_id=room_id).first()
+            )
+        finally:
+            fresh.close()
+
+
 class TestAccountDeletion(CheeseLinkTestBase):
 
     def test_a_user_who_dismissed_a_suggestion_can_still_be_deleted(self):

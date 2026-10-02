@@ -414,8 +414,11 @@ def unsubscribe_from_room(current_user, room_db_id):
     if not subscription:
         return jsonify({'error': 'Not subscribed to this room'}), 404
 
+    # Hiding the tracker on the user's Cheese dashboard is a write to Cheese, and
+    # the link is what authorises writes (see #323). A room the user unlinked is
+    # theirs to delete here without Cheese hearing about it.
     cheese_tracker_id = None
-    if subscription.room:
+    if subscription.room and normalize_cheese_link(subscription.cheese_link) == CHEESE_LINK_LINKED:
         cheese_tracker_id = subscription.room.cheese_tracker_id
 
     session.delete(subscription)
