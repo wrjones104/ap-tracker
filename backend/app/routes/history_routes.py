@@ -20,6 +20,7 @@ history_bp = Blueprint('history_routes', __name__)
 # Postgres rejects a statement carrying more than 65535 bind parameters. This
 # lookup binds three per key, so the IN list is chunked well below that ceiling.
 DATAPACKAGE_LOOKUP_CHUNK_SIZE = 1000
+HINT_SYNC_BATCH_SIZE = 100
 
 
 def fetch_datapackage_names(session, cache_keys):
@@ -610,7 +611,7 @@ def sync_history(current_user):
                 hint_filters.append(NotifiedHint.room_id == room_uuid)
 
         if hint_filters:
-            hints = session.query(NotifiedHint).filter(or_(*hint_filters)).order_by(NotifiedHint.updated_at.asc()).limit(100).all()
+            hints = session.query(NotifiedHint).filter(or_(*hint_filters)).order_by(NotifiedHint.updated_at.asc()).limit(HINT_SYNC_BATCH_SIZE).all()
 
     room_uuids = set(item.room_id for item in items) | set(hint.room_id for hint in hints)
     rooms_to_map = session.query(TrackedRoom).filter(TrackedRoom.room_id.in_(room_uuids)).all()
@@ -892,8 +893,11 @@ def sync_history(current_user):
             new_hint_watermarks[key] = format_iso_z(max_hint_dts[key])
         elif hint_watermarks_map.get(r_id):
             new_hint_watermarks[key] = hint_watermarks_map[r_id]
-        else:
+        elif len(hints) < HINT_SYNC_BATCH_SIZE:
             new_hint_watermarks[key] = now_iso
+        # Else leave the key out: a full batch means this room's hints may
+        # still be queued behind older hints from other rooms, and "now" would
+        # skip them for good. Clients keep the cursor they sent (null). See #421.
 
     return jsonify({
         "new_items": response_items,
