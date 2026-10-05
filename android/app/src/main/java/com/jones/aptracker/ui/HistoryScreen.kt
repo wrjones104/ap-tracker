@@ -217,7 +217,7 @@ fun HistoryContent(
 
         SwipeRefresh(
             state = swipeRefreshState,
-            onRefresh = { historyViewModel.refreshAllHistory() },
+            onRefresh = { historyViewModel.refreshAllHistory(userInitiated = true) },
             modifier = Modifier.fillMaxSize()
         ) {
             Column(modifier = Modifier.fillMaxSize()) {

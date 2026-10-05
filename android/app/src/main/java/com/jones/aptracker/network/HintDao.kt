@@ -9,17 +9,11 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface HintDao {
 
-    @Query("SELECT * FROM hints WHERE roomDbId = :roomId AND hintType = :type AND isFound = 0 ORDER BY timestamp DESC")
-    fun getUnfoundHintsForRoom(roomId: Int, type: String): Flow<List<HintEntity>>
+    @Query("SELECT * FROM hints WHERE roomDbId = :roomId ORDER BY timestamp DESC")
+    fun getAllHintsForRoom(roomId: Int): Flow<List<HintEntity>>
 
-    @Query("SELECT * FROM hints WHERE roomDbId = :roomId AND hintType = :type ORDER BY timestamp DESC")
-    fun getAllHintsForRoom(roomId: Int, type: String): Flow<List<HintEntity>>
-
-    @Query("SELECT * FROM hints WHERE hintType = :type AND isFound = 0 ORDER BY timestamp DESC")
-    fun getUnfoundGlobalHints(type: String): Flow<List<HintEntity>>
-
-    @Query("SELECT * FROM hints WHERE hintType = :type ORDER BY timestamp DESC")
-    fun getAllGlobalHints(type: String): Flow<List<HintEntity>>
+    @Query("SELECT * FROM hints ORDER BY timestamp DESC")
+    fun getAllGlobalHints(): Flow<List<HintEntity>>
 
     @Query("SELECT MAX(timestamp) FROM hints")
     suspend fun getLatestGlobalTimestamp(): String?
@@ -29,9 +23,6 @@ interface HintDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHints(hints: List<HintEntity>)
-
-    @Query("DELETE FROM hints WHERE roomDbId = :roomId AND (itemOwnerId IN (:slotIds) OR locationOwnerId IN (:slotIds))")
-    suspend fun deleteHintsForSlots(roomId: Int, slotIds: Set<Int>)
 
     @Query("DELETE FROM hints")
     suspend fun deleteAllHints()

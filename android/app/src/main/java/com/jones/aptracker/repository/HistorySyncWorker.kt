@@ -15,6 +15,12 @@ class HistorySyncWorker(
 
     companion object {
         private const val MAX_RETRY_ATTEMPTS = 3
+
+        /**
+         * When the work was queued, in epoch millis. Set on a fallback or a refresh tap, so the
+         * worker stands down only for a sync that finished after it (workerCanStandDown).
+         */
+        const val KEY_REQUESTED_AT = "requested_at"
     }
 
     override suspend fun doWork(): Result {
@@ -25,7 +31,8 @@ class HistorySyncWorker(
             return Result.success()
         }
 
-        if (HistorySyncManager.shouldSkipWorker()) {
+        val requestedAt = inputData.getLong(KEY_REQUESTED_AT, -1L).takeIf { it > 0 }
+        if (HistorySyncManager.shouldSkipWorker(requestedAt)) {
             Log.d("HistorySyncWorker", "Skipping background worker execution (active sync in progress or sync completed recently).")
             return Result.success()
         }
@@ -39,8 +46,11 @@ class HistorySyncWorker(
 
             val trackedRooms = apiService.getUserTrackedSlots()
 
+            // No full hint download here: the delta sync carries new hints and found-status
+            // changes. Running it on every periodic and push-triggered run was most of the
+            // app's data use (#411).
             repository.syncHistoryBatch(trackedRooms, priorityRoomId = targetRoomId)
-            repository.refreshHintHistory(targetRoomId)
+            HistorySyncManager.markSyncCompleted()
 
             com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(applicationContext)
             com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdate(applicationContext, trackedRooms)

@@ -194,9 +194,13 @@ class HistoryRepository(
                     }
 
                     if (response.updated_hints.isNotEmpty()) {
-                        val trackedSlotIds = itemWatermarks.map { it.slot_id }.toSet()
+                        // Per room, as the server decides it: slot numbers restart in every room,
+                        // so a bare slot id would file a hint by another room's tracked slot.
+                        // The History screen re-derives the type from the live tracked slots
+                        // anyway (classifyHints); this keeps the stored value honest.
+                        val trackedPairs = itemWatermarks.map { it.room_db_id to it.slot_id }.toSet()
                         val entities = response.updated_hints.map { detail ->
-                            val type = if (detail.item_owner_id in trackedSlotIds) "for_you" else "by_you"
+                            val type = if ((detail.room_db_id to detail.item_owner_id) in trackedPairs) "for_you" else "by_you"
                             mapHintDetailToEntity(detail, type)
                         }
                         if (entities.isNotEmpty()) {
@@ -205,11 +209,19 @@ class HistoryRepository(
                     }
 
                     // Persist new watermarks immediately to allow the next loop to fetch next batch
+                    val hintCursors = hintCursorsToStore(
+                        roomsSentWithoutCursor = hintWatermarks
+                            .filter { it.last_updated == null }
+                            .map { it.room_db_id.toString() }
+                            .toSet(),
+                        roomsInBatch = response.updated_hints.map { it.room_db_id.toString() }.toSet(),
+                        serverCursors = response.hint_watermarks
+                    )
                     prefs.edit {
                         response.item_watermarks.forEach { (key, value) ->
                             putString("item_watermark_$key", value.toString())
                         }
-                        response.hint_watermarks.forEach { (key, timestamp) ->
+                        hintCursors.forEach { (key, timestamp) ->
                             putString("hint_watermark_$key", timestamp)
                         }
                     }
@@ -334,22 +346,25 @@ class HistoryRepository(
     }
 
     // --- HINT FLOWS ---
-    fun getHintsForRoom(roomId: Int, type: String): Flow<List<HintEntity>> {
-        return hintDao.getAllHintsForRoom(roomId, type)
+    // Every hint of the scope, whatever type was stored with it. The History screen splits them
+    // into "for you" and "by you" from the slots tracked now (classifyHints).
+    fun getHintsForRoom(roomId: Int): Flow<List<HintEntity>> {
+        return hintDao.getAllHintsForRoom(roomId)
     }
 
-    fun getGlobalHints(type: String): Flow<List<HintEntity>> {
-        return hintDao.getAllGlobalHints(type)
+    fun getGlobalHints(): Flow<List<HintEntity>> {
+        return hintDao.getAllGlobalHints()
     }
 
-    // --- HINT REFRESH (Always Full Sync to catch Status Updates) ---
+    // --- FULL HINT DOWNLOAD (repair only) ---
+    // Every hint touching a tracked slot, found or not, re-sent whole. The delta sync
+    // (syncHistoryBatch) already carries new hints and found-status changes, because the server
+    // bumps updated_at when a hint is found. So this runs only where the delta cannot help:
+    // a refresh the user asked for, and after an ignore or whitelist rule change, which
+    // re-flags hints without touching updated_at. It used to run on every push and every
+    // periodic sync, and was most of the app's data use (#411).
     suspend fun refreshHintHistory(roomId: Int? = null) {
-        // We purposefully pass `since = null` here.
-        // If we used a timestamp, we would miss hints that were created long ago
-        // but were recently marked as "Found", because their creation timestamp didn't change.
-        //
-        // We also always pass `includeFound = true` to ensure the local DB
-        // gets updated with the correct "found" status of existing hints,
+        // `includeFound = true` so the local DB gets the found status of every hint,
         // even if the user has chosen to hide found hints in the UI.
 
         try {
@@ -432,7 +447,10 @@ class HistoryRepository(
         Log.d("PRUNING", "Pruning data for room $roomId, slots: $slotIds")
         try {
             historyDao.deleteHistoryForSlots(roomId, slotIds)
-            hintDao.deleteHintsForSlots(roomId, slotIds)
+            // Hints are kept. The delta sync stores every hint in the room, and the History
+            // screen shows only those touching a slot tracked now (classifyHints). Deleting
+            // here also took hints shared with a slot still tracked, and since #411 only a
+            // reset of the room's hint cursor, re-downloading the whole room, brought them back.
             
             // Clear SharedPreferences watermarks for pruned slots!
             prefs.edit().apply {
@@ -462,6 +480,23 @@ class HistoryRepository(
             }
         }
     }
+}
+
+/**
+ * The hint cursors worth storing from one /history/sync answer, keyed by room db id.
+ *
+ * The server answers "now" for a room that sent no cursor and got no hints back, even when other
+ * rooms' older hints filled the 100-hint batch (#421). Storing that would skip the room's whole
+ * hint history, so such a room keeps an empty cursor until its hints arrive. A room that really
+ * has no hints just asks again from the start, which returns nothing. The full hint download on
+ * every sync used to paper over this, before #411.
+ */
+internal fun hintCursorsToStore(
+    roomsSentWithoutCursor: Set<String>,
+    roomsInBatch: Set<String>,
+    serverCursors: Map<String, String?>
+): Map<String, String?> = serverCursors.filterKeys { room ->
+    room !in roomsSentWithoutCursor || room in roomsInBatch
 }
 
 private fun normalizeTimestamp(rawTime: String): String {

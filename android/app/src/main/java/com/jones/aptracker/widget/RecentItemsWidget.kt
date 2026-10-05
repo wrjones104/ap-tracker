@@ -54,6 +54,7 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.jones.aptracker.MainActivity
 import com.jones.aptracker.data.FinishedDefinitionStore
 import com.jones.aptracker.R
@@ -665,7 +666,10 @@ class RefreshRecentItemsAction : ActionCallback {
         parameters: ActionParameters
     ) {
         try {
-            val syncRequest = OneTimeWorkRequestBuilder<HistorySyncWorker>().build()
+            // Stamped, so a tap always syncs unless one finished after it.
+            val syncRequest = OneTimeWorkRequestBuilder<HistorySyncWorker>()
+                .setInputData(workDataOf(HistorySyncWorker.KEY_REQUESTED_AT to System.currentTimeMillis()))
+                .build()
             WorkManager.getInstance(context).enqueue(syncRequest)
         } catch (e: Exception) {
             Log.e("RecentItemsWidget", "Failed to enqueue background sync from widget refresh", e)
