@@ -8,25 +8,51 @@ import android.content.SharedPreferences
 
 class PasswordManager(private val context: Context) {
 
-    private val masterKeyAlias by lazy { MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC) }
     private val PREFS_FILE_NAME = "ap_passwords"
 
     private val sharedPreferences: SharedPreferences? by lazy {
         initializeSharedPreferences()
     }
 
+    /**
+     * Opens the store, deleting and recreating it once if it cannot be read. A file restored
+     * from a backup (#396) holds keysets sealed by another install's Keystore key, so its
+     * passwords are unrecoverable anyway; without the retry the store stays dead for the
+     * life of the install and every save is silently dropped.
+     */
     private fun initializeSharedPreferences(): SharedPreferences? {
         return try {
-            EncryptedSharedPreferences.create(
-                PREFS_FILE_NAME,
-                masterKeyAlias,
-                context,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
+            createEncryptedSharedPreferences()
         } catch (e: Exception) {
-            Log.e("PasswordManager", "Error initializing EncryptedSharedPreferences", e)
-            null
+            Log.e("PasswordManager", "Error initializing EncryptedSharedPreferences, clearing and retrying.", e)
+            clearCorruptedPreferences()
+            try {
+                createEncryptedSharedPreferences()
+            } catch (retryException: Exception) {
+                Log.e("PasswordManager", "Failed to recreate EncryptedSharedPreferences.", retryException)
+                null
+            }
+        }
+    }
+
+    private fun createEncryptedSharedPreferences(): SharedPreferences {
+        val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
+        return EncryptedSharedPreferences.create(
+            PREFS_FILE_NAME,
+            masterKeyAlias,
+            context,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
+
+    private fun clearCorruptedPreferences() {
+        try {
+            if (!context.deleteSharedPreferences(PREFS_FILE_NAME)) {
+                Log.w("PasswordManager", "Corrupted preferences file could not be deleted.")
+            }
+        } catch (e: Exception) {
+            Log.e("PasswordManager", "Failed to delete corrupted preferences file", e)
         }
     }
 
