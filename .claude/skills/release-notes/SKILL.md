@@ -1,6 +1,6 @@
 ---
 name: release-notes
-description: Collaboratively draft a new release entry for backend/app/data/changelog.json — user-friendly highlights plus separate Discord, Play Console, and GitHub Release snippets — then write it in and regenerate the CHANGELOG.md files. Use when cutting an Android or backend release, or when asked to "write release notes", "draft a changelog entry", "what's new for this release", or similar.
+description: The release-note copy rules (voice, length budgets, Discord / Play Console / GitHub specs). Collaboratively drafts a release entry for backend/app/data/changelog.json — user-friendly highlights plus the three channel snippets. When cutting a release, version-manager runs the procedure and calls this skill for the copy; use it on its own when asked to "write release notes", "draft a changelog entry", "what's new for this release", or to redraft notes without a version bump.
 ---
 
 # Release Notes
@@ -11,6 +11,13 @@ GitHub Release). `backend/app/data/changelog.json` is this project's single sour
 truth for release notes and versions — see [LLM.md](../../../LLM.md) for the full
 system. Nothing else needs to be hand-edited; `scripts/generate_changelog.py` derives
 `android/CHANGELOG.md` and `backend/CHANGELOG.md` from whatever this skill writes.
+
+**How this fits with version-manager.** This skill owns the *copy*, and it is the only
+place copy rules live. **version-manager** owns the *procedure*: choosing the version,
+bumping Gradle, verifying, and the ship order (PR, server deploy, device pass, Play).
+When cutting a release, run version-manager. It calls this skill for Flow steps 2–4
+and writes the files itself, so skip step 1 (version already chosen) and step 6. Run
+this skill on its own only to draft or redraft notes.
 
 This file is meant to be tweaked over time — the **Voice & Style** section below is
 where to adjust tone; the **Channel Specs** section is where to adjust hard
@@ -143,8 +150,9 @@ differently in each:
 **Discord** (`release_notes.discord`)
 - Audience: the community Discord, people who already use the app and want to know
   what's new.
-- Format: casual, Discord markdown OK (`**bold**`, `•` bullets), a short header line
-  with the version. No hype/CTA closing line ("Update now on...!") — the user finds
+- Format: casual, Discord markdown OK (`**bold**`, `•` bullets). The first line is
+  exactly `# **Archipelago Alerts <version>**` (e.g. `# **Archipelago Alerts 1.13.1**`),
+  then a blank line. No hype/CTA closing line ("Update now on...!") — the user finds
   that tone too excitable; just end with the download links (see below).
 - Length: **under 900 characters** including the links, so it reads as one clean
   message rather than a wall someone scrolls past.
