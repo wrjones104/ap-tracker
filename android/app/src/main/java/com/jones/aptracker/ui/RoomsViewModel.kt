@@ -222,10 +222,39 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Reports a refused room action, then refreshes anyway. A 403/404 usually means the local
+     * list is the stale side -- the room was deleted, or re-added under a new id, on another
+     * device -- and refreshRooms() is what drops leftovers and realigns ids. Skipping it left
+     * the room failing on every tap until a pull-to-refresh. A failed refresh is only logged,
+     * so it cannot replace [message].
+     */
+    private suspend fun reportRoomActionRefused(
+        action: String,
+        code: Int,
+        message: String,
+        includeArchived: Boolean = false
+    ) {
+        Log.w("RoomsViewModel", "$action refused by the server: HTTP $code")
+        _errorMessage.value = message
+        try {
+            repository.refreshRooms()
+            if (includeArchived) _archivedRooms.value = repository.refreshArchivedRooms()
+        } catch (e: Exception) {
+            Log.w("RoomsViewModel", "Refresh after refused $action failed: ${e.message}")
+        }
+    }
+
     fun deleteRoom(roomId: Int) {
         viewModelScope.launch {
             try {
-                RetrofitClient.instance.deleteRoom(roomId)
+                val response = RetrofitClient.instance.deleteRoom(roomId)
+                // Response<Unit> does not throw on a 4xx/5xx, so a refusal used to skip the catch
+                // and look like the app ignored the tap (#391). It still refreshes: see the helper.
+                if (!response.isSuccessful) {
+                    reportRoomActionRefused("deleteRoom", response.code(), "Failed to delete room.")
+                    return@launch
+                }
                 repository.refreshRooms()
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to delete room."
@@ -249,7 +278,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val request = UpdateRoomRequest(alias = newAlias, icon_name = iconName, is_archived = null)
-                RetrofitClient.instance.updateRoom(roomId, request)
+                val response = RetrofitClient.instance.updateRoom(roomId, request)
+                if (!response.isSuccessful) {
+                    reportRoomActionRefused("updateRoom", response.code(), "Failed to update room.")
+                    return@launch
+                }
                 repository.refreshRooms()
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to update room."
@@ -278,7 +311,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val request = UpdateRoomRequest(is_archived = true)
-                RetrofitClient.instance.updateRoom(roomId, request)
+                val response = RetrofitClient.instance.updateRoom(roomId, request)
+                if (!response.isSuccessful) {
+                    reportRoomActionRefused("archiveRoom", response.code(), "Failed to archive room.", includeArchived = true)
+                    return@launch
+                }
                 repository.refreshRooms()
                 fetchArchivedRooms()
             } catch (e: Exception) {
@@ -292,7 +329,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val request = UpdateRoomRequest(is_archived = false)
-                RetrofitClient.instance.updateRoom(roomId, request)
+                val response = RetrofitClient.instance.updateRoom(roomId, request)
+                if (!response.isSuccessful) {
+                    reportRoomActionRefused("unarchiveRoom", response.code(), "Failed to restore room.", includeArchived = true)
+                    return@launch
+                }
                 repository.refreshRooms()
                 fetchArchivedRooms()
             } catch (e: Exception) {

@@ -131,7 +131,11 @@ fun SlotDetailScreen(
 
     LaunchedEffect(currentRoom?.host) {
         currentRoom?.host?.let { host ->
-            val saved = passwordManager.getPassword(host)
+            // The first read opens the Keystore-backed store, and may delete and recreate it
+            // (#396): disk and Keystore work, kept off the main thread.
+            val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                passwordManager.getPassword(host)
+            }
             if (saved != null && password == null) {
                 password = saved
             }
