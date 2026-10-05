@@ -3,6 +3,7 @@ package com.jones.aptracker.widget
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -259,7 +260,8 @@ private fun purgeLegacyNetworkCache(prefs: SharedPreferences) {
 
 /**
  * The widget's refresh button. This is the one widget-side path allowed to hit the network: it is
- * explicitly user-initiated, so the round trip is expected rather than a surprise.
+ * explicitly user-initiated, so the round trip is expected rather than a surprise. The fetch runs
+ * in [MilestonesRefreshWorker], never here: this runs inside a 10 s broadcast (#397).
  */
 class RefreshMilestonesAction : ActionCallback {
     override suspend fun onAction(
@@ -267,8 +269,11 @@ class RefreshMilestonesAction : ActionCallback {
         glanceId: GlanceId,
         parameters: ActionParameters
     ) {
-        MilestonesRepository.refreshCache(context)
-        MilestonesWidgetUpdater.update(context)
+        try {
+            MilestonesRefreshWorker.enqueue(context)
+        } catch (e: Exception) {
+            Log.e("MilestonesWidget", "Failed to enqueue milestone refresh from widget", e)
+        }
     }
 }
 
