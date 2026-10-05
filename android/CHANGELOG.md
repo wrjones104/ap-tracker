@@ -10,6 +10,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.13.1] - 2026-10-05
+
+_Lighter and Quieter_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> **App 1.13.1 is out**
+>
+> • **Uses far less data.** Notifications no longer re-download your whole hint history.
+> • **No surprise sync messages.** Opening the app only mentions Cheese when a slot was moved to Watching.
+> • **The Milestones widget won't freeze** the app when you tap refresh on a slow connection.
+> • **Fixed:** failed room deletes and archives now show an error, saving room passwords works again after a backup restore, and push token changes reach the server even with the app closed.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> Uses much less data: notifications no longer re-download your whole hint history.
+>
+> Opening the app no longer shows a Cheese sync message unless a slot was moved to Watching.
+>
+> Refreshing the Milestones widget can no longer freeze the app.
+>
+> Also fixed: failed room actions now show an error, saving room passwords works again after a backup restore, and push token changes reach the server even with the app closed.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - Pushes and the background sync no longer download the full hint history; the delta sync carries new hints and found-status changes. The full download runs only on pull-to-refresh and after ignore/whitelist changes. Closes #411.
+> - The automatic Cheese sync on open is silent unless slots were demoted or rooms unlisted, waits up to 3 min for the server, and runs at most once per 10 min per process. The manual sync button is unchanged. Refs #400.
+>
+> ### Fixed
+> - The Milestones widget refresh runs in `MilestonesRefreshWorker` instead of inside the 10 s widget broadcast, so it cannot ANR. Closes #397.
+> - Room delete, edit, archive and restore check the response, show an error on a 4xx/5xx, and still refresh the list. Closes #391.
+> - `ap_passwords.xml` is excluded from backup, and an unreadable password store is recreated instead of failing silently. Closes #396.
+> - A rotated FCM token is registered by `DeviceRegistrationWorker`, which retries on network errors, 5xx, 408 and 429. Closes #392.
+> - Android lint passes again (`NewApi` false positives in `AppExitReporter`). Closes #393.
+>
+> ### Note
+> App-only release. Works with server 1.13.0 or later; dead-token recovery needs server 1.14.1, and prod runs 1.14.3.
+> ```
+
+### Changed
+- **Less Background Data**: A notification fetches only what changed instead of downloading every hint again. Closes #411.
+- **Quieter Cheese Sync on Open**: The automatic sync on open stays silent unless it moved a slot or a room left your Cheese dashboard. Refs #400.
+
+### Fixed
+- **Milestones Widget Refresh**: Refreshing the Milestones widget no longer freezes the app on a slow connection. Closes #397.
+- **Errors on Room Actions**: A failed delete, rename, archive or restore now shows an error instead of looking ignored. Closes #391.
+- **Room Passwords After a Restore**: Saving room passwords works again on a phone restored from a backup. Closes #396.
+- **Push Token Changes**: A new push token Firebase issues in the background reaches the server even with the app closed. Closes #392.
+
+---
+
 ## [1.13.0] - 2026-10-01
 
 _Notifications That Follow You_
