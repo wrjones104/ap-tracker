@@ -9,17 +9,11 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
-import com.jones.aptracker.network.DeviceRegistration
+import com.jones.aptracker.network.DeviceRegistrationWorker
 import com.jones.aptracker.network.TokenManager
 import com.jones.aptracker.repository.HistorySyncManager
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 
 class MyFirebaseMessagingService : FirebaseMessagingService() {
-
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         super.onMessageReceived(remoteMessage)
@@ -55,8 +49,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         super.onNewToken(token)
         Log.d("FCM", "New token generated.")
         // Only logged before, so a token Firebase rotated reached the server at the
-        // next launch at the earliest, and pushes went nowhere until then (#364).
-        serviceScope.launch { DeviceRegistration.register(applicationContext, token) }
+        // next launch at the earliest, and pushes went nowhere until then (#364). As work,
+        // not a launch on this service's scope, so it survives the service stopping and
+        // retries when offline (#392).
+        DeviceRegistrationWorker.enqueue(applicationContext)
     }
 
     private fun sendSystemNotification(

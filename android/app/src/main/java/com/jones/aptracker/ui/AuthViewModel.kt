@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.messaging.FirebaseMessaging
 import com.jones.aptracker.network.DeviceRegistration
+import com.jones.aptracker.network.DeviceRegistrationWorker
 import com.jones.aptracker.network.RegisterDeviceRequest
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.SessionManager
@@ -148,6 +149,7 @@ class AuthViewModel : ViewModel() {
     }
 
     fun onLogout(context: Context) {
+        DeviceRegistrationWorker.cancel(context)
         viewModelScope.launch {
             val fcmToken = try {
                 FirebaseMessaging.getInstance().token.await()
