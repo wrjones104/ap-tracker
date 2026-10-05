@@ -13,8 +13,8 @@ import kotlin.coroutines.cancellation.CancellationException
 /**
  * Sends this device's push token to the server.
  *
- * Shared by app launch and [com.jones.aptracker.MyFirebaseMessagingService.onNewToken],
- * so a token Firebase rotates reaches the server without waiting for the next launch.
+ * Shared by app launch and [DeviceRegistrationWorker], which onNewToken queues, so a
+ * token Firebase rotates reaches the server without waiting for the next launch.
  */
 object DeviceRegistration {
     private const val TAG = "DeviceRegistration"
@@ -32,8 +32,7 @@ object DeviceRegistration {
     private val recoveryUsed = AtomicBoolean(false)
 
     /**
-     * Register [token], or Firebase's current token when null. Does nothing when
-     * logged out.
+     * Register Firebase's current token. Does nothing when logged out.
      *
      * A device restored from a backup or a transfer can carry the old install's
      * cached token, which FCM has already retired. The server refuses that with a
@@ -41,14 +40,16 @@ object DeviceRegistration {
      * Once per process: a token Firebase has just issued is not dead, and a second
      * refusal means something else is wrong.
      *
-     * The lock cannot deadlock on the refresh: Firebase delivers the onNewToken it
-     * causes on its own thread, and nothing here waits for that delivery. That call
-     * queues, then re-sends the fresh token, which the server treats as a no-op.
+     * The lock cannot deadlock on the refresh: Firebase delivers the onNewToken that
+     * fetching the fresh token causes on its own thread, and nothing here waits for it.
+     * That onNewToken queues a [DeviceRegistrationWorker] with REPLACE. If this call is
+     * itself running in that worker, it is cancelled, and the replacement sends the
+     * fresh token; otherwise the worker re-sends it, which the server treats as a no-op.
      *
-     * Returns false only when trying again later could help: no network, a timeout or a
-     * server error. Everything else, including a refusal, counts as settled.
+     * Returns false only when trying again later could help: no network, a timeout, a
+     * 408/429 or a server error. Everything else, including a refusal, counts as settled.
      */
-    suspend fun register(context: Context, token: String? = null): Boolean = mutex.withLock {
+    suspend fun register(context: Context): Boolean = mutex.withLock {
         if (TokenManager(context).getToken() == null) {
             Log.w(TAG, "User not logged in. Cannot register FCM token.")
             return@withLock true
@@ -61,8 +62,9 @@ object DeviceRegistration {
 
         val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
 
+        var recovering = false
         try {
-            val first = token ?: FirebaseMessaging.getInstance().token.await()
+            val first = FirebaseMessaging.getInstance().token.await()
             Log.d(TAG, "Sending FCM token to server...")
             val response = RetrofitClient.instance.registerDevice(RegisterDeviceRequest(first, androidId))
             if (response.isSuccessful) {
@@ -73,7 +75,7 @@ object DeviceRegistration {
             val body = response.errorBody()?.string()
             if (response.code() != 410 || body?.contains(DEAD_TOKEN_ERROR) != true) {
                 Log.e(TAG, "Backend FCM registration failed: ${response.code()} - $body")
-                return@withLock response.code() < 500
+                return@withLock !isRetryable(response.code())
             }
 
             if (!recoveryUsed.compareAndSet(false, true)) {
@@ -81,6 +83,7 @@ object DeviceRegistration {
                 return@withLock true
             }
 
+            recovering = true
             Log.w(TAG, "Server says this FCM token is dead; fetching a fresh one.")
             val messaging = FirebaseMessaging.getInstance()
             messaging.deleteToken().await()
@@ -91,12 +94,19 @@ object DeviceRegistration {
             } else {
                 Log.e(TAG, "Fresh FCM token was refused too: ${retry.code()} - ${retry.errorBody()?.string()}")
             }
-            retry.isSuccessful || retry.code() < 500
+            !isRetryable(retry.code())
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            // A network or Play Services failure part-way through the refresh must not
+            // spend the once-per-process recovery: the retry would meet the same 410 and
+            // give up as settled, leaving the dead token on the server.
+            if (recovering) recoveryUsed.set(false)
             Log.e(TAG, "Error registering FCM token with the server", e)
             false
         }
     }
+
+    /** Server errors, plus the two 4xx a proxy may send for a request worth repeating. */
+    private fun isRetryable(code: Int): Boolean = code >= 500 || code == 408 || code == 429
 }

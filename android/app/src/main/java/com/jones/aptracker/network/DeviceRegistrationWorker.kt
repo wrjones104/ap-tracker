@@ -28,7 +28,11 @@ class DeviceRegistrationWorker(
     companion object {
         private const val TAG = "DeviceRegistrationWorker"
         private const val WORK_NAME = "fcm_token_registration"
-        private const val MAX_ATTEMPTS = 5
+        // Offline does not spend attempts (the job waits for a network); only retryable
+        // responses and exceptions do. Nine exponential waits from 30 s add up to about
+        // 4.3 hours, which outlasts a deploy or a server restart. Five gave up after 7.5
+        // minutes.
+        private const val MAX_ATTEMPTS = 10
 
         /**
          * Queues a registration. Several rotations collapse into one job, and the job sends
@@ -43,6 +47,15 @@ class DeviceRegistrationWorker(
                 .build()
             WorkManager.getInstance(context)
                 .enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.REPLACE, request)
+        }
+
+        /**
+         * Drops a queued or running registration. Called on logout: a job waiting out its
+         * backoff could otherwise re-register the device between the unregister call and
+         * the session token being revoked.
+         */
+        fun cancel(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
         }
     }
 
