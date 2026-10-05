@@ -44,11 +44,14 @@ object DeviceRegistration {
      * The lock cannot deadlock on the refresh: Firebase delivers the onNewToken it
      * causes on its own thread, and nothing here waits for that delivery. That call
      * queues, then re-sends the fresh token, which the server treats as a no-op.
+     *
+     * Returns false only when trying again later could help: no network, a timeout or a
+     * server error. Everything else, including a refusal, counts as settled.
      */
-    suspend fun register(context: Context, token: String? = null) = mutex.withLock {
+    suspend fun register(context: Context, token: String? = null): Boolean = mutex.withLock {
         if (TokenManager(context).getToken() == null) {
             Log.w(TAG, "User not logged in. Cannot register FCM token.")
-            return@withLock
+            return@withLock true
         }
 
         // A forced logout invalidates the FCM token on a detached coroutine. Fetching
@@ -64,18 +67,18 @@ object DeviceRegistration {
             val response = RetrofitClient.instance.registerDevice(RegisterDeviceRequest(first, androidId))
             if (response.isSuccessful) {
                 Log.i(TAG, "FCM token and Android ID registered with backend successfully.")
-                return@withLock
+                return@withLock true
             }
 
             val body = response.errorBody()?.string()
             if (response.code() != 410 || body?.contains(DEAD_TOKEN_ERROR) != true) {
                 Log.e(TAG, "Backend FCM registration failed: ${response.code()} - $body")
-                return@withLock
+                return@withLock response.code() < 500
             }
 
             if (!recoveryUsed.compareAndSet(false, true)) {
                 Log.e(TAG, "Server refused this FCM token too; not refreshing again this launch.")
-                return@withLock
+                return@withLock true
             }
 
             Log.w(TAG, "Server says this FCM token is dead; fetching a fresh one.")
@@ -88,10 +91,12 @@ object DeviceRegistration {
             } else {
                 Log.e(TAG, "Fresh FCM token was refused too: ${retry.code()} - ${retry.errorBody()?.string()}")
             }
+            retry.isSuccessful || retry.code() < 500
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error registering FCM token with the server", e)
+            false
         }
     }
 }
