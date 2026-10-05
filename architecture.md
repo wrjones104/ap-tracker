@@ -28,7 +28,6 @@ flowchart TD
         subgraph poller["Poller Container — run_poller_only.py"]
             PollerSupervisor[poller_supervisor]
             PollerWorker[poller.run_room_poll]
-            DatapackageSvc[datapackage_service]
             ThresholdSvc[threshold_service]
             FilterSvc[filtering_service]
             NotificationSvc[notification_service]
@@ -87,12 +86,11 @@ Four more blueprints are registered directly in `create_app()`:
 
 ### C. Modular Poller Engine (`backend/app/services/`)
 The poller handles background polling and event detection across active Archipelago multiworld rooms:
-* **[poller.py](backend/app/poller.py):** The poll loop itself lives outside `services/`. `run_room_poll` does stateless HTTP GET polling, using `/api/room_status/<uuid>` gatekeepers to skip redundant tracker downloads.
-* **[threshold_service.py](backend/app/services/threshold_service.py):** Evaluates AND-logic milestone threshold groups for tracked slots.
+* **[poller.py](backend/app/poller.py):** The poll loop itself lives outside `services/`. `run_room_poll` does stateless HTTP GET polling, using `/api/room_status/<uuid>` gatekeepers to skip redundant tracker downloads. The poller also owns datapackage caching and healing (`db_cache_datapackage`, `db_get_missing_checksums`), push bundling (`compress_notifications`) and milestone evaluation (`_evaluate_threshold_groups`); `services/` holds no second copy of these (#388, #406).
+* **[threshold_service.py](backend/app/services/threshold_service.py):** Milestone progress for the app (`compute_requirement_progress`) and the background repair of `SlotItemCount` (`reconcile_slot_item_counts`).
 * **[filtering_service.py](backend/app/services/filtering_service.py):** Resolves ignore and whitelist rules server-side, expanding item-group rules against the exact datapackage checksum an item arrived under.
-* **[notification_service.py](backend/app/services/notification_service.py):** Aggregates and dispatches FCM push payloads, including the Android channel id and priority for each event category.
+* **[notification_service.py](backend/app/services/notification_service.py):** Maps each event category to its Android channel id (`map_notification_to_channel_id`) and sends one-off FCM pushes outside the poll loop (`send_fcm_notifications`).
 * **[cheese_service.py](backend/app/services/cheese_service.py):** Handles Cheese Tracker background sync and grace-period unclaim logic. Lost claims demote a slot from `play` to `watch` rather than untracking it; only a slot that vanishes from the tracker is deleted.
-* **[datapackage_service.py](backend/app/services/datapackage_service.py):** Datapackage caching, healing, and group name expansion.
 * **[retention_service.py](backend/app/services/retention_service.py):** Runs automated 90-day retention purges for event logs and inactive guest accounts, plus expiry of the JWT blocklist and history whose room no longer exists. Called from the poller's 24-hour janitor. Every purge deletes in committed batches (`PURGE_BATCH_SIZE`) and stops at a per-run ceiling (`PURGE_MAX_ROWS_PER_RUN`), leaving the remainder for the next run.
 
 The supervisor (`poller.py::poller_supervisor`) runs on a 60-second tick: it queues new rooms for setup with backoff on repeated failures, revives suspended rooms, suspends active rooms that have gone quiet, deletes rooms with no subscribers, and starts a separate Cheese poller task per room that needs one.
