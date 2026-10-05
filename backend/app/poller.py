@@ -2996,6 +2996,24 @@ async def poller_supervisor(app, loop):
 
         await asyncio.sleep(SUPERVISOR_INTERVAL_SECONDS)
 
+def _has_active_subscriber():
+    """A room counts as watched only while someone has it unarchived (#347).
+
+    Archived subscriptions are skipped by db_process_poll_data before it records
+    anything, so polling a room whose every subscription is archived refreshed
+    only room metadata (the player list, last_successful_poll) and stored no
+    items, hints or counts. It cost a fetch per cycle for nothing the user sees,
+    and production held about 1,900 of them. Archiving now pauses the room: the
+    subscription and its history stay, and unarchiving puts the room back on
+    the next supervisor tick. That is what the app's Archive action already
+    promised ("Stop tracking updates but keep history").
+
+    db_run_cleanup deliberately does not use this: an archived subscription
+    still keeps its room from being collected.
+    """
+    return TrackedRoom.subscriptions.any(UserRoomSubscription.is_archived == False)
+
+
 def db_get_active_rooms():
     """Rooms the supervisor should be running tasks for.
 
@@ -3010,8 +3028,8 @@ def db_get_active_rooms():
     Safe against the window where a room exists without a subscription: both
     creation paths (rooms_routes.add_room, api_cheese.import_available_cheese_rooms)
     add the room and the subscription in one transaction, so no other session
-    observes the gap. An archived subscription is still a subscription, and
-    those rooms keep polling -- deliberately not filtered on is_archived.
+    observes the gap. A room whose subscriptions are all archived is paused,
+    not dropped: see _has_active_subscriber.
 
     Both the Archipelago and the Cheese task hang off this list, so an
     unwatched Cheese room stops costing a tracker fetch as well.
@@ -3021,7 +3039,7 @@ def db_get_active_rooms():
         return session.query(TrackedRoom).filter(
             TrackedRoom.is_complete == False,
             TrackedRoom.is_suspended == False,
-            TrackedRoom.subscriptions.any()
+            _has_active_subscriber()
         ).all()
     except Exception as e:
         logging.error(f"[SUPERVISOR_DB_ERROR] Failed to get active rooms: {e}", exc_info=True)
@@ -3347,7 +3365,7 @@ def db_check_stale_rooms():
         active_rooms = session.query(TrackedRoom).filter(
             TrackedRoom.is_complete == False,
             TrackedRoom.is_suspended == False,
-            TrackedRoom.subscriptions.any()
+            _has_active_subscriber()
         ).all()
         
         stale_count = 0
@@ -3401,9 +3419,9 @@ def db_get_suspended_rooms_for_healing():
     Retrieves rooms that are suspended and not complete, but either have no last_remote_activity,
     or last_remote_activity is within the past 30 days.
 
-    Only rooms somebody subscribes to (#345). Healing costs one HTTP request
-    per room, and reviving an unwatched room changes nothing: db_get_active_rooms
-    filters on subscriptions too, so it would still never be polled. Nothing is
+    Only rooms somebody has unarchived (#345, #347). Healing costs one HTTP
+    request per room, and reviving an unwatched room changes nothing:
+    db_get_active_rooms applies the same filter, so it would still never be polled. Nothing is
     lost by skipping them -- once a room gains a subscriber it matches this
     query again, and rooms_routes.add_room clears is_suspended on subscribe
     anyway.
@@ -3414,7 +3432,7 @@ def db_get_suspended_rooms_for_healing():
         rooms = session.query(TrackedRoom).filter(
             TrackedRoom.is_suspended == True,
             TrackedRoom.is_complete == False,
-            TrackedRoom.subscriptions.any(),
+            _has_active_subscriber(),
             or_(
                 TrackedRoom.last_remote_activity == None,
                 TrackedRoom.last_remote_activity > thirty_days_ago

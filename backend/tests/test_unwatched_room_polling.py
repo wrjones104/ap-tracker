@@ -14,9 +14,12 @@ tracks stays out of reach of both rules indefinitely.
 What the filter must NOT do is drop a room during the window where it exists
 without a subscription. Both creation paths -- rooms_routes.add_room and
 api_cheese.import_available_cheese_rooms -- add the room and the subscription in
-one transaction, so no other session ever observes the gap. The archived case is
-the one that would be easy to get wrong by reaching for a stricter filter:
-archiving is a subscription that still exists, and those rooms must keep polling.
+one transaction, so no other session ever observes the gap.
+
+Archiving pauses a room rather than orphaning it (#347). A room whose every
+subscription is archived is not polled, suspended or healed, because the poller
+recorded nothing for archived subscriptions anyway. But the subscription still
+exists, so the janitor must never collect the room: archived history is kept.
 """
 import os
 import sys
@@ -104,14 +107,42 @@ class TestActiveRoomSelection(UnwatchedRoomTestBase):
 
         self.assertEqual(self._active_uuids(), {"watched"})
 
-    def test_archived_subscription_still_counts_as_watched(self):
-        """Archiving keeps the row. A stricter filter would silently stop these."""
+    def test_room_archived_by_everyone_is_paused(self):
+        """#347: the poller stored nothing for archived subscriptions, so polling
+        these only cost a fetch per cycle."""
         user = self._user("1")
-        room = self._room("archived-but-mine")
+        room = self._room("archived-by-me")
         self._subscribe(user, room, archived=True)
         self.session.commit()
 
-        self.assertEqual(self._active_uuids(), {"archived-but-mine"})
+        self.assertEqual(self._active_uuids(), set())
+
+    def test_one_unarchived_subscriber_keeps_it_polled(self):
+        """Another user's archive must not pause a room someone still follows."""
+        a, b = self._user("1"), self._user("2")
+        room = self._room("shared")
+        self._subscribe(a, room, archived=True)
+        self._subscribe(b, room)
+        self.session.commit()
+
+        self.assertEqual(self._active_uuids(), {"shared"})
+
+    def test_unarchiving_resumes_polling(self):
+        """Pausing is not permanent: unarchive and the room is back on the list."""
+        user = self._user("1")
+        room = self._room("paused")
+        self._subscribe(user, room, archived=True)
+        self.session.commit()
+        # The query's Session.remove() detaches everything loaded above.
+        user_id, room_id = user.id, room.id
+        self.assertEqual(self._active_uuids(), set())
+
+        sub = self.session.query(UserRoomSubscription).filter_by(
+            user_id=user_id, room_id=room_id).one()
+        sub.is_archived = False
+        self.session.commit()
+
+        self.assertEqual(self._active_uuids(), {"paused"})
 
     def test_cheese_room_with_a_subscriber_is_still_polled(self):
         """A Cheese-linked room is reached through the same list; only the
@@ -209,6 +240,20 @@ class TestStaleCheckSkipsUnwatched(UnwatchedRoomTestBase):
         stale = self.session.query(TrackedRoom).filter_by(room_id="mine").first()
         self.assertTrue(stale.is_suspended)
 
+    def test_archived_only_room_is_not_suspended(self):
+        """A paused room is not polled, so suspending it would only feed healing."""
+        user = self._user("1")
+        room = self._room("archived", last_poll=datetime.utcnow())
+        room.last_remote_activity = datetime.utcnow() - timedelta(days=45)
+        self._subscribe(user, room, archived=True)
+        self.session.commit()
+
+        db_check_stale_rooms()
+        self.session.expire_all()
+
+        stale = self.session.query(TrackedRoom).filter_by(room_id="archived").first()
+        self.assertFalse(stale.is_suspended)
+
     def test_watched_room_with_recent_activity_is_left_alone(self):
         user = self._user("1")
         room = self._room("active", last_poll=datetime.utcnow())
@@ -241,15 +286,15 @@ class TestHealingSkipsUnwatched(UnwatchedRoomTestBase):
         self.assertEqual(self._healing_uuids(), set())
 
     def test_watched_suspended_room_is_still_healed(self):
-        """The filter must not stop the healing it exists to do. Archived
-        counts as watched here too, as it does for polling."""
+        """The filter must not stop the healing it exists to do. A room archived
+        by everyone is paused, so healing it is skipped, as polling is."""
         user = self._user("1")
-        for uuid, archived in (("mine", False), ("archived-but-mine", True)):
+        for uuid, archived in (("mine", False), ("archived-by-me", True)):
             room = self._room(uuid, suspended=True)
             self._subscribe(user, room, archived=archived)
         self.session.commit()
 
-        self.assertEqual(self._healing_uuids(), {"mine", "archived-but-mine"})
+        self.assertEqual(self._healing_uuids(), {"mine"})
 
     def test_room_is_healed_again_once_someone_subscribes(self):
         """Skipping an orphan is not permanent: gaining a subscriber puts it
@@ -296,6 +341,21 @@ class TestJanitorCanNowCollect(UnwatchedRoomTestBase):
         self.assertIsNone(
             self.session.query(TrackedRoom).filter_by(room_id="orphan").first(),
             "the janitor still cannot collect a room nothing polls")
+
+    def test_archived_room_is_never_collected(self):
+        """Pausing stops the polls that kept last_successful_poll fresh, so an
+        archived room soon looks old. The janitor must still keep it: the
+        subscription exists, and archiving promises to keep the history."""
+        user = self._user("1")
+        room = self._room("archived", last_poll=datetime.utcnow() - timedelta(days=90))
+        self._subscribe(user, room, archived=True)
+        self.session.commit()
+
+        db_run_cleanup()
+        self.session.expire_all()
+        self.assertIsNotNone(
+            self.session.query(TrackedRoom).filter_by(room_id="archived").first(),
+            "the janitor deleted a room the user had only archived")
 
 
 if __name__ == '__main__':
