@@ -22,6 +22,7 @@ import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.HistorySyncManager
 import com.jones.aptracker.repository.SyncProgressState
 import com.jones.aptracker.repository.UserRepository
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -254,6 +255,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     // Reactive Hint flows matching the toggle + DB flow. Both lists come from one split of the
     // scope's hints against the live tracked slots, not from the type stored with each hint (#411).
+    @OptIn(ExperimentalCoroutinesApi::class)
     private val classifiedHints: StateFlow<ClassifiedHints> = combine(
         _historyFilter,
         _showFoundHints,
@@ -492,11 +494,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             prefs.edit { putBoolean("ui_show_found_hints", show) }
             saveViewPreferences(showFoundHints = show)
 
-            // The reactive combine flow above automatically handles the UI update locally!
-            // But we launch a silent background request here to fetch any new hints from the API
-            viewModelScope.launch {
-                repository.refreshHintHistory(currentRoomId)
-            }
+            // The reactive combine flow above handles this locally. The database already holds
+            // found hints, because the delta sync carries every hint and its found status, so
+            // there is nothing to download (#411).
         }
     }
 
@@ -790,6 +790,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 userRepository.addIgnoreItem(itemName, gameName)
                 _actionMessage.value = "Ignored '$itemName'"
+                HistorySyncManager.requestHintRepair(getApplication())
                 onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
@@ -855,6 +856,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 )
                 RetrofitClient.instance.addIgnoreItem(request)
                 _actionMessage.value = "Ignored group '$groupName'"
+                HistorySyncManager.requestHintRepair(getApplication())
                 onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
@@ -875,6 +877,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 userRepository.addWhitelistItem(itemName, gameName)
                 _actionMessage.value = "Whitelisted '$itemName'"
+                HistorySyncManager.requestHintRepair(getApplication())
                 onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
@@ -900,6 +903,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 )
                 RetrofitClient.instance.addWhitelistItem(request)
                 _actionMessage.value = "Whitelisted group '$groupName'"
+                HistorySyncManager.requestHintRepair(getApplication())
                 onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {

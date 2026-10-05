@@ -35,6 +35,7 @@ import com.jones.aptracker.database.CachedDatapackageEntity
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.jones.aptracker.repository.HistoryRepository
+import com.jones.aptracker.repository.HistorySyncManager
 import com.jones.aptracker.repository.UserRepository
 import com.jones.aptracker.widget.MilestonesWidgetUpdater
 import com.jones.aptracker.widget.RecentItemsWidgetUpdater
@@ -55,12 +56,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     // --- Dependencies ---
     private val settingsManager = SettingsManager(application)
     private val userRepository = UserRepository(RetrofitClient.instance)
-    private val historyRepository = HistoryRepository(
-        RetrofitClient.instance,
-        AppDatabase.getInstance(application).historyDao(),
-        AppDatabase.getInstance(application).hintDao(),
-        application
-    )
+    // The shared instance, so clearing local history serializes with a running sync on the
+    // same mutex instead of a private one.
+    private val historyRepository = HistoryRepository.getInstance(application)
 
     // Quick access to SharedPreferences for UI state (like sort order)
     private val uiPrefs by lazy {
@@ -870,14 +868,10 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         _gameAvailableItems.value = emptyList()
     }
 
-    // The server decides each hint's ignored and whitelisted flags from these rules, and a rule
-    // change does not touch any hint's updated_at, so the delta sync never re-sends them.
-    // Re-download the hints once so the History screen reflects the new rule. Every sync used to
-    // do this as a side effect, before #411.
+    // See HistorySyncManager.requestHintRepair: a rule change re-flags hints on the server
+    // without touching their updated_at, so the delta sync never re-sends them (#411).
     private fun refreshHintFlagsAfterRuleChange() {
-        viewModelScope.launch {
-            historyRepository.refreshHintHistory(null)
-        }
+        HistorySyncManager.requestHintRepair(getApplication())
     }
 
     fun addIgnoreItem(itemName: String, gameName: String?, isGroup: Boolean = false) {

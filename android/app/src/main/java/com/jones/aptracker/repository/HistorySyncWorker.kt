@@ -15,6 +15,12 @@ class HistorySyncWorker(
 
     companion object {
         private const val MAX_RETRY_ATTEMPTS = 3
+
+        /**
+         * When the work was queued, in epoch millis. Set on a fallback or a refresh tap, so the
+         * worker stands down only for a sync that finished after it (workerCanStandDown).
+         */
+        const val KEY_REQUESTED_AT = "requested_at"
     }
 
     override suspend fun doWork(): Result {
@@ -25,7 +31,8 @@ class HistorySyncWorker(
             return Result.success()
         }
 
-        if (HistorySyncManager.shouldSkipWorker()) {
+        val requestedAt = inputData.getLong(KEY_REQUESTED_AT, -1L).takeIf { it > 0 }
+        if (HistorySyncManager.shouldSkipWorker(requestedAt)) {
             Log.d("HistorySyncWorker", "Skipping background worker execution (active sync in progress or sync completed recently).")
             return Result.success()
         }

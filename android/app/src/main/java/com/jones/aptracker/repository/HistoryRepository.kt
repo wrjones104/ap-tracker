@@ -209,11 +209,19 @@ class HistoryRepository(
                     }
 
                     // Persist new watermarks immediately to allow the next loop to fetch next batch
+                    val hintCursors = hintCursorsToStore(
+                        roomsSentWithoutCursor = hintWatermarks
+                            .filter { it.last_updated == null }
+                            .map { it.room_db_id.toString() }
+                            .toSet(),
+                        roomsInBatch = response.updated_hints.map { it.room_db_id.toString() }.toSet(),
+                        serverCursors = response.hint_watermarks
+                    )
                     prefs.edit {
                         response.item_watermarks.forEach { (key, value) ->
                             putString("item_watermark_$key", value.toString())
                         }
-                        response.hint_watermarks.forEach { (key, timestamp) ->
+                        hintCursors.forEach { (key, timestamp) ->
                             putString("hint_watermark_$key", timestamp)
                         }
                     }
@@ -439,16 +447,16 @@ class HistoryRepository(
         Log.d("PRUNING", "Pruning data for room $roomId, slots: $slotIds")
         try {
             historyDao.deleteHistoryForSlots(roomId, slotIds)
-            hintDao.deleteHintsForSlots(roomId, slotIds)
+            // Hints are kept. The delta sync stores every hint in the room, and the History
+            // screen shows only those touching a slot tracked now (classifyHints). Deleting
+            // here also took hints shared with a slot still tracked, and since #411 only a
+            // reset of the room's hint cursor, re-downloading the whole room, brought them back.
             
             // Clear SharedPreferences watermarks for pruned slots!
             prefs.edit().apply {
                 slotIds.forEach { slotId ->
                     remove("item_watermark_${roomId}_$slotId")
                 }
-                // The delete above also takes hints between a pruned slot and one still tracked.
-                // Only the delta sync brings hints back now, so restart the room's hint cursor.
-                remove("hint_watermark_$roomId")
             }.apply()
             Log.d("PRUNING", "Cleared SharedPreferences watermarks for pruned slots in room $roomId.")
         } catch (e: Exception) {
@@ -472,6 +480,23 @@ class HistoryRepository(
             }
         }
     }
+}
+
+/**
+ * The hint cursors worth storing from one /history/sync answer, keyed by room db id.
+ *
+ * The server answers "now" for a room that sent no cursor and got no hints back, even when other
+ * rooms' older hints filled the 100-hint batch (#421). Storing that would skip the room's whole
+ * hint history, so such a room keeps an empty cursor until its hints arrive. A room that really
+ * has no hints just asks again from the start, which returns nothing. The full hint download on
+ * every sync used to paper over this, before #411.
+ */
+internal fun hintCursorsToStore(
+    roomsSentWithoutCursor: Set<String>,
+    roomsInBatch: Set<String>,
+    serverCursors: Map<String, String?>
+): Map<String, String?> = serverCursors.filterKeys { room ->
+    room !in roomsSentWithoutCursor || room in roomsInBatch
 }
 
 private fun normalizeTimestamp(rawTime: String): String {
