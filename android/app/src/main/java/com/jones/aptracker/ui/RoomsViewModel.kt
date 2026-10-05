@@ -42,6 +42,14 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     private var lastFetchTime = 0L
     private val FETCH_COOLDOWN_MS = 10000L // 10 seconds
 
+    companion object {
+        private const val AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000L
+
+        /** When this process last started the automatic sync on open. */
+        @Volatile
+        private var lastAutoSyncAt = 0L
+    }
+
     private val _isSyncingCheese = MutableStateFlow(false)
     val isSyncingCheese: StateFlow<Boolean> = _isSyncingCheese.asStateFlow()
 
@@ -132,7 +140,14 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 // that failed, rate-limited or outran its poll budget left the offer
                 // invisible with no way to ask for it again.
                 fetchAvailableCheeseRooms()
-                triggerBackgroundSync()
+                // Once per window across the process: every widget tap opens a new
+                // MainActivity, and so a new ViewModel, and each one used to start a
+                // full sync -- the second one hitting the server's 429 (#400).
+                val now = System.currentTimeMillis()
+                if (now - lastAutoSyncAt >= AUTO_SYNC_INTERVAL_MS) {
+                    lastAutoSyncAt = now
+                    triggerBackgroundSync(userInitiated = false)
+                }
             }
         }
     }
@@ -296,7 +311,15 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         _isSyncingCheese.value = false
     }
 
-    private fun triggerBackgroundSync() {
+    /**
+     * Starts a Cheese sync and polls until the server finishes it.
+     *
+     * Only a sync the user asked for reports itself. The automatic one on open speaks only
+     * when it changed something the user should know about (a slot moved to Watching, a
+     * room left the dashboard), and stays silent on success, on outrunning the poll budget,
+     * and on failure (#400).
+     */
+    private fun triggerBackgroundSync(userInitiated: Boolean) {
         if (_isSyncingCheese.value) return
         _isSyncingCheese.value = true
 
@@ -346,6 +369,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                         "They're still here."
                 }
                 val message = when {
+                    !userInitiated -> if (parts.isEmpty()) null else parts.joinToString(" ")
                     // The poll budget ran out with the server still working. Saying it
                     // finished would be a guess, and the counts above are all zero
                     // because no profile came back, not because nothing changed.
@@ -353,8 +377,10 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                     parts.isEmpty() -> "Cheese Sync Complete!"
                     else -> "Cheese Sync Complete! " + parts.joinToString(" ")
                 }
-                val duration = if (parts.isEmpty()) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-                Toast.makeText(getApplication(), message, duration).show()
+                if (message != null) {
+                    val duration = if (parts.isEmpty()) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                    Toast.makeText(getApplication(), message, duration).show()
+                }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
                 Log.i("RoomsViewModel", "Background sync cancelled by user.")
@@ -366,7 +392,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 // hide an offer the separate, cheaper call can still answer.
                 fetchRooms(force = true)
                 fetchAvailableCheeseRooms()
-                _errorMessage.value = "Background sync failed."
+                if (userInitiated) _errorMessage.value = "Background sync failed."
             } finally {
                 _isSyncingCheese.value = false
             }
@@ -579,7 +605,7 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshAll(isCheeseConnected: Boolean) {
         fetchRooms(force = true)
         if (isCheeseConnected && !_isSyncingCheese.value) {
-            triggerBackgroundSync()
+            triggerBackgroundSync(userInitiated = true)
         }
     }
 }
