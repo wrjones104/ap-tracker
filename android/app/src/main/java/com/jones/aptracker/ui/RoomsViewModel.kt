@@ -210,7 +210,13 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteRoom(roomId: Int) {
         viewModelScope.launch {
             try {
-                RetrofitClient.instance.deleteRoom(roomId)
+                val response = RetrofitClient.instance.deleteRoom(roomId)
+                // Response<Unit> does not throw on a 4xx/5xx, so a refusal used to skip the catch
+                // and look like the app ignored the tap (#391).
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Failed to delete room."
+                    return@launch
+                }
                 repository.refreshRooms()
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to delete room."
@@ -234,7 +240,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val request = UpdateRoomRequest(alias = newAlias, icon_name = iconName, is_archived = null)
-                RetrofitClient.instance.updateRoom(roomId, request)
+                val response = RetrofitClient.instance.updateRoom(roomId, request)
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Failed to update room."
+                    return@launch
+                }
                 repository.refreshRooms()
             } catch (e: Exception) {
                 _errorMessage.value = "Failed to update room."
@@ -263,7 +273,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val request = UpdateRoomRequest(is_archived = true)
-                RetrofitClient.instance.updateRoom(roomId, request)
+                val response = RetrofitClient.instance.updateRoom(roomId, request)
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Failed to archive room."
+                    return@launch
+                }
                 repository.refreshRooms()
                 fetchArchivedRooms()
             } catch (e: Exception) {
@@ -277,7 +291,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val request = UpdateRoomRequest(is_archived = false)
-                RetrofitClient.instance.updateRoom(roomId, request)
+                val response = RetrofitClient.instance.updateRoom(roomId, request)
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Failed to restore room."
+                    return@launch
+                }
                 repository.refreshRooms()
                 fetchArchivedRooms()
             } catch (e: Exception) {
