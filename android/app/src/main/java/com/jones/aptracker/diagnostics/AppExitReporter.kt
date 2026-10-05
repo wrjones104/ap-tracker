@@ -5,6 +5,7 @@ import android.app.ApplicationExitInfo
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import com.google.firebase.crashlytics.CustomKeysAndValues
 
 /**
@@ -62,6 +63,7 @@ object AppExitReporter {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.R)
     private fun report(exit: ApplicationExitInfo) {
         val reason = AppExitReasons.name(exit.reason)
         val state = AppExitReasons.importanceName(exit.importance)
@@ -99,6 +101,7 @@ object AppExitReporter {
      * every SIGNALED exit collapses into one issue and the noise cannot be told from the signal
      * without opening individual reports.
      */
+    @RequiresApi(Build.VERSION_CODES.R)
     private fun signalDetail(exit: ApplicationExitInfo): String {
         if (exit.reason != AppExitReasons.SIGNALED) return ""
         val description = exit.description ?: return ""
