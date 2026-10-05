@@ -140,6 +140,8 @@ Deployed on a Google Cloud VM via Docker Compose:
 
 PostgreSQL is **not** part of the production stack. It runs outside Compose and is reached over `host.docker.internal` (mapped to the host gateway), so `DATABASE_URL` in `backend/.env` points at the host rather than at a service name. Both containers mount `alembic/` and `alembic.ini` so the startup migration has its scripts.
 
+**nginx** (1.22.1, Debian's package) also runs on the VM outside Compose. It terminates TLS for `archipelagoalerts.com` and proxies to the API on port 5000. It also gzips JSON responses, which removed most of the internet egress (#410). That setting lives in nginx, not in Flask, so a rebuilt VM needs it back. A copy of `/etc/nginx/nginx.conf` is kept in [`deploy/nginx/`](deploy/nginx/); the VM's file is the source of truth, so update the copy when you change it.
+
 ### Local Development (`docker-compose.dev.yml`)
 Adds a `postgres` service (PostgreSQL 15, `pgdata_dev` volume) alongside Redis, publishes both ports to the host, and bind-mounts `backend/app` into the running image so backend edits take effect without a rebuild.
 
