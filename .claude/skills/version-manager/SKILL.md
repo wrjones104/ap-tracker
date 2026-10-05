@@ -1,11 +1,13 @@
 ---
 name: version-manager
-description: Reviews recent git changes across both the application (frontend/mobile) and backend server, recommends semantic version bumps (Major, Minor, Patch) for each independently, updates version files and changelog entries, regenerates markdown changelogs, and drafts platform-specific release notes for Discord, Google Play Store, and GitHub Releases. Use when cutting a release, bumping versions, updating changelogs, or reviewing shipped changes.
+description: The release procedure. Reviews recent git changes across the Android app and the backend server, recommends semantic version bumps (Major, Minor, Patch) for each independently, updates version files and changelog entries, regenerates markdown changelogs, verifies, and walks the ship order (PR, deploy, device pass, Play). The release-note copy itself (highlights, Discord, Play Store, GitHub) is drafted with the release-notes skill. Use when cutting a release, bumping versions, updating changelogs, or reviewing shipped changes.
 ---
 
 # Version Manager & Release Skill
 
-This skill provides an end-to-end workflow for analyzing changes, determining Semantic Versioning (SemVer) increments, updating version files and changelog records, and drafting platform release notes.
+This skill is the release **procedure**: analyze changes, choose Semantic Versioning (SemVer) increments, update version files and changelog records, verify, and ship in the right order.
+
+It does **not** define how release notes read. The **release-notes** skill owns all copy rules: voice, length budgets, and the Discord / Play Store / GitHub channel specs. Step 3 hands off to it, so the two cannot drift apart.
 
 > **Universal Compatibility**: This skill is structured to work seamlessly in both **Google Antigravity** (`.agents/skills/`) and **Claude Code** (`.claude/skills/` or `~/.claude/skills/`).
 
@@ -28,7 +30,7 @@ In this repository (Archipelago Alerts):
 Follow these steps sequentially whenever cutting a release or incrementing versions:
 
 ```
-[1. Inspect Git Diff] ➔ [2. Determine SemVer] ➔ [3. Draft Notes & Confirm] ➔ [4. Update Files] ➔ [5. Verify & Test]
+[1. Inspect Git Diff] ➔ [2. Determine SemVer] ➔ [3. Draft Copy (release-notes)] ➔ [4. Confirm] ➔ [5. Update Files] ➔ [6. Verify & Test] ➔ [7. PR & Ship Order] ➔ [8. Output Snippets]
 ```
 
 ### Step 1: Inspect Changes (Dual-Lens Review)
@@ -49,34 +51,22 @@ Evaluate each component independently using [Semantic Versioning 2.0.0](https://
 
 *Note: The App and Backend version numbers can be incremented independently or together depending on what changed.*
 
-### Step 3: Draft Release Highlights & Channel Snippets
-Draft 2–5 plain-English highlights focused on **user benefits** (translate technical jargon into clear descriptions):
-- Categorize each highlight into `features` (`Added`), `improvements` (`Changed`), or `fixes` (`Fixed`).
-- Draft the 3 release-note variants:
-  1. **Discord** (`release_notes.discord`):
-     - Casual tone, Markdown formatted (`**bold**`, `•` bullets).
-     - Under 1,200 characters.
-     - Include download links at the bottom.
-     - *Note*: If a backend release has no distinct user-visible changes separate from the app announcement, set `discord: ""` to avoid duplicate community pings.
-  2. **Google Play Console** (`release_notes.play_store`):
-     - **App releases only** (leave `""` for backend).
-     - Plain text only (no markdown, no backticks, plain `•` or `-` bullets).
-     - **Strictly &le; 500 characters**.
-  3. **GitHub Release** (`release_notes.github`):
-     - Structured markdown with `### Added`, `### Changed`, `### Fixed`.
-     - Technical details, endpoint paths, or migration IDs are welcome here.
+### Step 3: Draft the Copy with the release-notes Skill
+Invoke the **release-notes** skill and follow its Flow steps 2–4: gather what shipped, draft highlights and categories, and draft the three snippets. Skip its step 1, because the version is already chosen here, and its step 6, because this skill writes the files. Every copy rule (voice, length budgets, the Discord title line, Play Store's 500-character cap, when to leave `discord` empty) lives in release-notes. Do not restate or override them here.
 
 ### Step 4: Propose to User Before Writing
-Present the proposed version bump(s), release title, highlights, and character-counted snippets to the user in chat for confirmation.
+Present the proposed version bump(s) together with the release-notes preview (title, highlights, character-counted snippets) and wait for confirmation.
 
 ### Step 5: Update Files & Regenerate
-Once approved:
+Once approved, on a branch (`chore/release-app-X.Y.Z` or `chore/release-server-X.Y.Z`), never directly on `main`:
 1. **For App Releases**:
    - Update `versionName` (e.g. `"1.7.0"`) and increment `versionCode` (e.g. `23` &rarr; `24`) in `android/app/build.gradle.kts`.
 2. **For Changelog Entries**:
    - Prepend the release object to `app_releases` or `server_releases` in `backend/app/data/changelog.json`.
+   - Insert it **as text**, matching the 4-space entry indent and CRLF line endings. The file does not survive a `json.load`/`json.dump` round trip.
 3. **Regenerate Markdown**:
    - Run: `python scripts/generate_changelog.py` (or `.\venv\Scripts\python scripts/generate_changelog.py` on Windows).
+4. Commit as a single `chore(release): app X.Y.Z` (or `server X.Y.Z`) commit.
 
 ### Step 6: Verify & Test
 Execute automated guardrails to ensure zero drift:
@@ -84,13 +74,22 @@ Execute automated guardrails to ensure zero drift:
    ```bash
    python scripts/generate_changelog.py --check
    ```
-2. Run backend test suite:
+2. Run the **full** backend suite, one test file per process (`unittest discover` over the directory does not work here):
    ```bash
-   # Unix:
-   PYTHONPATH=backend pytest backend/tests
-   # Windows (PowerShell):
-   $env:PYTHONPATH="backend"; .\venv\Scripts\python -m unittest discover backend/tests
+   for f in backend/tests/test_*.py; do PYTHONPATH="backend;." venv/Scripts/python.exe -m unittest "$f" || echo "FAILED: $f"; done
    ```
+   CI runs Linux, and some test bugs only show there. For a release, prefer running the same loop in Docker (`python:3.13-slim`) on a `git archive HEAD` export of the branch. Install `requirements.txt` and `backend/requirements.txt` in **separate** `pip` calls, because they pin different alembic versions.
 
-### Step 7: Output Release Snippets
+### Step 7: Open the PR and Ship in Order
+Open the release PR. After the user merges it, walk the ship order:
+- **Server release:** the user deploys `main`. The version is read from `changelog.json`, so the label updates on deploy.
+- **App release:** the app fetches What's New from the server (`GET /api/whats_new/latest?version=<versionName>`), so the entry must be **on the prod server before anyone tests the build**:
+  1. The user redeploys the server (a data-only change, so a plain restart is enough).
+  2. Confirm it answers 200:
+     ```bash
+     curl -s -o /dev/null -w "%{http_code}" "https://archipelagoalerts.com/api/whats_new/latest?version=X.Y.Z&target=app"
+     ```
+  3. The user's device pass on a minified build (the release gate), then the Play upload.
+
+### Step 8: Output Release Snippets
 Present all formatted release snippets in full in the chat response so the user can easily copy and paste them directly to Discord, Google Play Console, and GitHub Releases.
