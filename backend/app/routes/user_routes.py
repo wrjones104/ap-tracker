@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from flask import Blueprint, request, jsonify, current_app
 
-from firebase_admin import exceptions, messaging
+from firebase_admin import messaging
 from datetime import datetime, timezone
 
 from app import Session, get_firebase_app
@@ -33,13 +33,12 @@ _token_check_slots = threading.BoundedSemaphore(_TOKEN_CHECK_WORKERS)
 
 
 def is_unregistered_token_error(exc):
-    """Any FCM 404, the same rule the poller prunes on.
+    """FCM's explicit UNREGISTERED answer, the same rule the poller prunes on.
 
-    Broader than UnregisteredError (which is itself a NotFoundError): a 404
-    from a wrong project counts too. Fine for pruning after a send, but
-    registration trusts only UnregisteredError; see fcm_token_is_dead.
+    Not any NotFoundError: a bare 404 from a wrong project or endpoint would
+    otherwise prune live devices. See #389.
     """
-    return isinstance(exc, exceptions.NotFoundError)
+    return isinstance(exc, messaging.UnregisteredError)
 
 
 def _dry_run(fcm_token, firebase_app):

@@ -1,7 +1,6 @@
 import logging
 import json
 from flask import Blueprint, request, jsonify
-from sqlalchemy import func
 
 from app import Session
 from app.models import TrackedRoom, DatapackageCache
@@ -31,13 +30,10 @@ def get_game_available_items(current_user, game_name):
             DatapackageCache.game == game_name,
             DatapackageCache.entity_type.in_(['item', 'item_group'])
         ).distinct().all()
-        
-        if not items_query:
-            items_query = session.query(DatapackageCache.entity_name, DatapackageCache.entity_type).filter(
-                func.lower(DatapackageCache.game) == game_name.lower(),
-                DatapackageCache.entity_type.in_(['item', 'item_group'])
-            ).distinct().all()
-        
+
+        # Exact match only. A lower(game) fallback here was a full scan of
+        # datapackage_cache on every miss (34 s on prod), and the app only ever
+        # sends names it got from the server verbatim. See #407.
         results = []
         for name, etype in items_query:
             results.append({
@@ -81,10 +77,7 @@ def get_item_groups(current_user, game_name, item_name):
             checksum_row = session.query(DatapackageCache.checksum).filter(
                 DatapackageCache.game == game_name
             ).first()
-            if not checksum_row:
-                checksum_row = session.query(DatapackageCache.checksum).filter(
-                    func.lower(DatapackageCache.game) == game_name.lower()
-                ).first()
+            # Exact match only, as in get_game_available_items (#407).
             if checksum_row:
                 checksum = checksum_row[0]
 

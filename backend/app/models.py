@@ -352,7 +352,7 @@ class UserWhitelistItem(Base):
 class DatapackageCache(Base):
     __tablename__ = 'datapackage_cache'
     # No surrogate key. (checksum, entity_type, entity_id) is the real identity:
-    # it is what the upsert in services/datapackage_service.py conflicts on, and
+    # it is what the upsert in poller.db_cache_datapackage conflicts on, and
     # nothing ever read the old `id` column. Its primary key index had been
     # scanned twice in the lifetime of the table while costing 268 MB, so the
     # column was dropped. See b7f4e2c9a1d3.

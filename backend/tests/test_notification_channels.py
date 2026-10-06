@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
-from app.services.notification_service import map_notification_to_channel_id, send_fcm_notifications, compress_notifications
+from app.services.notification_service import map_notification_to_channel_id, send_fcm_notifications
+from app.poller import compress_notifications
 
 
 class TestNotificationChannels(unittest.TestCase):
@@ -136,6 +137,67 @@ class TestNotificationChannels(unittest.TestCase):
         self.assertEqual(sent_messages[2].android.priority, 'normal')
         self.assertEqual(sent_messages[2].data['channel_id'], 'channel_hints')
         self.assertEqual(sent_messages[2].data['notification_type'], 'hint')
+
+    @patch('app.poller.db_remove_invalid_tokens')
+    @patch('firebase_admin.messaging.send_each')
+    @patch('app.poller.get_firebase_app')
+    def test_poller_prunes_only_unregistered_tokens(self, mock_get_app, mock_send_each, mock_remove):
+        # A bare 404 (wrong Firebase project, bad endpoint) must not delete the
+        # device; only FCM's explicit UNREGISTERED answer may. See #389.
+        import asyncio
+        from types import SimpleNamespace
+        from firebase_admin import exceptions, messaging
+        from app.poller import send_push_notifications as poller_send_push
+
+        failures = {
+            'dead-token': messaging.UnregisteredError('Requested entity was not found.'),
+            'wrong-project-token': exceptions.NotFoundError('Requested entity was not found.'),
+            'flaky-token': exceptions.UnavailableError('FCM unavailable'),
+        }
+
+        def send_each(messages, app=None):
+            return SimpleNamespace(responses=[
+                SimpleNamespace(success=m.token not in failures, exception=failures.get(m.token))
+                for m in messages
+            ])
+        mock_send_each.side_effect = send_each
+
+        loop = asyncio.new_event_loop()
+        try:
+            with self.assertLogs(level='ERROR') as logs:
+                loop.run_until_complete(poller_send_push(
+                    [{'title': 'Sword - [Room]', 'body': 'Got sword', 'type': 'item_progression'}],
+                    ['live-token', *failures], loop, platform='android'))
+        finally:
+            loop.close()
+
+        mock_remove.assert_called_once_with(['dead-token'])
+        self.assertTrue(any('not an unregistered token' in line for line in logs.output), logs.output)
+
+    @patch('app.poller.db_remove_invalid_tokens')
+    @patch('firebase_admin.messaging.send_each')
+    @patch('app.poller.get_firebase_app')
+    def test_poller_keeps_every_device_when_every_send_is_a_bare_404(self, mock_get_app, mock_send_each, mock_remove):
+        import asyncio
+        from types import SimpleNamespace
+        from firebase_admin import exceptions
+        from app.poller import send_push_notifications as poller_send_push
+
+        mock_send_each.side_effect = lambda messages, app=None: SimpleNamespace(responses=[
+            SimpleNamespace(success=False, exception=exceptions.NotFoundError('not found'))
+            for _ in messages
+        ])
+
+        loop = asyncio.new_event_loop()
+        try:
+            with self.assertLogs(level='ERROR'):
+                loop.run_until_complete(poller_send_push(
+                    [{'title': 'Sword - [Room]', 'body': 'Got sword', 'type': 'item_progression'}],
+                    ['a', 'b', 'c'], loop, platform='android'))
+        finally:
+            loop.close()
+
+        mock_remove.assert_not_called()
 
 
 if __name__ == '__main__':

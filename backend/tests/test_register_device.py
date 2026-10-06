@@ -291,6 +291,20 @@ class DeadTokenTest(RegisterDeviceTestBase):
         _app.assert_called_with(platform='android')
         self.assertIs(sent.call_args.kwargs['app'], _app.return_value)
 
+    def test_the_test_push_keeps_a_device_on_a_bare_404(self, _app):
+        # A 404 without FCM's UNREGISTERED detail (wrong project, bad
+        # endpoint) says nothing about the token. See #389.
+        self.add_device(self.alice, 'live-token', 'phone-1')
+
+        with patch.object(user_routes.messaging, 'send', side_effect=exceptions.NotFoundError('x')):
+            resp = self.app.test_client().post(
+                '/users/me/test-notification', headers=self.auth(self.alice))
+
+        body = resp.get_json()
+        self.assertEqual(resp.status_code, 200, body)
+        self.assertEqual((body['sent'], body['failed'], body['removed']), (0, 1, 0))
+        self.assertEqual(self.devices(), [(self.alice, 'live-token', 'phone-1')])
+
 
 if __name__ == '__main__':
     unittest.main()
