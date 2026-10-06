@@ -1,5 +1,4 @@
 import logging
-import json
 from firebase_admin import messaging
 from app import get_firebase_app
 

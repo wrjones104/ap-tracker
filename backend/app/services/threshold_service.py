@@ -35,7 +35,7 @@ def compute_requirement_progress(session, room, slot_id, requirements):
     """
     Per-requirement acquired counts for one tracked slot, keyed by ThresholdGroupItem id.
 
-    Mirrors the expansion evaluate_threshold_groups performs: an item-group requirement is
+    Mirrors the expansion poller._evaluate_threshold_groups performs: an item-group requirement is
     resolved against the game's item_name_groups datapackage entry and summed over every member,
     and the counts come from SlotItemCount -- the same table that decides when a milestone
     actually fires. Clients cannot do this themselves; the datapackage exposes only an is_group
