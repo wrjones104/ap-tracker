@@ -81,6 +81,8 @@ Execute automated guardrails to ensure zero drift:
    CI runs Linux, and some test bugs only show there. For a release, prefer running the same loop in Docker (`python:3.13-slim`) on a `git archive HEAD` export of the branch. Install `requirements.txt` and `backend/requirements.txt` in **separate** `pip` calls, because they pin different alembic versions.
 
 ### Step 7: Open the PR and Ship in Order
+Before opening the PR, decide which side goes first. **Server first when it adds behaviour, app first when the server withdraws or moves something** an installed app relies on (or raise `MIN_APP_VERSION` in the server's `backend/.env`). Check every change in the release, including background tasks: a behaviour removed from the poller or a sync does not show up in an API contract diff. See the deploy-order gotcha in `LLM.md`. State the order in the PR.
+
 Open the release PR. After the user merges it, walk the ship order:
 - **Server release:** the user deploys `main`. The version is read from `changelog.json`, so the label updates on deploy.
 - **App release:** the app fetches What's New from the server (`GET /api/whats_new/latest?version=<versionName>`), so the entry must be **on the prod server before anyone tests the build**:
