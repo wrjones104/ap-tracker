@@ -994,6 +994,42 @@
   ],
   "server_releases": [
     {
+      "version": "1.14.5",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-06",
+      "title": "Faster Game Pickers",
+      "highlights": [
+        {
+          "title": "Faster Game Pickers",
+          "description": "Game lists in the ignore, whitelist and template pickers load at once instead of taking up to 15 seconds."
+        },
+        {
+          "title": "Quicker Cheese Sync",
+          "description": "The Cheese sync when you open the app skips rooms you've archived, so it finishes sooner."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Faster Game Pickers",
+            "description": "The game list loads at once instead of scanning the whole cache, and now needs you to be signed in. Closes #439."
+          },
+          {
+            "title": "Quicker Cheese Sync",
+            "description": "The sync on app open no longer fetches trackers for archived rooms; unarchiving brings them back. Closes #400."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Changed\n- `GET /games` walks the game index with a recursive CTE instead of `SELECT DISTINCT` (14.8 s on prod), caches the list for 5 minutes, and requires sign-in. Closes #439, PR #443.\n- The Cheese sync on app open no longer fetches trackers for archived rooms; they stay linked and return on unarchive. Closes #400, PR #444.\n- `GET /config` reads `min_app_version` from the optional `MIN_APP_VERSION` env var (default 9), and the deploy-order rule is written into `LLM.md`. Refs #343, PR #445.\n\n### Compatibility\n- No migration. Safe server-first: every app version that calls `GET /games` already sends its sign-in token, and `min_app_version` stays 9 until `MIN_APP_VERSION` is set."
+      }
+    },
+    {
       "version": "1.14.4",
       "component": "server",
       "component_label": "Server",

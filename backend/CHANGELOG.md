@@ -10,6 +10,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.14.5] - 2026-10-06
+
+_Faster Game Pickers_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - `GET /games` walks the game index with a recursive CTE instead of `SELECT DISTINCT` (14.8 s on prod), caches the list for 5 minutes, and requires sign-in. Closes #439, PR #443.
+> - The Cheese sync on app open no longer fetches trackers for archived rooms; they stay linked and return on unarchive. Closes #400, PR #444.
+> - `GET /config` reads `min_app_version` from the optional `MIN_APP_VERSION` env var (default 9), and the deploy-order rule is written into `LLM.md`. Refs #343, PR #445.
+>
+> ### Compatibility
+> - No migration. Safe server-first: every app version that calls `GET /games` already sends its sign-in token, and `min_app_version` stays 9 until `MIN_APP_VERSION` is set.
+> ```
+
+### Changed
+- **Faster Game Pickers**: The game list loads at once instead of scanning the whole cache, and now needs you to be signed in. Closes #439.
+- **Quicker Cheese Sync**: The sync on app open no longer fetches trackers for archived rooms; unarchiving brings them back. Closes #400.
+
+---
+
 ## [1.14.4] - 2026-10-06
 
 _Archived Rooms Rest_
