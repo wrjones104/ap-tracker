@@ -145,7 +145,7 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
     firebase_app = get_firebase_app(platform=platform)
     if not firebase_app or not notifications or not device_tokens: return
 
-    from firebase_admin import messaging
+    from firebase_admin import exceptions, messaging
     from app.services.notification_service import map_notification_to_channel_id
   
     messages = []
@@ -213,11 +213,22 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
             response = await loop.run_in_executor(None, lambda: messaging.send_each(chunk, app=firebase_app))
             
             unregistered_tokens = []
+            other_not_found = 0
             for idx, res in enumerate(response.responses):
                 if not res.success:
-                    error_code = res.exception.code if hasattr(res.exception, 'code') else "UNKNOWN"
-                    if error_code in ['UNREGISTERED', 'NOT_FOUND']:
+                    # Prune only on FCM's explicit UNREGISTERED answer. A bare
+                    # 404 (wrong Firebase project, bad endpoint) would otherwise
+                    # delete every device we try to notify. See #389.
+                    if isinstance(res.exception, messaging.UnregisteredError):
                         unregistered_tokens.append(chunk[idx].token)
+                    elif isinstance(res.exception, exceptions.NotFoundError):
+                        other_not_found += 1
+
+            if other_not_found:
+                logging.error(
+                    f"[FCM] {other_not_found} of {len(chunk)} {platform} sends got a 404 that is not an "
+                    f"unregistered token. Check the Firebase project and key file; devices were kept."
+                )
 
             if unregistered_tokens:
                 logging.info(f"[FCM] Found {len(unregistered_tokens)} invalid devices. Removing from DB.")
