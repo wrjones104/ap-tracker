@@ -1250,9 +1250,18 @@ class TestRelinkingUndoesTheDeleteHide(CheeseLinkTestBase):
 
                 self.assertEqual(self._override_writes(cheese), [])
 
-    def _push(self, cheese):
+    def _push(self, cheese, during_second_wait=None):
+        """Run the push with its waits skipped. `during_second_wait` runs where the
+        second CHEESE_DELAY would be, which is the window #409 is about."""
+        waits = []
+
+        def sleep(*_):
+            waits.append(1)
+            if len(waits) == 2 and during_second_wait:
+                during_second_wait()
+
         with patch.object(api_cheese, '_cheese_session', cheese), \
-             patch.object(api_cheese.time, 'sleep', lambda *_: None):
+             patch.object(api_cheese.time, 'sleep', sleep):
             api_cheese.push_new_room_to_cheese(
                 self.app, 1, "https://archipelago.gg/tracker/ap_trk", "room_uuid",
                 "https://archipelago.gg/room/room_uuid", "Room",
@@ -1330,6 +1339,120 @@ class TestRelinkingUndoesTheDeleteHide(CheeseLinkTestBase):
         self._push(cheese)
 
         self.assertEqual(self._override_writes(cheese), [])
+
+    # The title/room_link PUT lands about two minutes after the room was added.
+    # If the user withdrew the link by then, it is no longer theirs to write. A
+    # push that does not write must not record the tracker id either, or nothing
+    # ever pushes the room again: healing and relink only pick up rooms without
+    # one. #409.
+
+    def _tracker_writes(self, cheese):
+        return [c for c in cheese.put.call_args_list
+                if c.args and c.args[0].endswith('/tracker/ct_room_1')]
+
+    def _recorded_tracker_id(self):
+        fresh = Session()
+        try:
+            return fresh.query(TrackedRoom).filter_by(room_id="room_uuid").one().cheese_tracker_id
+        finally:
+            fresh.close()
+
+    def _set_link(self, room_id, link):
+        def flip():
+            session = Session()
+            try:
+                session.query(UserRoomSubscription).filter_by(user_id=1, room_id=room_id).update({'cheese_link': link})
+                session.commit()
+            finally:
+                session.close()
+        return flip
+
+    def _unsubscribe(self, room_id):
+        def delete():
+            session = Session()
+            try:
+                session.query(UserRoomSubscription).filter_by(user_id=1, room_id=room_id).delete()
+                session.commit()
+            finally:
+                session.close()
+        return delete
+
+    def test_a_linked_push_writes_the_title_and_room_link(self):
+        self.make_user()
+        self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        cheese = self._cheese(tracker={'title': ''})
+
+        self._push(cheese)
+
+        writes = self._tracker_writes(cheese)
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0].kwargs['json']['title'], 'Room')
+        self.assertEqual(writes[0].kwargs['json']['room_link'], "https://archipelago.gg/room/room_uuid")
+        self.assertEqual(self._recorded_tracker_id(), "ct_room_1")
+
+    def test_a_room_unlinked_during_the_push_gets_no_tracker_write(self):
+        self.make_user()
+        room_id = self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        cheese = self._cheese(tracker={'title': '', 'dashboard_override_visibility': False})
+
+        self._push(cheese, during_second_wait=self._set_link(room_id, CHEESE_LINK_NONE))
+
+        self.assertEqual(cheese.post.call_count, 1, "the push did start while linked")
+        self.assertEqual(self._tracker_writes(cheese), [])
+        self.assertEqual(self._override_writes(cheese), [])
+        self.assertIsNone(self._recorded_tracker_id(), "a relink must push the room again")
+
+    def test_a_room_unlinked_then_relinked_during_the_push_is_written(self):
+        # Only the state at write time counts.
+        self.make_user()
+        room_id = self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        cheese = self._cheese(tracker={'title': ''})
+
+        def unlink_then_relink():
+            self._set_link(room_id, CHEESE_LINK_NONE)()
+            self._set_link(room_id, CHEESE_LINK_LINKED)()
+
+        self._push(cheese, during_second_wait=unlink_then_relink)
+
+        self.assertEqual(len(self._tracker_writes(cheese)), 1)
+        self.assertEqual(self._recorded_tracker_id(), "ct_room_1")
+
+    def test_a_room_deleted_during_the_push_gets_no_tracker_write(self):
+        self.make_user()
+        room_id = self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        cheese = self._cheese(tracker={'title': ''})
+
+        self._push(cheese, during_second_wait=self._unsubscribe(room_id))
+
+        self.assertEqual(cheese.post.call_count, 1, "the push did start while subscribed")
+        self.assertEqual(self._tracker_writes(cheese), [])
+        self.assertIsNone(self._recorded_tracker_id())
+
+    def test_a_failed_link_check_skips_the_push_and_leaves_the_room_for_healing(self):
+        self.make_user()
+        self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        cheese = self._cheese(tracker={'title': '', 'dashboard_override_visibility': False})
+
+        with patch.object(api_cheese, '_room_still_linked', side_effect=RuntimeError("db hiccup")):
+            self._push(cheese)
+
+        self.assertEqual(self._tracker_writes(cheese), [])
+        self.assertEqual(self._override_writes(cheese), [])
+        self.assertIsNone(self._recorded_tracker_id(), "an unrecorded room is what healing retries")
+
+    def test_a_skipped_push_is_retried_by_the_next_healing_pass(self):
+        # The room the failed check left behind is exactly what healing selects:
+        # linked, with no tracker id. Pushing it again writes the title.
+        self.make_user()
+        self._room_for(1, CHEESE_LINK_LINKED, tracker_id=None)
+        cheese = self._cheese(tracker={'title': ''})
+
+        with patch.object(api_cheese, '_room_still_linked', side_effect=RuntimeError("db hiccup")):
+            self._push(cheese)
+        self._push(cheese)
+
+        self.assertEqual(len(self._tracker_writes(cheese)), 1)
+        self.assertEqual(self._recorded_tracker_id(), "ct_room_1")
 
 
 class TestAccountDeletion(CheeseLinkTestBase):

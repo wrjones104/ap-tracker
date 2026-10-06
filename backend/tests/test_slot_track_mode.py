@@ -1174,12 +1174,16 @@ class TestLinkCatchUpRespectsWatch(TrackModeTestBase):
         return pushes
 
     def _make_room(self, modes):
-        """modes: {slot_id: track_mode}. Room starts unlinked, as a fresh one is."""
+        """modes: {slot_id: track_mode}. The room has no Cheese tracker yet, as a
+        fresh one does. The subscription is linked: the push only starts for a
+        room added or switched to linked, and it re-checks the link before
+        writing (#409)."""
         room = TrackedRoom(room_id="fresh_uuid")
         self.session.add(room)
         self.session.flush()
         self.session.add(UserRoomSubscription(
-            user_id=self.user_id, room_id=room.id, alias="Fresh Room"
+            user_id=self.user_id, room_id=room.id, alias="Fresh Room",
+            cheese_link=CHEESE_LINK_LINKED,
         ))
         for slot_id, mode in modes.items():
             self.session.add(UserTrackedSlot(
