@@ -175,6 +175,59 @@ class ItemGroupsRouteTest(unittest.TestCase):
         self.assertEqual(resp.get_json(), ['Bottles', 'Everything'])
         self.assertEqual(self.cache_rows(), rows_before)
 
+    # A miss on either game route used to fall back to lower(game), a full
+    # scan of the table, and any signed-in guest could request one. See #407.
+
+    def test_game_items_by_exact_name(self):
+        self.cached_package()
+
+        resp = self.get(f'/games/{GAME}/items')
+
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        self.assertEqual(
+            [i['name'] for i in resp.get_json()],
+            ['Bottle', 'Bottles', 'Everything', 'Kokiri Sword'],
+        )
+        self.assertEqual(self.cache_scans(), [])
+
+    def test_game_items_miss_does_not_scan_the_cache(self):
+        self.cached_package()
+
+        resp = self.get('/games/No Such Game/items')
+
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        self.assertEqual(resp.get_json(), [])
+        self.assertEqual(self.cache_scans(), [])
+
+    def test_item_groups_without_a_room_by_exact_name(self):
+        self.cached_package()
+
+        resp = self.get(f'/games/{GAME}/items/bottle/groups')
+
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        self.assertEqual(resp.get_json(), ['Bottles', 'Everything'])
+        self.assertEqual(self.cache_scans(), [])
+
+    def test_item_groups_miss_does_not_scan_the_cache(self):
+        self.cached_package()
+
+        resp = self.get('/games/No Such Game/items/bottle/groups')
+
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        self.assertEqual(resp.get_json(), [])
+        self.assertEqual(self.cache_scans(), [])
+
+    def test_item_groups_room_lookup_still_ignores_case(self):
+        # The room's own checksum map is matched case-insensitively in Python,
+        # which costs nothing; only the table-wide fallback went.
+        self.cached_package()
+
+        resp = self.get(f'/games/{GAME.upper()}/items/bottle/groups?room_db_id={self.room_id}')
+
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        self.assertEqual(resp.get_json(), ['Bottles', 'Everything'])
+        self.assertEqual(self.cache_scans(), [])
+
 
 if __name__ == '__main__':
     unittest.main()
