@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
-from app.services.notification_service import map_notification_to_channel_id, send_fcm_notifications, compress_notifications
+from app.services.notification_service import map_notification_to_channel_id, send_fcm_notifications
+from app.poller import compress_notifications
 
 
 class TestNotificationChannels(unittest.TestCase):
