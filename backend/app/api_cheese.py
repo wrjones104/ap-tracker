@@ -262,12 +262,23 @@ def setup_cheese_user_task(app, user_id):
             # asked us to mirror. Deliberately not filtered by dashboard
             # membership -- a linked room the user hid on Cheese still gets its
             # claims reconciled, it is just flagged as unlisted below.
+            #
+            # Archived rooms are left out. Archiving pauses a room for its user
+            # (#347): nothing the room records reaches them, and its polling stops
+            # once nobody has it unarchived, so refreshing its tracker and claims
+            # buys nothing. Each fetch costs up to 10 s,
+            # and a long-time user's archived rooms made the sync on every app
+            # open outlast the app's wait for it (#400). The loop below still
+            # checks them against the dashboard, which needs no request, but has
+            # no details to refresh them with. Unarchiving puts them back on the
+            # next sync.
             linked_tracker_ids = {
                 ct_id for (ct_id,) in session.query(TrackedRoom.cheese_tracker_id)
                 .join(UserRoomSubscription, UserRoomSubscription.room_id == TrackedRoom.id)
                 .filter(
                     UserRoomSubscription.user_id == user.id,
                     UserRoomSubscription.cheese_link == CHEESE_LINK_LINKED,
+                    UserRoomSubscription.is_archived.is_(False),
                     TrackedRoom.cheese_tracker_id.isnot(None),
                 ).all()
             }
