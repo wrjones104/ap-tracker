@@ -1004,32 +1004,36 @@ def push_new_room_to_cheese(app, user_id, tracker_url, ap_room_id, room_url, ali
 
         # The user may have unlinked or deleted the room during the two waits
         # above, and the link is what authorises a write to Cheese (#323). Check
-        # it again right before writing (#409). Inside its own try, so a failed
-        # check skips the writes but never the database phase below, which is
-        # what links the room to its tracker.
+        # it again right before writing (#409). A push that may not write must
+        # not record the tracker id either: a room with an id is never pushed
+        # again (the sync's healing phase and a relink both key on a missing
+        # id), so its title and room_link would never be written. Left
+        # unrecorded, the next healing pass or a relink pushes it again, and
+        # POST /tracker is create-or-get, so that lands on this same tracker.
         try:
             still_linked = _room_still_linked(app, user_id, ap_room_id)
         except Exception as e:
-            logging.error(f"[CHEESE_DEBUG] Could not re-check the link for {ap_room_id}; skipping the Cheese writes: {e}", exc_info=True)
-            still_linked = False
+            logging.error(f"[CHEESE_DEBUG] Could not re-check the link for {ap_room_id}; skipping this push, healing will retry it: {e}", exc_info=True)
+            return
 
         if not still_linked:
-            logging.info(f"[CHEESE_DEBUG] Room {ap_room_id} is no longer linked for user {user_id}; left tracker {cheese_tracker_id} untouched.")
-        else:
-            # Step 5: PUT the update
-            response_put = _cheese_session.put(f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}", json=put_payload, headers=put_headers, timeout=10)
+            logging.info(f"[CHEESE_DEBUG] Room {ap_room_id} is no longer linked for user {user_id}; left tracker {cheese_tracker_id} untouched and unrecorded.")
+            return
 
-            if not (response_put.status_code == 200 or response_put.status_code == 204):
-                logging.warning(f"[CHEESE_DEBUG] Failed (PUT) to update title/room_link for {cheese_tracker_id}: {response_put.status_code} {response_put.text}")
+        # Step 5: PUT the update
+        response_put = _cheese_session.put(f"{CHEESE_BASE_URL}/tracker/{cheese_tracker_id}", json=put_payload, headers=put_headers, timeout=10)
 
-            # POST /tracker is create-or-get, so a room the user deleted and is now
-            # adding back gets the same tracker, still hidden by that delete. See #403.
-            # Inside its own try, so the write cannot skip the database phase below.
-            if tracker_data.get('dashboard_override_visibility') is False:
-                try:
-                    _clear_dashboard_hide(headers, user_id, cheese_tracker_id)
-                except Exception as e:
-                    logging.error(f"[CHEESE_VISIBILITY] Error clearing hide for {cheese_tracker_id}: {e}", exc_info=True)
+        if not (response_put.status_code == 200 or response_put.status_code == 204):
+            logging.warning(f"[CHEESE_DEBUG] Failed (PUT) to update title/room_link for {cheese_tracker_id}: {response_put.status_code} {response_put.text}")
+
+        # POST /tracker is create-or-get, so a room the user deleted and is now
+        # adding back gets the same tracker, still hidden by that delete. See #403.
+        # Inside its own try, so the write cannot skip the database phase below.
+        if tracker_data.get('dashboard_override_visibility') is False:
+            try:
+                _clear_dashboard_hide(headers, user_id, cheese_tracker_id)
+            except Exception as e:
+                logging.error(f"[CHEESE_VISIBILITY] Error clearing hide for {cheese_tracker_id}: {e}", exc_info=True)
 
     except requests.exceptions.ReadTimeout:
         logging.error(f"[CHEESE_DEBUG] Network timeout connecting to {CHEESE_BASE_URL}.", exc_info=True)
