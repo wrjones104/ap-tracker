@@ -18,7 +18,7 @@ os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='  #
 # Import through `app.*` only, never `backend.app.*` -- see the note in
 # test_slot_track_mode.py.
 from app import create_app, Session, engine
-from app.routes.auth_routes import DEFAULT_MIN_APP_VERSION
+from app.routes.auth_routes import DEFAULT_MIN_APP_VERSION, _parse_min_app_version
 
 
 def _remove_test_db():
@@ -36,6 +36,8 @@ class MinAppVersionTest(unittest.TestCase):
         self.app = create_app()
         self.app_context = self.app.app_context()
         self.app_context.push()
+        _parse_min_app_version.cache_clear()
+        self.addCleanup(_parse_min_app_version.cache_clear)
 
     def tearDown(self):
         Session.remove()
@@ -74,6 +76,18 @@ class MinAppVersionTest(unittest.TestCase):
         for bad in ('seventy-eight', '78.0', '0', '-5'):
             with self.subTest(value=bad), self.assertLogs(level='ERROR'):
                 self.assertEqual(self.min_version(bad), 9)
+
+    def test_a_typo_is_logged_once_not_on_every_launch(self):
+        with self.assertLogs(level='INFO') as logs:
+            for _ in range(5):
+                self.assertEqual(self.min_version('seventy-eight'), 9)
+        errors = [r for r in logs.records if 'CONFIG_ERROR' in r.getMessage()]
+        self.assertEqual(len(errors), 1)
+
+    def test_the_floor_in_effect_is_logged(self):
+        with self.assertLogs(level='INFO') as logs:
+            self.min_version('78')
+        self.assertTrue(any('min_app_version is 78' in r.getMessage() for r in logs.records))
 
 
 if __name__ == '__main__':
