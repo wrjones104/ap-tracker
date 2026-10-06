@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from unittest.mock import patch, MagicMock
@@ -483,6 +484,86 @@ class TestCheeseSync(unittest.TestCase):
         user_check = fresh_session.query(User).get(user_db_id)
         self.assertEqual(user_check.cheese_last_sync_unlisted, 1)
         fresh_session.close()
+
+    @patch('app.api_cheese.time.sleep')
+    @patch('app.api_cheese.requests.Session')
+    def test_archived_rooms_are_not_fetched(self, mock_session_cls, _sleep):
+        """
+        The sync fetches trackers only for rooms the user has not archived.
+
+        Each fetch can take up to 10 s, and archiving pauses a room (#347), so a
+        long-time user's archived rooms made the sync on every app open outlast
+        the app's wait for it. See #400.
+        """
+        mock_session = MagicMock()
+        mock_session_cls.return_value.__enter__.return_value = mock_session
+
+        payload = {
+            'updated_at': '2026-10-06T10:00:00Z',
+            'games': [{'id': 101, 'position': 1, 'claimed_by_ct_user_id': 12345,
+                       'effective_discord_username': 'test_discord_user'}],
+        }
+        fetched = []
+
+        def mock_get(url, *args, **kwargs):
+            resp = MagicMock()
+            resp.ok = True
+            if '/user/self' in url:
+                resp.json.return_value = {'id': 12345}
+            elif '/dashboard/tracker' in url:
+                resp.json.return_value = [
+                    {'tracker_id': 'ct_active'},
+                    {'tracker_id': 'ct_archived'},
+                ]
+            elif '/tracker/' in url:
+                fetched.append(url.rsplit('/', 1)[-1])
+                resp.json.return_value = payload
+            return resp
+
+        mock_session.get.side_effect = mock_get
+
+        user = User(
+            id=1,
+            discord_username='test_discord_user',
+            cheese_api_key=encrypt_api_key('fake_api_key'),
+            cheese_user_id=12345,
+            is_guest=False,
+        )
+        self.session.add(user)
+        rooms = {}
+        for name, archived in (('active', False), ('archived', True)):
+            room = TrackedRoom(
+                room_id=f'{name}_uuid',
+                hostname='archipelago.gg',
+                cheese_tracker_id=f'ct_{name}',
+                cached_cheese_json='{"stale": true}',
+            )
+            self.session.add(room)
+            self.session.flush()
+            self.session.add(UserRoomSubscription(
+                user_id=user.id, room_id=room.id, alias=name,
+                is_archived=archived, cheese_link=CHEESE_LINK_LINKED,
+            ))
+            rooms[name] = room.id
+        self.session.commit()
+
+        setup_cheese_user_task(self.app, user.id)
+
+        self.assertEqual(fetched, ['ct_active'])
+
+        check = Session()
+        try:
+            active = check.query(TrackedRoom).get(rooms['active'])
+            archived = check.query(TrackedRoom).get(rooms['archived'])
+            self.assertEqual(json.loads(active.cached_cheese_json), payload)
+            self.assertEqual(archived.cached_cheese_json, '{"stale": true}')
+            # Still linked and still a subscription: archiving pauses, it does not unlink.
+            archived_sub = check.query(UserRoomSubscription).filter_by(room_id=rooms['archived']).one()
+            self.assertEqual(archived_sub.cheese_link, CHEESE_LINK_LINKED)
+            self.assertIsNone(archived_sub.cheese_unlisted_at)
+            self.assertFalse(check.query(User).get(user.id).is_syncing_cheese)
+        finally:
+            check.close()
 
 if __name__ == '__main__':
     unittest.main()
