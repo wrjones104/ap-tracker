@@ -994,6 +994,59 @@
   ],
   "server_releases": [
     {
+      "version": "1.14.4",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-06",
+      "title": "Archived Rooms Rest",
+      "highlights": [
+        {
+          "title": "Archived Rooms Rest",
+          "description": "Rooms you've archived stop being checked for updates until you unarchive them."
+        },
+        {
+          "title": "No Missing Hints",
+          "description": "After you sign in again, a room's hints are no longer skipped when another room has a long backlog."
+        },
+        {
+          "title": "Unlinking From Cheese Sticks",
+          "description": "Unlinking or deleting a room right after adding it no longer updates its Cheese tracker."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Archived Rooms Rest",
+            "description": "A room everyone has archived is no longer polled, and unarchiving it resumes updates. Closes #347."
+          },
+          {
+            "title": "Faster Game Lookups",
+            "description": "Looking up items for a game the server has not cached answers at once instead of scanning the whole cache. Closes #407."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "No Missing Hints",
+            "description": "A room's hints are no longer skipped on a first sync when another room's older hints fill the batch. Closes #421."
+          },
+          {
+            "title": "Unlinking From Cheese Sticks",
+            "description": "A new room's Cheese update is skipped if you unlink or delete it first, and an interrupted one is retried later. Closes #409."
+          },
+          {
+            "title": "Devices Kept on Firebase Errors",
+            "description": "A Firebase setup error no longer removes registered devices; only tokens Firebase has retired are dropped. Closes #389."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Changed\n- Rooms whose every subscription is archived are no longer polled, stale-checked or healed; cleanup still keeps them. Closes #347, PR #431.\n- `GET /games/<game>/items` and `.../items/<item>/groups` match the game name exactly. The `lower(game)` fallback full-scanned `datapackage_cache` on a miss (~34 s on prod). Closes #407, PR #433.\n- Deleted the unused service copies of poller code (`services/datapackage_service.py`, `compress_notifications`, `evaluate_threshold_groups`). Closes #388 and #406, PR #436.\n\n### Fixed\n- `POST /history/sync` no longer gives a cursorless room \"now\" when other rooms' hints fill the 100-hint batch. Closes #421, PR #434.\n- The poller and the test push prune a device only on FCM `UnregisteredError`, not any 404; other 404s are logged as a config error. Closes #389, PR #435.\n- `push_new_room_to_cheese` re-checks the link before its title/room_link PUT. A push that may not write records no tracker id, so healing or a relink retries it. Closes #409, PR #437.\n\n### Compatibility\n- No migration. Safe for every app version: the history-sync change leaves out a key that every app already treats as \"keep the cursor I sent\".\n- The prod nginx config is now in the repo under `deploy/nginx/` (#410, PR #430)."
+      }
+    },
+    {
       "version": "1.14.3",
       "component": "server",
       "component_label": "Server",

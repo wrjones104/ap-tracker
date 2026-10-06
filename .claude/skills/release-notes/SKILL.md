@@ -148,6 +148,10 @@ Each snippet targets a different audience and platform, so the same release read
 differently in each:
 
 **Discord** (`release_notes.discord`)
+- **App releases only.** The user never posts server-only releases to Discord, so
+  always leave `discord: ""` for `server_releases` entries and don't draft one. If a
+  server change is worth telling users about, the next app release's Discord post
+  can mention it (as app 1.13.0's did for server 1.14.1).
 - Audience: the community Discord, people who already use the app and want to know
   what's new.
 - Format: casual, Discord markdown OK (`**bold**`, `•` bullets). The first line is
@@ -159,11 +163,9 @@ differently in each:
 - Add a section at the very end with download links like this:
      GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
      Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
-- **Skip Discord entirely when there's nothing new to tell users.** This comes up
-  when one commit touches both app and server code (common in this project) and the
-  app release already announced the user-facing effect — a second Discord post for
-  the server release would just repeat it. Leave `discord: ""` in that case rather
-  than padding out a redundant announcement; still fill in `github` normally.
+- **Skip Discord for an app release with nothing new to tell users** (rare, e.g. a
+  build-only bump). Leave `discord: ""` rather than padding out an announcement;
+  still fill in `github` normally.
 
 **Play Console — "What's new"** (`release_notes.play_store`)
 - **App releases only.** The backend has no Play Store listing — always leave this
