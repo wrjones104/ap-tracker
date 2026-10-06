@@ -1,6 +1,9 @@
 import logging
 import json
+import threading
+import time
 from flask import Blueprint, request, jsonify
+from sqlalchemy import text
 
 from app import Session
 from app.models import TrackedRoom, DatapackageCache
@@ -8,16 +11,57 @@ from app.routes.common import log_api_call, token_required, handle_db_errors
 
 game_bp = Blueprint('game_routes', __name__)
 
+# Postgres has no loose index scan, so a plain DISTINCT over game reads one
+# index entry per cached row: 13 M entries and 14.8 s on prod to return ~2,400
+# names. This walks the same index one game at a time instead -- each step asks
+# for the first game after the last one -- so the cost follows the number of
+# games, not the size of the table. See #439.
+_DISTINCT_GAMES_SQL = text("""
+    WITH RECURSIVE games(game) AS (
+        SELECT MIN(game) FROM datapackage_cache
+        UNION ALL
+        SELECT (SELECT MIN(d.game) FROM datapackage_cache d WHERE d.game > games.game)
+        FROM games
+        WHERE games.game IS NOT NULL
+    )
+    SELECT game FROM games WHERE game IS NOT NULL ORDER BY game
+""")
+
+# The list only grows when the poller caches a game new to the whole server,
+# and the app already holds it for the session, so a few minutes of staleness
+# costs nothing. Process memory is enough: the API runs as one process.
+_GAMES_CACHE_TTL_SECONDS = 300
+_games_cache = {'games': None, 'expires_at': 0.0}
+_games_cache_lock = threading.Lock()
+
+
+def _known_games():
+    now = time.monotonic()
+    cached = _games_cache['games']
+    if cached is not None and now < _games_cache['expires_at']:
+        return cached
+    # One thread refreshes; the rest wait for its answer rather than each
+    # running the query.
+    with _games_cache_lock:
+        if _games_cache['games'] is not None and time.monotonic() < _games_cache['expires_at']:
+            return _games_cache['games']
+        session = Session()
+        try:
+            rows = session.execute(_DISTINCT_GAMES_SQL).all()
+        finally:
+            Session.remove()
+        games = [r[0] for r in rows if r[0]]
+        _games_cache['games'] = games
+        _games_cache['expires_at'] = time.monotonic() + _GAMES_CACHE_TTL_SECONDS
+        return games
+
+
 @game_bp.route('/games', methods=['GET'])
+@handle_db_errors
 @log_api_call
-def get_games():
-    session = Session()
-    try:
-        games = session.query(DatapackageCache.game).distinct().order_by(DatapackageCache.game).all()
-        game_list = [g[0] for g in games if g[0]]
-        return jsonify(game_list)
-    finally:
-        Session.remove()
+@token_required
+def get_games(current_user):
+    return jsonify(_known_games())
 
 @game_bp.route('/games/<path:game_name>/items', methods=['GET'])
 @handle_db_errors
