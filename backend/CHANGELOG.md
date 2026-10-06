@@ -10,6 +10,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.14.4] - 2026-10-06
+
+_Archived Rooms Rest_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - Rooms whose every subscription is archived are no longer polled, stale-checked or healed; cleanup still keeps them. Closes #347, PR #431.
+> - `GET /games/<game>/items` and `.../items/<item>/groups` match the game name exactly. The `lower(game)` fallback full-scanned `datapackage_cache` on a miss (~34 s on prod). Closes #407, PR #433.
+> - Deleted the unused service copies of poller code (`services/datapackage_service.py`, `compress_notifications`, `evaluate_threshold_groups`). Closes #388 and #406, PR #436.
+>
+> ### Fixed
+> - `POST /history/sync` no longer gives a cursorless room "now" when other rooms' hints fill the 100-hint batch. Closes #421, PR #434.
+> - The poller and the test push prune a device only on FCM `UnregisteredError`, not any 404; other 404s are logged as a config error. Closes #389, PR #435.
+> - `push_new_room_to_cheese` re-checks the link before its title/room_link PUT. A push that may not write records no tracker id, so healing or a relink retries it. Closes #409, PR #437.
+>
+> ### Compatibility
+> - No migration. Safe for every app version: the history-sync change leaves out a key that every app already treats as "keep the cursor I sent".
+> - The prod nginx config is now in the repo under `deploy/nginx/` (#410, PR #430).
+> ```
+
+### Changed
+- **Archived Rooms Rest**: A room everyone has archived is no longer polled, and unarchiving it resumes updates. Closes #347.
+- **Faster Game Lookups**: Looking up items for a game the server has not cached answers at once instead of scanning the whole cache. Closes #407.
+
+### Fixed
+- **No Missing Hints**: A room's hints are no longer skipped on a first sync when another room's older hints fill the batch. Closes #421.
+- **Unlinking From Cheese Sticks**: A new room's Cheese update is skipped if you unlink or delete it first, and an interrupted one is retried later. Closes #409.
+- **Devices Kept on Firebase Errors**: A Firebase setup error no longer removes registered devices; only tokens Firebase has retired are dropped. Closes #389.
+
+---
+
 ## [1.14.3] - 2026-10-02
 
 _Faster Item Groups, Lighter Syncs_
