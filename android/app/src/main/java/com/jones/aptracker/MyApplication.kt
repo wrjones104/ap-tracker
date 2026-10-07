@@ -1,6 +1,7 @@
 package com.jones.aptracker
 
 import android.app.Application
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -10,6 +11,7 @@ import com.jones.aptracker.diagnostics.AppExitReporter
 import com.jones.aptracker.diagnostics.CrashReporter
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.repository.HistorySyncWorker
+import com.jones.aptracker.widget.WidgetRedrawWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,6 +57,10 @@ class MyApplication : Application() {
             30, TimeUnit.MINUTES
         )
             .setConstraints(constraints)
+            // The default 30 s backoff spends every retry in about 3.5 minutes, so a server
+            // restart longer than that cost a whole 3-hour period. From 5 minutes, the
+            // retries cover about half an hour.
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
             .build()
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
@@ -62,5 +68,9 @@ class MyApplication : Application() {
             ExistingPeriodicWorkPolicy.UPDATE,
             periodicSyncRequest
         )
+
+        // The sync above used to redraw the Recent Items widget every 15 minutes as a side
+        // effect, which kept its "Xm ago" labels current. That redraw now runs on its own.
+        applicationScope.launch { WidgetRedrawWorker.syncSchedule(this@MyApplication) }
     }
 }
