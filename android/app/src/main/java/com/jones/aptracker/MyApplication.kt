@@ -46,9 +46,13 @@ class MyApplication : Application() {
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        // A safety net, not the feed. Pushes sync the phone as things happen; this only
+        // catches a push that never arrived, so it can afford to be late. It ran every
+        // 15 minutes on every device until #415, which made it most of the server's
+        // request load. UPDATE moves installed apps to the new period on next launch.
         val periodicSyncRequest = PeriodicWorkRequestBuilder<HistorySyncWorker>(
-            15, TimeUnit.MINUTES,
-            5, TimeUnit.MINUTES
+            3, TimeUnit.HOURS,
+            30, TimeUnit.MINUTES
         )
             .setConstraints(constraints)
             .build()
