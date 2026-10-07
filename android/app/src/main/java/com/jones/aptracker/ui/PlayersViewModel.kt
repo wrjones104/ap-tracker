@@ -33,6 +33,14 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
     val isLoading = mutableStateOf(true)
     val showSaveConfirmation = mutableStateOf(false)
     val searchQuery = mutableStateOf("")
+
+    /**
+     * "My slots": only the slots this user tracks (#438), so a big async does not
+     * mean scrolling hundreds of rows to find your own. Filters on what the server
+     * says is tracked, not on the live ticks, so unticking a row leaves it on screen
+     * to be ticked again until the picker is saved.
+     */
+    val showOnlyTracked = mutableStateOf(false)
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage = _errorMessage.asStateFlow()
     private val repository: HistoryRepository
@@ -48,11 +56,16 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
     }
     val filteredPlayers by derivedStateOf {
         val query = searchQuery.value.trim()
+        val pool = if (showOnlyTracked.value) {
+            allPlayers.value.filter { it.is_tracked }
+        } else {
+            allPlayers.value
+        }
 
         if (query.isBlank()) {
-            allPlayers.value
+            pool
         } else {
-            allPlayers.value.filter { player ->
+            pool.filter { player ->
                 val nameMatches = player.name?.contains(query, ignoreCase = true) == true
                 val aliasMatches = player.alias?.contains(query, ignoreCase = true) == true
                 val gameMatches = player.game?.contains(query, ignoreCase = true) == true

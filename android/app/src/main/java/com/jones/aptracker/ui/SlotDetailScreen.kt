@@ -104,6 +104,8 @@ fun SlotDetailScreen(
     var templateOverwriteConflict by remember { mutableStateOf<Pair<List<ThresholdGroupItemRequest>, String>?>(null) }
     var showApplyTemplatesSheet by remember { mutableStateOf(false) }
     var showAddMilestoneMenu by remember { mutableStateOf(false) }
+    var showStopTrackingDialog by remember { mutableStateOf(false) }
+    val isStoppingTracking by userViewModel.isStoppingTracking.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val passwordManager = remember { com.jones.aptracker.network.PasswordManager(context) }
@@ -631,10 +633,61 @@ fun SlotDetailScreen(
                         }
                     }
                 }
+                // Last on the page, away from the everyday controls, and behind a
+                // confirmation. In a room of hundreds of slots this saves finding the
+                // slot again in Manage Slots just to untick it (#438).
+                Spacer(Modifier.height(24.dp))
+                OutlinedButton(
+                    onClick = { showStopTrackingDialog = true },
+                    enabled = !isStoppingTracking,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    if (isStoppingTracking) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Stop tracking this slot")
+                }
                 Spacer(Modifier.height(40.dp))
             }
             }
         }
+    }
+
+    if (showStopTrackingDialog && slot != null) {
+        val slotName = slot.player_alias?.ifBlank { null } ?: slot.player_name
+        // Untracking a Playing slot releases its claim (slots_routes.py,
+        // update_tracked_slots). Said only when there is a claim to lose.
+        val releasesClaim = userProfile?.is_cheese_connected == true &&
+            slot.track_mode == TrackMode.PLAY &&
+            slot.cheese?.is_mine == true
+        AlertDialog(
+            onDismissRequest = { showStopTrackingDialog = false },
+            title = { Text("Stop tracking $slotName?") },
+            text = {
+                Text(
+                    buildString {
+                        append("You'll stop getting alerts for this slot")
+                        if (releasesClaim) append(", and your claim on Cheese Tracker is released")
+                        append(". You can track it again from Manage Slots.")
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showStopTrackingDialog = false
+                        userViewModel.stopTrackingSlot(roomDbId, slotId, onStopped = onBackClick)
+                    }
+                ) { Text("Stop tracking", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStopTrackingDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 
     // MODALS

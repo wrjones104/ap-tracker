@@ -13,6 +13,7 @@ import com.jones.aptracker.network.IgnoreItem
 import com.jones.aptracker.network.WhitelistItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
+import com.jones.aptracker.network.UpdateSlotsRequest
 import com.jones.aptracker.data.FinishedDefinition
 import com.jones.aptracker.data.FinishedDefinitionStore
 import com.jones.aptracker.data.FinishedResolver
@@ -356,6 +357,47 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             // case rather than the edge one.
             _errorMessage.value = "Failed to load tracked slots."
             e.printStackTrace()
+        }
+    }
+
+    private val _isStoppingTracking = MutableStateFlow(false)
+    /** True while [stopTrackingSlot] is in flight, to disable its button. */
+    val isStoppingTracking: StateFlow<Boolean> = _isStoppingTracking.asStateFlow()
+
+    /**
+     * Stops tracking one slot, from its detail screen (#438).
+     *
+     * `PUT rooms/{id}/slots` replaces the whole tracked set, so the set comes from
+     * the server at the moment of the tap rather than from the cached tracked-slots
+     * list: a slot tracked from another device since that list loaded would
+     * otherwise be untracked along with this one. `slot_modes` is left out, so the
+     * server keeps the mode of every slot that stays.
+     */
+    fun stopTrackingSlot(roomId: Int, slotId: Int, onStopped: () -> Unit) {
+        if (_isStoppingTracking.value) return
+        viewModelScope.launch {
+            _isStoppingTracking.value = true
+            try {
+                val remaining = RetrofitClient.instance.getPlayersInRoom(roomId)
+                    .filter { it.is_tracked && it.slot_id != slotId }
+                    .map { it.slot_id }
+                val response = RetrofitClient.instance.updateTrackedSlots(
+                    roomId, UpdateSlotsRequest(tracked_slot_ids = remaining)
+                )
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Could not stop tracking this slot. Please try again."
+                    return@launch
+                }
+                // Same local cleanup as unticking the slot in Manage Slots.
+                historyRepository.pruneSlotData(roomId, setOf(slotId))
+                loadTrackedSlots()
+                onStopped()
+            } catch (e: Exception) {
+                _errorMessage.value = "Could not stop tracking this slot. Please try again."
+                e.printStackTrace()
+            } finally {
+                _isStoppingTracking.value = false
+            }
         }
     }
 
