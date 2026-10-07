@@ -32,6 +32,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -423,7 +424,11 @@ fun MainScreen(
         val sheetRooms by roomsViewModel.sheetRooms.collectAsState()
         val isLoadingSuggestions by roomsViewModel.isLoadingSuggestions.collectAsState()
         val isImportingCheeseRooms by roomsViewModel.isImportingCheeseRooms.collectAsState()
+        // Fully open from the start. Half-open, the buttons sit below the screen
+        // edge whenever the list is long enough to need them (#449).
+        val cheeseSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
+            sheetState = cheeseSheetState,
             onDismissRequest = {
                 // An import in flight owns the sheet until it answers. Swiping it away
                 // mid-import is how somebody ends up asking for the same rooms twice.

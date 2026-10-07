@@ -1173,27 +1173,32 @@ fun CheeseSuggestionsSheet(
             )
         }
 
-        available.forEach { room ->
-            val isChecked = selected[room.cheese_tracker_id] == true
-            ListItem(
-                headlineContent = { Text(room.title) },
-                supportingContent = {
-                    Text(
-                        if (room.dismissed) "Hidden earlier"
-                        else room.room_link ?: "On Cheese Tracker"
-                    )
-                },
-                leadingContent = {
-                    Checkbox(
-                        checked = isChecked,
-                        onCheckedChange = { selected[room.cheese_tracker_id] = it },
-                        enabled = !isImporting
-                    )
-                },
-                modifier = Modifier.clickable(enabled = !isImporting) {
-                    selected[room.cheese_tracker_id] = !isChecked
-                }
-            )
+        // Only the rooms scroll. The title above and the buttons below stay put, so
+        // "Add" is reachable however many rooms Cheese offers (#449). fill = false
+        // lets a short list keep the sheet short.
+        LazyColumn(modifier = Modifier.weight(1f, fill = false).fillMaxWidth()) {
+            items(available) { room ->
+                val isChecked = selected[room.cheese_tracker_id] == true
+                ListItem(
+                    headlineContent = { Text(room.title) },
+                    supportingContent = {
+                        Text(
+                            if (room.dismissed) "Hidden earlier"
+                            else room.room_link ?: "On Cheese Tracker"
+                        )
+                    },
+                    leadingContent = {
+                        Checkbox(
+                            checked = isChecked,
+                            onCheckedChange = { selected[room.cheese_tracker_id] = it },
+                            enabled = !isImporting
+                        )
+                    },
+                    modifier = Modifier.clickable(enabled = !isImporting) {
+                        selected[room.cheese_tracker_id] = !isChecked
+                    }
+                )
+            }
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
