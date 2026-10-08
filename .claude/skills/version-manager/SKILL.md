@@ -9,7 +9,7 @@ This skill is the release **procedure**: analyze changes, choose Semantic Versio
 
 It does **not** define how release notes read. The **release-notes** skill owns all copy rules: voice, length budgets, and the Discord / Play Store / GitHub channel specs. Step 3 hands off to it, so the two cannot drift apart.
 
-> **Universal Compatibility**: This skill is structured to work seamlessly in both **Google Antigravity** (`.agents/skills/`) and **Claude Code** (`.claude/skills/` or `~/.claude/skills/`).
+> **Claude Code only.** Releases are cut from Claude Code, so this skill has no `.agents/skills/` copy for Antigravity. A second copy drifted seven weeks behind this one and was deleted (#448). Do not recreate it.
 
 ---
 
