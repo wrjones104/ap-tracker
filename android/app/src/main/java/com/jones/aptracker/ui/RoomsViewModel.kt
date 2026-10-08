@@ -145,9 +145,11 @@ class RoomsViewModel(application: Application) : AndroidViewModel(application) {
                 // that failed, rate-limited or outran its poll budget left the offer
                 // invisible with no way to ask for it again.
                 fetchAvailableCheeseRooms()
-                // Once per window across the process: every widget tap opens a new
-                // MainActivity, and so a new ViewModel, and each one used to start a
-                // full sync -- the second one hitting the server's 429 (#400).
+                // Once per window across the process: anything that starts a new
+                // MainActivity gets a new ViewModel, and each one used to start a full
+                // sync -- the second one hitting the server's 429 (#400). Widget taps
+                // reuse the running activity since #428, but signing in or out still
+                // starts a fresh one.
                 val last = lastAutoSyncAt
                 if (last == 0L || SystemClock.elapsedRealtime() - last >= AUTO_SYNC_INTERVAL_MS) {
                     triggerBackgroundSync(userInitiated = false)

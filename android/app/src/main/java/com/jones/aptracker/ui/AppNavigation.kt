@@ -104,15 +104,27 @@ fun MainNavHost(
     val historyViewModel: HistoryViewModel = viewModel()
     val userViewModel: UserViewModel = viewModel()
 
-    // Direct deep-link to a specific slot if both targetRoomId and targetSlotId are provided
-    androidx.compose.runtime.LaunchedEffect(targetRoomId, targetSlotId) {
+    // Widget and notification targets. A slot target opens the slot's page here; a tab
+    // target is MainScreen's job, and MainScreen is only on screen while "home" is on top.
+    // Since #428 the running MainActivity is reused (singleTop), so a tap can arrive while
+    // Settings or a detail page covers home. Each tap used to start a fresh activity on
+    // "home", so both cases unwind to home first, which is what that fresh activity showed.
+    androidx.compose.runtime.LaunchedEffect(targetTab, targetRoomId, targetSlotId) {
         if (targetRoomId != null && targetSlotId != null && targetRoomId != -1 && targetSlotId != -1) {
             navController.navigate("slot_detail/$targetRoomId/$targetSlotId") {
+                // Home, then the slot: not the slot on top of whatever page was left open,
+                // nor on top of the slot a previous tap opened.
+                popUpTo("home")
                 // Repeated widget taps on the same slot would otherwise stack duplicate
                 // back-stack entries.
                 launchSingleTop = true
             }
             onTargetTabConsumed()
+        } else if (targetTab != null) {
+            // With nothing above home this does nothing. Otherwise MainScreen comes back on
+            // screen, and its own effect switches the tab and clears the target. Left alone,
+            // the target waited until the user pressed Back, then switched tabs late.
+            navController.popBackStack("home", inclusive = false)
         }
     }
 
