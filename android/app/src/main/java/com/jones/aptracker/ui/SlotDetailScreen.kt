@@ -81,6 +81,8 @@ fun SlotDetailScreen(
     roomDbId: Int,
     slotId: Int,
     onBackClick: () -> Unit,
+    /** After [UserViewModel.stopTrackingSlot] succeeds. The caller decides whether to leave. */
+    onStoppedTracking: () -> Unit,
     onNavigateToHistory: (Int, String, String?, String?) -> Unit,
     onNavigateToMilestoneTemplates: () -> Unit = {},
     userViewModel: UserViewModel = viewModel(),
@@ -680,7 +682,7 @@ fun SlotDetailScreen(
                 TextButton(
                     onClick = {
                         showStopTrackingDialog = false
-                        userViewModel.stopTrackingSlot(roomDbId, slotId, onStopped = onBackClick)
+                        userViewModel.stopTrackingSlot(roomDbId, slotId, onStopped = onStoppedTracking)
                     }
                 ) { Text("Stop tracking", color = MaterialTheme.colorScheme.error) }
             },
