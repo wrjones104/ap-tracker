@@ -22,6 +22,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -117,12 +118,37 @@ fun PlayersScreen(
                 singleLine = true
             )
 
+            FilterChip(
+                selected = playersViewModel.showOnlyTracked.value,
+                onClick = {
+                    playersViewModel.showOnlyTracked.value = !playersViewModel.showOnlyTracked.value
+                },
+                label = { Text("My slots") },
+                leadingIcon = if (playersViewModel.showOnlyTracked.value) {
+                    { Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                } else {
+                    null
+                },
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+
             Box(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center
             ) {
                 if (playersViewModel.isLoading.value) {
                     CircularProgressIndicator()
+                } else if (playersViewModel.showOnlyTracked.value && playersViewModel.filteredPlayers.isEmpty()) {
+                    Text(
+                        text = if (playersViewModel.searchQuery.value.isBlank()) {
+                            "You don't track any slots in this room yet."
+                        } else {
+                            "None of your slots match that search."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp)
+                    )
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),

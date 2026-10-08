@@ -13,6 +13,7 @@ import com.jones.aptracker.network.IgnoreItem
 import com.jones.aptracker.network.WhitelistItem
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomWithTrackedSlots
+import com.jones.aptracker.network.UpdateSlotsRequest
 import com.jones.aptracker.data.FinishedDefinition
 import com.jones.aptracker.data.FinishedDefinitionStore
 import com.jones.aptracker.data.FinishedResolver
@@ -39,6 +40,7 @@ import com.jones.aptracker.repository.HistorySyncManager
 import com.jones.aptracker.repository.UserRepository
 import com.jones.aptracker.widget.MilestonesWidgetUpdater
 import com.jones.aptracker.widget.RecentItemsWidgetUpdater
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -356,6 +358,66 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
             // case rather than the edge one.
             _errorMessage.value = "Failed to load tracked slots."
             e.printStackTrace()
+        }
+    }
+
+    private val _isStoppingTracking = MutableStateFlow(false)
+    /** True while [stopTrackingSlot] is in flight, to disable its button. */
+    val isStoppingTracking: StateFlow<Boolean> = _isStoppingTracking.asStateFlow()
+
+    /**
+     * Stops tracking one slot, from its detail screen (#438).
+     *
+     * `PUT rooms/{id}/slots` replaces the whole tracked set, so the set is read fresh
+     * from `users/me/tracked-slots`, which lists the user's tracked-slot rows
+     * themselves. Not from `rooms/{id}/players`: that lists only the slots in the
+     * room's cached player list, so a tracked slot missing from that cache, or a cache
+     * that is empty, would be untracked along with this one. Not from the cached
+     * tracked-slots list either: a slot tracked from another device since it loaded
+     * would be dropped. `slot_modes` is left out, so every slot that stays keeps its mode.
+     *
+     * [onStopped] runs once the server has agreed and local data is pruned, before
+     * the tracked-slots list reloads: reloading first drops this slot from the list
+     * the detail screen is drawn from, which flashes its loading spinner.
+     */
+    fun stopTrackingSlot(roomId: Int, slotId: Int, onStopped: () -> Unit) {
+        if (_isStoppingTracking.value) return
+        viewModelScope.launch {
+            _isStoppingTracking.value = true
+            try {
+                val tracked = RetrofitClient.instance.getUserTrackedSlots()
+                    .find { it.room_db_id == roomId }
+                    ?.tracked_slots
+                    ?.map { it.slot_id }
+                    .orEmpty()
+                if (slotId !in tracked) {
+                    // Already untracked, from another device or the picker. Sending the
+                    // set anyway would be a PUT built on a list that does not hold the
+                    // slot it is about, so send nothing and catch the screen up.
+                    _errorMessage.value = "This slot is no longer tracked."
+                    onStopped()
+                    loadTrackedSlots()
+                    return@launch
+                }
+                val response = RetrofitClient.instance.updateTrackedSlots(
+                    roomId, UpdateSlotsRequest(tracked_slot_ids = tracked - slotId)
+                )
+                if (!response.isSuccessful) {
+                    _errorMessage.value = "Could not stop tracking this slot. Please try again."
+                    return@launch
+                }
+                // Same local cleanup as unticking the slot in Manage Slots.
+                historyRepository.pruneSlotData(roomId, setOf(slotId))
+                onStopped()
+                loadTrackedSlots()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _errorMessage.value = "Could not stop tracking this slot. Please try again."
+                e.printStackTrace()
+            } finally {
+                _isStoppingTracking.value = false
+            }
         }
     }
 

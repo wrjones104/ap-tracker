@@ -298,6 +298,17 @@ fun MainNavHost(
                 userViewModel = userViewModel,
                 textClientViewModel = textClientViewModel,
                 onBackClick = { navController.popBackStack() },
+                onStoppedTracking = {
+                    // Same follow-up as saving the picker (PlayersScreen): History keeps
+                    // its own in-memory list and would go on showing the slot.
+                    historyViewModel.refreshAllHistory()
+                    // The request outlives this screen (UserViewModel is app-scoped), and
+                    // system back still works while it runs. If the user already left,
+                    // popping now would close whatever screen they are on instead.
+                    if (navController.currentBackStackEntry?.id == backStackEntry.id) {
+                        navController.popBackStack()
+                    }
+                },
                 onNavigateToHistory = { roomId, _, query, player ->
                     historyViewModel.loadHistoryFor(roomId, query, player)
                     navController.navigate("slot_history")

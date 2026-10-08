@@ -33,6 +33,12 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
     val isLoading = mutableStateOf(true)
     val showSaveConfirmation = mutableStateOf(false)
     val searchQuery = mutableStateOf("")
+
+    /**
+     * "My slots": only the slots this user tracks (#438), so a big async does not
+     * mean scrolling hundreds of rows to find your own. See [filterPlayers].
+     */
+    val showOnlyTracked = mutableStateOf(false)
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage = _errorMessage.asStateFlow()
     private val repository: HistoryRepository
@@ -47,18 +53,7 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
         )
     }
     val filteredPlayers by derivedStateOf {
-        val query = searchQuery.value.trim()
-
-        if (query.isBlank()) {
-            allPlayers.value
-        } else {
-            allPlayers.value.filter { player ->
-                val nameMatches = player.name?.contains(query, ignoreCase = true) == true
-                val aliasMatches = player.alias?.contains(query, ignoreCase = true) == true
-                val gameMatches = player.game?.contains(query, ignoreCase = true) == true
-                nameMatches || aliasMatches || gameMatches
-            }
-        }
+        filterPlayers(allPlayers.value, searchQuery.value, showOnlyTracked.value, selections)
     }
 
     fun fetchPlayers(roomId: Int) {
@@ -221,5 +216,34 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
 
     fun clearErrorMessage() {
         _errorMessage.value = null
+    }
+}
+
+/**
+ * The picker's visible rows: the search, and "My slots" when it is on.
+ *
+ * "My slots" keeps a slot the server says is tracked even after it is unticked, so a
+ * mistaken untick can be undone before saving, and adds a slot ticked here but not yet
+ * saved, so the selection can be reviewed. Kept out of the ViewModel so it can be tested
+ * without one.
+ */
+internal fun filterPlayers(
+    players: List<Player>,
+    query: String,
+    onlyTracked: Boolean,
+    selections: Map<Int, Boolean>
+): List<Player> {
+    val pool = if (onlyTracked) {
+        players.filter { it.is_tracked || selections[it.slot_id] == true }
+    } else {
+        players
+    }
+    val q = query.trim()
+    if (q.isBlank()) return pool
+    return pool.filter { player ->
+        val nameMatches = player.name?.contains(q, ignoreCase = true) == true
+        val aliasMatches = player.alias?.contains(q, ignoreCase = true) == true
+        val gameMatches = player.game?.contains(q, ignoreCase = true) == true
+        nameMatches || aliasMatches || gameMatches
     }
 }
