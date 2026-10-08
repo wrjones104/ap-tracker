@@ -87,10 +87,14 @@
 
         <!-- The UI is all Compose, which re-lays itself out on a size change. Letting the
              activity be recreated instead threw away every open dialog and sheet, whose
-             state lives in plain `remember` (#344). -->
+             state lives in plain `remember` (#344).
+             singleTop: widget taps start this activity with their own extras, and the
+             default launch mode stacked a fresh copy, with its own view models and on-open
+             work, on every tap. Now a tap on a running app reaches onNewIntent (#428). -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.APTracker">
