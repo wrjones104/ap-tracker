@@ -10,6 +10,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.13.2] - 2026-10-08
+
+_My Slots and Steadier Widgets_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> # **Archipelago Alerts 1.13.2**
+>
+> • **My slots.** Manage Slots has a My slots filter, and each slot's page has a Stop tracking button at the bottom. No more scrolling a 2,000-slot async to untick yours.
+> • **Widget taps** bring up the app you already have open, on the right tab, instead of stacking another copy.
+> • **Uses less battery:** the background check for missed notifications runs every 3 hours instead of every 15 minutes. Notifications are still instant.
+> • **Fixed:** the Rooms on Cheese Tracker list scrolls so its buttons stay reachable, and the app no longer closes on launch on some phones.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> New: a My slots filter in Manage Slots, and a Stop tracking button on each slot's page.
+>
+> Widget taps now bring up the app you already have open, on the right tab.
+>
+> Uses less battery: the background check for missed notifications runs every 3 hours instead of every 15 minutes.
+>
+> Also fixed: the Rooms on Cheese Tracker list now scrolls, and the app no longer closes on launch on some phones.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - "My slots" chip in Manage Slots lists only tracked slots, plus any ticked but not yet saved. Refs #438.
+> - "Stop tracking this slot" at the bottom of slot details, behind a confirmation that says when it releases a Cheese claim. It reads the tracked set from `users/me/tracked-slots`. Closes #438.
+>
+> ### Changed
+> - The periodic `HistorySyncWorker` runs every 3 h (30 min flex, 5 min exponential backoff) instead of 15 min. A network-free `WidgetRedrawWorker` keeps the Recent Items "Xm ago" labels current every 15 min while that widget is placed. Closes #415.
+> - `MainActivity` is `singleTop`, and widget and notification targets unwind the nav stack to home first. Closes #428.
+>
+> ### Fixed
+> - The Rooms on Cheese Tracker sheet opens fully, its list scrolls, and its buttons stay pinned. Closes #449.
+> - Material You colours fall back to the app's own scheme on `Resources.NotFoundException`. Closes #442.
+>
+> ### Note
+> App-only release; no server change needed (prod runs 1.14.5). The widget trampoline crash (#441) is not in this release.
+> ```
+
+### Added
+- **My Slots**: A My slots filter in Manage Slots and a Stop tracking button on each slot's page. Closes #438.
+
+### Changed
+- **Widget Taps Open the Right Place**: A widget tap reuses the open app and lands on the right tab from any screen, instead of stacking a new copy. Closes #428.
+- **Uses Less Battery**: The background check for missed notifications runs every 3 hours instead of every 15 minutes. Closes #415.
+
+### Fixed
+- **Rooms on Cheese Tracker Scrolls**: The list of rooms waiting on Cheese Tracker scrolls, so Add and Not these stay reachable. Closes #449.
+- **Launch Crash on Some Phones**: The app no longer closes on launch on phones that are missing some system colours. Closes #442.
+
+---
+
 ## [1.13.1] - 2026-10-05
 
 _Lighter and Quieter_

@@ -1,6 +1,60 @@
 {
   "app_releases": [
     {
+      "version": "1.13.2",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-10-08",
+      "title": "My Slots and Steadier Widgets",
+      "highlights": [
+        {
+          "title": "My Slots",
+          "description": "Manage Slots has a My slots filter, and each slot's page has a Stop tracking button, so a big async no longer means scrolling to untick yours."
+        },
+        {
+          "title": "Widget Taps Open the Right Place",
+          "description": "Tapping a widget brings up the app you already have open, on the right tab, instead of stacking another copy."
+        },
+        {
+          "title": "Uses Less Battery",
+          "description": "The background check for missed notifications runs every 3 hours instead of every 15 minutes. Notifications are still instant."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "My Slots",
+            "description": "A My slots filter in Manage Slots and a Stop tracking button on each slot's page. Closes #438."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Widget Taps Open the Right Place",
+            "description": "A widget tap reuses the open app and lands on the right tab from any screen, instead of stacking a new copy. Closes #428."
+          },
+          {
+            "title": "Uses Less Battery",
+            "description": "The background check for missed notifications runs every 3 hours instead of every 15 minutes. Closes #415."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Rooms on Cheese Tracker Scrolls",
+            "description": "The list of rooms waiting on Cheese Tracker scrolls, so Add and Not these stay reachable. Closes #449."
+          },
+          {
+            "title": "Launch Crash on Some Phones",
+            "description": "The app no longer closes on launch on phones that are missing some system colours. Closes #442."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "# **Archipelago Alerts 1.13.2**\n\n• **My slots.** Manage Slots has a My slots filter, and each slot's page has a Stop tracking button at the bottom. No more scrolling a 2,000-slot async to untick yours.\n• **Widget taps** bring up the app you already have open, on the right tab, instead of stacking another copy.\n• **Uses less battery:** the background check for missed notifications runs every 3 hours instead of every 15 minutes. Notifications are still instant.\n• **Fixed:** the Rooms on Cheese Tracker list scrolls so its buttons stay reachable, and the app no longer closes on launch on some phones.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "New: a My slots filter in Manage Slots, and a Stop tracking button on each slot's page.\n\nWidget taps now bring up the app you already have open, on the right tab.\n\nUses less battery: the background check for missed notifications runs every 3 hours instead of every 15 minutes.\n\nAlso fixed: the Rooms on Cheese Tracker list now scrolls, and the app no longer closes on launch on some phones.",
+        "github": "### Added\n- \"My slots\" chip in Manage Slots lists only tracked slots, plus any ticked but not yet saved. Refs #438.\n- \"Stop tracking this slot\" at the bottom of slot details, behind a confirmation that says when it releases a Cheese claim. It reads the tracked set from `users/me/tracked-slots`. Closes #438.\n\n### Changed\n- The periodic `HistorySyncWorker` runs every 3 h (30 min flex, 5 min exponential backoff) instead of 15 min. A network-free `WidgetRedrawWorker` keeps the Recent Items \"Xm ago\" labels current every 15 min while that widget is placed. Closes #415.\n- `MainActivity` is `singleTop`, and widget and notification targets unwind the nav stack to home first. Closes #428.\n\n### Fixed\n- The Rooms on Cheese Tracker sheet opens fully, its list scrolls, and its buttons stay pinned. Closes #449.\n- Material You colours fall back to the app's own scheme on `Resources.NotFoundException`. Closes #442.\n\n### Note\nApp-only release; no server change needed (prod runs 1.14.5). The widget trampoline crash (#441) is not in this release."
+      }
+    },
+    {
       "version": "1.13.1",
       "component": "app",
       "component_label": "App",
