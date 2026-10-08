@@ -30,7 +30,7 @@ In this repository (Archipelago Alerts):
 Follow these steps sequentially whenever cutting a release or incrementing versions:
 
 ```
-[1. Inspect Git Diff] ➔ [2. Determine SemVer] ➔ [3. Draft Copy (release-notes)] ➔ [4. Confirm] ➔ [5. Update Files] ➔ [6. Verify & Test] ➔ [7. PR & Ship Order] ➔ [8. Output Snippets]
+[1. Inspect Git Diff] ➔ [2. Determine SemVer] ➔ [3. Draft Copy (release-notes)] ➔ [4. Confirm] ➔ [5. Update Files] ➔ [6. Verify & Test] ➔ [7. PR & Ship Order] ➔ [8. Output Snippets] ➔ [9. Screenshots (app)]
 ```
 
 ### Step 1: Inspect Changes (Dual-Lens Review)
@@ -95,3 +95,14 @@ Open the release PR. After the user merges it, walk the ship order:
 
 ### Step 8: Output Release Snippets
 Present all formatted release snippets in full in the chat response so the user can easily copy and paste them directly to Discord, Google Play Console, and GitHub Releases.
+
+### Step 9: Screenshots for the Discord Post (app releases)
+The Discord announcement goes out with screenshots attached. They are for **Discord only**: not the GitHub release, not Play (its "What's new" is text-only), and never committed to the repo.
+
+1. **Pick what to show.** One screenshot per highlight a user can *see*, usually 1 to 3. A new screen, control or visibly fixed layout earns one. A background, battery, data or crash fix does not.
+2. **Capture on the emulator** with the dev build (`com.jones.aptracker.dev.debug`), from `main` after the release PR's fixes are merged. Portrait, default font scale, the app's normal dark theme. Show the change in its finished state: the filter switched on, the dialog open, the list scrolled to its pinned buttons. Do not tap anything that writes (Save, Add, a confirm button) just to set up a shot, unless it is on a throwaway slot you then put back.
+   ```bash
+   MSYS_NO_PATHCONV=1 adb -s emulator-5554 exec-out screencap -p > <scratchpad>/release-X.Y.Z/01-<slug>.png
+   ```
+   Screenshots taken while verifying the release's PRs can be reused if they show the final behaviour.
+3. **Hand them over** with `SendUserFile`, in the order of the Discord bullets, each captioned with the highlight it illustrates. **Name anything to blur:** other players' slot names and room names are visible in most screens. The user posts from their own account and blurs those themselves before posting.

@@ -160,6 +160,7 @@ differently in each:
   that tone too excitable; just end with the download links (see below).
 - Length: **under 900 characters** including the links, so it reads as one clean
   message rather than a wall someone scrolls past.
+- Screenshots are attached to the Discord post by hand, never put in this text. version-manager step 9 captures them.
 - Add a section at the very end with download links like this:
      GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
      Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
