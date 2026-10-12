@@ -102,7 +102,8 @@ The Discord announcement goes out with screenshots attached. They are for **Disc
 1. **Pick what to show.** One screenshot per highlight a user can *see*, usually 1 to 3. A new screen, control or visibly fixed layout earns one. A background, battery, data or crash fix does not.
 2. **Capture on the emulator** with the dev build (`com.jones.aptracker.dev.debug`), from `main` after the release PR's fixes are merged. Portrait, default font scale, the app's normal dark theme. Show the change in its finished state: the filter switched on, the dialog open, the list scrolled to its pinned buttons. Do not tap anything that writes (Save, Add, a confirm button) just to set up a shot, unless it is on a throwaway slot you then put back.
    ```bash
-   MSYS_NO_PATHCONV=1 adb -s emulator-5554 exec-out screencap -p > <scratchpad>/release-X.Y.Z/01-<slug>.png
+   MSYS_NO_PATHCONV=1 adb -s emulator-5554 exec-out screencap -p > "/c/Users/wrjon/Pictures/AP Alerts/release_screenshots/X.Y.Z/01-<slug>.png"
    ```
-   Screenshots taken while verifying the release's PRs can be reused if they show the final behaviour.
+   Save them in `C:\Users\wrjon\Pictures\AP Alerts\release_screenshots\X.Y.Z\`, one folder per app version (create it first). Do not leave them only in the scratchpad: it is temporary and may be cleared before the user posts.
+   Screenshots taken while verifying the release's PRs can be reused if they show the final behaviour: copy them into that folder.
 3. **Hand them over** with `SendUserFile`, in the order of the Discord bullets, each captioned with the highlight it illustrates. **Name anything to blur:** other players' slot names and room names are visible in most screens. The user posts from their own account and blurs those themselves before posting.
