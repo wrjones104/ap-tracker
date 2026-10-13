@@ -10,6 +10,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.15.0] - 2026-10-13
+
+_Milestones in One Request_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - `GET /users/me/threshold-groups`: every tracked slot's milestone groups and progress in one response, in the same group shape as the per-slot route; slots with no groups are listed as `[]`. Refs #418, PR #461.
+>
+> ### Changed
+> - Milestone progress loads each game's datapackage item map once per request, and each slot's progress runs in a savepoint, so one failing slot cannot blank the progress of the slots after it.
+> - The per-slot `threshold-groups` route returns groups ordered by id.
+>
+> ### Compatibility
+> - No migration. Additive and server-first: no released app calls the new route yet. The next app release (PR #462) uses it and falls back to per-slot calls on a 404.
+> ```
+
+### Changed
+- **Milestones in One Request**: A new endpoint returns all your tracked slots' milestone groups in one request; the app switches to it in its next release. Refs #418.
+
+---
+
 ## [1.14.5] - 2026-10-06
 
 _Faster Game Pickers_
