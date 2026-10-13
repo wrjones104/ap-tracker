@@ -235,8 +235,7 @@ class TestThresholdGroupsBatch(unittest.TestCase):
                 headers={'Authorization': f'Bearer {self.token}'}
             )
             self.assertEqual(r.status_code, 200)
-            single = sorted(r.get_json(), key=lambda g: g['id'])
-            self.assertEqual(groups, single, f'room {room_db_id} slot {slot_id}')
+            self.assertEqual(groups, r.get_json(), f'room {room_db_id} slot {slot_id}')
 
     # ------------------------------------------------------------------
     # Progress
@@ -284,8 +283,63 @@ class TestThresholdGroupsBatch(unittest.TestCase):
         ]
         self.assertEqual(len(item_map_loads), 2)
 
+    def test_a_failing_slot_does_not_null_the_slots_after_it(self):
+        """
+        One slot's progress query fails with a real SQL error. Later slots still get progress.
+
+        On Postgres a failed statement aborts the transaction, so this only passes there because
+        each slot runs in a savepoint. SQLite does not abort, so the assertion on the savepoint
+        rollback pins the mechanism here as well.
+        """
+        from unittest import mock
+        from sqlalchemy import text
+        from app.routes import thresholds_routes
+
+        self._seed_typical()
+        real = thresholds_routes.compute_requirement_progress
+        failing_room, failing_slot = self.room_a, 2
+
+        def flaky(session, room, slot_id, requirements, datapackage_cache=None):
+            if room.id == failing_room and slot_id == failing_slot:
+                session.execute(text('SELECT * FROM no_such_table'))
+            return real(session, room, slot_id, requirements, datapackage_cache)
+
+        event.listen(engine, 'before_cursor_execute', self._record)
+        self.addCleanup(event.remove, engine, 'before_cursor_execute', self._record)
+        with mock.patch.object(thresholds_routes, 'compute_requirement_progress', side_effect=flaky), \
+                self.assertLogs(level='ERROR'):
+            by_slot = self._by_slot(self._get_batch())
+
+        self.assertIsNone(by_slot[(self.room_a, 2)][0]['items'][0]['acquired'])
+        self.assertEqual(by_slot[(self.room_a, 3)][0]['items'][0]['acquired'], 4)
+        self.assertEqual(by_slot[(self.room_b, 1)][0]['items'][0]['acquired'], 5)
+        self.assertTrue(any(s.startswith('ROLLBACK TO SAVEPOINT') for s in self.statements))
+
+    def test_a_malformed_unused_group_does_not_hide_the_others(self):
+        """Every datapackage group is parsed, so a bad entry nobody tracks must not drop the rest."""
+        session = Session()
+        try:
+            row = session.query(DatapackageCache).filter_by(
+                checksum=CHECKSUM_ZELDA, entity_type='item_name_groups_json'
+            ).first()
+            row.entity_name = json.dumps({
+                'Broken': ['Fire Essence', None, 7],
+                'Also Broken': 'not a list',
+                'Essences': ['Fire Essence', 'Water Essence', 'Earth Essence'],
+            })
+            session.commit()
+        finally:
+            Session.remove()
+        self._add_counts(ROOM_A, 1, {101: 1, 102: 2})
+        self._add_group(self.tracked[(self.room_a, 1)], [('Essences', 4, True), ('Broken', 1, True)])
+
+        items = {i['item_name']: i['acquired'] for i in self._by_slot(self._get_batch())[(self.room_a, 1)][0]['items']}
+        self.assertEqual(items['Essences'], 3)
+        self.assertEqual(items['Broken'], 1)
+
     def test_query_count_does_not_grow_with_group_less_slots(self):
-        """Slots without groups cost no queries beyond the shared ones."""
+        """Slots without groups cost no queries beyond the shared ones, with groups elsewhere."""
+        self._seed_typical()
         event.listen(engine, 'before_cursor_execute', self._record)
         self.addCleanup(event.remove, engine, 'before_cursor_execute', self._record)
         self._get_batch()
@@ -302,6 +356,7 @@ class TestThresholdGroupsBatch(unittest.TestCase):
         self.statements.clear()
         payload = self._get_batch()
         self.assertEqual(len(payload), 24)
+        self.assertEqual(sum(1 for e in payload if e['groups']), 4)
         self.assertEqual(len(self.statements), baseline)
 
 

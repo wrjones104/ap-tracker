@@ -29,12 +29,18 @@ def _progress_for_slot(session, room, room_db_id, slot_id, groups, datapackage_c
     Progress is advisory: clients render it, they do not act on it, and item-group requirements
     are the only ones they cannot count for themselves. Never let a failure here take down the
     definitions fetch -- 'acquired' simply comes back null.
+
+    The savepoint matters in the batch route: on Postgres a failed statement aborts the whole
+    transaction, so without it one slot's failure would null the progress of every slot after
+    it. A full session.rollback() would also clear that, but would expire every group already
+    loaded for the response.
     """
     all_items = [item for g in groups for item in g.items]
     if not all_items or room is None:
         return {}
     try:
-        return compute_requirement_progress(session, room, slot_id, all_items, datapackage_cache)
+        with session.begin_nested():
+            return compute_requirement_progress(session, room, slot_id, all_items, datapackage_cache)
     except Exception as e:
         logging.error(
             f"Failed to compute milestone progress for room {room_db_id} slot {slot_id}: {e}",
@@ -88,8 +94,11 @@ def get_all_threshold_groups(current_user):
         ).options(selectinload(ThresholdGroup.items)).order_by(ThresholdGroup.id).all():
             groups_by_tracked_slot.setdefault(g.user_tracked_slot_id, []).append(g)
 
-        room_ids = {ts.room_id for ts in tracked_slots}
-        rooms = {r.id: r for r in session.query(TrackedRoom).filter(TrackedRoom.id.in_(room_ids)).all()}
+        # Only rooms whose slots have groups: a room row carries its whole player list as JSON.
+        room_ids = {ts.room_id for ts in tracked_slots if ts.id in groups_by_tracked_slot}
+        rooms = {
+            r.id: r for r in session.query(TrackedRoom).filter(TrackedRoom.id.in_(room_ids)).all()
+        } if room_ids else {}
 
         datapackage_cache = {}
         result = []
@@ -125,7 +134,7 @@ def get_threshold_groups(current_user, room_db_id, slot_id):
 
         groups = session.query(ThresholdGroup).filter_by(
             user_tracked_slot_id=tracked_slot.id
-        ).options(selectinload(ThresholdGroup.items)).all()
+        ).options(selectinload(ThresholdGroup.items)).order_by(ThresholdGroup.id).all()
 
         room = session.query(TrackedRoom).filter_by(id=room_db_id).first() if groups else None
         progress = _progress_for_slot(session, room, room_db_id, slot_id, groups)

@@ -69,9 +69,13 @@ def _item_name_groups(session, checksum, entry):
         try:
             parsed = json.loads(groups_row[0])
             if isinstance(parsed, dict):
+                # Every group is parsed, used or not, so one malformed entry must not cut the
+                # loop short and drop the groups after it.
                 for g_name, members in parsed.items():
-                    if isinstance(members, list):
-                        groups[g_name.lower().strip()] = {m.lower().strip() for m in members}
+                    if isinstance(g_name, str) and isinstance(members, list):
+                        groups[g_name.lower().strip()] = {
+                            m.lower().strip() for m in members if isinstance(m, str)
+                        }
         except Exception as e:
             logging.warning(f"[MILESTONE_PROGRESS] Bad item_name_groups_json for checksum {checksum}: {e}")
 
