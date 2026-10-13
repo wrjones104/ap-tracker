@@ -1048,6 +1048,34 @@
   ],
   "server_releases": [
     {
+      "version": "1.15.0",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-13",
+      "title": "Milestones in One Request",
+      "highlights": [
+        {
+          "title": "Milestones in One Request",
+          "description": "The server can send every slot's milestones at once, so the next app update's Milestones widget refreshes with one call instead of one per slot."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Milestones in One Request",
+            "description": "A new endpoint returns all your tracked slots' milestone groups in one request; the app switches to it in its next release. Refs #418."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Added\n- `GET /users/me/threshold-groups`: every tracked slot's milestone groups and progress in one response, in the same group shape as the per-slot route; slots with no groups are listed as `[]`. Refs #418, PR #461.\n\n### Changed\n- Milestone progress loads each game's datapackage item map once per request, and each slot's progress runs in a savepoint, so one failing slot cannot blank the progress of the slots after it.\n- The per-slot `threshold-groups` route returns groups ordered by id.\n\n### Compatibility\n- No migration. Additive and server-first: no released app calls the new route yet. The next app release (PR #462) uses it and falls back to per-slot calls on a 404."
+      }
+    },
+    {
       "version": "1.14.5",
       "component": "server",
       "component_label": "Server",
