@@ -12,6 +12,8 @@ import com.jones.aptracker.database.CachedTrackedSlotEntity
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomItemCount
 import com.jones.aptracker.network.RoomWithTrackedSlots
+import com.jones.aptracker.network.SlotThresholdGroups
+import com.jones.aptracker.network.ThresholdGroup
 import com.jones.aptracker.network.ThresholdGroupItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -21,6 +23,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 data class MilestoneItemProgress(
     val itemName: String,
@@ -215,26 +218,7 @@ object MilestonesRepository {
             }
             dao.replaceTrackedSlots(slotRows)
 
-            val semaphore = Semaphore(MAX_PARALLEL_SLOT_FETCHES)
-            val fetched = coroutineScope {
-                slotRows.map { slot ->
-                    async {
-                        semaphore.withPermit {
-                            try {
-                                slot to api.getThresholdGroups(slot.roomDbId, slot.slotId)
-                            } catch (e: Exception) {
-                                // Leave this slot's previously cached groups in place.
-                                Log.w(
-                                    TAG,
-                                    "Failed to fetch milestones for room ${slot.roomDbId} slot ${slot.slotId}",
-                                    e
-                                )
-                                null
-                            }
-                        }
-                    }
-                }.awaitAll().filterNotNull()
-            }
+            val fetched = fetchAllGroups(slotRows) ?: fetchGroupsPerSlot(slotRows)
 
             for ((slot, groups) in fetched) {
                 dao.replaceMilestoneGroupsForSlot(
@@ -269,6 +253,65 @@ object MilestonesRepository {
         } catch (e: Exception) {
             Log.e(TAG, "Milestone cache refresh failed", e)
             false
+        }
+    }
+
+    /**
+     * Every slot's groups from the one batch call (#418), or null when the server predates it
+     * (404), in which case the caller falls back to [fetchGroupsPerSlot]. Any other failure
+     * propagates and fails the refresh, leaving the whole cache as it was.
+     */
+    private suspend fun fetchAllGroups(
+        slotRows: List<CachedTrackedSlotEntity>
+    ): List<Pair<CachedTrackedSlotEntity, List<ThresholdGroup>>>? {
+        val response = try {
+            RetrofitClient.instance.getAllThresholdGroups()
+        } catch (e: HttpException) {
+            if (e.code() == 404) return null
+            throw e
+        }
+        return matchGroupsToSlots(slotRows, response)
+    }
+
+    /** The pre-#418 path: one request per slot, a few at a time. */
+    private suspend fun fetchGroupsPerSlot(
+        slotRows: List<CachedTrackedSlotEntity>
+    ): List<Pair<CachedTrackedSlotEntity, List<ThresholdGroup>>> {
+        val api = RetrofitClient.instance
+        val semaphore = Semaphore(MAX_PARALLEL_SLOT_FETCHES)
+        return coroutineScope {
+            slotRows.map { slot ->
+                async {
+                    semaphore.withPermit {
+                        try {
+                            slot to api.getThresholdGroups(slot.roomDbId, slot.slotId)
+                        } catch (e: Exception) {
+                            // Leave this slot's previously cached groups in place.
+                            Log.w(
+                                TAG,
+                                "Failed to fetch milestones for room ${slot.roomDbId} slot ${slot.slotId}",
+                                e
+                            )
+                            null
+                        }
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * Pairs each cached slot with its groups from the batch response. A slot the response does
+     * not list is skipped, so its previously cached groups stay, as when a per-slot fetch fails.
+     * Slots in the response that the roster does not have are ignored.
+     */
+    internal fun matchGroupsToSlots(
+        slotRows: List<CachedTrackedSlotEntity>,
+        response: List<SlotThresholdGroups>
+    ): List<Pair<CachedTrackedSlotEntity, List<ThresholdGroup>>> {
+        val bySlot = response.associateBy { it.room_db_id to it.slot_id }
+        return slotRows.mapNotNull { slot ->
+            bySlot[slot.roomDbId to slot.slotId]?.let { slot to it.groups }
         }
     }
 
