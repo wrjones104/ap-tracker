@@ -21,6 +21,93 @@ from app.services.milestone_template_service import (
 
 thresholds_bp = Blueprint('thresholds_routes', __name__)
 
+
+def _progress_for_slot(session, room, room_db_id, slot_id, groups, datapackage_cache=None):
+    """
+    Acquired counts for one slot's groups, keyed by ThresholdGroupItem id.
+
+    Progress is advisory: clients render it, they do not act on it, and item-group requirements
+    are the only ones they cannot count for themselves. Never let a failure here take down the
+    definitions fetch -- 'acquired' simply comes back null.
+    """
+    all_items = [item for g in groups for item in g.items]
+    if not all_items or room is None:
+        return {}
+    try:
+        return compute_requirement_progress(session, room, slot_id, all_items, datapackage_cache)
+    except Exception as e:
+        logging.error(
+            f"Failed to compute milestone progress for room {room_db_id} slot {slot_id}: {e}",
+            exc_info=True
+        )
+        return {}
+
+
+def _serialize_groups(groups, progress):
+    return [{
+        'id': g.id,
+        'name': g.name,
+        'is_triggered': g.is_triggered,
+        'items': [{
+            'id': item.id,
+            'item_name': item.item_name,
+            'quantity': item.quantity,
+            'is_group': item.is_group,
+            'acquired': progress.get(item.id)
+        } for item in g.items]
+    } for g in groups]
+
+
+@thresholds_bp.route('/users/me/threshold-groups', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_all_threshold_groups(current_user):
+    """
+    Every tracked slot's milestone groups in one response, so the Milestones widget refresh makes
+    one request instead of one per slot (#418). Each slot's entry has the same group shape as
+    GET /rooms/<id>/slots/<slot_id>/threshold-groups.
+
+    Every tracked slot is listed, including slots with no groups (an empty list), so a client can
+    clear groups that were deleted elsewhere. A room's datapackage is loaded once per game for the
+    whole request, not once per slot.
+    """
+    session = Session()
+    try:
+        tracked_slots = session.query(UserTrackedSlot).filter_by(user_id=current_user.id).order_by(
+            UserTrackedSlot.room_id, UserTrackedSlot.slot_id
+        ).all()
+        if not tracked_slots:
+            return jsonify([])
+
+        groups_by_tracked_slot = {}
+        for g in session.query(ThresholdGroup).join(
+            UserTrackedSlot, ThresholdGroup.user_tracked_slot_id == UserTrackedSlot.id
+        ).filter(
+            UserTrackedSlot.user_id == current_user.id
+        ).options(selectinload(ThresholdGroup.items)).order_by(ThresholdGroup.id).all():
+            groups_by_tracked_slot.setdefault(g.user_tracked_slot_id, []).append(g)
+
+        room_ids = {ts.room_id for ts in tracked_slots}
+        rooms = {r.id: r for r in session.query(TrackedRoom).filter(TrackedRoom.id.in_(room_ids)).all()}
+
+        datapackage_cache = {}
+        result = []
+        for ts in tracked_slots:
+            groups = groups_by_tracked_slot.get(ts.id, [])
+            progress = _progress_for_slot(
+                session, rooms.get(ts.room_id), ts.room_id, ts.slot_id, groups, datapackage_cache
+            )
+            result.append({
+                'room_db_id': ts.room_id,
+                'slot_id': ts.slot_id,
+                'groups': _serialize_groups(groups, progress),
+            })
+        return jsonify(result)
+    finally:
+        Session.remove()
+
+
 @thresholds_bp.route('/rooms/<int:room_db_id>/slots/<int:slot_id>/threshold-groups', methods=['GET'])
 @handle_db_errors
 @log_api_call
@@ -35,39 +122,14 @@ def get_threshold_groups(current_user, room_db_id, slot_id):
         ).first()
         if not tracked_slot:
             return jsonify({'error': 'Tracked slot not found'}), 404
-        
+
         groups = session.query(ThresholdGroup).filter_by(
             user_tracked_slot_id=tracked_slot.id
         ).options(selectinload(ThresholdGroup.items)).all()
 
-        # Progress is advisory: clients render it, they do not act on it, and item-group
-        # requirements are the only ones they cannot count for themselves. Never let a failure
-        # here take down the definitions fetch -- 'acquired' simply comes back null.
-        progress = {}
-        all_items = [item for g in groups for item in g.items]
-        if all_items:
-            try:
-                room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
-                if room:
-                    progress = compute_requirement_progress(session, room, slot_id, all_items)
-            except Exception as e:
-                logging.error(
-                    f"Failed to compute milestone progress for room {room_db_id} slot {slot_id}: {e}",
-                    exc_info=True
-                )
-
-        return jsonify([{
-            'id': g.id,
-            'name': g.name,
-            'is_triggered': g.is_triggered,
-            'items': [{
-                'id': item.id,
-                'item_name': item.item_name,
-                'quantity': item.quantity,
-                'is_group': item.is_group,
-                'acquired': progress.get(item.id)
-            } for item in g.items]
-        } for g in groups])
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first() if groups else None
+        progress = _progress_for_slot(session, room, room_db_id, slot_id, groups)
+        return jsonify(_serialize_groups(groups, progress))
     finally:
         Session.remove()
 

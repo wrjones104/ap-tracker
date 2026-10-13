@@ -31,7 +31,55 @@ def _resolve_slot_checksum(room, slot_id):
     )
 
 
-def compute_requirement_progress(session, room, slot_id, requirements):
+def _datapackage_lookups(session, checksum, cache):
+    """
+    The item name -> id map for one datapackage, memoised in `cache` (keyed by checksum) when the
+    caller passes one. Loading it reads every item row for the game, so a batch over many slots of
+    the same game should load it once, not once per slot.
+    """
+    if cache is not None and checksum in cache:
+        return cache[checksum]
+
+    name_to_id = {}
+    for name, entity_id in session.query(
+        DatapackageCache.entity_name, DatapackageCache.entity_id
+    ).filter(
+        DatapackageCache.checksum == checksum,
+        DatapackageCache.entity_type == 'item'
+    ).all():
+        name_to_id[name.lower().strip()] = entity_id
+
+    entry = {'name_to_id': name_to_id, 'groups': None}
+    if cache is not None:
+        cache[checksum] = entry
+    return entry
+
+
+def _item_name_groups(session, checksum, entry):
+    """Every item_name_group of the datapackage as {lowercased name: set of lowercased members}, loaded once per entry."""
+    if entry['groups'] is not None:
+        return entry['groups']
+
+    groups = {}
+    groups_row = session.query(DatapackageCache.entity_name).filter(
+        DatapackageCache.checksum == checksum,
+        DatapackageCache.entity_type == 'item_name_groups_json'
+    ).first()
+    if groups_row and groups_row[0]:
+        try:
+            parsed = json.loads(groups_row[0])
+            if isinstance(parsed, dict):
+                for g_name, members in parsed.items():
+                    if isinstance(members, list):
+                        groups[g_name.lower().strip()] = {m.lower().strip() for m in members}
+        except Exception as e:
+            logging.warning(f"[MILESTONE_PROGRESS] Bad item_name_groups_json for checksum {checksum}: {e}")
+
+    entry['groups'] = groups
+    return groups
+
+
+def compute_requirement_progress(session, room, slot_id, requirements, datapackage_cache=None):
     """
     Per-requirement acquired counts for one tracked slot, keyed by ThresholdGroupItem id.
 
@@ -46,7 +94,10 @@ def compute_requirement_progress(session, room, slot_id, requirements):
     "not knowable" and render accordingly.
 
     Deliberately does not heal a stale datapackage cache: this runs on a read path the Milestones
-    widget calls once per tracked slot, and healing opens a WebSocket to the Archipelago server.
+    widget calls on every refresh, and healing opens a WebSocket to the Archipelago server.
+
+    Pass the same `datapackage_cache` dict across calls in one request to load each game's
+    datapackage once rather than once per slot.
     """
     if not requirements:
         return {}
@@ -55,32 +106,12 @@ def compute_requirement_progress(session, room, slot_id, requirements):
     if not checksum:
         return {}
 
-    name_to_id = {}
-    for name, entity_id in session.query(
-        DatapackageCache.entity_name, DatapackageCache.entity_id
-    ).filter(
-        DatapackageCache.checksum == checksum,
-        DatapackageCache.entity_type == 'item'
-    ).all():
-        name_to_id[name.lower().strip()] = entity_id
+    lookups = _datapackage_lookups(session, checksum, datapackage_cache)
+    name_to_id = lookups['name_to_id']
 
-    requested_groups = {r.item_name.lower().strip() for r in requirements if r.is_group}
     group_expansions = {}
-    if requested_groups:
-        groups_row = session.query(DatapackageCache.entity_name).filter(
-            DatapackageCache.checksum == checksum,
-            DatapackageCache.entity_type == 'item_name_groups_json'
-        ).first()
-        if groups_row and groups_row[0]:
-            try:
-                parsed = json.loads(groups_row[0])
-                if isinstance(parsed, dict):
-                    for g_name, members in parsed.items():
-                        g_key = g_name.lower().strip()
-                        if g_key in requested_groups and isinstance(members, list):
-                            group_expansions[g_key] = {m.lower().strip() for m in members}
-            except Exception as e:
-                logging.warning(f"[MILESTONE_PROGRESS] Bad item_name_groups_json for checksum {checksum}: {e}")
+    if any(r.is_group for r in requirements):
+        group_expansions = _item_name_groups(session, checksum, lookups)
 
     counts_by_item_id = {}
     for item_id, count in session.query(SlotItemCount.item_id, SlotItemCount.count).filter(
