@@ -119,6 +119,10 @@ interface ApiService {
         @Path("slot_id") slotId: Int
     ): List<ThresholdGroup>
 
+    /** Every tracked slot's groups in one call (#418). Servers before it answer 404. */
+    @GET("users/me/threshold-groups")
+    suspend fun getAllThresholdGroups(): List<SlotThresholdGroups>
+
     @POST("rooms/{id}/slots/{slot_id}/threshold-groups")
     suspend fun createThresholdGroup(
         @Path("id") roomId: Int,
@@ -757,6 +761,16 @@ data class ThresholdGroup(
     val name: String?,
     val is_triggered: Boolean = false,
     val items: List<ThresholdGroupItem>
+)
+
+/**
+ * One tracked slot in GET users/me/threshold-groups; [groups] is empty when the slot has none.
+ * Nullable because Gson does not enforce Kotlin nullability: a missing field arrives as null.
+ */
+data class SlotThresholdGroups(
+    val room_db_id: Int,
+    val slot_id: Int,
+    val groups: List<ThresholdGroup>?
 )
 
 data class ThresholdGroupItem(

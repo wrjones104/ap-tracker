@@ -12,6 +12,8 @@ import com.jones.aptracker.database.CachedTrackedSlotEntity
 import com.jones.aptracker.network.RetrofitClient
 import com.jones.aptracker.network.RoomItemCount
 import com.jones.aptracker.network.RoomWithTrackedSlots
+import com.jones.aptracker.network.SlotThresholdGroups
+import com.jones.aptracker.network.ThresholdGroup
 import com.jones.aptracker.network.ThresholdGroupItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -21,6 +23,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 data class MilestoneItemProgress(
     val itemName: String,
@@ -99,6 +102,7 @@ object MilestonesRepository {
 
     private const val REFRESH_PREFS = "milestone_cache_prefs"
     private const val KEY_LAST_REFRESH = "last_refresh_at"
+    private const val KEY_LAST_FAILURE = "last_failed_refresh_at"
 
     private val gson = Gson()
     private val itemListType = object : TypeToken<List<ThresholdGroupItem>>() {}.type
@@ -141,20 +145,25 @@ object MilestonesRepository {
      * Item-group progress is the one thing that can only arrive with a refresh, since the server
      * counts it (see `acquired` on `ThresholdGroupItem`). It therefore lags by at most this window
      * -- in practice much less, because a push-driven sync refreshes on the way through.
+     *
+     * A failed refresh holds the gate for the same window, so a struggling server is not retried
+     * on every push until it recovers. The widget's own refresh button bypasses the gate.
      */
     suspend fun refreshCacheIfStale(
         context: Context,
         trackedRooms: List<RoomWithTrackedSlots>? = null,
         maxAgeMs: Long = DEFAULT_MAX_CACHE_AGE_MS
     ): Boolean {
-        val lastRefresh = try {
-            withContext(Dispatchers.IO) { readLastRefresh(context) }
+        val lastAttempt = try {
+            withContext(Dispatchers.IO) {
+                listOfNotNull(readLastRefresh(context), readLastFailure(context)).maxOrNull()
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read milestone cache age; refreshing anyway", e)
             null
         }
 
-        val isFresh = lastRefresh != null && System.currentTimeMillis() - lastRefresh < maxAgeMs
+        val isFresh = lastAttempt != null && System.currentTimeMillis() - lastAttempt < maxAgeMs
         return if (isFresh) false else refreshCache(context, trackedRooms)
     }
 
@@ -213,29 +222,11 @@ object MilestonesRepository {
                     )
                 }
             }
+
+            // Fetch before writing anything, so a failed batch call leaves the whole cache as it was.
+            val fetched = fetchAllGroups(slotRows) ?: fetchGroupsPerSlot(slotRows)
+
             dao.replaceTrackedSlots(slotRows)
-
-            val semaphore = Semaphore(MAX_PARALLEL_SLOT_FETCHES)
-            val fetched = coroutineScope {
-                slotRows.map { slot ->
-                    async {
-                        semaphore.withPermit {
-                            try {
-                                slot to api.getThresholdGroups(slot.roomDbId, slot.slotId)
-                            } catch (e: Exception) {
-                                // Leave this slot's previously cached groups in place.
-                                Log.w(
-                                    TAG,
-                                    "Failed to fetch milestones for room ${slot.roomDbId} slot ${slot.slotId}",
-                                    e
-                                )
-                                null
-                            }
-                        }
-                    }
-                }.awaitAll().filterNotNull()
-            }
-
             for ((slot, groups) in fetched) {
                 dao.replaceMilestoneGroupsForSlot(
                     slot.roomDbId,
@@ -268,7 +259,70 @@ object MilestonesRepository {
             true
         } catch (e: Exception) {
             Log.e(TAG, "Milestone cache refresh failed", e)
+            writeLastFailure(context, System.currentTimeMillis())
             false
+        }
+    }
+
+    /**
+     * Every slot's groups from the one batch call (#418), or null when the server predates it
+     * (404), in which case the caller falls back to [fetchGroupsPerSlot]. Any other failure
+     * propagates and fails the refresh, leaving the whole cache as it was. Falling back on a 5xx
+     * would send one request per slot to a server that is already struggling.
+     */
+    internal suspend fun fetchAllGroups(
+        slotRows: List<CachedTrackedSlotEntity>,
+        fetch: suspend () -> List<SlotThresholdGroups> = { RetrofitClient.instance.getAllThresholdGroups() }
+    ): List<Pair<CachedTrackedSlotEntity, List<ThresholdGroup>>>? {
+        if (slotRows.isEmpty()) return emptyList()
+        val response = try {
+            fetch()
+        } catch (e: HttpException) {
+            if (e.code() == 404) return null
+            throw e
+        }
+        return matchGroupsToSlots(slotRows, response)
+    }
+
+    /** The pre-#418 path: one request per slot, a few at a time. */
+    private suspend fun fetchGroupsPerSlot(
+        slotRows: List<CachedTrackedSlotEntity>
+    ): List<Pair<CachedTrackedSlotEntity, List<ThresholdGroup>>> {
+        val api = RetrofitClient.instance
+        val semaphore = Semaphore(MAX_PARALLEL_SLOT_FETCHES)
+        return coroutineScope {
+            slotRows.map { slot ->
+                async {
+                    semaphore.withPermit {
+                        try {
+                            slot to api.getThresholdGroups(slot.roomDbId, slot.slotId)
+                        } catch (e: Exception) {
+                            // Leave this slot's previously cached groups in place.
+                            Log.w(
+                                TAG,
+                                "Failed to fetch milestones for room ${slot.roomDbId} slot ${slot.slotId}",
+                                e
+                            )
+                            null
+                        }
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * Pairs each cached slot with its groups from the batch response. A slot the response does
+     * not list is skipped, so its previously cached groups stay, as when a per-slot fetch fails.
+     * Slots in the response that the roster does not have are ignored.
+     */
+    internal fun matchGroupsToSlots(
+        slotRows: List<CachedTrackedSlotEntity>,
+        response: List<SlotThresholdGroups>
+    ): List<Pair<CachedTrackedSlotEntity, List<ThresholdGroup>>> {
+        val bySlot = response.associateBy { it.room_db_id to it.slot_id }
+        return slotRows.mapNotNull { slot ->
+            bySlot[slot.roomDbId to slot.slotId]?.let { slot to it.groups.orEmpty() }
         }
     }
 
@@ -402,6 +456,21 @@ object MilestonesRepository {
 
     private fun writeLastRefresh(context: Context, at: Long) {
         refreshPrefs(context).edit().putLong(KEY_LAST_REFRESH, at).apply()
+    }
+
+    /**
+     * Epoch millis of the last failed refresh, or null. Kept apart from [readLastRefresh], which
+     * also tells the widget whether it has ever loaded.
+     */
+    private fun readLastFailure(context: Context): Long? =
+        refreshPrefs(context).getLong(KEY_LAST_FAILURE, 0L).takeIf { it > 0L }
+
+    private fun writeLastFailure(context: Context, at: Long) {
+        try {
+            refreshPrefs(context).edit().putLong(KEY_LAST_FAILURE, at).apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to record milestone refresh failure", e)
+        }
     }
 
     /**
