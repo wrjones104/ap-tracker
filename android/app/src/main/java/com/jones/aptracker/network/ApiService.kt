@@ -763,11 +763,14 @@ data class ThresholdGroup(
     val items: List<ThresholdGroupItem>
 )
 
-/** One tracked slot in GET users/me/threshold-groups; [groups] is empty when the slot has none. */
+/**
+ * One tracked slot in GET users/me/threshold-groups; [groups] is empty when the slot has none.
+ * Nullable because Gson does not enforce Kotlin nullability: a missing field arrives as null.
+ */
 data class SlotThresholdGroups(
     val room_db_id: Int,
     val slot_id: Int,
-    val groups: List<ThresholdGroup>
+    val groups: List<ThresholdGroup>?
 )
 
 data class ThresholdGroupItem(
