@@ -11,7 +11,7 @@ from app.models import (
     User, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     UserIgnoreItem, UserWhitelistItem, NotifiedItem
 )
-from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z
+from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z, conditional_json
 from app.utils import (
     parse_cached_checks, VALID_FINISHED_DEFINITIONS,
     VALID_TRACK_MODES, TRACK_MODE_PLAY, DEFAULT_TRACK_MODE, normalize_track_mode
@@ -568,7 +568,8 @@ def get_user_tracked_slots(current_user):
                 'tracked_slots': tracked_slots_list
             })
 
-        return jsonify(response_data)
+        # Most of its ~30k daily calls return what the phone already has (#417).
+        return conditional_json(response_data)
     finally:
         Session.remove()
 

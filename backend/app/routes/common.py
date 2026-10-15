@@ -27,6 +27,21 @@ def format_iso_z(dt_obj):
         dt_obj = dt_obj.replace(tzinfo=timezone.utc)
     return dt_obj.isoformat().replace("+00:00", "Z")
 
+def conditional_json(payload):
+    """
+    A JSON response that answers 304 Not Modified, with no body, when the client already holds
+    this exact body (#417). The ETag is a hash of the body, so it saves bytes, not server work.
+
+    `private, no-cache` lets the app's HTTP cache keep the body but makes it ask every time, so
+    it never serves a stale copy on its own, and keeps shared caches out. nginx turns the ETag
+    weak when it gzips the response; Werkzeug compares If-None-Match weakly, so that still
+    matches. Clients without an HTTP cache never send If-None-Match and always get a 200.
+    """
+    response = jsonify(payload)
+    response.add_etag()
+    response.headers['Cache-Control'] = 'private, no-cache'
+    return response.make_conditional(request)
+
 def log_api_call(f):
     """A decorator to log API request and response."""
     @wraps(f)
