@@ -1,17 +1,31 @@
 package com.jones.aptracker.network
 
 import android.content.Context
+import android.util.Log
 import com.google.gson.GsonBuilder
 import com.jones.aptracker.BuildConfig
+import okhttp3.Cache
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
 
+    private const val HTTP_CACHE_BYTES = 5L * 1024 * 1024
+
     private lateinit var apiService: ApiService
+
+    /**
+     * Lets OkHttp revalidate responses the server tags with an ETag (#417): it sends
+     * If-None-Match, and on a 304 hands Retrofit the stored body, so callers see an ordinary
+     * 200. The server marks those responses `private, no-cache`, so a stored body is never
+     * served without asking first. [RevalidateOnlyCacheInterceptor] keeps every other response
+     * out of the cache.
+     */
+    private var httpCache: Cache? = null
 
     fun init(context: Context) {
 
@@ -25,7 +39,12 @@ object RetrofitClient {
             redactHeader("Authorization")
         }
 
+        val cache = Cache(File(context.cacheDir, "http"), HTTP_CACHE_BYTES)
+        httpCache = cache
+
         val httpClient = OkHttpClient.Builder()
+            .cache(cache)
+            .addNetworkInterceptor(RevalidateOnlyCacheInterceptor())
             // AuthInterceptor is the single place that decides a 401 ends the session.
             // There used to be an Authenticator here doing the same thing, but it ran
             // below the interceptor in OkHttp's chain and fired unconditionally, so it
@@ -54,4 +73,17 @@ object RetrofitClient {
 
     val instance: ApiService
         get() = apiService
+
+    /**
+     * Drops every stored response. Called on logout, so one account's data does not stay on
+     * disk for the next. The server would not hand it out anyway: the ETag is a hash of each
+     * user's own body, so another account's tag never matches.
+     */
+    fun clearHttpCache() {
+        try {
+            httpCache?.evictAll()
+        } catch (e: Exception) {
+            Log.w("RetrofitClient", "Failed to clear the HTTP cache", e)
+        }
+    }
 }
