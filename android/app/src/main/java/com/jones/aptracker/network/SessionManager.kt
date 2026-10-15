@@ -43,6 +43,7 @@ object SessionManager {
             tokenInvalidation = CoroutineScope(Dispatchers.IO).launch {
                 tokenManager.deleteToken()
                 appDatabase.clearAllTables()
+                RetrofitClient.clearHttpCache()
 
                 _logoutEvent.emit(reason)
 
