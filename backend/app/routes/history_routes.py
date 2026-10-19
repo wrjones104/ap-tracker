@@ -1164,6 +1164,123 @@ def get_global_item_history(current_user):
 
     return jsonify(final_history_dicts)
 
+
+@history_bp.route('/history/filter-flags', methods=['GET'])
+@handle_db_errors
+@log_api_call
+@token_required
+def get_history_filter_flags(current_user):
+    """
+    The ids of the user's received items that their ignore and whitelist rules match now (#464).
+
+    isIgnored and isWhitelisted are decided when an item is sent, and the app keeps each item
+    once, so a rule added or removed later never reached the items already on the phone. After
+    a rule change the app asks for these two lists, clears both flags on every cached item and
+    sets them for the ids returned. Same rules and same evaluation as the history routes.
+
+    Each distinct (room, slot, item) is named and evaluated once, however many copies arrived.
+    """
+    session = Session()
+    try:
+        prefs_user = session.query(User).options(
+            selectinload(User.ignore_items), selectinload(User.whitelist_items)
+        ).filter_by(id=current_user.id).first()
+        ignore_items = prefs_user.ignore_items if prefs_user else []
+        whitelist_items = prefs_user.whitelist_items if prefs_user else []
+        empty = {'ignored_ids': [], 'whitelisted_ids': []}
+        if not ignore_items and not whitelist_items:
+            return jsonify(empty)
+
+        tracked = session.query(UserTrackedSlot.room_id, UserTrackedSlot.slot_id).filter_by(
+            user_id=current_user.id
+        ).all()
+        if not tracked:
+            return jsonify(empty)
+
+        rooms = session.query(TrackedRoom).filter(
+            TrackedRoom.id.in_({room_db_id for room_db_id, _ in tracked})
+        ).all()
+        room_uuid_by_db_id = {r.id: r.room_id for r in rooms}
+
+        # Per room: which game each slot plays, and that game's datapackage checksum.
+        games_by_room = {}
+        checksums_by_room = {}
+        for r in rooms:
+            try:
+                players = json.loads(r.cached_players_json or '[]')
+                if not isinstance(players, list):
+                    players = []
+            except (json.JSONDecodeError, TypeError):
+                players = []
+            try:
+                checksums = json.loads(r.game_checksums_json or '{}')
+                if not isinstance(checksums, dict):
+                    checksums = {}
+            except (json.JSONDecodeError, TypeError):
+                checksums = {}
+            games_by_room[r.room_id] = {p.get('slot_id'): p.get('game') for p in players}
+            checksums_by_room[r.room_id] = checksums
+
+        slot_filters = []
+        for room_db_id, slot_id in tracked:
+            room_uuid = room_uuid_by_db_id.get(room_db_id)
+            if room_uuid:
+                slot_filters.append(
+                    (NotifiedItem.room_id == room_uuid) & (NotifiedItem.receiving_slot_id == slot_id)
+                )
+        if not slot_filters:
+            return jsonify(empty)
+
+        distinct_items = session.query(
+            NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id
+        ).filter(or_(*slot_filters)).distinct().all()
+
+        keyed = []
+        cache_keys = set()
+        for room_uuid, slot_id, item_id in distinct_items:
+            game = games_by_room.get(room_uuid, {}).get(slot_id, "Unknown")
+            checksum = checksums_by_room.get(room_uuid, {}).get(game)
+            name_key = (checksum, 'item', item_id) if checksum else None
+            if name_key:
+                cache_keys.add(name_key)
+            keyed.append(((room_uuid, slot_id, item_id), game, checksum, name_key))
+
+        name_cache_map = fetch_datapackage_names(session, cache_keys)
+        group_members_lookup = fetch_group_members_lookup(session, {k[2] for k in keyed if k[2]})
+
+        ignored_keys = []
+        whitelisted_keys = []
+        for key, game, checksum, name_key in keyed:
+            item_name = name_cache_map.get(name_key) or f"Item ID {key[2]}"
+            is_ignored, is_whitelisted, _, _ = evaluate_item_filter_status(
+                item_name=item_name,
+                game_name=game,
+                game_checksum=checksum,
+                ignore_items=ignore_items,
+                whitelist_items=whitelist_items,
+                group_members_lookup=group_members_lookup
+            )
+            if is_ignored:
+                ignored_keys.append(key)
+            if is_whitelisted:
+                whitelisted_keys.append(key)
+
+        def ids_for(keys):
+            ids = []
+            for chunk in chunked_iterable(keys, DATAPACKAGE_LOOKUP_CHUNK_SIZE):
+                ids.extend(row[0] for row in session.query(NotifiedItem.id).filter(
+                    tuple_(NotifiedItem.room_id, NotifiedItem.receiving_slot_id, NotifiedItem.item_id).in_(chunk)
+                ).all())
+            return sorted(ids)
+
+        return jsonify({
+            'ignored_ids': ids_for(ignored_keys),
+            'whitelisted_ids': ids_for(whitelisted_keys),
+        })
+    finally:
+        Session.remove()
+
+
 @history_bp.route('/history/hints', methods=['GET'])
 @handle_db_errors
 @log_api_call
