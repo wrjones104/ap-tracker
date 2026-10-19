@@ -392,6 +392,10 @@ class HistoryRepository(
                 hintDao.insertHints(entitiesToInsert)
                 Log.d("HINT_DEBUG", "Insertion/Update complete.")
             }
+        } catch (e: CancellationException) {
+            // A superseded filter repair: let it stop here rather than fall through to the
+            // item re-flag that follows it in requestFilterRepair.
+            throw e
         } catch (e: Exception) {
             Log.e("HINT_DEBUG", "!!! FAILED hint history refresh: ${e.message}", e)
         }
@@ -404,8 +408,11 @@ class HistoryRepository(
      * are decided when an item is sent and the delta sync never re-sends it, so without this a
      * rule only ever applied to items received after it.
      *
-     * Holds the sync mutex: a sync storing freshly flagged items between the fetch and the apply
-     * would otherwise have its flags cleared. Returns true when the cache was re-flagged; false
+     * Holds the sync mutex, so the batch sync (syncHistoryBatch, which holds it across its network
+     * calls) cannot store freshly flagged items between the fetch and the apply, and a batch sync
+     * in flight during a rule change finishes before this corrects it. The paged feed
+     * (fetchItemHistoryFeed) writes without the lock, but only older items, which this answer
+     * covers. Returns true when the cache was re-flagged; false
      * on a server without the route (404) or any failure, which leaves the flags as they were.
      */
     suspend fun refreshItemFilterFlags(): Boolean = syncMutex.withLock {

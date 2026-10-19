@@ -68,3 +68,16 @@ fun workerCanStandDown(
     if (requestedAt != null) return lastCompleted >= requestedAt
     return now - lastCompleted < windowMs
 }
+
+/**
+ * Whether a sync should also re-flag the cached items from the user's current rules (#464).
+ *
+ * - On every refresh the user asks for: rules may have changed on another device, or the
+ *   repair after a rule change may have failed, and pull-to-refresh is already the repair path
+ *   for hints.
+ * - Once after the upgrade that brought the re-flag, whatever started the sync: items stored by
+ *   earlier builds carry the flags of the rules in force when they arrived. [repairedOnce] is
+ *   recorded only after a successful re-flag, so a phone on an older server tries again later.
+ */
+fun itemFlagRepairDue(userInitiated: Boolean, repairedOnce: Boolean): Boolean =
+    userInitiated || !repairedOnce

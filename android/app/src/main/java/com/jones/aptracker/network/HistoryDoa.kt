@@ -52,7 +52,8 @@ interface HistoryDao {
     @Query("DELETE FROM history_items")
     suspend fun deleteAllHistory()
 
-    @Query("UPDATE history_items SET isIgnored = 0, isWhitelisted = 0")
+    // Only the flagged rows: on a large cache most rows have neither flag to clear.
+    @Query("UPDATE history_items SET isIgnored = 0, isWhitelisted = 0 WHERE isIgnored = 1 OR isWhitelisted = 1")
     suspend fun clearFilterFlags()
 
     @Query("UPDATE history_items SET isIgnored = 1 WHERE id IN (:ids)")

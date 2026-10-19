@@ -29,11 +29,16 @@ object HistorySyncManager {
     private const val RECENT_SYNC_WINDOW_MS = 10_000L
     private const val ACTIVE_SYNC_WAIT_MS = 60_000L
     private const val ACTIVE_SYNC_POLL_MS = 500L
-    private const val HINT_REPAIR_DEBOUNCE_MS = 1_000L
+    private const val FILTER_REPAIR_DEBOUNCE_MS = 1_000L
+
+    // Its own file, not the sync watermarks: clearing local history resets those, and the
+    // re-downloaded items then carry current flags anyway.
+    private const val FILTER_FLAG_PREFS = "ap_tracker_filter_flags"
+    private const val KEY_ITEM_FLAGS_REPAIRED = "item_filter_flags_repaired_464"
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var activeSyncJob: Job? = null
-    private var hintRepairJob: Job? = null
+    private var filterRepairJob: Job? = null
 
     @Volatile
     private var lastAttemptStartTime: Long = 0L
@@ -52,7 +57,9 @@ object HistorySyncManager {
     ) {
         val appContext = pushSyncContext ?: return@CoalescingRunner
         val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
-        HistoryRepository.getInstance(appContext).syncHistoryBatch(trackedRooms)
+        val repository = HistoryRepository.getInstance(appContext)
+        repository.syncHistoryBatch(trackedRooms)
+        repairItemFlagsIfDue(appContext, repository, userInitiated = false)
         markSyncCompleted()
         com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(appContext)
         com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdate(appContext, trackedRooms)
@@ -131,9 +138,9 @@ object HistorySyncManager {
     @Synchronized
     fun requestFilterRepair(context: Context) {
         val appContext = context.applicationContext
-        hintRepairJob?.cancel()
-        hintRepairJob = applicationScope.launch {
-            delay(HINT_REPAIR_DEBOUNCE_MS)
+        filterRepairJob?.cancel()
+        filterRepairJob = applicationScope.launch {
+            delay(FILTER_REPAIR_DEBOUNCE_MS)
             val repository = HistoryRepository.getInstance(appContext)
             repository.refreshHintHistory(null)
             if (repository.refreshItemFilterFlags()) {
@@ -141,6 +148,23 @@ object HistorySyncManager {
                 com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(appContext)
             }
         }
+    }
+
+    /**
+     * Re-flags cached items after a sync when [itemFlagRepairDue] says so: on a refresh the user
+     * asked for, and once after the upgrade that brought the re-flag. Runs after the sync, so the
+     * items it just stored are covered too. Callers redraw the widget afterwards.
+     */
+    private suspend fun repairItemFlagsIfDue(
+        appContext: Context,
+        repository: HistoryRepository,
+        userInitiated: Boolean
+    ) {
+        val prefs = appContext.getSharedPreferences(FILTER_FLAG_PREFS, Context.MODE_PRIVATE)
+        if (!itemFlagRepairDue(userInitiated, prefs.getBoolean(KEY_ITEM_FLAGS_REPAIRED, false))) return
+        if (!repository.refreshItemFilterFlags()) return
+        prefs.edit().putBoolean(KEY_ITEM_FLAGS_REPAIRED, true).apply()
+        _filterFlagsChanged.tryEmit(Unit)
     }
 
     /**
@@ -218,6 +242,10 @@ object HistorySyncManager {
                     )
                     onBatchReceived?.invoke()
                 }
+
+                // Pull-to-refresh repairs item flags as it does hints; any sync also runs the
+                // one-time repair after the upgrade (#464).
+                repairItemFlagsIfDue(appContext, repository, userInitiated = repairHints)
 
                 val finalItemsTotal = itemsFetchedTotal
                 val finalPct = if (totalDelta > 0) minOf(100, (finalItemsTotal * 100) / totalDelta) else 100

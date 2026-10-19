@@ -346,8 +346,13 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         fetchUserPreferences()
         // Items are read once, not as a Flow, so a rule change's re-flag has to ask for a
         // reload: without it the list keeps showing what was ignored a moment ago (#464).
+        // Only once this ViewModel has loaded history: a reload before Activity was ever opened
+        // would fill the list, and HistoryContent then skips its first refreshAllHistory() because
+        // the list is not empty. Room already holds the new flags for when that load runs.
         viewModelScope.launch {
-            HistorySyncManager.filterFlagsChanged.collect { reloadHistory(showSpinner = false) }
+            HistorySyncManager.filterFlagsChanged.collect {
+                if (rosterApplied) reloadHistory(showSpinner = false)
+            }
         }
     }
 
