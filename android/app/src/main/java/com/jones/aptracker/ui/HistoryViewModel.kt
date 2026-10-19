@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.FinishedDefinition
 import com.jones.aptracker.data.FinishedDefinitionStore
 import com.jones.aptracker.data.FinishedResolver
+import com.jones.aptracker.data.RosterCache
 import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.data.ShowFinishedPreference
 import com.jones.aptracker.database.AppDatabase
@@ -17,11 +18,13 @@ import com.jones.aptracker.diagnostics.CrashReporter
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
+import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.readsAsWatched
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.HistorySyncManager
 import com.jones.aptracker.repository.SyncProgressState
 import com.jones.aptracker.repository.UserRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -32,6 +35,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 
 /**
@@ -552,16 +556,96 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
      * @param userInitiated True only for the History screen's pull-to-refresh. It is the one
      * caller that also re-downloads every hint, as a repair path for local hints (#411).
      */
+    /**
+     * Derives the screen's room and slot metadata from a tracked-slots roster: which rooms are
+     * active or archived, aliases, finish state, watched slots. Used with the network answer, and
+     * on a cold start with the last roster the HTTP cache holds, so the screen can paint the
+     * phone's history before the network answers (#468).
+     */
+    private suspend fun applyRoster(trackedRooms: List<RoomWithTrackedSlots>) {
+        val isCheeseConnected = settingsManager.isCheeseConnected.first()
+
+        val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
+        val liveIcons = mutableMapOf<Int, String>()
+        val liveFinishState = mutableMapOf<Pair<Int, String>, SlotFinishState>()
+        val watchedKeys = mutableSetOf<Pair<Int, String>>()
+        val slotDefinitions = mutableMapOf<Pair<Int, Int>, String?>()
+        val roomNameMap = mutableMapOf<Int, String>()
+        val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
+        val trackedPlayersList = mutableListOf<TrackedPlayer>()
+
+        val activeIds = mutableSetOf<Int>()
+        val archivedIds = mutableSetOf<Int>()
+
+        trackedRooms.forEach { room ->
+            if (room.is_archived) {
+                archivedIds.add(room.room_db_id)
+            } else {
+                activeIds.add(room.room_db_id)
+            }
+
+            liveIcons[room.room_db_id] = room.icon_name
+            roomNameMap[room.room_db_id] = room.room_alias
+
+            room.tracked_slots.forEach { slot ->
+                validSlotsSet.add(room.room_db_id to slot.slot_id)
+
+                trackedPlayersList.add(
+                    TrackedPlayer(
+                        roomId = room.room_db_id,
+                        playerName = slot.player_name,
+                        playerAlias = slot.player_alias,
+                        needsBackfill = slot.needs_backfill
+                    )
+                )
+
+                if (!slot.player_alias.isNullOrBlank()) {
+                    aliasMap[room.room_db_id to slot.slot_id] = slot.player_alias
+                }
+                liveFinishState[room.room_db_id to slot.player_name] = SlotFinishState(
+                    slotId = slot.slot_id,
+                    isGoaled = slot.is_finished,
+                    hasAllChecks = slot.has_all_checks
+                )
+                slotDefinitions[room.room_db_id to slot.slot_id] = slot.finished_definition
+                if (slot.readsAsWatched(isCheeseConnected)) {
+                    watchedKeys.add(room.room_db_id to slot.player_name)
+                }
+            }
+        }
+
+        _roomNames.value = roomNameMap
+        _validTrackedSlots.value = validSlotsSet
+        _liveAliases.value = aliasMap
+        _liveFinishState.value = liveFinishState
+        _watchedPlayerKeys.value = watchedKeys
+
+        // Mirror the per-slot overrides so the widgets, which have no ViewModel
+        // and no network call on their load path, resolve them the same way.
+        FinishedDefinitionStore.writeOverrides(getApplication(), slotDefinitions)
+        _activeRoomIds.value = activeIds
+        _archivedRoomIds.value = archivedIds
+        _roomIcons.value = liveIcons
+        _trackedPlayers.value = trackedPlayersList
+    }
+
+    /** The roster saved by the last successful load, or null. Never touches the network. */
+    private suspend fun loadCachedRoster(): List<RoomWithTrackedSlots>? =
+        withContext(Dispatchers.IO) { RosterCache.load(getApplication()) }
+
     fun refreshAllHistory(userInitiated: Boolean = false) {
         Log.d("HistoryViewModel", "Triggering refresh for Room ID: ${currentRoomId ?: "Global"}")
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
             errorMessage.value = null
 
-            // Warm start: if we already have tracked-slot metadata from earlier this
-            // session, paint the local cache immediately instead of blocking the
-            // transition on the network round-trip below. STEP 1 reconciles shortly
-            // after with the authoritative server response.
+            // Paint the local history before the network round-trip below; STEP 1 reconciles
+            // shortly after with the authoritative server response. A warm ViewModel already
+            // has the roster from an earlier load. A cold one (first open, process restarted)
+            // takes the roster saved by the last load instead of waiting on the server (#468).
+            if (_validTrackedSlots.value.isEmpty()) {
+                loadCachedRoster()?.let { applyRoster(it) }
+            }
             if (_validTrackedSlots.value.isNotEmpty()) {
                 reloadHistory(showSpinner = false)
             }
@@ -570,70 +654,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 // --- STEP 1: Metadata & Room Setup (Fast) ---
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
-                val isCheeseConnected = settingsManager.isCheeseConnected.first()
-
-                val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
-                val liveIcons = mutableMapOf<Int, String>()
-                val liveFinishState = mutableMapOf<Pair<Int, String>, SlotFinishState>()
-                val watchedKeys = mutableSetOf<Pair<Int, String>>()
-                val slotDefinitions = mutableMapOf<Pair<Int, Int>, String?>()
-                val roomNameMap = mutableMapOf<Int, String>()
-                val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
-                val trackedPlayersList = mutableListOf<TrackedPlayer>()
-
-                val activeIds = mutableSetOf<Int>()
-                val archivedIds = mutableSetOf<Int>()
-
-                trackedRooms.forEach { room ->
-                    if (room.is_archived) {
-                        archivedIds.add(room.room_db_id)
-                    } else {
-                        activeIds.add(room.room_db_id)
-                    }
-
-                    liveIcons[room.room_db_id] = room.icon_name
-                    roomNameMap[room.room_db_id] = room.room_alias
-
-                    room.tracked_slots.forEach { slot ->
-                        validSlotsSet.add(room.room_db_id to slot.slot_id)
-
-                        trackedPlayersList.add(
-                            TrackedPlayer(
-                                roomId = room.room_db_id,
-                                playerName = slot.player_name,
-                                playerAlias = slot.player_alias,
-                                needsBackfill = slot.needs_backfill
-                            )
-                        )
-
-                        if (!slot.player_alias.isNullOrBlank()) {
-                            aliasMap[room.room_db_id to slot.slot_id] = slot.player_alias
-                        }
-                        liveFinishState[room.room_db_id to slot.player_name] = SlotFinishState(
-                            slotId = slot.slot_id,
-                            isGoaled = slot.is_finished,
-                            hasAllChecks = slot.has_all_checks
-                        )
-                        slotDefinitions[room.room_db_id to slot.slot_id] = slot.finished_definition
-                        if (slot.readsAsWatched(isCheeseConnected)) {
-                            watchedKeys.add(room.room_db_id to slot.player_name)
-                        }
-                    }
-                }
-
-                _roomNames.value = roomNameMap
-                _validTrackedSlots.value = validSlotsSet
-                _liveAliases.value = aliasMap
-                _liveFinishState.value = liveFinishState
-                _watchedPlayerKeys.value = watchedKeys
-
-                // Mirror the per-slot overrides so the widgets, which have no ViewModel
-                // and no network call on their load path, resolve them the same way.
-                FinishedDefinitionStore.writeOverrides(getApplication(), slotDefinitions)
-                _activeRoomIds.value = activeIds
-                _archivedRoomIds.value = archivedIds
-                _roomIcons.value = liveIcons
-                _trackedPlayers.value = trackedPlayersList
+                applyRoster(trackedRooms)
+                withContext(Dispatchers.IO) { RosterCache.save(getApplication(), trackedRooms) }
 
                 // --- STEP 1.5: Re-align currentRoomId if the room's server database ID changed ---
                 var targetRoomId = currentRoomId

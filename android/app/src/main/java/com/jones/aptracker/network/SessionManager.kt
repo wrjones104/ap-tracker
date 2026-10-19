@@ -3,6 +3,7 @@ package com.jones.aptracker.network
 import android.content.Context
 import android.util.Log
 import com.google.firebase.messaging.FirebaseMessaging
+import com.jones.aptracker.data.RosterCache
 import com.jones.aptracker.database.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,7 @@ object SessionManager {
 
     private lateinit var tokenManager: TokenManager
     private lateinit var appDatabase: AppDatabase
+    private lateinit var appContext: Context
 
     private val _logoutEvent = MutableSharedFlow<LogoutReason>()
     val logoutEvent = _logoutEvent.asSharedFlow()
@@ -35,6 +37,7 @@ object SessionManager {
     fun init(context: Context) {
         tokenManager = TokenManager(context)
         appDatabase = AppDatabase.getInstance(context)
+        appContext = context.applicationContext
     }
 
     fun logout(reason: LogoutReason) {
@@ -44,6 +47,7 @@ object SessionManager {
                 tokenManager.deleteToken()
                 appDatabase.clearAllTables()
                 RetrofitClient.clearHttpCache()
+                RosterCache.clear(appContext)
 
                 _logoutEvent.emit(reason)
 
