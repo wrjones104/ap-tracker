@@ -30,9 +30,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -439,9 +439,17 @@ fun MainScreen(
         // tap ask confirmValueChange first, so they are vetoed there. Back does
         // not: it calls hide() directly, and on Android 13+ its callback is fixed
         // when the sheet opens, so it cannot be switched off mid-import. A back
-        // during an import therefore brings the sheet straight back up.
-        // The confirmValueChange lambda is a key of the state's rememberSaveable,
-        // so it must stay the same instance and read the flag through state.
+        // during an import therefore brings the sheet straight back up. Do not
+        // gate that on isVisible: the veto leaves currentValue at Expanded while
+        // the sheet sits off screen, so the gate would skip show() and bring the
+        // invisible dialog back. After a predictive back swipe (Android 16+), the
+        // sheet comes back at the shrunk size it had when the swipe ended: M3
+        // keeps that scale for the exit animation and gives us no way to reset
+        // it. It clears when the import ends and the sheet closes.
+        // Both lambdas read the flag through state. The confirmValueChange one is
+        // a key of the state's rememberSaveable, so it must stay the same
+        // instance; and on Android 13+ the back callback keeps the onDismissRequest
+        // from when the sheet opened, so a captured flag would be stale there.
         val importingNow by rememberUpdatedState(isImportingCheeseRooms)
         val cheeseSheetState = rememberModalBottomSheetState(
             skipPartiallyExpanded = true,
