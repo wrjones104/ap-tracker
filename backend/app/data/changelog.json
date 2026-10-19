@@ -1048,6 +1048,43 @@
   ],
   "server_releases": [
     {
+      "version": "1.16.0",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-19",
+      "title": "Ignore Rules That Catch Up",
+      "highlights": [
+        {
+          "title": "Ignore Rules That Catch Up",
+          "description": "The server can tell the app which items your ignore and whitelist rules match now, so the next app update can re-sort items you already have."
+        },
+        {
+          "title": "Manage Slots Keeps Every Slot",
+          "description": "Saving Manage Slots no longer untracks a slot that was missing from the room's player list."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Ignore Rules That Catch Up",
+            "description": "The server lists which received items your ignore and whitelist rules match now; the app uses it from its next release. Refs #464."
+          }
+        ],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Manage Slots Keeps Every Slot",
+            "description": "Saving Manage Slots no longer untracks slots missing from the room's cached player list. Closes #457."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Added\n- `GET /history/filter-flags` returns `{ignored_ids, whitelisted_ids}`: the user's received items that their current ignore and whitelist rules match, so the app can re-flag items cached before a rule change. Refs #464, PR #472.\n\n### Fixed\n- `GET /rooms/<id>/players` also lists tracked slots missing from the room's cached player list (as `Player N`), so saving Manage Slots no longer untracks them. Closes #457, PR #475.\n\n### Compatibility\n- No migration. Additive and server-first: released apps never call the new route, and the extra player rows appear only when a room's cache is incomplete. The next app release (PR #473) uses filter-flags."
+      }
+    },
+    {
       "version": "1.15.1",
       "component": "server",
       "component_label": "Server",
