@@ -10,6 +10,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.16.0] - 2026-10-19
+
+_Ignore Rules That Catch Up_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - `GET /history/filter-flags` returns `{ignored_ids, whitelisted_ids}`: the user's received items that their current ignore and whitelist rules match, so the app can re-flag items cached before a rule change. Refs #464, PR #472.
+>
+> ### Fixed
+> - `GET /rooms/<id>/players` also lists tracked slots missing from the room's cached player list (as `Player N`), so saving Manage Slots no longer untracks them. Closes #457, PR #475.
+>
+> ### Compatibility
+> - No migration. Additive and server-first: released apps never call the new route, and the extra player rows appear only when a room's cache is incomplete. The next app release (PR #473) uses filter-flags.
+> ```
+
+### Added
+- **Ignore Rules That Catch Up**: The server lists which received items your ignore and whitelist rules match now; the app uses it from its next release. Refs #464.
+
+### Fixed
+- **Manage Slots Keeps Every Slot**: Saving Manage Slots no longer untracks slots missing from the room's cached player list. Closes #457.
+
+---
+
 ## [1.15.1] - 2026-10-19
 
 _Lighter Room Checks_
