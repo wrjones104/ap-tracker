@@ -10,6 +10,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.15.1] - 2026-10-19
+
+_Lighter Room Checks_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - `GET /users/me/tracked-slots` sends an ETag (a hash of the body) with `Cache-Control: private, no-cache`, and answers `304 Not Modified` with no body when `If-None-Match` matches. The weak ETag nginx sends after gzip matches too. Refs #417, PR #466.
+>
+> ### Compatibility
+> - No migration. Additive and server-first: released apps send no `If-None-Match` and keep getting 200s. The next app release (PR #467) adds the HTTP cache that uses it.
+> ```
+
+### Changed
+- **Lighter Room Checks**: The tracked-slots list answers "not modified" when the app already has the latest; the app uses it from its next release. Refs #417.
+
+---
+
 ## [1.15.0] - 2026-10-13
 
 _Milestones in One Request_
