@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -39,6 +40,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +59,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import coil.compose.AsyncImage
 import java.time.Instant
+import kotlinx.coroutines.launch
 
 /**
  * There is no longer a separate Slots tab. It and Rooms rendered the same rooms with the
@@ -426,13 +430,40 @@ fun MainScreen(
         val isImportingCheeseRooms by roomsViewModel.isImportingCheeseRooms.collectAsState()
         // Fully open from the start. Half-open, the buttons sit below the screen
         // edge whenever the list is long enough to need them (#449).
-        val cheeseSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        //
+        // An import in flight owns the sheet until it answers. Swiping it away
+        // mid-import is how somebody ends up asking for the same rooms twice.
+        // Swipe, scrim tap and back all slide the sheet to Hidden *before*
+        // onDismissRequest runs, so just ignoring that callback left the sheet's
+        // invisible full-screen dialog eating every tap (#456). Swipe and scrim
+        // tap ask confirmValueChange first, so they are vetoed there. Back does
+        // not: it calls hide() directly, and on Android 13+ its callback is fixed
+        // when the sheet opens, so it cannot be switched off mid-import. A back
+        // during an import therefore brings the sheet straight back up. Do not
+        // gate that on isVisible: the veto leaves currentValue at Expanded while
+        // the sheet sits off screen, so the gate would skip show() and bring the
+        // invisible dialog back. After a predictive back swipe (Android 16+), the
+        // sheet comes back at the shrunk size it had when the swipe ended: M3
+        // keeps that scale for the exit animation and gives us no way to reset
+        // it. It clears when the import ends and the sheet closes.
+        // Both lambdas read the flag through state. The confirmValueChange one is
+        // a key of the state's rememberSaveable, so it must stay the same
+        // instance; and on Android 13+ the back callback keeps the onDismissRequest
+        // from when the sheet opened, so a captured flag would be stale there.
+        val importingNow by rememberUpdatedState(isImportingCheeseRooms)
+        val cheeseSheetState = rememberModalBottomSheetState(
+            skipPartiallyExpanded = true,
+            confirmValueChange = remember { { value: SheetValue -> value != SheetValue.Hidden || !importingNow } }
+        )
+        val sheetScope = rememberCoroutineScope()
         ModalBottomSheet(
             sheetState = cheeseSheetState,
             onDismissRequest = {
-                // An import in flight owns the sheet until it answers. Swiping it away
-                // mid-import is how somebody ends up asking for the same rooms twice.
-                if (!isImportingCheeseRooms) roomsViewModel.consumeSuggestionsRequest()
+                if (importingNow) {
+                    sheetScope.launch { cheeseSheetState.show() }
+                } else {
+                    roomsViewModel.consumeSuggestionsRequest()
+                }
             }
         ) {
             CheeseSuggestionsSheet(
