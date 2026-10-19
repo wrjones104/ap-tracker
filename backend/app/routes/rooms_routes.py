@@ -516,14 +516,7 @@ def get_room_players(current_user, room_db_id):
 
         my_discord_clean = current_user.discord_username.strip().lower() if current_user.discord_username else None
 
-        response_players = []
-        for p in players_list:
-            slot_id = p.get('slot_id')
-            try:
-                slot_id_int = int(slot_id) if slot_id is not None else None
-            except (ValueError, TypeError):
-                slot_id_int = None
-            
+        def player_row(slot_id, slot_id_int, p):
             tracked_slot_entry = tracked_slots_map.get(slot_id_int) if slot_id_int is not None else None
             is_tracked = tracked_slot_entry is not None
 
@@ -543,8 +536,8 @@ def get_room_players(current_user, room_db_id):
                     is_known=cheese_game is not None,
                 )
 
-            response_players.append({
-                'slot_id': slot_id_int if slot_id_int is not None else slot_id,
+            return {
+                'slot_id': slot_id,
                 'name': p.get('name'),
                 'alias': p.get('alias'),
                 'game': p.get('game'),
@@ -564,8 +557,32 @@ def get_room_players(current_user, room_db_id):
                 'notify_filler': tracked_slot_entry.notify_filler if tracked_slot_entry else None,
                 'notify_trap': tracked_slot_entry.notify_trap if tracked_slot_entry else None,
                 'notify_hints': tracked_slot_entry.notify_hints if tracked_slot_entry else None
-            })
-        
+            }
+
+        response_players = []
+        listed_slot_ids = set()
+        for p in players_list:
+            slot_id = p.get('slot_id')
+            try:
+                slot_id_int = int(slot_id) if slot_id is not None else None
+            except (ValueError, TypeError):
+                slot_id_int = None
+            if slot_id_int is not None:
+                listed_slot_ids.add(slot_id_int)
+            response_players.append(player_row(
+                slot_id_int if slot_id_int is not None else slot_id, slot_id_int, p
+            ))
+
+        # The picker saves by replacing the user's tracked set with the rows it
+        # ticked, so a tracked slot missing from the cached player list (empty
+        # or partial cache) would be untracked by any save. List those slots
+        # too, named the way tracked-slots names them, so they stay ticked and
+        # the user can still untick one on purpose. See #457.
+        for slot_id_int in sorted(set(tracked_slots_map) - listed_slot_ids):
+            row = player_row(slot_id_int, slot_id_int, {})
+            row['name'] = f"Player {slot_id_int}"
+            response_players.append(row)
+
         return jsonify(response_players)
     finally:
         Session.remove()
