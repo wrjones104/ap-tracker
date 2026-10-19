@@ -11,6 +11,7 @@ import com.jones.aptracker.database.AppDatabase
 import com.jones.aptracker.network.RoomEntity
 import kotlinx.coroutines.flow.Flow
 import androidx.core.content.edit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -391,11 +392,42 @@ class HistoryRepository(
                 hintDao.insertHints(entitiesToInsert)
                 Log.d("HINT_DEBUG", "Insertion/Update complete.")
             }
+        } catch (e: CancellationException) {
+            // A superseded filter repair: let it stop here rather than fall through to the
+            // item re-flag that follows it in requestFilterRepair.
+            throw e
         } catch (e: Exception) {
             Log.e("HINT_DEBUG", "!!! FAILED hint history refresh: ${e.message}", e)
         }
     }
 
+
+    // --- ITEM RE-FLAG (after a rule change, #464) ---
+    /**
+     * Re-flags every cached item from the server's current answer. isIgnored and isWhitelisted
+     * are decided when an item is sent and the delta sync never re-sends it, so without this a
+     * rule only ever applied to items received after it.
+     *
+     * Holds the sync mutex, so the batch sync (syncHistoryBatch, which holds it across its network
+     * calls) cannot store freshly flagged items between the fetch and the apply, and a batch sync
+     * in flight during a rule change finishes before this corrects it. The paged feed
+     * (fetchItemHistoryFeed) writes without the lock, but only older items, which this answer
+     * covers. Returns true when the cache was re-flagged; false
+     * on a server without the route (404) or any failure, which leaves the flags as they were.
+     */
+    suspend fun refreshItemFilterFlags(): Boolean = syncMutex.withLock {
+        try {
+            val flags = apiService.getHistoryFilterFlags()
+            historyDao.applyFilterFlags(flags.ignored_ids.orEmpty(), flags.whitelisted_ids.orEmpty())
+            Log.d("HISTORY_DEBUG", "Re-flagged items: ${flags.ignored_ids.orEmpty().size} ignored, ${flags.whitelisted_ids.orEmpty().size} whitelisted.")
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("HISTORY_DEBUG", "Item re-flag skipped: ${e.message}")
+            false
+        }
+    }
 
     private fun mapHintDetailToEntity(detail: HintDetail, type: String): HintEntity {
         return HintEntity(

@@ -344,6 +344,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         repository = HistoryRepository.getInstance(application)
         userRepository = UserRepository(apiService)
         fetchUserPreferences()
+        // Items are read once, not as a Flow, so a rule change's re-flag has to ask for a
+        // reload: without it the list keeps showing what was ignored a moment ago (#464).
+        // Only once this ViewModel has loaded history: a reload before Activity was ever opened
+        // would fill the list, and HistoryContent then skips its first refreshAllHistory() because
+        // the list is not empty. Room already holds the new flags for when that load runs.
+        viewModelScope.launch {
+            HistorySyncManager.filterFlagsChanged.collect {
+                if (rosterApplied) reloadHistory(showSpinner = false)
+            }
+        }
     }
 
     fun loadHistoryFor(roomId: Int?, initialSearchQuery: String? = null, initialPlayerFilter: String? = null) {
@@ -866,7 +876,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 userRepository.addIgnoreItem(itemName, gameName)
                 _actionMessage.value = "Ignored '$itemName'"
-                HistorySyncManager.requestHintRepair(getApplication())
+                HistorySyncManager.requestFilterRepair(getApplication())
                 onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
@@ -932,7 +942,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 )
                 RetrofitClient.instance.addIgnoreItem(request)
                 _actionMessage.value = "Ignored group '$groupName'"
-                HistorySyncManager.requestHintRepair(getApplication())
+                HistorySyncManager.requestFilterRepair(getApplication())
                 onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
@@ -953,7 +963,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 userRepository.addWhitelistItem(itemName, gameName)
                 _actionMessage.value = "Whitelisted '$itemName'"
-                HistorySyncManager.requestHintRepair(getApplication())
+                HistorySyncManager.requestFilterRepair(getApplication())
                 onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {
@@ -979,7 +989,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 )
                 RetrofitClient.instance.addWhitelistItem(request)
                 _actionMessage.value = "Whitelisted group '$groupName'"
-                HistorySyncManager.requestHintRepair(getApplication())
+                HistorySyncManager.requestFilterRepair(getApplication())
                 onComplete?.invoke()
             } catch (e: HttpException) {
                 if (e.code() == 409) {

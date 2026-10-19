@@ -121,4 +121,22 @@ class SyncCoordinationTest {
         awaitIdle(runner)
         assertEquals(2, passes)
     }
+
+    // --- itemFlagRepairDue (#464) ---
+
+    @Test
+    fun firstSyncAfterTheUpgradeReflagsWhateverStartedIt() {
+        assertTrue(itemFlagRepairDue(userInitiated = false, repairedOnce = false))
+    }
+
+    @Test
+    fun backgroundSyncsStopOnceTheUpgradeRepairSucceeded() {
+        assertFalse(itemFlagRepairDue(userInitiated = false, repairedOnce = true))
+    }
+
+    @Test
+    fun aRefreshTheUserAsksForAlwaysReflags() {
+        assertTrue(itemFlagRepairDue(userInitiated = true, repairedOnce = true))
+        assertTrue(itemFlagRepairDue(userInitiated = true, repairedOnce = false))
+    }
 }
