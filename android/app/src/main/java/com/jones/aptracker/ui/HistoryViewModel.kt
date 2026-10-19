@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.jones.aptracker.data.FinishedDefinition
 import com.jones.aptracker.data.FinishedDefinitionStore
 import com.jones.aptracker.data.FinishedResolver
+import com.jones.aptracker.data.RosterCache
 import com.jones.aptracker.data.SettingsManager
 import com.jones.aptracker.data.ShowFinishedPreference
 import com.jones.aptracker.database.AppDatabase
@@ -17,11 +18,14 @@ import com.jones.aptracker.diagnostics.CrashReporter
 import com.jones.aptracker.network.HintEntity
 import com.jones.aptracker.network.HistoryItem
 import com.jones.aptracker.network.RetrofitClient
+import com.jones.aptracker.network.RoomWithTrackedSlots
 import com.jones.aptracker.network.readsAsWatched
 import com.jones.aptracker.repository.HistoryRepository
 import com.jones.aptracker.repository.HistorySyncManager
 import com.jones.aptracker.repository.SyncProgressState
 import com.jones.aptracker.repository.UserRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -32,6 +36,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 
 /**
@@ -382,42 +387,61 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         reloadHistory()
     }
 
-    fun reloadHistory(showSpinner: Boolean = true) {
-        viewModelScope.launch {
-            if (showSpinner) {
-                isLoading.value = true
-            }
-            errorMessage.value = null
-            try {
-                currentPageOffset = 0
-                isAllDataLoaded = true // All local data loaded in one shot
-                val rawItemEntities = when (val filter = _historyFilter.value) {
-                    is HistoryFilter.Specific -> {
-                        repository.getHistoryForRoom(filter.roomId)
-                    }
-                    else -> {
-                        repository.getGlobalHistory()
-                    }
-                }
-                
-                // This path loads the whole table and then holds a second, mapped copy for the
-                // lifetime of the ViewModel -- which spans backgrounding, where Play samples
-                // dynamic memory. Recorded so a report from a device that died cached carries the
-                // row count that produced it, and so the effect of paging this can be measured.
-                // A key rather than a breadcrumb because reloadHistory() runs on every filter
-                // change and would otherwise churn the fixed-size breadcrumb log.
-                // TODO(#277): remove once this path is paged -- this is a probe, not permanent.
-                CrashReporter.setKey("history_rows_loaded", rawItemEntities.size)
+    private var reloadJob: kotlinx.coroutines.Job? = null
 
-                _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
-                currentPageOffset = rawItemEntities.size
-            } catch (e: Exception) {
-                errorMessage.value = "Failed to load history: ${e.message}"
-                Log.e("HistoryViewModel", "Error reloading history", e)
-            } finally {
-                if (showSpinner) {
-                    isLoading.value = false
+    fun reloadHistory(showSpinner: Boolean = true) {
+        reloadJob?.cancel()
+        reloadJob = viewModelScope.launch { reloadHistoryInternal(showSpinner) }
+    }
+
+    /**
+     * Reads the local history for the current filter and suspends until it is painted, so
+     * [refreshAllHistory] can order its steps around it. Applies the saved roster first when this
+     * ViewModel has none yet: the mapping drops every row of a slot it does not know, so a filter
+     * change that lands before the roster (a widget or notification opening Activity cold) would
+     * otherwise replace a painted list with an empty one (#468).
+     */
+    private suspend fun reloadHistoryInternal(showSpinner: Boolean) {
+        ensureRoster()
+        // No roster at all yet (first load ever, nothing saved): every tracked row would be
+        // dropped, so leave the list and the spinner to refreshAllHistory instead of flashing
+        // "no history".
+        if (!rosterApplied) return
+        if (showSpinner) {
+            isLoading.value = true
+        }
+        errorMessage.value = null
+        try {
+            currentPageOffset = 0
+            isAllDataLoaded = true // All local data loaded in one shot
+            val rawItemEntities = when (val filter = _historyFilter.value) {
+                is HistoryFilter.Specific -> {
+                    repository.getHistoryForRoom(filter.roomId)
                 }
+                else -> {
+                    repository.getGlobalHistory()
+                }
+            }
+            
+            // This path loads the whole table and then holds a second, mapped copy for the
+            // lifetime of the ViewModel -- which spans backgrounding, where Play samples
+            // dynamic memory. Recorded so a report from a device that died cached carries the
+            // row count that produced it, and so the effect of paging this can be measured.
+            // A key rather than a breadcrumb because reloadHistory() runs on every filter
+            // change and would otherwise churn the fixed-size breadcrumb log.
+            // TODO(#277): remove once this path is paged -- this is a probe, not permanent.
+            CrashReporter.setKey("history_rows_loaded", rawItemEntities.size)
+
+            _itemHistory.value = mapEntitiesToHistoryItems(rawItemEntities)
+            currentPageOffset = rawItemEntities.size
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            errorMessage.value = "Failed to load history: ${e.message}"
+            Log.e("HistoryViewModel", "Error reloading history", e)
+        } finally {
+            if (showSpinner) {
+                isLoading.value = false
             }
         }
     }
@@ -548,6 +572,117 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     private var refreshJob: kotlinx.coroutines.Job? = null
 
+    /** Some roster, saved or from the network, has been applied: the mapping can trust it. */
+    private var rosterApplied = false
+
+    /** A roster from the network has been applied; a saved one must not replace it. */
+    private var networkRosterApplied = false
+
+    /**
+     * Derives the screen's room and slot metadata from a tracked-slots roster: which rooms are
+     * active or archived, aliases, finish state, watched slots. Used with the network answer, and
+     * on a cold start with the roster [RosterCache] saved, so the screen can paint the phone's
+     * history before the network answers (#468).
+     *
+     * @param fromNetwork False for a saved roster. A saved roster never replaces a network one
+     * (the two can be applied concurrently on a cold start), and never writes the per-slot
+     * finished definitions, which the Rooms screen may have updated since it was saved.
+     */
+    private suspend fun applyRoster(trackedRooms: List<RoomWithTrackedSlots>, fromNetwork: Boolean) {
+        val isCheeseConnected = settingsManager.isCheeseConnected.first()
+
+        val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
+        val liveIcons = mutableMapOf<Int, String>()
+        val liveFinishState = mutableMapOf<Pair<Int, String>, SlotFinishState>()
+        val watchedKeys = mutableSetOf<Pair<Int, String>>()
+        val slotDefinitions = mutableMapOf<Pair<Int, Int>, String?>()
+        val roomNameMap = mutableMapOf<Int, String>()
+        val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
+        val trackedPlayersList = mutableListOf<TrackedPlayer>()
+
+        val activeIds = mutableSetOf<Int>()
+        val archivedIds = mutableSetOf<Int>()
+
+        trackedRooms.forEach { room ->
+            if (room.is_archived) {
+                archivedIds.add(room.room_db_id)
+            } else {
+                activeIds.add(room.room_db_id)
+            }
+
+            liveIcons[room.room_db_id] = room.icon_name
+            roomNameMap[room.room_db_id] = room.room_alias
+
+            room.tracked_slots.forEach { slot ->
+                validSlotsSet.add(room.room_db_id to slot.slot_id)
+
+                trackedPlayersList.add(
+                    TrackedPlayer(
+                        roomId = room.room_db_id,
+                        playerName = slot.player_name,
+                        playerAlias = slot.player_alias,
+                        needsBackfill = slot.needs_backfill
+                    )
+                )
+
+                if (!slot.player_alias.isNullOrBlank()) {
+                    aliasMap[room.room_db_id to slot.slot_id] = slot.player_alias
+                }
+                liveFinishState[room.room_db_id to slot.player_name] = SlotFinishState(
+                    slotId = slot.slot_id,
+                    isGoaled = slot.is_finished,
+                    hasAllChecks = slot.has_all_checks
+                )
+                slotDefinitions[room.room_db_id to slot.slot_id] = slot.finished_definition
+                if (slot.readsAsWatched(isCheeseConnected)) {
+                    watchedKeys.add(room.room_db_id to slot.player_name)
+                }
+            }
+        }
+
+        // No suspension from here to the end, so this check and the assignments below are atomic
+        // on the main thread with respect to a concurrent apply.
+        if (!fromNetwork && networkRosterApplied) return
+
+        _roomNames.value = roomNameMap
+        _validTrackedSlots.value = validSlotsSet
+        _liveAliases.value = aliasMap
+        _liveFinishState.value = liveFinishState
+        _watchedPlayerKeys.value = watchedKeys
+
+        if (fromNetwork) {
+            // Mirror the per-slot overrides so the widgets, which have no ViewModel
+            // and no network call on their load path, resolve them the same way.
+            FinishedDefinitionStore.writeOverrides(getApplication(), slotDefinitions)
+        }
+        _activeRoomIds.value = activeIds
+        _archivedRoomIds.value = archivedIds
+        _roomIcons.value = liveIcons
+        _trackedPlayers.value = trackedPlayersList
+
+        rosterApplied = true
+        if (fromNetwork) networkRosterApplied = true
+    }
+
+    /**
+     * Applies the roster [RosterCache] saved, if this ViewModel has none yet. Never touches the
+     * network. A saved roster that cannot be applied is deleted rather than allowed to crash the
+     * screen: the file is only rewritten after a network load, so a crash here would repeat on
+     * every cold open.
+     */
+    private suspend fun ensureRoster() {
+        if (rosterApplied) return
+        val saved = withContext(Dispatchers.IO) { RosterCache.load(getApplication()) } ?: return
+        try {
+            applyRoster(saved, fromNetwork = false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("HistoryViewModel", "Saved roster unusable; waiting on the server", e)
+            withContext(Dispatchers.IO) { RosterCache.clear(getApplication()) }
+        }
+    }
+
     /**
      * @param userInitiated True only for the History screen's pull-to-refresh. It is the one
      * caller that also re-downloads every hint, as a repair path for local hints (#411).
@@ -555,85 +690,23 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun refreshAllHistory(userInitiated: Boolean = false) {
         Log.d("HistoryViewModel", "Triggering refresh for Room ID: ${currentRoomId ?: "Global"}")
         refreshJob?.cancel()
+        reloadJob?.cancel()
         refreshJob = viewModelScope.launch {
             errorMessage.value = null
 
-            // Warm start: if we already have tracked-slot metadata from earlier this
-            // session, paint the local cache immediately instead of blocking the
-            // transition on the network round-trip below. STEP 1 reconciles shortly
-            // after with the authoritative server response.
-            if (_validTrackedSlots.value.isNotEmpty()) {
-                reloadHistory(showSpinner = false)
-            }
+            // Paint the local history before the network round-trip below; STEP 1 reconciles
+            // shortly after with the authoritative server response. A warm ViewModel already
+            // has the roster from an earlier load. A cold one (first open, process restarted)
+            // takes the roster saved by the last load instead of waiting on the server (#468).
+            // Awaited, so the spinner below reflects what was actually painted.
+            reloadHistoryInternal(showSpinner = false)
             isLoading.value = itemHistory.value.isEmpty()
 
             try {
                 // --- STEP 1: Metadata & Room Setup (Fast) ---
                 val trackedRooms = RetrofitClient.instance.getUserTrackedSlots()
-                val isCheeseConnected = settingsManager.isCheeseConnected.first()
-
-                val aliasMap = mutableMapOf<Pair<Int, Int>, String>()
-                val liveIcons = mutableMapOf<Int, String>()
-                val liveFinishState = mutableMapOf<Pair<Int, String>, SlotFinishState>()
-                val watchedKeys = mutableSetOf<Pair<Int, String>>()
-                val slotDefinitions = mutableMapOf<Pair<Int, Int>, String?>()
-                val roomNameMap = mutableMapOf<Int, String>()
-                val validSlotsSet = mutableSetOf<Pair<Int, Int>>()
-                val trackedPlayersList = mutableListOf<TrackedPlayer>()
-
-                val activeIds = mutableSetOf<Int>()
-                val archivedIds = mutableSetOf<Int>()
-
-                trackedRooms.forEach { room ->
-                    if (room.is_archived) {
-                        archivedIds.add(room.room_db_id)
-                    } else {
-                        activeIds.add(room.room_db_id)
-                    }
-
-                    liveIcons[room.room_db_id] = room.icon_name
-                    roomNameMap[room.room_db_id] = room.room_alias
-
-                    room.tracked_slots.forEach { slot ->
-                        validSlotsSet.add(room.room_db_id to slot.slot_id)
-
-                        trackedPlayersList.add(
-                            TrackedPlayer(
-                                roomId = room.room_db_id,
-                                playerName = slot.player_name,
-                                playerAlias = slot.player_alias,
-                                needsBackfill = slot.needs_backfill
-                            )
-                        )
-
-                        if (!slot.player_alias.isNullOrBlank()) {
-                            aliasMap[room.room_db_id to slot.slot_id] = slot.player_alias
-                        }
-                        liveFinishState[room.room_db_id to slot.player_name] = SlotFinishState(
-                            slotId = slot.slot_id,
-                            isGoaled = slot.is_finished,
-                            hasAllChecks = slot.has_all_checks
-                        )
-                        slotDefinitions[room.room_db_id to slot.slot_id] = slot.finished_definition
-                        if (slot.readsAsWatched(isCheeseConnected)) {
-                            watchedKeys.add(room.room_db_id to slot.player_name)
-                        }
-                    }
-                }
-
-                _roomNames.value = roomNameMap
-                _validTrackedSlots.value = validSlotsSet
-                _liveAliases.value = aliasMap
-                _liveFinishState.value = liveFinishState
-                _watchedPlayerKeys.value = watchedKeys
-
-                // Mirror the per-slot overrides so the widgets, which have no ViewModel
-                // and no network call on their load path, resolve them the same way.
-                FinishedDefinitionStore.writeOverrides(getApplication(), slotDefinitions)
-                _activeRoomIds.value = activeIds
-                _archivedRoomIds.value = archivedIds
-                _roomIcons.value = liveIcons
-                _trackedPlayers.value = trackedPlayersList
+                applyRoster(trackedRooms, fromNetwork = true)
+                RosterCache.saveUnlessLoggingOut(getApplication(), trackedRooms)
 
                 // --- STEP 1.5: Re-align currentRoomId if the room's server database ID changed ---
                 var targetRoomId = currentRoomId
@@ -663,7 +736,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 // --- STEP 2: Refresh with authoritative metadata ---
-                reloadHistory(showSpinner = false)
+                // Awaited, so the spinner never clears over a list that is still loading.
+                reloadHistoryInternal(showSpinner = false)
                 isLoading.value = false
 
                 // --- STEP 3: Delegate sync execution to HistorySyncManager (ApplicationScope & WorkManager) ---
@@ -671,6 +745,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     reloadHistory(showSpinner = false)
                 }
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 errorMessage.value = "History Refresh failed: ${e.message}"
                 Log.e("HistoryViewModel", "Error during full history refresh", e)

@@ -17,6 +17,7 @@ import com.jones.aptracker.network.UpdateSlotsRequest
 import com.jones.aptracker.data.FinishedDefinition
 import com.jones.aptracker.data.FinishedDefinitionStore
 import com.jones.aptracker.data.FinishedResolver
+import com.jones.aptracker.data.RosterCache
 import com.jones.aptracker.data.ShowFinishedPreference
 import com.jones.aptracker.network.toPrefsRequest
 import com.jones.aptracker.network.UserProfile
@@ -335,6 +336,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val rooms = RetrofitClient.instance.getUserTrackedSlots()
             _trackedSlotsByRoom.value = rooms
+            // The same roster the Activity screen paints from on a cold start (#468), so it is
+            // already saved the first time Activity opens after Rooms loaded.
+            RosterCache.saveUnlessLoggingOut(getApplication(), rooms)
 
             // Mirror the per-slot overrides for the widgets, which resolve them with no
             // ViewModel and no network call on their load path.
