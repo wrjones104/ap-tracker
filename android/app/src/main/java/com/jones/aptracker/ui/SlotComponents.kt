@@ -352,18 +352,32 @@ fun SlotRow(
             // slot four lines tall for four short facts -- the row was long because of
             // how the facts were stacked, not because of how many there were. Both are
             // secondary detail at the same weight, so they read as one line of context.
-            val subtitle = listOfNotNull(
-                slot.game?.takeIf { it.isNotBlank() },
-                slot.last_activity?.let { formatRelativeTime(it) }
-            ).joinToString(" · ")
-            if (subtitle.isNotEmpty()) {
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+            // They are separate Texts so a long game name is what gets cut, never the
+            // time: one joined string ellipsized from the end and hid "5m ago" (#469).
+            val game = slot.game?.takeIf { it.isNotBlank() }
+            val lastActivity = slot.last_activity?.let { formatRelativeTime(it) }
+            if (game != null || lastActivity != null) {
+                Row {
+                    if (game != null) {
+                        Text(
+                            text = game,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
+                    if (lastActivity != null) {
+                        Text(
+                            text = if (game != null) " · $lastActivity" else lastActivity,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
             }
         }
 
