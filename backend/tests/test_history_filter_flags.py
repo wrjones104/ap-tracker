@@ -206,20 +206,88 @@ class TestHistoryFilterFlags(unittest.TestCase):
     # Agreement with the history routes
     # ------------------------------------------------------------------
 
-    def test_flags_agree_with_what_the_history_route_sends(self):
-        """Re-flagging must land on the same answer a fresh download would."""
+    def _assert_agrees(self, items, ignored, whitelisted):
+        for item in items:
+            self.assertEqual(item['isIgnored'], item['id'] in ignored, item['itemName'])
+            self.assertEqual(item['isWhitelisted'], item['id'] in whitelisted, item['itemName'])
+
+    def test_flags_agree_with_what_the_history_routes_send(self):
+        """Re-flagging must land on the same answer a fresh download would, from either route."""
         self._rule(UserIgnoreItem, '*')
         self._rule(UserIgnoreItem, 'Essences', ZELDA, is_group=True)
         self._rule(UserWhitelistItem, 'Rupee', ZELDA)
 
         ignored, whitelisted = self._flags()
-        r = self.client.get('/history/items?limit=100', headers={'Authorization': f'Bearer {self.token}'})
+        headers = {'Authorization': f'Bearer {self.token}'}
+
+        r = self.client.get('/history/items?limit=100', headers=headers)
         self.assertEqual(r.status_code, 200)
         items = r.get_json()
         self.assertEqual(len(items), 8)
-        for item in items:
-            self.assertEqual(item['isIgnored'], item['id'] in ignored, item['itemName'])
-            self.assertEqual(item['isWhitelisted'], item['id'] in whitelisted, item['itemName'])
+        self._assert_agrees(items, ignored, whitelisted)
+
+        # The phone's stored history comes mostly from the delta sync.
+        r = self.client.post('/history/sync', json={}, headers=headers)
+        self.assertEqual(r.status_code, 200)
+        synced = r.get_json()['new_items']
+        self.assertEqual(len(synced), 8)
+        self._assert_agrees(synced, ignored, whitelisted)
+
+    # ------------------------------------------------------------------
+    # Less common shapes
+    # ------------------------------------------------------------------
+
+    def _add_tracked_items(self, room_uuid, room_db_id, slot_id, item_ids, first_index):
+        session = Session()
+        try:
+            session.add(UserTrackedSlot(user_id=self.user_id, room_id=room_db_id, slot_id=slot_id))
+            ids = []
+            for n, item_id in enumerate(item_ids):
+                row = NotifiedItem(
+                    room_id=room_uuid, receiving_slot_id=slot_id, sending_slot_id=1,
+                    item_id=item_id, location_id=first_index + n, item_index=first_index + n, item_flags=0
+                )
+                session.add(row)
+                session.flush()
+                ids.append(row.id)
+            session.commit()
+            return set(ids)
+        finally:
+            Session.remove()
+
+    def test_a_slot_with_no_known_game_matches_on_the_fallback_name(self):
+        """No player entry, so no game or checksum: the name is "Item ID N", as the history routes send it."""
+        session = Session()
+        try:
+            room_db_id = session.query(TrackedRoom).filter_by(room_id=ROOM_UUID).one().id
+        finally:
+            Session.remove()
+        unknown_ids = self._add_tracked_items(ROOM_UUID, room_db_id, 9, [999, 999], first_index=500)
+        self._rule(UserIgnoreItem, 'Item ID 999')
+
+        ignored, _ = self._flags()
+        self.assertEqual(ignored, unknown_ids)
+
+    def test_items_in_every_tracked_room_are_covered(self):
+        session = Session()
+        try:
+            room2 = TrackedRoom(
+                room_id='room-uuid-two',
+                game_checksums_json=json.dumps({METROID: CHK_METROID}),
+                cached_players_json=json.dumps([{'slot_id': 1, 'name': 'Samus', 'game': METROID}])
+            )
+            session.add(room2)
+            session.flush()
+            session.add(UserRoomSubscription(user_id=self.user_id, room_id=room2.id, alias='Second'))
+            session.commit()
+            room2_db_id = room2.id
+        finally:
+            Session.remove()
+        room2_ids = self._add_tracked_items('room-uuid-two', room2_db_id, 1, [201, 201], first_index=600)
+        self._rule(UserIgnoreItem, 'Missile', METROID)
+
+        ignored, _ = self._flags()
+        self.assertEqual(ignored, self._ids((2, 201)) | room2_ids)
 
     def test_sign_in_is_required(self):
         self.assertEqual(self.client.get('/history/filter-flags').status_code, 401)
