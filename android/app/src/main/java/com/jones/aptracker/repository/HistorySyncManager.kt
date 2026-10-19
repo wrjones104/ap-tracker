@@ -14,8 +14,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 
 object HistorySyncManager {
@@ -107,19 +110,36 @@ object HistorySyncManager {
         }
     }
 
+    private val _filterFlagsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     /**
-     * Re-download every hint once the user stops changing ignore or whitelist rules. The server
-     * decides each hint's ignored and whitelisted flags from those rules, and a rule change does
-     * not touch any hint's updated_at, so the delta sync never re-sends them. Every sync used to
-     * do this as a side effect, before #411. Debounced so a bulk delete costs one download.
+     * Emits after cached items were re-flagged for a rule change, so the Activity screen, which
+     * reads items once rather than as a Flow, can reload them (#464).
+     */
+    val filterFlagsChanged: SharedFlow<Unit> = _filterFlagsChanged.asSharedFlow()
+
+    /**
+     * Re-applies ignore and whitelist rules to everything already on the phone, once the user
+     * stops changing them. The server decides each item's and hint's flags from those rules when
+     * it sends them, and the delta sync never re-sends either after a rule change. Debounced so a
+     * bulk delete costs one round.
+     *
+     * Hints are re-downloaded whole (every sync used to do this as a side effect, before #411).
+     * Items are re-flagged from the ids the server says match now, which is far smaller than the
+     * items themselves (#464).
      */
     @Synchronized
-    fun requestHintRepair(context: Context) {
+    fun requestFilterRepair(context: Context) {
         val appContext = context.applicationContext
         hintRepairJob?.cancel()
         hintRepairJob = applicationScope.launch {
             delay(HINT_REPAIR_DEBOUNCE_MS)
-            HistoryRepository.getInstance(appContext).refreshHintHistory(null)
+            val repository = HistoryRepository.getInstance(appContext)
+            repository.refreshHintHistory(null)
+            if (repository.refreshItemFilterFlags()) {
+                _filterFlagsChanged.tryEmit(Unit)
+                com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(appContext)
+            }
         }
     }
 

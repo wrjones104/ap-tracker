@@ -4,7 +4,11 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
+
+/** Ids per UPDATE in [HistoryDao.applyFilterFlags], under SQLite's 999 bound-value limit on API 26. */
+internal const val FILTER_FLAG_CHUNK = 500
 
 @Dao
 interface HistoryDao {
@@ -47,6 +51,27 @@ interface HistoryDao {
 
     @Query("DELETE FROM history_items")
     suspend fun deleteAllHistory()
+
+    @Query("UPDATE history_items SET isIgnored = 0, isWhitelisted = 0")
+    suspend fun clearFilterFlags()
+
+    @Query("UPDATE history_items SET isIgnored = 1 WHERE id IN (:ids)")
+    suspend fun markIgnored(ids: List<Long>)
+
+    @Query("UPDATE history_items SET isWhitelisted = 1 WHERE id IN (:ids)")
+    suspend fun markWhitelisted(ids: List<Long>)
+
+    /**
+     * Re-flags every cached item from the server's current answer (#464): clears both flags, then
+     * sets them for the ids given, in one transaction so no screen reads a half-applied state.
+     * Chunked because SQLite on API 26 binds at most 999 values per statement.
+     */
+    @Transaction
+    suspend fun applyFilterFlags(ignoredIds: List<Long>, whitelistedIds: List<Long>) {
+        clearFilterFlags()
+        ignoredIds.chunked(FILTER_FLAG_CHUNK).forEach { markIgnored(it) }
+        whitelistedIds.chunked(FILTER_FLAG_CHUNK).forEach { markWhitelisted(it) }
+    }
 
     @Query("UPDATE history_items SET roomId = :newId WHERE roomId = :oldId")
     suspend fun updateRoomIdForHistory(oldId: Int, newId: Int)

@@ -43,6 +43,10 @@ interface ApiService {
         @Query("offset") offset: Int? = null
     ): List<HistoryItem>
 
+    /** Ids of the user's items that their ignore and whitelist rules match now (#464). Older servers answer 404. */
+    @GET("history/filter-flags")
+    suspend fun getHistoryFilterFlags(): HistoryFilterFlags
+
     @GET("history/items")
     suspend fun getGlobalItemHistory(
         @Query("since") since: String? = null,
@@ -761,6 +765,12 @@ data class ThresholdGroup(
     val name: String?,
     val is_triggered: Boolean = false,
     val items: List<ThresholdGroupItem>
+)
+
+/** GET history/filter-flags. Nullable because Gson does not enforce Kotlin nullability. */
+data class HistoryFilterFlags(
+    val ignored_ids: List<Long>?,
+    val whitelisted_ids: List<Long>?
 )
 
 /**
