@@ -1048,6 +1048,34 @@
   ],
   "server_releases": [
     {
+      "version": "1.15.1",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-19",
+      "title": "Lighter Room Checks",
+      "highlights": [
+        {
+          "title": "Lighter Room Checks",
+          "description": "When nothing has changed, the server answers the app's room check with an empty reply, so the next app update uses less data on every sync."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Lighter Room Checks",
+            "description": "The tracked-slots list answers \"not modified\" when the app already has the latest; the app uses it from its next release. Refs #417."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Changed\n- `GET /users/me/tracked-slots` sends an ETag (a hash of the body) with `Cache-Control: private, no-cache`, and answers `304 Not Modified` with no body when `If-None-Match` matches. The weak ETag nginx sends after gzip matches too. Refs #417, PR #466.\n\n### Compatibility\n- No migration. Additive and server-first: released apps send no `If-None-Match` and keep getting 200s. The next app release (PR #467) adds the HTTP cache that uses it."
+      }
+    },
+    {
       "version": "1.15.0",
       "component": "server",
       "component_label": "Server",
