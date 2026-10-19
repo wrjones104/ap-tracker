@@ -84,4 +84,7 @@ object SessionManager {
     fun resetLogoutState() {
         isLoggingOut.set(false)
     }
+
+    /** True from the start of a logout until the next login resets it. */
+    fun logoutInProgress(): Boolean = isLoggingOut.get()
 }
