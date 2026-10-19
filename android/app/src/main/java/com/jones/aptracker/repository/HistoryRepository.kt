@@ -290,62 +290,6 @@ class HistoryRepository(
         return entities
     }
 
-    // --- ITEM HISTORY (Safe to use 'since' optimization) ---
-    suspend fun refreshItemHistory() {
-        Log.d("HISTORY_DEBUG", "Starting ITEM history refresh...")
-        val latestTimestamp = historyDao.getLatestGlobalTimestamp()
-        val limit = 50
-        var offset = 0
-        var fetchedCount = limit
-
-        try {
-            while (fetchedCount == limit) {
-                val newItems = apiService.getGlobalItemHistory(since = latestTimestamp, limit = limit, offset = offset)
-                fetchedCount = newItems.size
-                Log.d("HISTORY_DEBUG", "Received $fetchedCount new items from the API (since $latestTimestamp, offset $offset).")
-
-                if (newItems.isNotEmpty()) {
-                    val entities = newItems.mapNotNull { item ->
-                        try {
-                            HistoryItemEntity(
-                                id = item.id,
-                                roomId = item.room_db_id,
-                                playerName = item.playerName,
-                                playerAlias = item.playerAlias,
-                                receivingGame = item.receivingGame,
-                                itemName = item.itemName,
-                                senderName = item.senderName,
-                                senderAlias = item.senderAlias,
-                                senderGame = item.senderGame,
-                                locationName = item.locationName,
-                                isPlayerFinished = item.isPlayerFinished,
-                                playerHasAllChecks = item.playerHasAllChecks,
-                                itemFlags = item.itemFlags,
-                                timestamp = normalizeTimestamp(item.timestamp),
-                                tracker_id = item.tracker_id,
-                                slot_id = item.slot_id,
-                                icon_name = item.icon_name,
-                                host = item.host,
-                                receivedCount = item.receivedCount,
-                                isIgnored = item.isIgnored,
-                                isWhitelisted = item.isWhitelisted
-                            )
-                        } catch (e: Exception) {
-                            Log.e("HISTORY_DEBUG", "!!! FAILED to process history item: ${e.message}")
-                            null
-                        }
-                    }
-                    if (entities.isNotEmpty()) {
-                        historyDao.insertHistoryItems(entities)
-                    }
-                }
-                offset += fetchedCount
-            }
-        } catch (e: Exception) {
-            Log.e("HISTORY_DEBUG", "!!! FAILED item history refresh: ${e.message}", e)
-        }
-    }
-
     // --- HINT FLOWS ---
     // Every hint of the scope, whatever type was stored with it. The History screen splits them
     // into "for you" and "by you" from the slots tracked now (classifyHints).
