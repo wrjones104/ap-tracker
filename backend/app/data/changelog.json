@@ -1101,6 +1101,34 @@
   ],
   "server_releases": [
     {
+      "version": "1.16.1",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-20",
+      "title": "New Rooms Show Up Right Away",
+      "highlights": [
+        {
+          "title": "New Rooms Show Up Right Away",
+          "description": "After a server restart, newly added rooms now fill in their slots within a minute instead of showing 0 slots for 20+ minutes."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "New Rooms Show Up Right Away",
+            "description": "Rooms added soon after a server restart no longer sit at 0 slots while the daily cleanup runs. PR #487."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Fixed\n- The daily janitor now runs as a background task, so the poller supervisor keeps ticking while it works. Rooms added right after a restart are set up within a minute instead of waiting out the janitor (20+ minutes in production on 2026-10-20). PR #487.\n\n### Changed\n- The stale-room check finds recently active rooms in one range scan per table instead of two queries per room. Which rooms get suspended is unchanged. PR #487.\n\n### Compatibility\n- No migration, no API change. Server-only; the app is unaffected."
+      }
+    },
+    {
       "version": "1.16.0",
       "component": "server",
       "component_label": "Server",
