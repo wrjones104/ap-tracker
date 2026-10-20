@@ -154,6 +154,18 @@ differently in each:
   can mention it (as app 1.13.0's did for server 1.14.1).
 - Audience: the community Discord, people who already use the app and want to know
   what's new.
+- **Plainest of the three channels: "what's in it for me", explained like to a
+  five-year-old.** Most readers care little or not at all about how the app works.
+  Each bullet says what they will notice, in everyday words: what they can now do,
+  what stopped annoying them, what they no longer have to wait for. Name screens
+  and buttons the way the app labels them. No mechanism words (request, sync,
+  cache, server, endpoint, flag, network call), no issue numbers. If a change has
+  nothing a user would notice, leave it out of Discord or fold it into a short
+  "uses less data/battery" line.
+  - ❌ "**Lighter syncs:** the Milestones widget refreshes in one request, and room
+    checks download nothing when nothing changed."
+  - ✅ "**Uses less data.** The app's background check-ins are smaller, so it's
+    easier on your data plan."
 - Format: casual, Discord markdown OK (`**bold**`, `•` bullets). The first line is
   exactly `# **Archipelago Alerts <version>**` (e.g. `# **Archipelago Alerts 1.13.1**`),
   then a blank line. No hype/CTA closing line ("Update now on...!") — the user finds

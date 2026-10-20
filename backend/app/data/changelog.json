@@ -1,6 +1,59 @@
 {
   "app_releases": [
     {
+      "version": "1.13.3",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-10-20",
+      "title": "Faster Activity, Smarter Ignore Rules",
+      "highlights": [
+        {
+          "title": "Activity Opens Instantly",
+          "description": "Activity shows your saved history the moment you open the app, instead of waiting for the network."
+        },
+        {
+          "title": "Ignore Rules Cover Old Items",
+          "description": "A new ignore or whitelist rule now also applies to items you already received, in Activity and the Recent Items widget."
+        },
+        {
+          "title": "Uses Less Data",
+          "description": "The app's background check-ins are smaller, so it uses less mobile data."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Activity Opens Instantly",
+            "description": "Activity shows your saved history at once on open, then refreshes. Closes #468."
+          },
+          {
+            "title": "Uses Less Data",
+            "description": "The Milestones widget refreshes in one request, and room checks skip the download when nothing changed. Closes #418, closes #417."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Ignore Rules Cover Old Items",
+            "description": "Ignore and whitelist rules now also apply to items already on your phone. Closes #464."
+          },
+          {
+            "title": "Game Names Keep the Time Visible",
+            "description": "A long game name on Rooms & Slots no longer hides when the slot last got an item. Closes #469."
+          },
+          {
+            "title": "Cheese Import Can't Freeze the App",
+            "description": "Closing the Rooms on Cheese Tracker list while it adds rooms no longer leaves the app unresponsive. Closes #456."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "# **Archipelago Alerts 1.13.3**\n\n• **Activity opens right away.** Your recent items are there the moment you open the app, with no spinner to wait through.\n• **Ignoring an item now hides the ones you already got.** Add an ignore rule and older copies of that item disappear from Activity and the widget too, not just new ones.\n• **Uses less data.** The app's background check-ins are smaller, so it's easier on your data plan.\n• **Fixed:** long game names no longer hide how long ago a slot got its last item, and the app no longer freezes if you close the Cheese Tracker list while it's adding rooms.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "Activity now opens instantly with your saved history.\n\nIgnore and whitelist rules now also apply to items you already received.\n\nUses less data: the Milestones widget refreshes in one request, and room checks skip the download when nothing changed.\n\nAlso fixed: long game names no longer hide the time since the last item, and the Cheese rooms sheet can no longer freeze the app mid-import.",
+        "github": "### Changed\n- The Milestones widget fetches every slot's groups in one `GET /users/me/threshold-groups` call (server 1.15.0+), falling back per slot on a 404; a failed refresh backs off. Closes #418, PRs #461/#462.\n- A 5 MB OkHttp cache revalidates `users/me/tracked-slots` with ETag/304 (server 1.15.1+) and is cleared on logout. Closes #417, PR #467.\n- Activity paints from a saved roster on a cold start, then refreshes. Closes #468, PR #471.\n\n### Fixed\n- Cached items are re-flagged from `GET /history/filter-flags` (server 1.16.0+) after an ignore or whitelist change, once after this update, and on pull-to-refresh. Closes #464, PRs #472/#473.\n- Rooms & Slots: the game name shortens and the last-item time always shows. Closes #469, PR #476.\n- Cheese rooms sheet: during an import, swiping it away is blocked and Back shows it again, so no invisible dialog blocks taps. Closes #456, PR #478.\n\n### Removed\n- The unused `HistoryRepository.refreshItemHistory()`. Closes #474, PR #479.\n\n### Compatibility\nNeeds server 1.16.0 (live) for the #464 repair. On older servers the batch and 304 paths fall back, and the repair retries later."
+      }
+    },
+    {
       "version": "1.13.2",
       "component": "app",
       "component_label": "App",

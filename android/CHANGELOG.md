@@ -10,6 +10,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.13.3] - 2026-10-20
+
+_Faster Activity, Smarter Ignore Rules_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> # **Archipelago Alerts 1.13.3**
+>
+> • **Activity opens right away.** Your recent items are there the moment you open the app, with no spinner to wait through.
+> • **Ignoring an item now hides the ones you already got.** Add an ignore rule and older copies of that item disappear from Activity and the widget too, not just new ones.
+> • **Uses less data.** The app's background check-ins are smaller, so it's easier on your data plan.
+> • **Fixed:** long game names no longer hide how long ago a slot got its last item, and the app no longer freezes if you close the Cheese Tracker list while it's adding rooms.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> Activity now opens instantly with your saved history.
+>
+> Ignore and whitelist rules now also apply to items you already received.
+>
+> Uses less data: the Milestones widget refreshes in one request, and room checks skip the download when nothing changed.
+>
+> Also fixed: long game names no longer hide the time since the last item, and the Cheese rooms sheet can no longer freeze the app mid-import.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - The Milestones widget fetches every slot's groups in one `GET /users/me/threshold-groups` call (server 1.15.0+), falling back per slot on a 404; a failed refresh backs off. Closes #418, PRs #461/#462.
+> - A 5 MB OkHttp cache revalidates `users/me/tracked-slots` with ETag/304 (server 1.15.1+) and is cleared on logout. Closes #417, PR #467.
+> - Activity paints from a saved roster on a cold start, then refreshes. Closes #468, PR #471.
+>
+> ### Fixed
+> - Cached items are re-flagged from `GET /history/filter-flags` (server 1.16.0+) after an ignore or whitelist change, once after this update, and on pull-to-refresh. Closes #464, PRs #472/#473.
+> - Rooms & Slots: the game name shortens and the last-item time always shows. Closes #469, PR #476.
+> - Cheese rooms sheet: during an import, swiping it away is blocked and Back shows it again, so no invisible dialog blocks taps. Closes #456, PR #478.
+>
+> ### Removed
+> - The unused `HistoryRepository.refreshItemHistory()`. Closes #474, PR #479.
+>
+> ### Compatibility
+> Needs server 1.16.0 (live) for the #464 repair. On older servers the batch and 304 paths fall back, and the repair retries later.
+> ```
+
+### Changed
+- **Activity Opens Instantly**: Activity shows your saved history at once on open, then refreshes. Closes #468.
+- **Uses Less Data**: The Milestones widget refreshes in one request, and room checks skip the download when nothing changed. Closes #418, closes #417.
+
+### Fixed
+- **Ignore Rules Cover Old Items**: Ignore and whitelist rules now also apply to items already on your phone. Closes #464.
+- **Game Names Keep the Time Visible**: A long game name on Rooms & Slots no longer hides when the slot last got an item. Closes #469.
+- **Cheese Import Can't Freeze the App**: Closing the Rooms on Cheese Tracker list while it adds rooms no longer leaves the app unresponsive. Closes #456.
+
+---
+
 ## [1.13.2] - 2026-10-08
 
 _My Slots and Steadier Widgets_
