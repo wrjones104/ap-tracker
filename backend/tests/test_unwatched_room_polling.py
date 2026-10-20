@@ -21,10 +21,12 @@ subscription is archived is not polled, suspended or healed, because the poller
 recorded nothing for archived subscriptions anyway. But the subscription still
 exists, so the janitor must never collect the room: archived history is kept.
 """
+import asyncio
 import os
 import sys
 import unittest
 from datetime import datetime, timedelta
+from unittest import mock
 
 TEST_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test_unwatched.db'))
 os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
@@ -34,10 +36,12 @@ os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app import create_app, Session, engine
-from app.models import Base, TrackedRoom, User, UserRoomSubscription
+from app.models import (
+    Base, NotifiedHint, NotifiedItem, TrackedRoom, User, UserRoomSubscription,
+)
 from app.poller import (
     db_check_stale_rooms, db_get_active_rooms, db_get_suspended_rooms_for_healing,
-    db_run_cleanup,
+    db_run_cleanup, run_janitor,
 )
 
 
@@ -266,6 +270,120 @@ class TestStaleCheckSkipsUnwatched(UnwatchedRoomTestBase):
 
         fresh = self.session.query(TrackedRoom).filter_by(room_id="active").first()
         self.assertFalse(fresh.is_suspended)
+
+
+class TestStaleCheckActivitySources(UnwatchedRoomTestBase):
+    """Which activity keeps a watched room from being suspended.
+
+    db_check_stale_rooms used to ask each room for its latest item and latest
+    hint. It now collects every room with history inside the window in one
+    scan per table, and only probes for any history at all when a room has no
+    remote activity on record. These pin the decisions so the rewrite cannot
+    drift from what the per-room version did.
+    """
+
+    def _watched_room(self, uuid, remote_days_ago=None):
+        user = self._user(uuid)
+        room = self._room(uuid, last_poll=datetime.utcnow())
+        if remote_days_ago is not None:
+            room.last_remote_activity = datetime.utcnow() - timedelta(days=remote_days_ago)
+        self._subscribe(user, room)
+        return room
+
+    def _item(self, uuid, days_ago, index=1):
+        self.session.add(NotifiedItem(
+            room_id=uuid, receiving_slot_id=1, sending_slot_id=2, item_id=1,
+            location_id=index, item_index=index,
+            timestamp=datetime.utcnow() - timedelta(days=days_ago),
+        ))
+
+    def _hint(self, uuid, days_ago):
+        self.session.add(NotifiedHint(
+            room_id=uuid, item_owner_id=1, location_owner_id=2, item_id=1,
+            location_id=1, timestamp=datetime.utcnow() - timedelta(days=days_ago),
+        ))
+
+    def _suspended(self, uuid):
+        db_check_stale_rooms()
+        self.session.expire_all()
+        return self.session.query(TrackedRoom).filter_by(room_id=uuid).one().is_suspended
+
+    def test_recent_item_keeps_room_active_despite_old_remote_activity(self):
+        self._watched_room("r", remote_days_ago=45)
+        self._item("r", days_ago=2)
+        self.session.commit()
+        self.assertFalse(self._suspended("r"))
+
+    def test_recent_hint_keeps_room_active(self):
+        self._watched_room("r", remote_days_ago=45)
+        self._hint("r", days_ago=2)
+        self.session.commit()
+        self.assertFalse(self._suspended("r"))
+
+    def test_only_old_history_and_no_remote_activity_is_suspended(self):
+        self._watched_room("r")
+        self._item("r", days_ago=45)
+        self._hint("r", days_ago=40)
+        self.session.commit()
+        self.assertTrue(self._suspended("r"))
+
+    def test_old_history_but_recent_remote_activity_is_left_alone(self):
+        """The case that matters if RETENTION_DAYS is ever set below 30."""
+        self._watched_room("r", remote_days_ago=3)
+        self._item("r", days_ago=45)
+        self.session.commit()
+        self.assertFalse(self._suspended("r"))
+
+    def test_room_with_no_activity_on_record_is_left_alone(self):
+        """Never seen doing anything is not the same as gone quiet."""
+        self._watched_room("r")
+        self.session.commit()
+        self.assertFalse(self._suspended("r"))
+
+    def test_another_rooms_recent_history_does_not_count(self):
+        self._watched_room("quiet", remote_days_ago=45)
+        self._item("quiet", days_ago=45)
+        self._watched_room("busy")
+        self._item("busy", days_ago=1)
+        self.session.commit()
+        self.assertTrue(self._suspended("quiet"))
+        self.assertFalse(self._suspended("busy"))
+
+
+class TestJanitorRunsOffTheSupervisorLoop(unittest.TestCase):
+    """run_janitor is started as a task and never awaited by the supervisor, so
+    it has to run its steps in order and keep its own failures to itself."""
+
+    STEPS = ("db_run_cleanup", "db_check_stale_rooms", "run_all_retention_tasks")
+
+    def _run(self, failing_step=None):
+        calls = []
+
+        def make(name):
+            def step():
+                calls.append(name)
+                if name == failing_step:
+                    raise RuntimeError("boom")
+            return step
+
+        loop = asyncio.new_event_loop()
+        try:
+            with mock.patch.multiple("app.poller", **{n: make(n) for n in self.STEPS}):
+                loop.run_until_complete(run_janitor(loop))
+        finally:
+            loop.close()
+        return calls
+
+    def test_runs_all_three_steps_in_order(self):
+        self.assertEqual(self._run(), list(self.STEPS))
+
+    def test_failure_is_logged_not_raised(self):
+        """Nothing awaits the task, so an exception that escaped would only
+        surface as 'Task exception was never retrieved' at shutdown."""
+        with self.assertLogs(level="ERROR") as logs:
+            calls = self._run(failing_step="db_run_cleanup")
+        self.assertEqual(calls, ["db_run_cleanup"])
+        self.assertIn("[JANITOR] Daily cleanup failed", logs.output[0])
 
 
 class TestHealingSkipsUnwatched(UnwatchedRoomTestBase):
