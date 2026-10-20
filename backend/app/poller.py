@@ -2820,6 +2820,28 @@ async def setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop):
 
 _global_setup_cooldowns = {}
 
+async def run_janitor(loop):
+    """The daily cleanup, run off the supervisor loop. See poller_supervisor."""
+    try:
+        # 1. Delete orphaned rooms (No subscribers), and their history
+        await loop.run_in_executor(None, db_run_cleanup)
+
+        # 2. Suspend stale active rooms (Has subscribers, but no activity)
+        await loop.run_in_executor(None, db_check_stale_rooms)
+
+        # 3. Age out history past the retention window, inactive guests
+        # and expired blocklist entries. Written long before this call
+        # existed: nothing outside the test suite had ever invoked it,
+        # while LLM.md and architecture.md both described the policy as
+        # active. Each task is batched and capped per run.
+        await loop.run_in_executor(None, run_all_retention_tasks)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        # Logged here because nothing awaits this task. Before it moved off the
+        # supervisor loop, the loop's own handler caught and logged this.
+        logging.error(f"[JANITOR] Daily cleanup failed: {e}", exc_info=True)
+
 async def poller_supervisor(app, loop):
     logging.info("[POLLER] Background polling service starting...")
     running_tasks = {}
@@ -2830,6 +2852,7 @@ async def poller_supervisor(app, loop):
     # Each task it calls is bounded and cheap when there is nothing to do, so
     # running once per restart is affordable.
     last_cleanup_time = datetime.utcnow() - timedelta(hours=24)
+    janitor_task = None
 
     setup_queue = asyncio.Queue()
     setup_semaphore = asyncio.Semaphore(2) 
@@ -2981,26 +3004,23 @@ async def poller_supervisor(app, loop):
                 if task_to_stop:
                     task_to_stop.cancel()
 
-            if datetime.utcnow() - last_cleanup_time > timedelta(hours=24):
+            # Started as a background task, never awaited here. It used to run
+            # inline, and since the janitor runs on the first pass after every
+            # restart, the supervisor stopped ticking for as long as the janitor
+            # took: over 20 minutes in production on 2026-10-20. Rooms already
+            # polling carried on, but no new room was set up, no unarchived
+            # room resumed and no failed setup was retried until it finished.
+            # One run at a time: a run still going when the next is due is left
+            # to finish, and the next starts on the first tick after it does.
+            janitor_idle = janitor_task is None or janitor_task.done()
+            if janitor_idle and datetime.utcnow() - last_cleanup_time > timedelta(hours=24):
                 # Stamped before the work, not after. It used to be set at the
-                # end, inside the try, so any exception from the three calls
-                # below skipped it and the next 60 second tick re-ran the whole
-                # janitor. A failure that repeats turns into a retry loop against
-                # the largest tables in the database.
+                # end, so any exception from the janitor skipped it and the next
+                # 60 second tick re-ran the whole thing. A failure that repeats
+                # turns into a retry loop against the largest tables in the
+                # database.
                 last_cleanup_time = datetime.utcnow()
-
-                # 1. Delete orphaned rooms (No subscribers), and their history
-                await loop.run_in_executor(None, db_run_cleanup)
-
-                # 2. Suspend stale active rooms (Has subscribers, but no activity)
-                await loop.run_in_executor(None, db_check_stale_rooms)
-
-                # 3. Age out history past the retention window, inactive guests
-                # and expired blocklist entries. Written long before this call
-                # existed: nothing outside the test suite had ever invoked it,
-                # while LLM.md and architecture.md both described the policy as
-                # active. Each task is batched and capped per run.
-                await loop.run_in_executor(None, run_all_retention_tasks)
+                janitor_task = asyncio.create_task(run_janitor(loop))
 
         except Exception as e:
             logging.error(f"[SUPERVISOR] An unhandled error occurred: {e}", exc_info=True)
@@ -3378,42 +3398,60 @@ def db_check_stale_rooms():
             TrackedRoom.is_suspended == False,
             _has_active_subscriber()
         ).all()
-        
+        if not active_rooms:
+            return
+
+        # Rooms with any item or hint inside the window, in one range scan per
+        # table over the timestamp index. This used to ask each room for its
+        # latest item and latest hint, two queries per room, and no index
+        # serves "latest row for this room" (the composite indexes lead with
+        # room_id and then slot). In production that took over 20 minutes per
+        # run. On 2026-10-20 it ran
+        # inline in the supervisor loop after a restart, and new rooms went
+        # unset-up for the whole run.
+        recent_room_ids = {
+            rid for (rid,) in session.query(NotifiedItem.room_id)
+            .filter(NotifiedItem.timestamp >= limit_date).distinct()
+        }
+        recent_room_ids.update(
+            rid for (rid,) in session.query(NotifiedHint.room_id)
+            .filter(NotifiedHint.timestamp >= limit_date).distinct()
+        )
+
         stale_count = 0
         for room in active_rooms:
-            # 1. Get latest Item time
-            last_item = session.query(NotifiedItem.timestamp).filter_by(room_id=room.room_id).order_by(NotifiedItem.timestamp.desc()).first()
-            last_item_time = last_item[0] if last_item else None
-            
-            # 2. Get latest Hint time
-            last_hint = session.query(NotifiedHint.timestamp).filter_by(room_id=room.room_id).order_by(NotifiedHint.timestamp.desc()).first()
-            last_hint_time = last_hint[0] if last_hint else None
-            
-            # 3. Determine latest activity.
-            # room.last_remote_activity is included because history is purgeable
-            # now. With the default settings it cannot actually matter: retention
-            # keeps 90 days and this window is 30, so any room active inside the
-            # window still has the rows proving it. It matters if RETENTION_DAYS
-            # is ever set below 30, where a purge would otherwise read as
-            # silence and suspend a live room.
-            # Normalised to naive UTC before comparing: max() raises outright on a
-            # mix of aware and naive values, and these three reach us from
-            # different write paths.
-            candidates = [
-                t.replace(tzinfo=None) if t.tzinfo else t
-                for t in (last_item_time, last_hint_time, room.last_remote_activity) if t
-            ]
-            latest_activity = max(candidates) if candidates else None
-            
-            # 4. Check vs Limit
-            # Note: We enforce naive UTC comparison by stripping info if present, or assuming native is UTC.
-            # (Adjust based on your DB driver behavior, assuming naive UTC for now as per api.py)
-            if latest_activity:
-                if latest_activity < limit_date:
-                    room.is_suspended = True
-                    room.failed_poll_count = 0 # Distinct from Error Suspension (which is >= 60)
-                    stale_count += 1
-                    logging.info(f"[POLLER_STALE] Suspending Room {room.id} due to inactivity (Last Active: {latest_activity})")
+            if room.room_id in recent_room_ids:
+                continue
+
+            # room.last_remote_activity counts as activity because history is
+            # purgeable. With the default settings it cannot actually matter:
+            # retention keeps 90 days and this window is 30, so any room active
+            # inside the window still has the rows proving it. It matters if
+            # RETENTION_DAYS is ever set below 30, where a purge would otherwise
+            # read as silence and suspend a live room. Normalised to naive UTC
+            # because it reaches us from more than one write path.
+            remote = room.last_remote_activity
+            if remote is not None:
+                remote = remote.replace(tzinfo=None) if remote.tzinfo else remote
+                if remote >= limit_date:
+                    continue
+            else:
+                # A room with no activity on record at all is left alone, as
+                # before: no history and no remote timestamp means we have never
+                # seen it do anything, not that it has gone quiet. Only rooms
+                # reaching this branch pay for the lookup, and it is a single
+                # probe on the room_id index.
+                has_history = (
+                    session.query(NotifiedItem.id).filter_by(room_id=room.room_id).first() is not None
+                    or session.query(NotifiedHint.id).filter_by(room_id=room.room_id).first() is not None
+                )
+                if not has_history:
+                    continue
+
+            room.is_suspended = True
+            room.failed_poll_count = 0 # Distinct from Error Suspension (which is >= 60)
+            stale_count += 1
+            logging.info(f"[POLLER_STALE] Suspending Room {room.id} due to inactivity (no activity since {limit_date:%Y-%m-%d}; last remote activity: {room.last_remote_activity})")
 
         if stale_count > 0:
             session.commit()
