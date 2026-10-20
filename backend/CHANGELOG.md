@@ -10,6 +10,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.16.1] - 2026-10-20
+
+_New Rooms Show Up Right Away_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - The daily janitor now runs as a background task, so the poller supervisor keeps ticking while it works. Rooms added right after a restart are set up within a minute instead of waiting out the janitor (20+ minutes in production on 2026-10-20). PR #487.
+>
+> ### Changed
+> - The stale-room check finds recently active rooms in one range scan per table instead of two queries per room. Which rooms get suspended is unchanged. PR #487.
+>
+> ### Compatibility
+> - No migration, no API change. Server-only; the app is unaffected.
+> ```
+
+### Fixed
+- **New Rooms Show Up Right Away**: Rooms added soon after a server restart no longer sit at 0 slots while the daily cleanup runs. PR #487.
+
+---
+
 ## [1.16.0] - 2026-10-19
 
 _Ignore Rules That Catch Up_
