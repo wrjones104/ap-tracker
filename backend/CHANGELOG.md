@@ -10,6 +10,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.16.2] - 2026-10-21
+
+_No Pause After Restarts_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - The poller no longer runs the SlotItemCount reconciliation before its first pass. Its gate matched 2.46M legacy rows that nothing removes, so every restart spent 2–5 minutes with no polls or pushes (#486). PR #490.
+>
+> ### Changed
+> - `reconcile_slot_item_counts` is now a manual tool; its docstring gives the command.
+>
+> ### Compatibility
+> - No migration, no API change. Server-only; the app is unaffected.
+> ```
+
+### Fixed
+- **No Pause After Restarts**: Polling and notifications no longer pause for 2–5 minutes after every server restart. PR #490.
+
+---
+
 ## [1.16.1] - 2026-10-20
 
 _New Rooms Show Up Right Away_

@@ -1101,6 +1101,34 @@
   ],
   "server_releases": [
     {
+      "version": "1.16.2",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-21",
+      "title": "No Pause After Restarts",
+      "highlights": [
+        {
+          "title": "No Pause After Restarts",
+          "description": "After a server update, rooms are checked and notifications go out again right away, instead of after a few minutes."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "No Pause After Restarts",
+            "description": "Polling and notifications no longer pause for 2–5 minutes after every server restart. PR #490."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Fixed\n- The poller no longer runs the SlotItemCount reconciliation before its first pass. Its gate matched 2.46M legacy rows that nothing removes, so every restart spent 2–5 minutes with no polls or pushes (#486). PR #490.\n\n### Changed\n- `reconcile_slot_item_counts` is now a manual tool; its docstring gives the command.\n\n### Compatibility\n- No migration, no API change. Server-only; the app is unaffected."
+      }
+    },
+    {
       "version": "1.16.1",
       "component": "server",
       "component_label": "Server",
