@@ -246,7 +246,19 @@ class HistoryRepository(
         } // syncMutex.withLock
     }
 
-    suspend fun fetchItemHistoryFeed(roomId: Int?, limit: Int = 50, offset: Int = 0): List<HistoryItemEntity> {
+    /**
+     * One page of older items from the server, for when Activity scrolls past the local cache.
+     *
+     * Holds the sync mutex across the request and the insert, as syncHistoryBatch does (#481).
+     * The rows are new to the cache and arrive flagged under the rules in force when the request
+     * went out, and the re-flag after a rule change (refreshItemFilterFlags) only updates rows
+     * already stored. Without the lock, a page requested before a rule change and stored after
+     * its re-flag kept the old flags for good: the delta sync never re-sends those ids. With it,
+     * either the re-flag runs after the insert and covers these rows, or the request goes out
+     * after the change and the server flags them correctly. A page load can wait behind a batch
+     * sync; it only runs once the local pages are used up.
+     */
+    suspend fun fetchItemHistoryFeed(roomId: Int?, limit: Int = 50, offset: Int = 0): List<HistoryItemEntity> = syncMutex.withLock {
         Log.d("HISTORY_DEBUG", "Fetching item history feed for room ${roomId ?: "Global"} (limit: $limit, offset: $offset)...")
         val items = if (roomId != null) {
             apiService.getItemHistory(roomId = roomId, limit = limit, offset = offset)
@@ -287,7 +299,7 @@ class HistoryRepository(
         if (entities.isNotEmpty()) {
             historyDao.insertHistoryItems(entities)
         }
-        return entities
+        entities
     }
 
     // --- HINT FLOWS ---
@@ -352,12 +364,12 @@ class HistoryRepository(
      * are decided when an item is sent and the delta sync never re-sends it, so without this a
      * rule only ever applied to items received after it.
      *
-     * Holds the sync mutex, so the batch sync (syncHistoryBatch, which holds it across its network
-     * calls) cannot store freshly flagged items between the fetch and the apply, and a batch sync
-     * in flight during a rule change finishes before this corrects it. The paged feed
-     * (fetchItemHistoryFeed) writes without the lock, but only older items, which this answer
-     * covers. Returns true when the cache was re-flagged; false
-     * on a server without the route (404) or any failure, which leaves the flags as they were.
+     * Holds the sync mutex, so neither writer of items (syncHistoryBatch and the paged feed,
+     * fetchItemHistoryFeed, both of which hold it across their network calls) can store items
+     * flagged under the old rules between the fetch and the apply, and one in flight during a
+     * rule change finishes before this corrects it (#481). Returns true when the cache was
+     * re-flagged; false on a server without the route (404) or any failure, which leaves the
+     * flags as they were.
      */
     suspend fun refreshItemFilterFlags(): Boolean = syncMutex.withLock {
         try {
