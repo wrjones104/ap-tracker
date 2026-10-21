@@ -143,6 +143,7 @@ fun RoomsScreen(
 
     // --- Slot state (absorbed from the former Slots tab) ---
     val trackedSlotsByRoom by userViewModel.trackedSlotsByRoom.collectAsState()
+    val trackedSlotsLoaded by userViewModel.trackedSlotsLoaded.collectAsState()
     val showFinished by userViewModel.slotsShowFinished.collectAsState()
     val finishedResolver by userViewModel.finishedResolver.collectAsState()
     val expandedRoomIds by userViewModel.expandedRoomIds.collectAsState()
@@ -529,6 +530,7 @@ fun RoomsScreen(
                                 RoomCard(
                                     room = room,
                                     group = slotGroupsByRoomId[room.id],
+                                    slotsLoaded = trackedSlotsLoaded,
                                     isCheeseConnected = isCheeseConnected,
                                     // Searching implies you want to see what matched, so a
                                     // matching room opens regardless of its saved state.
@@ -830,6 +832,8 @@ private fun RoomCard(
     room: Room,
     /** Null when the room has no tracked slots at all, or none survived the search. */
     group: RoomSlotGroup?,
+    /** False until any slot list has loaded, so a null [group] may only mean "not yet". */
+    slotsLoaded: Boolean,
     /** Gates every Cheese affordance on the card: the chip and the watching eyes. */
     isCheeseConnected: Boolean,
     isExpanded: Boolean,
@@ -1029,8 +1033,14 @@ private fun RoomCard(
                         }
 
                         // A room you have just added expands to nothing at all otherwise,
-                        // which reads as a failure rather than as work still to do.
-                        if (visibleSlots.isEmpty() && hiddenFinishedCount == 0) {
+                        // which reads as a failure rather than as work still to do. Held
+                        // back until a slot list has loaded, since before that empty is not
+                        // an answer, and when the header counts tracked slots the list has
+                        // not caught up with yet (a stale saved copy, a Cheese import), so
+                        // the card never contradicts itself (#483).
+                        if (slotsLoaded && room.tracked_slots_count == 0 &&
+                            visibleSlots.isEmpty() && hiddenFinishedCount == 0
+                        ) {
                             Text(
                                 text = "No slots tracked in this room yet.",
                                 style = MaterialTheme.typography.bodySmall,
