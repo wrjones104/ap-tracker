@@ -16,9 +16,11 @@ import com.jones.aptracker.network.TrackMode
 import com.jones.aptracker.network.UpdateSlotsRequest
 import com.jones.aptracker.repository.HistoryRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class PlayersViewModel(application: Application) : AndroidViewModel(application) {
     val allPlayers = mutableStateOf<List<Player>>(emptyList())
@@ -46,6 +48,12 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
     private var initialTrackedSlots = setOf<Int>()
     /** [slotModes] as loaded, so a save sends only the modes changed here (#477). */
     private var initialSlotModes = mapOf<Int, String>()
+
+    /**
+     * True once [fetchPlayers] has filled the picker. Until then the ticks are empty rather
+     * than the user's choice, and a save computed from them would untrack every slot.
+     */
+    private var playersLoaded = false
     init {
         val db = AppDatabase.getInstance(application)
         repository = HistoryRepository(
@@ -61,6 +69,7 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
 
     fun fetchPlayers(roomId: Int) {
         isLoading.value = true
+        playersLoaded = false
         _errorMessage.value = null
         viewModelScope.launch {
             try {
@@ -81,7 +90,10 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                 }
                 initialTrackedSlots = trackedSlots
                 initialSlotModes = slotModes.toMap()
+                playersLoaded = true
                 Log.d("SLOTS_DEBUG", "initialTrackedSlots set to: $initialTrackedSlots")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("SLOTS_DEBUG", "Failed to load players: ${e.message}", e)
                 _errorMessage.value = "Failed to load players: ${e.message}"
@@ -167,13 +179,30 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
      * set is read fresh from `users/me/tracked-slots` right before the PUT, as
      * [UserViewModel.stopTrackingSlot] does, and only the edits made here are applied to it; see
      * [mergeSlotSelection]. A save that cannot read the fresh set is not sent.
+     *
+     * Refused while a load or save is running, and before the picker has loaded: the Save
+     * button is always shown, and a save built on ticks that are not the user's yet would
+     * untrack every slot. Everything the merge reads is taken before the request suspends,
+     * so a load landing mid-save cannot pair new baselines with old ticks.
      */
     fun saveSelections(roomId: Int) {
+        if (isLoading.value) return
+        if (!playersLoaded) {
+            _errorMessage.value = "The slot list has not loaded, so there is nothing to save."
+            return
+        }
+        isLoading.value = true
+        _errorMessage.value = null
+        val loaded = initialTrackedSlots
+        val selected = selections.filter { it.value }.keys.toSet()
+        val loadedModes = initialSlotModes
+        val chosenModes = slotModes.toMap()
+        // Only slots that can have a mode get one. Without a Cheese key there is nothing to
+        // claim. A room that is not linked yet still gets modes: the user's choice has to
+        // reach the server before the link catch-up runs.
+        val modeCapable = allPlayers.value.filter { it.cheese_claim != null }.map { it.slot_id }.toSet()
         viewModelScope.launch {
-            isLoading.value = true
-            _errorMessage.value = null
             try {
-                val selected = selections.filter { it.value }.keys.toSet()
                 val current = RetrofitClient.instance.getUserTrackedSlots()
                     .find { it.room_db_id == roomId }
                     ?.tracked_slots
@@ -181,20 +210,16 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                     ?.toSet()
                     .orEmpty()
 
-                // Only slots that can have a mode get one. Without a Cheese key there is
-                // nothing to claim. A room that is not linked yet still gets modes: the
-                // user's choice has to reach the server before the link catch-up runs.
-                val modeCapable = allPlayers.value.filter { it.cheese_claim != null }.map { it.slot_id }.toSet()
                 val save = mergeSlotSelection(
-                    loaded = initialTrackedSlots,
+                    loaded = loaded,
                     selected = selected,
                     current = current,
-                    loadedModes = initialSlotModes,
-                    chosenModes = slotModes.toMap(),
+                    loadedModes = loadedModes,
+                    chosenModes = chosenModes,
                     modeCapable = modeCapable
                 )
 
-                Log.d("SLOTS_DEBUG", "saveSelections roomId=$roomId loaded=$initialTrackedSlots selected=$selected current=$current")
+                Log.d("SLOTS_DEBUG", "saveSelections roomId=$roomId loaded=$loaded selected=$selected current=$current")
                 Log.d("SLOTS_DEBUG", "  sending tracked=${save.trackedSlotIds} modes=${save.modes} removed=${save.removed}")
 
                 val response = RetrofitClient.instance.updateTrackedSlots(
@@ -210,14 +235,19 @@ class PlayersViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 // Local history goes only for the slots unticked here, and only once the
-                // server has agreed, the same order as Stop tracking.
+                // server has agreed, the same order as Stop tracking. Not cancellable: the
+                // server has already untracked them, so leaving the screen now must not
+                // strand their rows and watermarks.
                 if (save.removed.isNotEmpty()) {
-                    repository.pruneSlotData(roomId, save.removed)
+                    withContext(NonCancellable) { repository.pruneSlotData(roomId, save.removed) }
                 }
                 showSaveConfirmation.value = true
 
-                initialTrackedSlots = save.trackedSlotIds
-                initialSlotModes = slotModes.toMap()
+                // The new baseline is what the ticks now say, not the merged set: the ticks
+                // are what the next save diffs against. Saving closes the screen today, so
+                // this only matters if it ever stays open.
+                initialTrackedSlots = selected
+                initialSlotModes = chosenModes
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

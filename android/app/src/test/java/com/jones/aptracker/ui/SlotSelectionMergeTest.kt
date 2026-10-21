@@ -91,6 +91,29 @@ class SlotSelectionMergeTest {
     }
 
     @Test
+    fun `a mode changed here on a slot dropped elsewhere is not sent, and the slot stays dropped`() {
+        // Deliberate: the other device's untrack wins. Tracking is the bigger decision, and
+        // re-tracking just to carry a mode change would re-claim the slot on Cheese.
+        val save = mergeSlotSelection(
+            loaded = setOf(1, 2), selected = setOf(1, 2), current = setOf(1),
+            loadedModes = mapOf(1 to play, 2 to play), chosenModes = mapOf(1 to play, 2 to watch),
+            modeCapable = setOf(1, 2)
+        )
+        assertEquals(setOf(1), save.trackedSlotIds)
+        assertEquals(emptyMap<Int, String>(), save.modes)
+    }
+
+    @Test
+    fun `a slot unticked here and already dropped elsewhere is still cleaned up locally`() {
+        val save = mergeSlotSelection(
+            loaded = setOf(1, 2), selected = setOf(1), current = setOf(1),
+            loadedModes = emptyMap(), chosenModes = emptyMap(), modeCapable = emptySet()
+        )
+        assertEquals(setOf(1), save.trackedSlotIds)
+        assertEquals(setOf(2), save.removed)
+    }
+
+    @Test
     fun `ticking a slot another device already tracked sends this device's mode`() {
         val save = mergeSlotSelection(
             loaded = emptySet(), selected = setOf(5), current = setOf(5),
