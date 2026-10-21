@@ -382,11 +382,11 @@ class NotifiedItem(Base):
     item_flags = Column(Integer, nullable=True)
     __table_args__ = (
         UniqueConstraint('room_id', 'receiving_slot_id', 'item_index', name='_item_event_index_uc'),
-        # Only the legacy backfill probes read item_index, and both of them ask
-        # for rows where it IS NULL (poller.py db_has_unindexed_items, and the
-        # per-room purge). A partial index over just those rows answers the same
-        # questions for kilobytes; the full btree it replaces cost 99 MB for 141
-        # lifetime scans.
+        # Only the legacy backfill probe reads item_index, and it asks for rows
+        # where it IS NULL (the poller's per-room purge; the startup probe that
+        # also used this went in #486). A partial index over just those rows
+        # answers that for kilobytes; the full btree it replaces cost 99 MB for
+        # 141 lifetime scans.
         Index(
             'ix_notifieditem_unindexed', 'room_id',
             postgresql_where=text('item_index IS NULL'),

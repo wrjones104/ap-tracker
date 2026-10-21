@@ -158,7 +158,12 @@ def reconcile_slot_item_counts(session=None):
 
     Also audits triggered ThresholdGroups and resets is_triggered=False where the
     authoritative counts no longer satisfy the requirement.
-    Runs asynchronously/in background to avoid blocking API startup or causing OOM memory spikes.
+
+    Not run automatically. The poller ran it at every start until #486; that
+    repair is complete on every existing database, so it is kept only as a
+    manual tool, run from the repository root:
+
+        python -c "import sys; sys.path.insert(0, 'backend'); from app.services.threshold_service import reconcile_slot_item_counts; reconcile_slot_item_counts()"
     """
     close_session = False
     if session is None:

@@ -2861,17 +2861,14 @@ async def poller_supervisor(app, loop):
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
     asyncio.create_task(setup_worker(setup_queue, setup_semaphore, rooms_in_setup, loop))
 
-    # Reconciliation only fixes drift caused by the legacy item_index backfill (see
-    # poller.py purge/backfill logic above). Once no un-indexed items remain, it's a
-    # no-op full-table scan, so skip it and avoid delaying startup.
-    try:
-        if await loop.run_in_executor(None, db_has_unindexed_items):
-            from app.services.threshold_service import reconcile_slot_item_counts
-            await loop.run_in_executor(None, reconcile_slot_item_counts)
-        else:
-            logging.info("[RECONCILE] No legacy un-indexed items found; skipping startup reconciliation.")
-    except Exception as e:
-        logging.error(f"[POLLER] Startup reconciliation failed: {e}", exc_info=True)
+    # No SlotItemCount reconciliation here (#486). It used to run before the first
+    # pass whenever any NotifiedItem lacked an item_index, as a one-time repair of
+    # the legacy backfill's undercounts. That gate never closed: retention skips
+    # un-indexed rows on purpose and polls only reach them in active rooms, so
+    # 2.46M rows from before 30 Jul 2026 kept it open, and every restart spent
+    # 2-5 minutes with no room polled. The repair only raises counts and no new
+    # un-indexed rows are written, so every run after the first was a no-op.
+    # reconcile_slot_item_counts is still there to run by hand.
 
     last_cache_check = datetime.utcnow() - timedelta(minutes=15)
     last_revive_check = datetime.utcnow() - timedelta(hours=2)
@@ -3076,16 +3073,6 @@ def db_get_active_rooms():
         logging.error(f"[SUPERVISOR_DB_ERROR] Failed to get active rooms: {e}", exc_info=True)
         session.rollback()
         return None
-    finally:
-        Session.remove()
-
-def db_has_unindexed_items():
-    session = Session()
-    try:
-        return session.query(NotifiedItem.id).filter(NotifiedItem.item_index == None).first() is not None
-    except Exception as e:
-        logging.error(f"[SUPERVISOR_DB_ERROR] Failed to check for unindexed items: {e}", exc_info=True)
-        return True  # fail safe: assume reconciliation is still needed
     finally:
         Session.remove()
 
