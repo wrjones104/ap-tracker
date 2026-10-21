@@ -42,6 +42,7 @@ import com.jones.aptracker.repository.UserRepository
 import com.jones.aptracker.widget.MilestonesWidgetUpdater
 import com.jones.aptracker.widget.RecentItemsWidgetUpdater
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -50,6 +51,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -187,6 +189,17 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private val _trackedSlotsByRoom = MutableStateFlow<List<RoomWithTrackedSlots>>(emptyList())
     val trackedSlotsByRoom = _trackedSlotsByRoom.asStateFlow()
 
+    /**
+     * False until a roster has been applied, saved or from the server (#483). Until then an
+     * empty [trackedSlotsByRoom] means "not loaded yet", so the Rooms tab must not read it as
+     * "nothing tracked".
+     */
+    private val _trackedSlotsLoaded = MutableStateFlow(false)
+    val trackedSlotsLoaded = _trackedSlotsLoaded.asStateFlow()
+
+    /** Set by the first successful network load. A saved roster never overwrites it. */
+    private var networkRosterLoaded = false
+
     private val _thresholdGroups = MutableStateFlow<List<ThresholdGroup>>(emptyList())
     val thresholdGroups = _thresholdGroups.asStateFlow()
     private var latestThresholdGroupsKey: Pair<Int, Int>? = null
@@ -263,6 +276,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         fetchUserProfile()
+        applySavedRoster()
         fetchTrackedSlots()
         fetchIgnoreList()
         fetchWhitelist()
@@ -327,6 +341,26 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Paints the Rooms tab's slots from the roster [RosterCache] saved, so a cold start does not
+     * show every room as "No slots tracked" until the server answers (#483). The same copy
+     * Activity paints from (#468).
+     *
+     * Runs alongside the network load rather than before it, so the request is not held up by
+     * the file read. Whichever lands second must not undo the first: a network result always
+     * wins, so the saved copy is dropped once one has landed. No shape check is needed before
+     * applying it. The file is keyed by version code, so it was written by this same build from
+     * a server response that build had already parsed and shown.
+     */
+    private fun applySavedRoster() {
+        viewModelScope.launch {
+            val saved = withContext(Dispatchers.IO) { RosterCache.load(getApplication()) } ?: return@launch
+            if (networkRosterLoaded) return@launch
+            _trackedSlotsByRoom.value = saved
+            _trackedSlotsLoaded.value = true
+        }
+    }
+
     fun fetchTrackedSlots() {
         viewModelScope.launch { loadTrackedSlots() }
     }
@@ -335,7 +369,9 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun loadTrackedSlots() {
         try {
             val rooms = RetrofitClient.instance.getUserTrackedSlots()
+            networkRosterLoaded = true
             _trackedSlotsByRoom.value = rooms
+            _trackedSlotsLoaded.value = true
             // The same roster the Activity screen paints from on a cold start (#468), so it is
             // already saved the first time Activity opens after Rooms loaded.
             RosterCache.saveUnlessLoggingOut(getApplication(), rooms)
