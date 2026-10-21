@@ -348,9 +348,15 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
      *
      * Runs alongside the network load rather than before it, so the request is not held up by
      * the file read. Whichever lands second must not undo the first: a network result always
-     * wins, so the saved copy is dropped once one has landed. No shape check is needed before
-     * applying it. The file is keyed by version code, so it was written by this same build from
-     * a server response that build had already parsed and shown.
+     * wins, so the saved copy is dropped once one has landed.
+     *
+     * [RosterCache.load] returns only a copy whose non-null fields are all present, and deletes
+     * any other. This list goes straight to screens that read it while drawing, so a malformed
+     * copy would crash every cold start, and a server fix could not clear it: the file is only
+     * rewritten after a successful load, which the crash would always beat.
+     *
+     * Until a server roster lands, the slot screens show this copy but cannot save full slot
+     * settings from it; see [canWriteSlotPrefs].
      */
     private fun applySavedRoster() {
         viewModelScope.launch {
@@ -512,7 +518,19 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Full-state slot writes ([toPrefsRequest]) must be built from the server's roster, not the
+     * saved one: a saved copy may predate changes made on another device, and the PUT would
+     * write those old values back (#483). Patch-style writes (snooze, Cheese) are unaffected.
+     */
+    private fun canWriteSlotPrefs(): Boolean {
+        if (networkRosterLoaded) return true
+        _errorMessage.value = "Still loading slot settings. Try again in a moment."
+        return false
+    }
+
     fun updateSlotPreferences(roomId: Int, slotId: Int, key: String, value: Boolean?) {
+        if (!canWriteSlotPrefs()) return
         viewModelScope.launch {
             val previousRooms = _trackedSlotsByRoom.value
             try {
@@ -1257,6 +1275,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
      * Null clears the override so the slot inherits the global default again.
      */
     fun updateSlotFinishedDefinition(roomId: Int, slotId: Int, definition: FinishedDefinition?) {
+        if (!canWriteSlotPrefs()) return
         viewModelScope.launch {
             val previousRooms = _trackedSlotsByRoom.value
             try {
@@ -1301,6 +1320,7 @@ class UserViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applySlotSettingsToAll(roomId: Int, sourceSlotId: Int) {
+        if (!canWriteSlotPrefs()) return
         viewModelScope.launch {
             try {
                 // 1. Get source data

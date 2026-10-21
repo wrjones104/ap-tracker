@@ -69,10 +69,15 @@ object RosterCache {
         }
     }
 
+    /**
+     * A file that does not decode to a well-formed roster is deleted, not just skipped. It is only
+     * rewritten after a successful network load, so leaving it would hand every cold start the
+     * same bad copy until then (#483).
+     */
     internal fun load(dir: File, versionCode: Int): List<RoomWithTrackedSlots>? =
         try {
             val f = File(dir, fileName(versionCode))
-            if (f.exists()) decode(f.readText()) else null
+            if (!f.exists()) null else decode(f.readText()) ?: run { f.delete(); null }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read the roster", e)
             null
@@ -86,8 +91,26 @@ object RosterCache {
 
     internal fun decode(json: String): List<RoomWithTrackedSlots>? =
         try {
-            gson.fromJson<List<RoomWithTrackedSlots>>(json, rosterType)
+            gson.fromJson<List<RoomWithTrackedSlots>>(json, rosterType)?.takeIf { isWellFormed(it) }
         } catch (e: Exception) {
             null
         }
+
+    /**
+     * False when Gson left a non-null field null. It builds these classes without running their
+     * constructors, so a field missing from the JSON comes back null whatever its Kotlin type
+     * says, and nothing fails until a screen reads it while drawing. Both the Rooms and Activity
+     * screens paint from this copy before the server answers (#468, #483).
+     *
+     * Covers every non-null reference field the two classes declare. Primitives cannot be null.
+     */
+    @Suppress("SENSELESS_COMPARISON")
+    internal fun isWellFormed(rooms: List<RoomWithTrackedSlots>): Boolean = rooms.all { room ->
+        room != null && room.room_id != null && room.room_alias != null &&
+            room.icon_name != null && room.tracked_slots != null &&
+            room.tracked_slots.all { slot ->
+                slot != null && slot.player_name != null && slot.track_mode != null &&
+                    (slot.cheese == null || slot.cheese.notes != null)
+            }
+    }
 }

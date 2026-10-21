@@ -1034,9 +1034,13 @@ private fun RoomCard(
 
                         // A room you have just added expands to nothing at all otherwise,
                         // which reads as a failure rather than as work still to do. Held
-                        // back until a slot list has loaded: before that, empty is not an
-                        // answer (#483).
-                        if (slotsLoaded && visibleSlots.isEmpty() && hiddenFinishedCount == 0) {
+                        // back until a slot list has loaded, since before that empty is not
+                        // an answer, and when the header counts tracked slots the list has
+                        // not caught up with yet (a stale saved copy, a Cheese import), so
+                        // the card never contradicts itself (#483).
+                        if (slotsLoaded && room.tracked_slots_count == 0 &&
+                            visibleSlots.isEmpty() && hiddenFinishedCount == 0
+                        ) {
                             Text(
                                 text = "No slots tracked in this room yet.",
                                 style = MaterialTheme.typography.bodySmall,

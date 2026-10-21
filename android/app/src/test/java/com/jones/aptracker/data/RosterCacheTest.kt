@@ -102,11 +102,56 @@ class RosterCacheTest {
     }
 
     @Test
-    fun `a damaged file reads as no roster`() {
+    fun `a damaged file reads as no roster and is deleted`() {
         val dir = tmp.root
-        File(dir, RosterCache.fileName(80)).writeText("[{\"room_db_id\": 2, \"tracked_slots\": [")
+        val file = File(dir, RosterCache.fileName(80))
+        file.writeText("[{\"room_db_id\": 2, \"tracked_slots\": [")
 
         assertNull(RosterCache.load(dir, 80))
+        assertFalse(file.exists())
+    }
+
+    // ------------------------------------------------------------------
+    // Shape: Gson leaves a missing non-null field null, and a screen would crash drawing it
+    // on every cold start (#483)
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `a slot missing its player name reads as no roster and is deleted`() {
+        val dir = tmp.root
+        val file = File(dir, RosterCache.fileName(80))
+        file.writeText(
+            """[{"room_db_id": 2, "room_id": "u", "room_alias": "BIG", "icon_name": "heart",
+               |  "tracked_slots": [{"slot_id": 883, "track_mode": "play"}]}]""".trimMargin()
+        )
+
+        assertNull(RosterCache.load(dir, 80))
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun `a room missing its slot list reads as no roster`() {
+        assertNull(RosterCache.decode("""[{"room_db_id": 2, "room_id": "u", "room_alias": "BIG", "icon_name": "heart"}]"""))
+    }
+
+    @Test
+    fun `a null room entry reads as no roster`() {
+        assertNull(RosterCache.decode("[null]"))
+    }
+
+    @Test
+    fun `cheese state missing its notes reads as no roster`() {
+        val json = RosterCache.encode(roster).replace(
+            "\"track_mode\":\"watch\"",
+            "\"track_mode\":\"watch\",\"cheese\":{\"game_id\":1}"
+        )
+
+        assertNull(RosterCache.decode(json))
+    }
+
+    @Test
+    fun `an empty roster is well formed`() {
+        assertEquals(emptyList<RoomWithTrackedSlots>(), RosterCache.decode("[]"))
     }
 
     @Test
