@@ -1,6 +1,51 @@
 {
   "app_releases": [
     {
+      "version": "1.13.4",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-10-22",
+      "title": "Slots Right Away, Safer Saves",
+      "highlights": [
+        {
+          "title": "Your Slots Right Away",
+          "description": "The Rooms tab shows your slots the moment the app opens, instead of saying \"No slots tracked\" until it catches up."
+        },
+        {
+          "title": "Manage Slots Respects Your Other Devices",
+          "description": "Saving Manage Slots no longer undoes slots you tracked or untracked on another device while it was open."
+        },
+        {
+          "title": "No Accidental Untracking",
+          "description": "Tapping Save before the slot list has loaded no longer untracks every slot in the room, and a failed save now says so."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [
+          {
+            "title": "Your Slots Right Away",
+            "description": "Rooms paints your slots from the last list the phone saved, so they appear at once on a cold start. PR #492."
+          }
+        ],
+        "fixes": [
+          {
+            "title": "Manage Slots Respects Your Other Devices",
+            "description": "Manage Slots saves only the changes made on screen, so slots changed on another device stay as they are. PR #497."
+          },
+          {
+            "title": "No Accidental Untracking",
+            "description": "Save waits for the slot list to load, and a save the server rejects shows an error instead of a confirmation. PR #497."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "# **Archipelago Alerts 1.13.4**\n\n• **Your slots show up right away.** Open the app and the Rooms tab lists your slots at once, instead of saying \"No slots tracked\" for a moment.\n• **Manage Slots plays nice with your other devices.** Saving it no longer undoes slots you tracked or dropped on another phone while it was open.\n• **No accidental wipe.** Tapping Save before the slot list finished loading could untrack every slot in the room. It can't anymore.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "• Rooms shows your slots right away when the app opens.\n• Manage Slots no longer undoes slot changes made on another device.\n• Tapping Save before the slot list loads no longer untracks every slot.\n• A failed slot save now tells you, instead of saying it saved.",
+        "github": "### Changed\n- Rooms paints tracked slots from the saved roster on a cold start; the empty-room message waits for a real list (#483, PR #492).\n- Full slot-settings saves wait for the server's roster, so a saved copy cannot write back stale settings (PR #492).\n\n### Fixed\n- Manage Slots applies its edits to the current tracked set instead of replacing it with its snapshot; modes go only for slots added or changed (#477, PR #497).\n- Manage Slots refuses to save before its list has loaded. On 1.13.3 that sent an empty set and untracked every slot in the room (PR #497).\n- A rejected Manage Slots save shows an error, and local history is pruned only after the server accepts the save (PR #497).\n- A malformed saved roster is deleted instead of read, so it cannot crash every cold start (PR #492).\n- The paged item feed holds the sync lock, so a rule change cannot leave stale ignore flags on its rows (#481, PR #495). The pager is dormant today.\n\n### Compatibility\n- App-only. No server change; works with server 1.16.0 and later."
+      }
+    },
+    {
       "version": "1.13.3",
       "component": "app",
       "component_label": "App",
