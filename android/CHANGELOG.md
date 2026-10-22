@@ -10,6 +10,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.13.4] - 2026-10-22
+
+_Slots Right Away, Safer Saves_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> # **Archipelago Alerts 1.13.4**
+>
+> • **Your slots show up right away.** Open the app and the Rooms tab lists your slots at once, instead of saying "No slots tracked" for a moment.
+> • **Manage Slots plays nice with your other devices.** Saving it no longer undoes slots you tracked or dropped on another phone while it was open.
+> • **No accidental wipe.** Tapping Save before the slot list finished loading could untrack every slot in the room. It can't anymore.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> • Rooms shows your slots right away when the app opens.
+> • Manage Slots no longer undoes slot changes made on another device.
+> • Tapping Save before the slot list loads no longer untracks every slot.
+> • A failed slot save now tells you, instead of saying it saved.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Changed
+> - Rooms paints tracked slots from the saved roster on a cold start; the empty-room message waits for a real list (#483, PR #492).
+> - Full slot-settings saves wait for the server's roster, so a saved copy cannot write back stale settings (PR #492).
+>
+> ### Fixed
+> - Manage Slots applies its edits to the current tracked set instead of replacing it with its snapshot; modes go only for slots added or changed (#477, PR #497).
+> - Manage Slots refuses to save before its list has loaded. On 1.13.3 that sent an empty set and untracked every slot in the room (PR #497).
+> - A rejected Manage Slots save shows an error, and local history is pruned only after the server accepts the save (PR #497).
+> - A malformed saved roster is deleted instead of read, so it cannot crash every cold start (PR #492).
+> - The paged item feed holds the sync lock, so a rule change cannot leave stale ignore flags on its rows (#481, PR #495). The pager is dormant today.
+>
+> ### Compatibility
+> - App-only. No server change; works with server 1.16.0 and later.
+> ```
+
+### Changed
+- **Your Slots Right Away**: Rooms paints your slots from the last list the phone saved, so they appear at once on a cold start. PR #492.
+
+### Fixed
+- **Manage Slots Respects Your Other Devices**: Manage Slots saves only the changes made on screen, so slots changed on another device stay as they are. PR #497.
+- **No Accidental Untracking**: Save waits for the slot list to load, and a save the server rejects shows an error instead of a confirmation. PR #497.
+
+---
+
 ## [1.13.3] - 2026-10-20
 
 _Faster Activity, Smarter Ignore Rules_
