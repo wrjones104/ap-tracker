@@ -35,6 +35,7 @@ from app.services.redis_service import get_redis_client, publish_event
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 from app.services import milestone_template_service
 from app.services.retention_service import run_all_retention_tasks
+from app.services.push_history import history_push_users, build_history_payloads, fits_in_push
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -138,7 +139,11 @@ def _extract_ap_room_id(url_string):
     return None
 
 
-async def send_push_notifications(notifications, device_tokens, loop, platform='android'):
+async def send_push_notifications(notifications, device_tokens, loop, platform='android', history=None):
+    """
+    `history` is the item payload for this user's batch (see push_history), sent to Android
+    only and on each message it fits in: the app ignores a copy it has already stored.
+    """
     platform = (platform or 'android').lower().strip()
     if platform not in ['android', 'ios']:
         platform = 'android'
@@ -168,6 +173,12 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
             data_payload['bundled_items'] = content['bundled_items']
             if 'type' in content:
                 data_payload['bundle_type'] = content['type']
+
+        if history and platform == 'android':
+            if fits_in_push(content['title'], content['body'], data_payload, history):
+                data_payload['history'] = history
+            else:
+                logging.info(f"[NOTIFIER] Item payload ({len(history.encode('utf-8'))} bytes) does not fit the push; the app will sync.")
 
         for token in device_tokens:
             android_config = None
@@ -802,10 +813,13 @@ def _room_is_complete(total_players, goaled_ids, all_checks_ids, checks_known, t
     return len(all_checks_ids) >= total_players
 
 
-def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, goaled_ids, all_checks_ids, checks_known, connected_slots_set, item_counts):
+def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, cache_keys_to_fetch, new_items_for_notify, new_hints_for_notify, users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, full_name_map, short_name_map, backfill_check_set, just_found_hint_item_loc_pairs, goaled_ids, all_checks_ids, checks_known, connected_slots_set, item_counts, lookups_out=None):
     """
     Fetches names from DB in chunks and constructs final notification payloads.
     Applies filtering, backfill checks, ignore lists, alias/condensed formatting, and snooze logic.
+
+    `lookups_out`, when given, receives the name map ('names') and the group memberships
+    ('groups') fetched here, so the push's item payload (#416) is built without fetching them twice.
     """
     notifications_by_user = {}
     name_lookup_map = {}
@@ -877,6 +891,10 @@ def _resolve_names_and_notify(session, room_db_id, room_uuid, game_checksums, ca
         except Exception as e:
             logging.error(f"[POLLER_DB_ERROR][RoomDBID:{room_db_id}] Failed to bulk-fetch names: {e}", exc_info=True)
             return {}
+
+    if lookups_out is not None:
+        lookups_out['names'] = name_lookup_map
+        lookups_out['groups'] = group_members_lookup
 
     # 2. Notify Items
     for item_data in new_items_for_notify:
@@ -1543,23 +1561,26 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         
         # --- SAFETY CHECK: Explicitly verify Archive Status ---
         aliases_by_user = {}
+        icons_by_user = {}
         archived_users_found = set()
-        
+
         # We fetch is_archived explicitly here to verify the User IDs we collected
         sub_check_query = session.query(
-            UserRoomSubscription.user_id, 
-            UserRoomSubscription.alias, 
-            UserRoomSubscription.is_archived
+            UserRoomSubscription.user_id,
+            UserRoomSubscription.alias,
+            UserRoomSubscription.is_archived,
+            UserRoomSubscription.icon_name
         ).filter(
-            UserRoomSubscription.user_id.in_(all_user_ids_in_room), 
+            UserRoomSubscription.user_id.in_(all_user_ids_in_room),
             UserRoomSubscription.room_id == db_id
         ).all()
-        
-        for uid, alias, is_arch in sub_check_query:
+
+        for uid, alias, is_arch, icon_name in sub_check_query:
             if is_arch:
                 archived_users_found.add(uid)
             else:
                 aliases_by_user[uid] = alias
+                icons_by_user[uid] = icon_name
 
         # If any users are actually archived (despite the initial query), remove them now.
         if archived_users_found:
@@ -1673,13 +1694,14 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
 
         # --- LOGIC STEP 5: Resolve Names & Build Notifications ---
         all_cache_keys = item_cache_keys | hint_cache_keys
+        lookups = {}
         data_notifs = _resolve_names_and_notify(
             session, db_id, room_uuid, game_checksums,
             all_cache_keys, new_items_notif, new_hints_notif,
-            users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user, 
+            users_by_id, prefs_by_user_slot, tracked_slots_by_user, aliases_by_user,
             full_name_map, short_name_map,
             backfill_check_set, just_found_hints, goaled_ids, all_checks_ids, checks_known, connected_slots_set,
-            count_updates
+            count_updates, lookups_out=lookups
         )
 
         # Combine notifications (Finished + Items + Hints)
@@ -1691,6 +1713,41 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
 
         merge_notifs(finish_notifs, notifications_to_send)
         merge_notifs(data_notifs, notifications_to_send)
+
+        # Users whose push can carry its items, so their phones need not sync (#416). Not when
+        # the room's hints changed: the sync carries those too, so it still has to run.
+        #
+        # Its queries run in savepoints. On Postgres a failed statement aborts the whole
+        # transaction, so without one an error here would lose the poll's items and its pushes,
+        # not just the payload. The flush first keeps a failure of the poll's own writes out of
+        # the guard, where it fails the poll as it always has.
+        history_users = set()
+        prior_max_by_slot = {}
+        hints_through = None
+        if items_to_add and has_item_history and not hints_to_add and not just_found_hints:
+            history_users = history_push_users(notifications_to_send)
+        if history_users:
+            receiving = {item.receiving_slot_id for item in items_to_add}
+            payload_slots = receiving & set().union(*(tracked_slots_by_user.get(u, set()) for u in history_users))
+            session.flush()
+            try:
+                with session.begin_nested():
+                    # Read before the insert: the app stores the items only when its newest
+                    # id for the slot is this one, which proves nothing between them is missing.
+                    prior_max_by_slot = dict(session.query(
+                        NotifiedItem.receiving_slot_id, func.max(NotifiedItem.id)
+                    ).filter(
+                        NotifiedItem.room_id == room_uuid,
+                        NotifiedItem.receiving_slot_id.in_(payload_slots)
+                    ).group_by(NotifiedItem.receiving_slot_id).all())
+                    # The same proof for hints. This poll changed none, but an earlier poll's
+                    # change may never have reached the phone; its cursor shows that.
+                    hints_through = session.query(func.max(NotifiedHint.updated_at)).filter(
+                        NotifiedHint.room_id == room_uuid
+                    ).scalar()
+            except Exception:
+                logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not read the cursors for the push's item payload.", exc_info=True)
+                history_users = set()
 
         if items_to_add:
             session.bulk_save_objects(items_to_add)
@@ -1724,6 +1781,31 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
             for slot in slots_to_clear_backfill:
                 slot.needs_backfill = False
 
+        history_by_user = {}
+        if history_users:
+            session.flush()
+            try:
+                # Read back rather than taken from items_to_add: the ids are assigned by the
+                # insert, and the stored timestamp is what /history/sync will send.
+                keys = [(item.receiving_slot_id, item.item_index) for item in items_to_add
+                        if item.receiving_slot_id in payload_slots]
+                stored_items = []
+                with session.begin_nested():
+                    for chunk in chunked_iterable(keys, 500):
+                        stored_items.extend(session.query(NotifiedItem).filter(
+                            NotifiedItem.room_id == room_uuid,
+                            tuple_(NotifiedItem.receiving_slot_id, NotifiedItem.item_index).in_(chunk)
+                        ).all())
+                history_by_user = build_history_payloads(
+                    history_users, stored_items, tracked_slots_by_user, prior_max_by_slot, room,
+                    players, checks_known, game_checksums, lookups.get('names', {}),
+                    count_updates, users_by_id, lookups.get('groups', {}), icons_by_user,
+                    hints_through
+                )
+            except Exception:
+                # Never at the cost of the push itself: without the field the app syncs.
+                logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not build the push's item payload.", exc_info=True)
+
         final_payloads = {}
         if notifications_to_send:
             devices_to_notify = session.query(Device).filter(Device.user_id.in_(notifications_to_send.keys())).all()
@@ -1752,7 +1834,8 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                     final_payloads[user_id] = {
                         'notifications': processed_notifications,
                         'tokens': user_tokens,
-                        'alias': aliases_by_user.get(user_id)
+                        'alias': aliases_by_user.get(user_id),
+                        'history': history_by_user.get(user_id)
                     }
 
         session.commit()
@@ -1928,9 +2011,11 @@ async def run_room_poll(room_info, loop):
                 if isinstance(tokens_data, dict):
                     for platform, tokens in tokens_data.items():
                         if tokens:
-                            await send_push_notifications(data['notifications'], tokens, loop, platform=platform)
+                            await send_push_notifications(data['notifications'], tokens, loop, platform=platform,
+                                                          history=data.get('history'))
                 else:
-                    await send_push_notifications(data['notifications'], tokens_data, loop, platform='android')
+                    await send_push_notifications(data['notifications'], tokens_data, loop, platform='android',
+                                                  history=data.get('history'))
 
     except Exception as e:
         logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Error in run_room_poll!", exc_info=True)
