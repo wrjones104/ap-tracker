@@ -34,7 +34,7 @@ def _build_demotion_payload(session, room, demotions):
     """
     Turns the demotions collected during a sync into the payload shape
     run_cheese_poll's push loop expects: {user_id: {'notifications': [...],
-    'tokens': {platform: [token]}}}.
+    'tokens': {platform: [token]}, 'data_only_tokens': {token}}}.
     """
     if not demotions:
         return {}
@@ -42,6 +42,7 @@ def _build_demotion_payload(session, room, demotions):
     user_ids = list(demotions.keys())
 
     tokens_by_user = {}
+    data_only_by_user = {}
     for device in session.query(Device).filter(Device.user_id.in_(user_ids)).all():
         platform = (device.platform or 'android').lower().strip()
         if platform not in ['android', 'ios']:
@@ -49,6 +50,8 @@ def _build_demotion_payload(session, room, demotions):
         tokens_by_user.setdefault(device.user_id, {}).setdefault(platform, []).append(
             device.fcm_token
         )
+        if device.data_only_push and platform == 'android':
+            data_only_by_user.setdefault(device.user_id, set()).add(device.fcm_token)
 
     aliases_by_user = {
         sub.user_id: sub.alias
@@ -81,7 +84,11 @@ def _build_demotion_payload(session, room, demotions):
                 )
             notifications.append({'title': title, 'body': body, 'type': 'conflict'})
 
-        payload[user_id] = {'notifications': notifications, 'tokens': tokens}
+        payload[user_id] = {
+            'notifications': notifications,
+            'tokens': tokens,
+            'data_only_tokens': data_only_by_user.get(user_id, set()),
+        }
 
     return payload
 

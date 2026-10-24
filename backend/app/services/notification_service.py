@@ -21,14 +21,18 @@ def map_notification_to_channel_id(notif):
     else:
         return 'channel_general'
 
-def send_fcm_notifications(tokens, notifications, platform='android'):
+def send_fcm_notifications(tokens, notifications, platform='android', data_only_tokens=None):
     """
     Dispatches FCM push notifications to a list of device tokens.
 
     Each platform is sent through its own Firebase app, so `platform` selects both
     the app and the per-platform message config. It defaults to 'android' because
     every caller predating the Cheese demotion path passes Android tokens only.
+    `data_only_tokens` are the tokens whose app takes data-only pushes (#501).
     """
+    # Here, not at the top: push_message imports map_notification_to_channel_id from this module.
+    from app.services.push_message import build_message
+
     if not tokens or not notifications:
         return 0
 
@@ -40,57 +44,13 @@ def send_fcm_notifications(tokens, notifications, platform='android'):
     if not firebase_app:
         return 0
 
+    data_only_tokens = data_only_tokens or set()
     success_count = 0
 
     for token in tokens:
         for notif in notifications:
             try:
-                channel_id = map_notification_to_channel_id(notif)
-                priority = 'high' if channel_id == 'channel_progression' else 'normal'
-                data_payload = {
-                    'notification_type': str(notif.get('type', '')),
-                    'channel_id': channel_id
-                }
-                if 'bundled_items' in notif:
-                    data_payload['bundled_items'] = notif['bundled_items']
-                if 'bundle_type' in notif:
-                    data_payload['bundle_type'] = notif['bundle_type']
-
-                android_config = None
-                apns_config = None
-                if platform == 'android':
-                    android_config = messaging.AndroidConfig(
-                        notification=messaging.AndroidNotification(
-                            channel_id=channel_id
-                        ),
-                        priority=priority
-                    )
-                else:
-                    apns_config = messaging.APNSConfig(
-                        headers={'apns-priority': '10'},
-                        payload=messaging.APNSPayload(
-                            aps=messaging.Aps(
-                                alert=messaging.ApsAlert(
-                                    title=notif['title'],
-                                    body=notif['body']
-                                ),
-                                sound='default',
-                                badge=1,
-                                content_available=True
-                            )
-                        )
-                    )
-
-                message = messaging.Message(
-                    notification=messaging.Notification(
-                        title=notif['title'],
-                        body=notif['body']
-                    ),
-                    android=android_config,
-                    apns=apns_config,
-                    data=data_payload,
-                    token=token
-                )
+                message = build_message(notif, token, platform, data_only=token in data_only_tokens)
                 messaging.send(message, app=firebase_app)
                 success_count += 1
             except Exception as e:

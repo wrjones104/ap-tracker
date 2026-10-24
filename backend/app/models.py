@@ -96,6 +96,9 @@ class Device(Base):
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     android_id = Column(String, nullable=True, index=True)
     platform = Column(String, nullable=False, default='android', server_default='android')
+    # The app on this device draws a push with no notification block itself, so it can be sent
+    # data-only and reach the app in the background too (#501). Reported at every registration.
+    data_only_push = Column(Boolean, nullable=False, default=False, server_default=sa_false())
     user = relationship("User", back_populates="devices")
     __table_args__ = (
         UniqueConstraint('user_id', 'android_id', 'platform', name='_user_android_id_uc'),

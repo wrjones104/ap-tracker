@@ -789,6 +789,21 @@ class TestPollerSyncNotifiesOnDemotion(TrackModeTestBase):
             {'android': ['tok_android'], 'ios': ['tok_ios']},
         )
 
+    def test_data_only_android_devices_are_marked(self):
+        """The demotion push goes data-only to devices whose app asked for it (#501)."""
+        user_id = self.make_user().id
+        room_id = self.make_room_with_slot_for(user_id, cheese_updated_at=NOT_FIRST_SYNC)
+        self.add_device(user_id, token='tok_new_app', platform='android')
+        self.add_device(user_id, token='tok_old_app', platform='android')
+        self.session.query(Device).filter_by(fcm_token='tok_new_app').update({'data_only_push': True})
+        self.session.commit()
+
+        payload = process_cheese_update(room_id, self._tracker_payload([
+            {'position': 1, 'claimed_by_ct_user_id': OTHER_CT_ID}
+        ]), '2026-06-23T10:00:00Z')
+
+        self.assertEqual(payload[user_id]['data_only_tokens'], {'tok_new_app'})
+
     def test_watch_slot_never_produces_a_push(self):
         user_id = self.make_user().id
         room_id = self.make_room_with_slot_for(
