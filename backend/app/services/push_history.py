@@ -14,6 +14,13 @@ the next ones; when they do not, the app falls back to the ordinary sync. The pa
 therefore all-or-nothing per user: it lists every new item of every tracked slot of theirs in
 the room, not just the ones that were announced, or none at all.
 
+Hints need the same proof, because the sync this replaces also carried them. A poll that
+changed the room's hints never carries the payload, but an earlier poll's change may not have
+reached the phone (its sync failed, say). `hints_through` is the room's newest hint `updated_at`,
+in the format /history/sync uses for hint cursors. The app syncs when it has hints to catch up:
+`hints_through` is set, and its own cursor for the room is missing or earlier. Earlier, not
+different: the server can hand out "now" as a cursor, which is later than any hint.
+
 It is withheld, and the app syncs as before, whenever a sync would bring more than items:
 - the room's hints changed this poll (the sync also carries hints),
 - the user's batch holds anything but item pushes (finishes, hints, milestones),
@@ -64,7 +71,8 @@ def _player_row(player, slot_id, checks_known):
 
 def build_history_payloads(user_ids, items, tracked_slots_by_user, prior_max_by_slot, room,
                            players, checks_known, game_checksums, name_lookup,
-                           item_counts, users_by_id, group_members_lookup, icons_by_user):
+                           item_counts, users_by_id, group_members_lookup, icons_by_user,
+                           hints_through=None):
     """
     The `history` field for each user, as a JSON string, keyed by user id.
 
@@ -72,7 +80,8 @@ def build_history_payloads(user_ids, items, tracked_slots_by_user, prior_max_by_
     {slot_id: highest id stored before this poll}, absent for a slot that had none.
     `item_counts` is {(room_uuid, slot_id, item_id): total after this poll}, which is what
     /history/sync would report as receivedCount right now. `icons_by_user` is each user's
-    icon for the room, which the app stores on every item.
+    icon for the room, which the app stores on every item. `hints_through` is the room's newest
+    hint `updated_at` (see the module docstring), or None for a room with no hints.
 
     Field for field, each item matches what /history/sync would send for it, so a row stored
     from a push and the same row downloaded later are identical.
@@ -137,6 +146,7 @@ def build_history_payloads(user_ids, items, tracked_slots_by_user, prior_max_by_
             'tracker': room.tracker_id,
             'host': room.hostname,
             'icon': icons_by_user.get(user_id),
+            'hints_through': format_iso_z(hints_through),
             'slots': [[slot_id, prior_max_by_slot.get(slot_id)] for slot_id in slot_ids],
             'players': {
                 str(slot_id): _player_row(player_map.get(slot_id), slot_id, checks_known)

@@ -178,7 +178,7 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
             if fits_in_push(content['title'], content['body'], data_payload, history):
                 data_payload['history'] = history
             else:
-                logging.info(f"[NOTIFIER] Item payload ({len(history)} bytes) does not fit the push; the app will sync.")
+                logging.info(f"[NOTIFIER] Item payload ({len(history.encode('utf-8'))} bytes) does not fit the push; the app will sync.")
 
         for token in device_tokens:
             android_config = None
@@ -1716,21 +1716,38 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
 
         # Users whose push can carry its items, so their phones need not sync (#416). Not when
         # the room's hints changed: the sync carries those too, so it still has to run.
+        #
+        # Its queries run in savepoints. On Postgres a failed statement aborts the whole
+        # transaction, so without one an error here would lose the poll's items and its pushes,
+        # not just the payload. The flush first keeps a failure of the poll's own writes out of
+        # the guard, where it fails the poll as it always has.
         history_users = set()
         prior_max_by_slot = {}
+        hints_through = None
         if items_to_add and has_item_history and not hints_to_add and not just_found_hints:
             history_users = history_push_users(notifications_to_send)
         if history_users:
-            # Read before the insert: the app stores the items only when its newest id for the
-            # slot is this one, which proves nothing between them is missing.
             receiving = {item.receiving_slot_id for item in items_to_add}
             payload_slots = receiving & set().union(*(tracked_slots_by_user.get(u, set()) for u in history_users))
-            prior_max_by_slot = dict(session.query(
-                NotifiedItem.receiving_slot_id, func.max(NotifiedItem.id)
-            ).filter(
-                NotifiedItem.room_id == room_uuid,
-                NotifiedItem.receiving_slot_id.in_(payload_slots)
-            ).group_by(NotifiedItem.receiving_slot_id).all())
+            session.flush()
+            try:
+                with session.begin_nested():
+                    # Read before the insert: the app stores the items only when its newest
+                    # id for the slot is this one, which proves nothing between them is missing.
+                    prior_max_by_slot = dict(session.query(
+                        NotifiedItem.receiving_slot_id, func.max(NotifiedItem.id)
+                    ).filter(
+                        NotifiedItem.room_id == room_uuid,
+                        NotifiedItem.receiving_slot_id.in_(payload_slots)
+                    ).group_by(NotifiedItem.receiving_slot_id).all())
+                    # The same proof for hints. This poll changed none, but an earlier poll's
+                    # change may never have reached the phone; its cursor shows that.
+                    hints_through = session.query(func.max(NotifiedHint.updated_at)).filter(
+                        NotifiedHint.room_id == room_uuid
+                    ).scalar()
+            except Exception:
+                logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not read the cursors for the push's item payload.", exc_info=True)
+                history_users = set()
 
         if items_to_add:
             session.bulk_save_objects(items_to_add)
@@ -1766,21 +1783,24 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
 
         history_by_user = {}
         if history_users:
+            session.flush()
             try:
                 # Read back rather than taken from items_to_add: the ids are assigned by the
                 # insert, and the stored timestamp is what /history/sync will send.
                 keys = [(item.receiving_slot_id, item.item_index) for item in items_to_add
                         if item.receiving_slot_id in payload_slots]
                 stored_items = []
-                for chunk in chunked_iterable(keys, 500):
-                    stored_items.extend(session.query(NotifiedItem).filter(
-                        NotifiedItem.room_id == room_uuid,
-                        tuple_(NotifiedItem.receiving_slot_id, NotifiedItem.item_index).in_(chunk)
-                    ).all())
+                with session.begin_nested():
+                    for chunk in chunked_iterable(keys, 500):
+                        stored_items.extend(session.query(NotifiedItem).filter(
+                            NotifiedItem.room_id == room_uuid,
+                            tuple_(NotifiedItem.receiving_slot_id, NotifiedItem.item_index).in_(chunk)
+                        ).all())
                 history_by_user = build_history_payloads(
                     history_users, stored_items, tracked_slots_by_user, prior_max_by_slot, room,
                     players, checks_known, game_checksums, lookups.get('names', {}),
-                    count_updates, users_by_id, lookups.get('groups', {}), icons_by_user
+                    count_updates, users_by_id, lookups.get('groups', {}), icons_by_user,
+                    hints_through
                 )
             except Exception:
                 # Never at the cost of the push itself: without the field the app syncs.

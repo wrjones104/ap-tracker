@@ -11,7 +11,10 @@ import json
 import os
 import sys
 import unittest
+from datetime import datetime
 from unittest.mock import patch
+
+from sqlalchemy import event
 
 TEST_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test_push_history.db'))
 os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
@@ -157,12 +160,41 @@ class PushHistoryTestCase(unittest.TestCase):
         }
         return db_process_poll_data(self.room_db_id, ROOM_UUID, tracker_data, room_data) or {}
 
-    def _history(self, payloads):
-        raw = payloads[self.user_id]['history']
+    def _history(self, payloads, user_id=None):
+        raw = payloads[user_id or self.user_id]['history']
         self.assertIsNotNone(raw, "expected the push to carry its items")
         return json.loads(raw)
 
-    def _sync(self, watermarks):
+    def _add_user(self, name, slots):
+        """Another subscriber to the room, tracking `slots`, with an Android device."""
+        session = Session()
+        try:
+            user = User(discord_id=name, discord_username=name)
+            session.add(user)
+            session.flush()
+            session.add(UserRoomSubscription(user_id=user.id, room_id=self.room_db_id, alias=name))
+            session.flush()
+            for slot in slots:
+                session.add(UserTrackedSlot(user_id=user.id, room_id=self.room_db_id, slot_id=slot,
+                                            needs_backfill=False))
+            session.add(Device(user_id=user.id, fcm_token=f'tok_{name}', platform='android'))
+            session.commit()
+            return user.id
+        finally:
+            Session.remove()
+
+    def _add_hint(self, updated_at, is_found=False):
+        """A hint already stored for the room: Link's Heart Container, at Ridley's Tourian Gate."""
+        session = Session()
+        try:
+            session.add(NotifiedHint(
+                room_id=ROOM_UUID, item_owner_id=1, location_owner_id=3, item_id=103, location_id=9003,
+                is_found=is_found, item_flags=PROGRESSION, timestamp=updated_at, updated_at=updated_at))
+            session.commit()
+        finally:
+            Session.remove()
+
+    def _sync_response(self, watermarks):
         response = self.client.post(
             '/history/sync',
             json={'items': [
@@ -172,7 +204,10 @@ class PushHistoryTestCase(unittest.TestCase):
             headers={'Authorization': f'Bearer {self.token}'},
         )
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
-        return response.get_json()['new_items']
+        return response.get_json()
+
+    def _sync(self, watermarks):
+        return self._sync_response(watermarks)['new_items']
 
     @staticmethod
     def _as_sync_rows(history):
@@ -251,15 +286,38 @@ class TestPushCarriesItems(PushHistoryTestCase):
         self.assertEqual(history['slots'], [[1, self.slot1_prior_max], [2, None]])
         self.assertEqual(sorted(i[1] for i in history['items']), [1, 2])
 
-    def test_untracked_slots_are_left_out(self):
+    def test_each_user_gets_only_their_own_slots(self):
+        # Slot 3 is tracked, by someone else, so its item is stored and reaches the builder.
+        other_id = self._add_user('user_b', slots=[3])
+
         payloads = self._poll(
             slot1_new=[(102, 9002, 3, PROGRESSION)],
             slot3=[(201, 9001, 2, PROGRESSION)],
         )
 
+        mine = self._history(payloads)
+        self.assertEqual([s[0] for s in mine['slots']], [1])
+        self.assertTrue(all(i[1] == 1 for i in mine['items']))
+        theirs = self._history(payloads, other_id)
+        self.assertEqual([s[0] for s in theirs['slots']], [3])
+        self.assertTrue(all(i[1] == 3 for i in theirs['items']))
+
+    def test_hints_through_matches_the_syncs_hint_cursor(self):
+        # The app compares it with the cursor /history/sync gave it, so both must be the same
+        # value in the same format.
+        self._add_hint(datetime(2026, 10, 20, 9, 30, 15, 123456))
+
+        payloads = self._poll(slot1_new=[(102, 9002, 3, PROGRESSION)])
+
         history = self._history(payloads)
-        self.assertEqual([s[0] for s in history['slots']], [1])
-        self.assertTrue(all(i[1] == 1 for i in history['items']))
+        cursor = self._sync_response({1: None, 2: None})['hint_watermarks'][str(self.room_db_id)]
+        self.assertEqual(history['hints_through'], '2026-10-20T09:30:15.123456Z')
+        self.assertEqual(history['hints_through'], cursor)
+
+    def test_hints_through_is_null_for_a_room_without_hints(self):
+        payloads = self._poll(slot1_new=[(102, 9002, 3, PROGRESSION)])
+
+        self.assertIsNone(self._history(payloads)['hints_through'])
 
     def test_ignore_rules_flag_items_as_the_sync_would(self):
         session = Session()
@@ -288,6 +346,18 @@ class TestPushWithholdsItems(PushHistoryTestCase):
         self.assertIn(self.user_id, payloads)
         self.assertIsNone(payloads[self.user_id]['history'])
 
+    def test_withheld_when_a_stored_hint_was_just_found(self):
+        # A found hint sends no push of its own, but the phone still needs the change.
+        self._add_hint(datetime(2026, 10, 20, 9, 30), is_found=False)
+
+        payloads = self._poll(
+            slot1_new=[(102, 9002, 3, PROGRESSION)],
+            hints=[(1, 3, 9003, 103, True, '', PROGRESSION)],
+        )
+
+        self.assertEqual([n['type'] for n in payloads[self.user_id]['notifications']], ['item_progression'])
+        self.assertIsNone(payloads[self.user_id]['history'])
+
     def test_withheld_when_the_batch_holds_more_than_items(self):
         self.assertEqual(history_push_users({
             1: [{'type': 'item_progression'}, {'type': 'player_finish'}],
@@ -302,6 +372,54 @@ class TestPushWithholdsItems(PushHistoryTestCase):
         payloads = self._poll(slot2=[(201, 9001, 3, FILLER)])
 
         self.assertNotIn(self.user_id, payloads)
+
+
+class TestPayloadFailuresKeepThePoll(PushHistoryTestCase):
+    """
+    A database error while building the payload costs the payload, never the poll.
+
+    The failing statement is real SQL the database rejects. SQLite carries on after that anyway,
+    so the tests also check that the error was rolled back to a savepoint: that is what keeps
+    Postgres, which aborts the whole transaction, from losing the items and the push.
+    """
+
+    def _poll_with_broken_query(self, marker, broken):
+        statements = []
+
+        def break_it(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+            if marker in statement:
+                statement = statement.replace(marker, broken)
+            return statement, parameters
+
+        event.listen(engine, 'before_cursor_execute', break_it, retval=True)
+        try:
+            payloads = self._poll(slot1_new=[(102, 9002, 3, PROGRESSION)])
+        finally:
+            event.remove(engine, 'before_cursor_execute', break_it)
+        return payloads, statements
+
+    def _assert_poll_survived(self, payloads, statements):
+        self.assertTrue(any(s.startswith('ROLLBACK TO SAVEPOINT') for s in statements))
+        # The push still goes out, without the field, so the app syncs.
+        self.assertIsNone(payloads[self.user_id]['history'])
+        self.assertEqual([n['type'] for n in payloads[self.user_id]['notifications']], ['item_progression'])
+        # And the item is stored.
+        session = Session()
+        try:
+            self.assertEqual(session.query(NotifiedItem).filter_by(receiving_slot_id=1).count(), 4)
+        finally:
+            Session.remove()
+
+    def test_a_failed_cursor_read(self):
+        payloads, statements = self._poll_with_broken_query(
+            'max(notified_items.id)', 'max(notified_items.no_such_column)')
+        self._assert_poll_survived(payloads, statements)
+
+    def test_a_failed_read_back(self):
+        payloads, statements = self._poll_with_broken_query(
+            'notified_items.item_index) IN', 'notified_items.no_such_column) IN')
+        self._assert_poll_survived(payloads, statements)
 
 
 class TestSendingThePayload(unittest.TestCase):
