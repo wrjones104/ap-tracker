@@ -1146,6 +1146,43 @@
   ],
   "server_releases": [
     {
+      "version": "1.17.0",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-25",
+      "title": "Big Releases Get Through",
+      "highlights": [
+        {
+          "title": "Big Releases Get Through",
+          "description": "A notification for a very large batch of items, like a big release into your slot, now arrives with a shortened list instead of never showing up."
+        },
+        {
+          "title": "Ready for Snooze Everywhere",
+          "description": "Notifications can now carry their new items, ready for the next app update to show Snooze buttons and update widgets even while the app is closed."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Ready for Snooze Everywhere",
+            "description": "Notifications can carry their new items, and phones can ask for notifications they draw themselves; the next app update uses both. PRs #500, #502."
+          }
+        ],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Big Releases Get Through",
+            "description": "Notifications for roughly 130 or more items were refused and never arrived; the item list is now shortened to fit. PR #502."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Added\n- Item pushes carry a compact `history` field: the poll's new items plus each slot's previous newest id, so an app can store them without calling `/history/sync` (#416). PR #500.\n- `devices.data_only_push` (migration `d8e3f1a6b2c4`): `POST /devices` records `data_only_push: true`, and those Android devices get data-only pushes (#501). PR #502.\n- A `[PUSH_PAYLOAD]` poller log line per item push: items carried, or withheld and why. PR #502.\n\n### Changed\n- Every push is built in `services/push_message.py`. `DATA_ONLY_PUSH=0` in `backend/.env` sends every device the notification message again. PR #502.\n\n### Fixed\n- Combined pushes of about 130+ items exceeded FCM's 4 KB limit and were dropped; the bundle list is now trimmed to fit, and every refused send is logged (#499). PR #502.\n\n### Compatibility\n- Additive migration (runs on boot); no API removed. Installed apps ignore the new fields and keep today's pushes; the next app release uses them."
+      }
+    },
+    {
       "version": "1.16.2",
       "component": "server",
       "component_label": "Server",

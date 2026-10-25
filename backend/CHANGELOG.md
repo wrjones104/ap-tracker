@@ -10,6 +10,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.17.0] - 2026-10-25
+
+_Big Releases Get Through_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - Item pushes carry a compact `history` field: the poll's new items plus each slot's previous newest id, so an app can store them without calling `/history/sync` (#416). PR #500.
+> - `devices.data_only_push` (migration `d8e3f1a6b2c4`): `POST /devices` records `data_only_push: true`, and those Android devices get data-only pushes (#501). PR #502.
+> - A `[PUSH_PAYLOAD]` poller log line per item push: items carried, or withheld and why. PR #502.
+>
+> ### Changed
+> - Every push is built in `services/push_message.py`. `DATA_ONLY_PUSH=0` in `backend/.env` sends every device the notification message again. PR #502.
+>
+> ### Fixed
+> - Combined pushes of about 130+ items exceeded FCM's 4 KB limit and were dropped; the bundle list is now trimmed to fit, and every refused send is logged (#499). PR #502.
+>
+> ### Compatibility
+> - Additive migration (runs on boot); no API removed. Installed apps ignore the new fields and keep today's pushes; the next app release uses them.
+> ```
+
+### Added
+- **Ready for Snooze Everywhere**: Notifications can carry their new items, and phones can ask for notifications they draw themselves; the next app update uses both. PRs #500, #502.
+
+### Fixed
+- **Big Releases Get Through**: Notifications for roughly 130 or more items were refused and never arrived; the item list is now shortened to fit. PR #502.
+
+---
+
 ## [1.16.2] - 2026-10-21
 
 _No Pause After Restarts_
