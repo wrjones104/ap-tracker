@@ -94,8 +94,9 @@ def register_device(current_user):
         platform = 'android'
     # Whether this app draws a data-only push itself (#501). Written at every registration, so an
     # older app that never sends it (reinstalled, or restored over a newer one) is set back to
-    # the pushes it can show. Anything but an explicit true is false.
-    data_only_push = data.get('data_only_push') is True
+    # the pushes it can show. Anything but an explicit true is false, and only Android can take
+    # one: the Cheese conflict push builds every device's message in the Android shape.
+    data_only_push = platform == 'android' and data.get('data_only_push') is True
 
     if not isinstance(fcm_token, str) or not fcm_token.strip():
         return jsonify({'error': 'Missing fcm_token'}), 400

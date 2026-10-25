@@ -128,6 +128,69 @@ class TestSizes(unittest.TestCase):
         self.assertNotIn('history', build_message(ITEM, 'tok', 'ios', history='{"v":1}').data)
 
 
+class TestTrimSearch(unittest.TestCase):
+    """The binary search must keep exactly what walking down one entry at a time kept."""
+
+    @staticmethod
+    def _walk_down(entries, title, body, data):
+        def fits(candidate):
+            return message_size(title, body, dict(data, bundled_items=json.dumps(candidate))) \
+                <= FCM_MESSAGE_BUDGET_BYTES
+        if fits(entries):
+            return entries
+        for kept in range(len(entries) - 1, -1, -1):
+            candidate = entries[:kept] + [f"…and {len(entries) - kept} more"]
+            if fits(candidate):
+                return candidate
+        return [f"…and {len(entries)} more"]
+
+    def test_same_result_as_walking_down(self):
+        from app.services.push_message import _bundle_that_fits
+        data = {'notification_type': 'item_progression', 'channel_id': 'channel_progression',
+                'bundle_type': 'item_progression'}
+        # The walk-down reference is the slow code this replaced, so the sizes stay modest.
+        for count in (0, 1, 50, 99, 100, 101, 150, 400, 600):
+            for width in (5, 30, 120, 4000):
+                with self.subTest(count=count, width=width):
+                    entries = [f"{i:04d}" + 'x' * width for i in range(count)]
+                    self.assertEqual(_bundle_that_fits(entries, 'title', 'body', data),
+                                     self._walk_down(entries, 'title', 'body', data))
+
+    def test_a_release_sized_bundle_is_quick(self):
+        import time
+        content = _bundle(5000)
+        start = time.perf_counter()
+        build_data(content)
+        self.assertLess(time.perf_counter() - start, 0.1)
+
+
+class TestOneBlockPerShape(unittest.TestCase):
+
+    def test_the_data_block_is_built_once_per_shape(self):
+        prepared = {}
+        with patch('app.services.push_message.build_data', wraps=build_data) as built:
+            messages = [build_message(_bundle(200), f'tok{i}', 'android', data_only=(i % 2 == 0),
+                                      prepared=prepared) for i in range(6)]
+
+        self.assertEqual(built.call_count, 2)
+        self.assertEqual(len({m.data['bundled_items'] for m in messages}), 1)
+        # Each message holds its own dict.
+        self.assertIsNot(messages[0].data, messages[2].data)
+
+    @patch('app.services.notification_service.messaging.send')
+    @patch('app.services.notification_service.get_firebase_app')
+    def test_send_fcm_notifications_sends_each_device_its_shape(self, _app, send):
+        from app.services.notification_service import send_fcm_notifications
+
+        sent = send_fcm_notifications(['new-app', 'old-app'], [ITEM], data_only_tokens={'new-app'})
+
+        self.assertEqual(sent, 2)
+        by_token = {c.args[0].token: c.args[0] for c in send.call_args_list}
+        self.assertIsNone(by_token['new-app'].notification)
+        self.assertEqual(by_token['new-app'].data['title'], ITEM['title'])
+        self.assertIsNotNone(by_token['old-app'].notification)
+
+
 class TestFailureLogging(unittest.TestCase):
 
     def test_every_refusal_is_logged_by_reason(self):

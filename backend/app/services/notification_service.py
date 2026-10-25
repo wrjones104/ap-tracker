@@ -47,10 +47,12 @@ def send_fcm_notifications(tokens, notifications, platform='android', data_only_
     data_only_tokens = data_only_tokens or set()
     success_count = 0
 
+    prepared = [{} for _ in notifications]
     for token in tokens:
-        for notif in notifications:
+        for index, notif in enumerate(notifications):
             try:
-                message = build_message(notif, token, platform, data_only=token in data_only_tokens)
+                message = build_message(notif, token, platform, data_only=token in data_only_tokens,
+                                        prepared=prepared[index])
                 messaging.send(message, app=firebase_app)
                 success_count += 1
             except Exception as e:

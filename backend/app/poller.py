@@ -36,7 +36,7 @@ from app.services.filtering_service import fetch_group_members_lookup, evaluate_
 from app.services import milestone_template_service
 from app.services.retention_service import run_all_retention_tasks
 from app.services.push_history import history_push_users, build_history_payloads
-from app.services.push_message import build_message, log_failed_sends, history_fits
+from app.services.push_message import build_message, log_failed_sends, history_fits, data_only_push_enabled
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -163,9 +163,11 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
         except Exception as e:
             logging.error(f"[NOTIFIER] Error creating log message: {e}")
 
+        prepared = {}
         for token in device_tokens:
             messages.append(build_message(
-                content, token, platform, data_only=token in data_only_tokens, history=history
+                content, token, platform, data_only=token in data_only_tokens, history=history,
+                prepared=prepared
             ))
 
     if not messages: return
@@ -213,12 +215,18 @@ def _log_payload_coverage(db_id, user_id, history, notifications, user_tokens, d
     pushes. Returns the payload to send: None once it fits none of the batch's messages.
 
     Reasons: hints_changed, mixed_batch (finishes, hints or milestones in the batch),
-    too_large, cursor_error, build_error.
+    too_large, cursor_error, build_error, and no_items (eligible, yet none of the poll's new
+    items were for this user's slots; should not happen, so worth a look if it shows up).
+
+    `data_only_devices` counts devices that registered for data-only pushes; `switch=off` says
+    the kill switch is sending them the notification message anyway.
     """
     android_devices = len(user_tokens.get('android') or [])
     if not android_devices:
         return history
     devices = f"data_only_devices={len(data_only_tokens)}/{android_devices}"
+    if not data_only_push_enabled():
+        devices += " switch=off"
     if history:
         fitting = sum(1 for n in notifications if history_fits(n, history))
         if fitting:
@@ -1822,13 +1830,19 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                     )
 
                     history = history_by_user.get(user_id)
+                    # The raw types: combining relabels a bundle of milestones item_progression.
                     if any(n.get('type', '').startswith('item_') and n.get('type') != 'item_milestone'
-                           for n in processed_notifications):
-                        history = _log_payload_coverage(
-                            db_id, user_id, history, processed_notifications, user_tokens,
-                            data_only_by_user.get(user_id, set()),
-                            payload_withheld or ('mixed_batch' if user_id not in eligible_users else 'no_items')
-                        )
+                           for n in raw_notifs):
+                        try:
+                            history = _log_payload_coverage(
+                                db_id, user_id, history, processed_notifications, user_tokens,
+                                data_only_by_user.get(user_id, set()),
+                                payload_withheld or ('mixed_batch' if user_id not in eligible_users else 'no_items')
+                            )
+                        except Exception:
+                            # A log line, never at the cost of the poll's commit. The sender still
+                            # checks the payload fits each message.
+                            logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not log the push's payload coverage.", exc_info=True)
 
                     final_payloads[user_id] = {
                         'notifications': processed_notifications,

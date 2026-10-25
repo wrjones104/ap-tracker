@@ -345,6 +345,16 @@ class DataOnlyPushFlagTest(RegisterDeviceTestBase):
 
         self.assertEqual(self.flags(), [('phone-1', False)])
 
+    def test_only_android_can_take_it(self):
+        resp = self.app.test_client().post(
+            '/devices',
+            json={'fcm_token': TOKEN, 'platform': 'ios', 'device_id': 'phone-1', 'data_only_push': True},
+            headers=self.auth(self.alice),
+        )
+
+        self.assertEqual(resp.status_code, 201, resp.get_json())
+        self.assertEqual(self.flags(), [('phone-1', False)])
+
     def test_only_an_explicit_true_counts(self):
         self.register_with(self.alice, TOKEN, 'phone-1', data_only_push='true')
 

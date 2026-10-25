@@ -8,6 +8,7 @@ These run a whole poll through db_process_poll_data, then check the payload agai
 """
 import asyncio
 import json
+import logging
 import os
 import sys
 import unittest
@@ -459,6 +460,45 @@ class TestCoverageLog(PushHistoryTestCase):
         self.assertIsNone(sent)
         self.assertIn('user=7 withheld reason=too_large', self._payload_lines(logs)[0])
 
+    def test_a_failing_coverage_log_costs_only_the_log(self):
+        with patch('app.poller._log_payload_coverage', side_effect=RuntimeError('boom')), \
+                self.assertLogs(level='ERROR') as logs:
+            payloads = self._poll(slot1_new=[(102, 9002, 3, PROGRESSION)])
+
+        self.assertTrue(any('Could not log the push' in line for line in logs.output))
+        self.assertEqual([n['type'] for n in payloads[self.user_id]['notifications']], ['item_progression'])
+        session = Session()
+        try:
+            self.assertEqual(session.query(NotifiedItem).filter_by(receiving_slot_id=1).count(), 4)
+        finally:
+            Session.remove()
+
+    def test_a_combined_batch_of_milestones_is_not_counted_as_item_pushes(self):
+        # Combining relabels a bundle of milestones item_progression; the raw types decide.
+        session = Session()
+        try:
+            session.query(User).filter_by(id=self.user_id).update({'combine_notifications_default': True})
+            session.commit()
+        finally:
+            Session.remove()
+        milestone = {'title': 'Boss Keys - [Mine]', 'body': 'Link: 2× Boss Key', 'type': 'item_milestone',
+                     'item_context': {'item_name': 'Boss Keys', 'alias': None, 'original': 'Link'}}
+        milestones = {self.user_id: [milestone, dict(milestone, title='Maps - [Mine]')]}
+
+        with patch('app.poller._resolve_names_and_notify', return_value=milestones), \
+                self.assertLogs(level='INFO') as logs:
+            logging.info("poll starts")
+            payloads = self._poll(slot1_new=[(102, 9002, 3, PROGRESSION)])
+
+        self.assertEqual([n['type'] for n in payloads[self.user_id]['notifications']], ['item_progression'])
+        self.assertEqual(self._payload_lines(logs), [])
+
+    def test_the_line_says_when_the_kill_switch_is_off(self):
+        with patch.dict(os.environ, {'DATA_ONLY_PUSH': 'off'}), self.assertLogs(level='INFO') as logs:
+            self._poll(slot1_new=[(102, 9002, 3, PROGRESSION)])
+
+        self.assertIn('data_only_devices=0/1 switch=off', self._payload_lines(logs)[0])
+
     def test_data_only_devices_reach_the_push_and_the_log(self):
         session = Session()
         try:
@@ -488,6 +528,24 @@ class TestSendingThePayload(unittest.TestCase):
         finally:
             loop.close()
         return send_each.call_args[0][0]
+
+    def test_the_cheese_poll_passes_data_only_tokens_on(self):
+        from unittest.mock import AsyncMock
+        from app.poller import run_cheese_poll
+        payload = {7: {'notifications': [{'title': 'Slot Released', 'body': 'b', 'type': 'conflict'}],
+                       'tokens': {'android': ['new-app', 'old-app']}, 'data_only_tokens': {'new-app'}}}
+
+        loop = asyncio.new_event_loop()
+        try:
+            with patch('app.poller.fetch_cheese_tracker', new=AsyncMock(return_value=({'updated_at': 'x'}, 200, True))), \
+                    patch('app.poller.process_cheese_update', return_value=payload), \
+                    patch('app.poller.send_push_notifications', new=AsyncMock()) as send:
+                loop.run_until_complete(run_cheese_poll({'db_id': 1, 'cheese_tracker_id': 'ct'}, loop))
+        finally:
+            loop.close()
+
+        self.assertEqual(send.await_args.kwargs['data_only_tokens'], {'new-app'})
+        self.assertEqual(send.await_args.kwargs['platform'], 'android')
 
     def test_each_device_gets_the_shape_it_registered(self):
         sent = self._send([{'title': 'Sword', 'body': 'Got sword', 'type': 'item_progression'}],

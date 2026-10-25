@@ -841,6 +841,16 @@ class TestManualRefreshSendsDemotionPushes(unittest.TestCase):
         self.assertEqual(by_platform, {'android': ['tok_a'], 'ios': ['tok_i']})
 
     @patch('app.services.notification_service.send_fcm_notifications')
+    def test_data_only_tokens_are_passed_on(self, mock_send):
+        from app.api_cheese import _send_demotion_pushes
+        payload = self._payload({'android': ['new-app', 'old-app']})
+        payload[7]['data_only_tokens'] = {'new-app'}
+
+        _send_demotion_pushes(payload)
+
+        self.assertEqual(mock_send.call_args.kwargs['data_only_tokens'], {'new-app'})
+
+    @patch('app.services.notification_service.send_fcm_notifications')
     def test_nothing_to_send_makes_no_calls(self, mock_send):
         from app.api_cheese import _send_demotion_pushes
 

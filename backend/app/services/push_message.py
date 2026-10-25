@@ -52,23 +52,27 @@ def _bundle_that_fits(entries, title, body, data):
 
     if fits(entries):
         return entries
-    kept = len(entries)
-    while kept > 0:
-        kept -= 1
-        candidate = entries[:kept] + [f"…and {len(entries) - kept} more"]
-        if fits(candidate):
-            return candidate
-    return [f"…and {len(entries)} more"]
+    # A longer head never fits better, so search for it. Walking down one entry at a time
+    # re-serialised the list per entry dropped: a second or more for a release-sized bundle,
+    # on the poller's event loop.
+    lo, hi = 0, len(entries) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits(entries[:mid] + [f"…and {len(entries) - mid} more"]):
+            lo = mid
+        else:
+            hi = mid - 1
+    return entries[:lo] + [f"…and {len(entries) - lo} more"]
 
 
 def build_data(content, platform='android', data_only=False, history=None,
-               channel_id=None, priority=None):
+               channel_id=None, log_trim=True):
     """
     The data block for one push, and whether the item payload made it in.
 
     `content` is the internal notification dict: title, body, type, and optionally
-    bundled_items (a JSON list of strings) and bundle_type. `channel_id` and `priority` override
-    what the type implies, for pushes that are not item events (conflicts, the test push).
+    bundled_items (a JSON list of strings) and bundle_type. `channel_id` overrides what the
+    type implies, for pushes that are not item events (conflicts, the test push).
     """
     channel_id = channel_id or map_notification_to_channel_id(content)
     title, body = content.get('title') or '', content.get('body') or ''
@@ -92,7 +96,7 @@ def build_data(content, platform='android', data_only=False, history=None,
             entries = None
         if isinstance(entries, list):
             kept = _bundle_that_fits(entries, title, body, data)
-            if kept is not entries:
+            if kept is not entries and log_trim:
                 logging.info(f"[NOTIFIER] Bundle of {len(entries)} trimmed to fit the push (#499).")
             bundled = json.dumps(kept)
         data['bundled_items'] = bundled
@@ -110,20 +114,32 @@ def history_fits(content, history):
     Whether the item payload fits on this push, measured on the data-only shape: it carries
     the same text plus the `title` and `body` key names, so it is never the smaller of the two.
     """
-    return build_data(content, 'android', data_only=True, history=history)[1]
+    return build_data(content, 'android', data_only=True, history=history, log_trim=False)[1]
 
 
 def build_message(content, token, platform='android', data_only=False, history=None,
-                  channel_id=None, priority=None):
+                  channel_id=None, priority=None, prepared=None):
     """
     One FCM message for one device. `data_only` is what the device registered; the kill switch
     and the platform decide whether it is honoured.
+
+    `prepared`, when given, caches the data block per shape: a caller sending the same push
+    to many devices passes one dict per push, and each block is built (and its bundle trimmed)
+    once rather than once per device.
     """
     platform = (platform or 'android').lower().strip()
     data_only = bool(data_only) and platform == 'android' and data_only_push_enabled()
     channel_id = channel_id or map_notification_to_channel_id(content)
     priority = priority or ('high' if channel_id == 'channel_progression' else 'normal')
-    data, _ = build_data(content, platform, data_only, history, channel_id, priority)
+    shape = (platform, data_only)
+    if prepared is not None and shape in prepared:
+        data = prepared[shape]
+    else:
+        data, _ = build_data(content, platform, data_only, history, channel_id)
+        if prepared is not None:
+            prepared[shape] = data
+    # Each message gets its own copy: firebase_admin keeps a reference to the dict.
+    data = dict(data)
     title, body = content.get('title') or '', content.get('body') or ''
 
     if data_only:
