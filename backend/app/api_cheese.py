@@ -1169,8 +1169,9 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
             if notifications_outbox:
                 try:
                     from firebase_admin import messaging
+                    from app.services.push_message import log_failed_sends
                     for tokens, messages in notifications_outbox:
-                        messaging.send_each(messages)
+                        log_failed_sends(messaging.send_each(messages).responses, "Cheese conflict push")
                         logging.info(f"[CHEESE_DEBUG] Sent collision push notification after commit to user {user_id}")
                 except Exception as p_err:
                     logging.error(f"[CHEESE_DEBUG] Failed to send collision push after commit: {p_err}")
@@ -1592,35 +1593,28 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                             from firebase_admin import messaging
                             from .models import Device
                             from . import get_firebase_app
-                            
+                            from app.services.push_message import build_message, log_failed_sends
+
                             get_firebase_app()
                             devices = session.query(Device).filter_by(user_id=current_user_id_for_thread).all()
                             if devices:
                                 tokens = [d.fcm_token for d in devices]
+                                content = {
+                                    'title': "Slot Already Claimed",
+                                    'body': f"'{player_name}' in '{room_alias}' is claimed by someone else on Cheese Tracker. Switched to Watching — you'll still get alerts.",
+                                    'type': 'conflict',
+                                }
+                                # Android shape for every device, as before: this goes through
+                                # the default Firebase app.
                                 messages = [
-                                    messaging.Message(
-                                        notification=messaging.Notification(
-                                            title="Slot Already Claimed",
-                                            body=f"'{player_name}' in '{room_alias}' is claimed by someone else on Cheese Tracker. Switched to Watching — you'll still get alerts."
-                                        ),
-                                        token=token,
-                                        android=messaging.AndroidConfig(
-                                            priority='high',
-                                            notification=messaging.AndroidNotification(
-                                                channel_id='channel_general'
-                                            )
-                                        ),
-                                        data={
-                                            'notification_type': 'conflict',
-                                            'channel_id': 'channel_general'
-                                        }
-                                    )
-                                    for token in tokens
+                                    build_message(content, d.fcm_token, 'android', data_only=d.data_only_push,
+                                                  channel_id='channel_general', priority='high')
+                                    for d in devices
                                 ]
                                 if notifications_outbox is not None:
                                     notifications_outbox.append((tokens, messages))
                                 else:
-                                    messaging.send_each(messages)
+                                    log_failed_sends(messaging.send_each(messages).responses, "Cheese conflict push")
                                     logging.info(f"[CHEESE_DEBUG] Sent collision push notification immediately to user {current_user_id_for_thread}")
                         except Exception as p_err:
                             logging.error(f"[CHEESE_DEBUG] Failed to queue collision push: {p_err}")
@@ -1977,7 +1971,8 @@ def _send_demotion_pushes(payload):
                 logging.info(
                     f"[CHEESE_NOTIFY] Refresh sending {len(notifications)} to user {user_id} ({platform})"
                 )
-                send_fcm_notifications(tokens, notifications, platform=platform)
+                send_fcm_notifications(tokens, notifications, platform=platform,
+                                       data_only_tokens=entry.get('data_only_tokens'))
             except Exception as e:
                 logging.error(
                     f"[CHEESE_NOTIFY] Push failed for user {user_id} ({platform}): {e}", exc_info=True

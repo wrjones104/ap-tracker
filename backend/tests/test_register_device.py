@@ -306,5 +306,89 @@ class DeadTokenTest(RegisterDeviceTestBase):
         self.assertEqual(self.devices(), [(self.alice, 'live-token', 'phone-1')])
 
 
+class DataOnlyPushFlagTest(RegisterDeviceTestBase):
+    """
+    POST /devices records whether the app draws a data-only push itself (#501). Every
+    registration writes it, so an app that does not send it is always set back to the
+    pushes it can show.
+    """
+
+    def register_with(self, user_id, fcm_token, android_id, **extra):
+        return self.app.test_client().post(
+            '/devices',
+            json=dict({'fcm_token': fcm_token, 'platform': 'android', 'device_id': android_id}, **extra),
+            headers=self.auth(user_id),
+        )
+
+    def flags(self):
+        self.session.expire_all()
+        return [(d.android_id, d.data_only_push) for d in self.session.query(Device).order_by(Device.id)]
+
+    def test_a_new_device_records_it(self):
+        resp = self.register_with(self.alice, TOKEN, 'phone-1', data_only_push=True)
+
+        self.assertEqual(resp.status_code, 201, resp.get_json())
+        self.assertEqual(self.flags(), [('phone-1', True)])
+
+    def test_an_existing_device_is_updated(self):
+        self.add_device(self.alice, TOKEN, 'phone-1')
+
+        self.register_with(self.alice, TOKEN, 'phone-1', data_only_push=True)
+
+        self.assertEqual(self.flags(), [('phone-1', True)])
+
+    def test_an_app_that_does_not_send_it_is_set_back(self):
+        # An older app reinstalled over a newer one keeps the device row and its id.
+        self.register_with(self.alice, TOKEN, 'phone-1', data_only_push=True)
+
+        self.register_with(self.alice, TOKEN, 'phone-1')
+
+        self.assertEqual(self.flags(), [('phone-1', False)])
+
+    def test_only_android_can_take_it(self):
+        resp = self.app.test_client().post(
+            '/devices',
+            json={'fcm_token': TOKEN, 'platform': 'ios', 'device_id': 'phone-1', 'data_only_push': True},
+            headers=self.auth(self.alice),
+        )
+
+        self.assertEqual(resp.status_code, 201, resp.get_json())
+        self.assertEqual(self.flags(), [('phone-1', False)])
+
+    def test_only_an_explicit_true_counts(self):
+        self.register_with(self.alice, TOKEN, 'phone-1', data_only_push='true')
+
+        self.assertEqual(self.flags(), [('phone-1', False)])
+
+    def test_a_token_moving_accounts_takes_the_new_apps_answer(self):
+        self.register_with(self.alice, TOKEN, 'phone-1', data_only_push=True)
+
+        self.register_with(self.bob, TOKEN, 'phone-1')
+
+        self.assertEqual(self.flags(), [('phone-1', False)])
+
+
+@patch('app.routes.user_routes.get_firebase_app', return_value=object())
+class TestPushShapeTest(RegisterDeviceTestBase):
+
+    def test_a_data_only_device_gets_a_data_only_test_push(self, _app):
+        self.add_device(self.alice, 'new-app', 'phone-1')
+        self.add_device(self.alice, 'old-app', 'phone-2')
+        self.session.query(Device).filter_by(fcm_token='new-app').update({'data_only_push': True})
+        self.session.commit()
+
+        with patch.object(user_routes.messaging, 'send', return_value='projects/x/messages/1') as sent:
+            resp = self.app.test_client().post('/users/me/test-notification', headers=self.auth(self.alice))
+
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        by_token = {call.args[0].token: call.args[0] for call in sent.call_args_list}
+        self.assertIsNone(by_token['new-app'].notification)
+        self.assertEqual(by_token['new-app'].data['title'], 'Test Notification')
+        self.assertEqual(by_token['new-app'].android.priority, 'high')
+        self.assertIsNotNone(by_token['old-app'].notification)
+        self.assertNotIn('title', by_token['old-app'].data)
+        self.assertEqual(by_token['old-app'].android.notification.channel_id, 'channel_general')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -13,6 +13,7 @@ from app import Session, get_firebase_app
 from app.models import User, Device, JWTBlocklist
 from app.routes.common import log_api_call, token_required, handle_db_errors, format_iso_z
 from app.utils import VALID_FINISHED_DEFINITIONS
+from app.services.push_message import build_message
 
 user_bp = Blueprint('user_routes', __name__)
 
@@ -91,6 +92,11 @@ def register_device(current_user):
     platform = str(data.get('platform') or 'android').lower().strip()
     if platform not in ['android', 'ios']:
         platform = 'android'
+    # Whether this app draws a data-only push itself (#501). Written at every registration, so an
+    # older app that never sends it (reinstalled, or restored over a newer one) is set back to
+    # the pushes it can show. Anything but an explicit true is false, and only Android can take
+    # one: the Cheese conflict push builds every device's message in the Android shape.
+    data_only_push = platform == 'android' and data.get('data_only_push') is True
 
     if not isinstance(fcm_token, str) or not fcm_token.strip():
         return jsonify({'error': 'Missing fcm_token'}), 400
@@ -145,17 +151,22 @@ def register_device(current_user):
         if device.fcm_token != fcm_token:
             device.fcm_token = fcm_token
             logging.info(f"[API] Refreshed FCM token for existing device ({platform.capitalize()} ID: {device_id}) for user {current_user.id}")
+        if device.data_only_push != data_only_push:
+            device.data_only_push = data_only_push
+            logging.info(f"[API] Device {device_id or 'legacy'} for user {current_user.id} now takes data-only pushes: {data_only_push}")
     elif device_id:
         device = Device(
             fcm_token=fcm_token,
             user_id=current_user.id,
             android_id=device_id,
-            platform=platform
+            platform=platform,
+            data_only_push=data_only_push
         )
         session.add(device)
         logging.info(f"[API] Registered new device ({platform.capitalize()} ID: {device_id}) for user {current_user.id}")
     else:
-        device = Device(fcm_token=fcm_token, user_id=current_user.id, platform=platform)
+        device = Device(fcm_token=fcm_token, user_id=current_user.id, platform=platform,
+                        data_only_push=data_only_push)
         session.add(device)
         logging.info(f"[API] Registered new device (legacy) for user {current_user.id}")
 
@@ -422,23 +433,17 @@ def send_test_notification(current_user):
                 logging.warning(f"[API_WARN] Skipping test push to token {token[:10]}...: no Firebase app for '{device.platform}'.")
                 continue
             try:
-                message = messaging.Message(
-                    notification=messaging.Notification(
-                        title="Test Notification",
-                        body="This is a test bundle! Click me to see the sheet."
-                    ),
-                    android=messaging.AndroidConfig(
-                        notification=messaging.AndroidNotification(
-                            channel_id="channel_general"
-                        ),
-                        priority='high'
-                    ),
-                    data={
+                # Built like every real push, so a device that takes data-only pushes (#501)
+                # gets one here too and the test shows what it would.
+                message = build_message(
+                    {
+                        'title': "Test Notification",
+                        'body': "This is a test bundle! Click me to see the sheet.",
+                        'type': 'test',
                         'bundled_items': json.dumps(["Test Sword", "Debug Shield", "Potion of Coding"]),
-                        'notification_type': 'test',
-                        'channel_id': 'channel_general'
                     },
-                    token=token
+                    token, device.platform, data_only=device.data_only_push,
+                    channel_id='channel_general', priority='high'
                 )
                 messaging.send(message, app=firebase_app)
                 success_count += 1

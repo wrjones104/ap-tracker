@@ -35,7 +35,8 @@ from app.services.redis_service import get_redis_client, publish_event
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 from app.services import milestone_template_service
 from app.services.retention_service import run_all_retention_tasks
-from app.services.push_history import history_push_users, build_history_payloads, fits_in_push
+from app.services.push_history import history_push_users, build_history_payloads
+from app.services.push_message import build_message, log_failed_sends, history_fits, data_only_push_enabled
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
 
@@ -139,10 +140,12 @@ def _extract_ap_room_id(url_string):
     return None
 
 
-async def send_push_notifications(notifications, device_tokens, loop, platform='android', history=None):
+async def send_push_notifications(notifications, device_tokens, loop, platform='android', history=None,
+                                  data_only_tokens=None):
     """
     `history` is the item payload for this user's batch (see push_history), sent to Android
     only and on each message it fits in: the app ignores a copy it has already stored.
+    `data_only_tokens` are the tokens whose app takes data-only pushes (#501); see push_message.
     """
     platform = (platform or 'android').lower().strip()
     if platform not in ['android', 'ios']:
@@ -151,68 +154,20 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
     if not firebase_app or not notifications or not device_tokens: return
 
     from firebase_admin import exceptions, messaging
-    from app.services.notification_service import map_notification_to_channel_id
-  
+
+    data_only_tokens = data_only_tokens or set()
     messages = []
     for content in notifications:
         try:
             logging.info(f"[NOTIFIER] Preparing {platform} notification for {len(device_tokens)} devices. Title: {content['title']} | Body: {content['body']}")
         except Exception as e:
             logging.error(f"[NOTIFIER] Error creating log message: {e}")
-            
-        channel_id = map_notification_to_channel_id(content)
-        priority = 'high' if channel_id == 'channel_progression' else 'normal'
 
-        # We check if the 'bundled_items' key exists (created by our bundling logic)
-        # FCM 'data' fields must be strings, so we ensure it's passed correctly.
-        data_payload = {
-            'notification_type': str(content.get('type', '')),
-            'channel_id': channel_id
-        }
-        if 'bundled_items' in content:
-            data_payload['bundled_items'] = content['bundled_items']
-            if 'type' in content:
-                data_payload['bundle_type'] = content['type']
-
-        if history and platform == 'android':
-            if fits_in_push(content['title'], content['body'], data_payload, history):
-                data_payload['history'] = history
-            else:
-                logging.info(f"[NOTIFIER] Item payload ({len(history.encode('utf-8'))} bytes) does not fit the push; the app will sync.")
-
+        prepared = {}
         for token in device_tokens:
-            android_config = None
-            apns_config = None
-
-            if platform == 'android':
-                android_config = messaging.AndroidConfig(
-                    priority=priority,
-                    notification=messaging.AndroidNotification(
-                        channel_id=channel_id
-                    )
-                )
-            elif platform == 'ios':
-                apns_config = messaging.APNSConfig(
-                    headers={'apns-priority': '10'},
-                    payload=messaging.APNSPayload(
-                        aps=messaging.Aps(
-                            alert=messaging.ApsAlert(
-                                title=content['title'],
-                                body=content['body']
-                            ),
-                            sound='default',
-                            badge=1,
-                            content_available=True
-                        )
-                    )
-                )
-
-            messages.append(messaging.Message(
-                notification=messaging.Notification(title=content['title'], body=content['body']),
-                token=token,
-                android=android_config,
-                apns=apns_config,
-                data=data_payload if data_payload else None
+            messages.append(build_message(
+                content, token, platform, data_only=token in data_only_tokens, history=history,
+                prepared=prepared
             ))
 
     if not messages: return
@@ -222,7 +177,8 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
         try:
             logging.info(f"[FCM] Sending a chunk of {len(chunk)} messages for {platform}...")
             response = await loop.run_in_executor(None, lambda: messaging.send_each(chunk, app=firebase_app))
-            
+            log_failed_sends(response.responses, f"poller, {platform}")
+
             unregistered_tokens = []
             other_not_found = 0
             for idx, res in enumerate(response.responses):
@@ -250,6 +206,40 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
         
         if i + 10 < len(messages):
             await asyncio.sleep(1)
+
+def _log_payload_coverage(db_id, user_id, history, notifications, user_tokens, data_only_tokens, reason):
+    """
+    One line per user batch with item pushes: whether its items rode along (#416), and if not,
+    why. Before the app that relies on the payload ships, `grep "[PUSH_PAYLOAD]"` on prod shows
+    what share of item pushes would still need a sync, which is the cost of #501's data-only
+    pushes. Returns the payload to send: None once it fits none of the batch's messages.
+
+    Reasons: hints_changed, mixed_batch (finishes, hints or milestones in the batch),
+    too_large, cursor_error, build_error, and no_items (eligible, yet none of the poll's new
+    items were for this user's slots; should not happen, so worth a look if it shows up).
+
+    `data_only_devices` counts devices that registered for data-only pushes; `switch=off` says
+    the kill switch is sending them the notification message anyway.
+    """
+    android_devices = len(user_tokens.get('android') or [])
+    if not android_devices:
+        return history
+    devices = f"data_only_devices={len(data_only_tokens)}/{android_devices}"
+    if not data_only_push_enabled():
+        devices += " switch=off"
+    if history:
+        fitting = sum(1 for n in notifications if history_fits(n, history))
+        if fitting:
+            items = len(json.loads(history).get('items', []))
+            logging.info(
+                f"[PUSH_PAYLOAD] room={db_id} user={user_id} carried items={items} "
+                f"bytes={len(history.encode('utf-8'))} messages={fitting}/{len(notifications)} {devices}"
+            )
+            return history
+        reason = 'too_large'
+    logging.info(f"[PUSH_PAYLOAD] room={db_id} user={user_id} withheld reason={reason} {devices}")
+    return None
+
 
 def db_remove_invalid_tokens(tokens_to_remove):
     """Synchronously removes invalid FCM tokens from the database."""
@@ -1724,8 +1714,11 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         history_users = set()
         prior_max_by_slot = {}
         hints_through = None
-        if items_to_add and has_item_history and not hints_to_add and not just_found_hints:
+        # Why a user's item push went without its items, for the coverage log line below.
+        payload_withheld = 'hints_changed' if (hints_to_add or just_found_hints) else None
+        if items_to_add and has_item_history and not payload_withheld:
             history_users = history_push_users(notifications_to_send)
+        eligible_users = set(history_users)
         if history_users:
             receiving = {item.receiving_slot_id for item in items_to_add}
             payload_slots = receiving & set().union(*(tracked_slots_by_user.get(u, set()) for u in history_users))
@@ -1748,6 +1741,7 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
             except Exception:
                 logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not read the cursors for the push's item payload.", exc_info=True)
                 history_users = set()
+                payload_withheld = 'cursor_error'
 
         if items_to_add:
             session.bulk_save_objects(items_to_add)
@@ -1805,16 +1799,20 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
             except Exception:
                 # Never at the cost of the push itself: without the field the app syncs.
                 logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not build the push's item payload.", exc_info=True)
+                payload_withheld = 'build_error'
 
         final_payloads = {}
         if notifications_to_send:
             devices_to_notify = session.query(Device).filter(Device.user_id.in_(notifications_to_send.keys())).all()
             tokens_by_user = {}
+            data_only_by_user = {}
             for device in devices_to_notify:
                 platform = (device.platform or 'android').lower().strip()
                 if platform not in ['android', 'ios']:
                     platform = 'android'
                 tokens_by_user.setdefault(device.user_id, {}).setdefault(platform, []).append(device.fcm_token)
+                if device.data_only_push and platform == 'android':
+                    data_only_by_user.setdefault(device.user_id, set()).add(device.fcm_token)
 
             for user_id, raw_notifs in notifications_to_send.items():
                 user_tokens = tokens_by_user.get(user_id)
@@ -1831,11 +1829,27 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                         prefs_by_user_slot.get(user_id, {})
                     )
 
+                    history = history_by_user.get(user_id)
+                    # The raw types: combining relabels a bundle of milestones item_progression.
+                    if any(n.get('type', '').startswith('item_') and n.get('type') != 'item_milestone'
+                           for n in raw_notifs):
+                        try:
+                            history = _log_payload_coverage(
+                                db_id, user_id, history, processed_notifications, user_tokens,
+                                data_only_by_user.get(user_id, set()),
+                                payload_withheld or ('mixed_batch' if user_id not in eligible_users else 'no_items')
+                            )
+                        except Exception:
+                            # A log line, never at the cost of the poll's commit. The sender still
+                            # checks the payload fits each message.
+                            logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not log the push's payload coverage.", exc_info=True)
+
                     final_payloads[user_id] = {
                         'notifications': processed_notifications,
                         'tokens': user_tokens,
+                        'data_only_tokens': data_only_by_user.get(user_id, set()),
                         'alias': aliases_by_user.get(user_id),
-                        'history': history_by_user.get(user_id)
+                        'history': history
                     }
 
         session.commit()
@@ -2012,10 +2026,12 @@ async def run_room_poll(room_info, loop):
                     for platform, tokens in tokens_data.items():
                         if tokens:
                             await send_push_notifications(data['notifications'], tokens, loop, platform=platform,
-                                                          history=data.get('history'))
+                                                          history=data.get('history'),
+                                                          data_only_tokens=data.get('data_only_tokens'))
                 else:
                     await send_push_notifications(data['notifications'], tokens_data, loop, platform='android',
-                                                  history=data.get('history'))
+                                                  history=data.get('history'),
+                                                  data_only_tokens=data.get('data_only_tokens'))
 
     except Exception as e:
         logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Error in run_room_poll!", exc_info=True)
@@ -2100,9 +2116,11 @@ async def run_cheese_poll(room_info, loop):
             if isinstance(tokens_data, dict):
                 for platform, tokens in tokens_data.items():
                     if tokens:
-                        await send_push_notifications(data['notifications'], tokens, loop, platform=platform)
+                        await send_push_notifications(data['notifications'], tokens, loop, platform=platform,
+                                                      data_only_tokens=data.get('data_only_tokens'))
             else:
-                await send_push_notifications(data['notifications'], tokens_data, loop, platform='android')
+                await send_push_notifications(data['notifications'], tokens_data, loop, platform='android',
+                                              data_only_tokens=data.get('data_only_tokens'))
 
     # 5. Retry pushes that did not reach Cheese (#304). Only now, after Cheese has
     # answered this poll, and after the sync, which leaves a pending claim alone

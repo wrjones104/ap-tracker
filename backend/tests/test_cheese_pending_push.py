@@ -166,6 +166,29 @@ class TestAFailedPushIsRemembered(PendingPushTestBase):
         mock_put.assert_not_called()
         self.assertEqual(self.pending(), {})
 
+    @patch('app.get_firebase_app')
+    @patch('firebase_admin.messaging.send_each')
+    def test_the_conflict_push_goes_data_only_to_devices_that_asked(self, send_each, _app, mock_get, mock_put):
+        # #501: a Playing slot found claimed by someone else is demoted with a push.
+        from app.models import Device
+        self.slot(1, 'play')
+        self.session.add_all([
+            Device(user_id=1, fcm_token='new-app', android_id='p1', platform='android', data_only_push=True),
+            Device(user_id=1, fcm_token='old-app', android_id='p2', platform='android'),
+        ])
+        self.session.commit()
+        mock_get.return_value = response(200, tracker(game(1, owner=OTHER_CT_ID)))
+
+        push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
+
+        by_token = {m.token: m for m in send_each.call_args.args[0]}
+        self.assertIsNone(by_token['new-app'].notification)
+        self.assertEqual(by_token['new-app'].data['title'], 'Slot Already Claimed')
+        self.assertEqual(by_token['new-app'].android.priority, 'high')
+        self.assertEqual(by_token['old-app'].notification.title, 'Slot Already Claimed')
+        self.assertEqual(by_token['old-app'].android.notification.channel_id, 'channel_general')
+        self.assertEqual(self.mode(1), 'watch')
+
     def test_a_push_that_lands_clears_the_slot(self, mock_get, mock_put):
         self.pend(1, attempts=2)
         mock_get.return_value = response(200, tracker(game(1)))
