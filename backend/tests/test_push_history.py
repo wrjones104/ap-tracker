@@ -298,6 +298,7 @@ class TestPushCarriesItems(PushHistoryTestCase):
         history = self._history(payloads)
         self.assertEqual(history['v'], 2)
         self.assertEqual(history['room'], self.room_db_id)
+        self.assertEqual(history['tracked'], [1, 2])
         self.assertEqual(history['slots'], [[1, self.slot1_prior_max]])
         self.assertEqual(len(history['items']), 1)
         item = history['items'][0]

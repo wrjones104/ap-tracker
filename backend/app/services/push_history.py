@@ -163,6 +163,9 @@ def build_history_payload(session, user_id, room, sub, tracked_slots, item_after
         'host': room.hostname,
         'icon': sub.icon_name,
         'alias': sub.alias,
+        # The user's tracked slots here: the app files each hint "for you" or "by you" by them,
+        # as the sync does, and has no roster to hand when it stores a push.
+        'tracked': sorted(tracked),
         'slots': [[slot_id, after] for slot_id, after in sorted(item_after.items())],
         'hints_after': format_iso_z(hint_after),
         'players': {
