@@ -302,6 +302,42 @@ class HistoryRepository(
         entities
     }
 
+    // --- PUSH PAYLOAD (#416) ---
+    /**
+     * Stores the items and hint changes a push carried, when nothing is missing between them and
+     * what the phone already has ([pushPayloadApplies]). Returns false when it could not, and
+     * the caller syncs instead.
+     *
+     * Holds the sync mutex, so the check and the writes cannot interleave with a sync's.
+     */
+    suspend fun applyPushPayload(payload: PushPayload): Boolean = syncMutex.withLock {
+        val localMaxIdBySlot = payload.slots.keys.associateWith { slotId ->
+            historyDao.getMaxIdForSlot(payload.roomId, slotId)?.toLong()
+        }
+        val coverageKey = hintPushCoverageKey(payload.roomId)
+        val hintCoverage = laterCursor(
+            prefs.getString("hint_watermark_${payload.roomId}", null),
+            prefs.getString(coverageKey, null)
+        )
+        if (!pushPayloadApplies(payload, localMaxIdBySlot, hintCoverage)) return@withLock false
+
+        val items = payload.toItemEntities()
+        if (items.isNotEmpty()) historyDao.insertHistoryItems(items)
+        val hints = payload.toHintEntities()
+        if (hints.isNotEmpty()) hintDao.insertHints(hints)
+
+        // The sync's own hint cursor is left alone: the next sync re-sends these hints, which
+        // replaces them with the same values. Coverage only moves forward, so a push that
+        // arrives late cannot move it back.
+        newestHintChange(payload)?.let { newest ->
+            val current = prefs.getString(coverageKey, null)
+            if (current == null || laterCursor(current, newest) != parseInstantOrNull(current)) {
+                prefs.edit { putString(coverageKey, newest) }
+            }
+        }
+        true
+    }
+
     // --- HINT FLOWS ---
     // Every hint of the scope, whatever type was stored with it. The History screen splits them
     // into "for you" and "by you" from the slots tracked now (classifyHints).
@@ -487,7 +523,10 @@ internal fun hintCursorsToStore(
     room !in roomsSentWithoutCursor || room in roomsInBatch
 }
 
-private fun normalizeTimestamp(rawTime: String): String {
+/** Where a room's hint coverage from stored pushes is kept, beside its sync cursors. */
+internal fun hintPushCoverageKey(roomId: Int) = "hint_push_coverage_$roomId"
+
+internal fun normalizeTimestamp(rawTime: String): String {
     var cleanString = rawTime.trim()
 
     if (cleanString.contains(" ") && !cleanString.contains("T")) {

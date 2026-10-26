@@ -9,6 +9,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.jones.aptracker.network.RetrofitClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -115,6 +116,37 @@ object HistorySyncManager {
         if (!pushSync.request()) {
             Log.d("HistorySyncManager", "Push sync already running; folded into a rerun.")
         }
+    }
+
+    /**
+     * After a push: store the items and hint changes it carried when they follow on from what the
+     * phone has, else sync as before ([syncForPush]). Either way the widgets catch up.
+     *
+     * Storing what the push carried makes no request at all (#416), which matters now that the
+     * app handles every push, in the background too (#501). The Milestones widget still refreshes
+     * its own cache when that is stale, as it does after a sync.
+     */
+    suspend fun handlePush(context: Context, historyJson: String?) {
+        val appContext = context.applicationContext
+        val payload = parsePushPayload(historyJson)
+        if (payload != null) {
+            val applied = try {
+                HistoryRepository.getInstance(appContext).applyPushPayload(payload)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("HistorySyncManager", "Could not store the push's items; syncing instead.", e)
+                false
+            }
+            if (applied) {
+                Log.d("HistorySyncManager", "Stored ${payload.items.size} items and ${payload.hints.size} hints from the push; no sync needed.")
+                com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(appContext)
+                com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdateAsync(appContext)
+                return
+            }
+            Log.d("HistorySyncManager", "The push's items do not follow on from local history; syncing.")
+        }
+        syncForPush(appContext)
     }
 
     private val _filterFlagsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)

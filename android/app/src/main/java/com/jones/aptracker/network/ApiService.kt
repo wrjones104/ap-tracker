@@ -510,7 +510,11 @@ data class HistoryItem(
 
 data class RegisterDeviceRequest(
     val fcm_token: String,
-    val android_id: String? = null
+    val android_id: String? = null,
+    // This app draws a push that arrives with no notification block itself, so the server can
+    // send it data-only and it reaches the app in the background too (#501). Sent at every
+    // registration: the server sets the device back to false whenever it is missing.
+    val data_only_push: Boolean = true
 )
 
 data class AuthRequest(
