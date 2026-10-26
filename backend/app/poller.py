@@ -35,7 +35,7 @@ from app.services.redis_service import get_redis_client, publish_event
 from app.services.filtering_service import fetch_group_members_lookup, evaluate_item_filter_status
 from app.services import milestone_template_service
 from app.services.retention_service import run_all_retention_tasks
-from app.services.push_history import history_push_users, build_history_payloads
+from app.services.push_history import history_push_users, build_history_payload, newest_relevant_hint
 from app.services.push_message import build_message, log_failed_sends, history_fits, data_only_push_enabled
 
 from . import POLLING_INTERVAL_SECONDS, SUPERVISOR_INTERVAL_SECONDS
@@ -209,14 +209,13 @@ async def send_push_notifications(notifications, device_tokens, loop, platform='
 
 def _log_payload_coverage(db_id, user_id, history, notifications, user_tokens, data_only_tokens, reason):
     """
-    One line per user batch with item pushes: whether its items rode along (#416), and if not,
-    why. Before the app that relies on the payload ships, `grep "[PUSH_PAYLOAD]"` on prod shows
-    what share of item pushes would still need a sync, which is the cost of #501's data-only
-    pushes. Returns the payload to send: None once it fits none of the batch's messages.
+    One line per user batch with item or hint pushes: whether its items and hint changes rode
+    along (#416), and if not, why. `grep "[PUSH_PAYLOAD]"` on prod shows what share of these
+    pushes would still need a sync, which is the cost of #501's data-only pushes. Returns the
+    payload to send: None once it fits none of the batch's messages.
 
-    Reasons: hints_changed, mixed_batch (finishes, hints or milestones in the batch),
-    too_large, cursor_error, build_error, and no_items (eligible, yet none of the poll's new
-    items were for this user's slots; should not happen, so worth a look if it shows up).
+    Reasons: mixed_batch (a finish or a milestone in the batch), too_large (more rows than
+    fit), cursor_error, build_error.
 
     `data_only_devices` counts devices that registered for data-only pushes; `switch=off` says
     the kill switch is sending them the notification message anyway.
@@ -230,9 +229,10 @@ def _log_payload_coverage(db_id, user_id, history, notifications, user_tokens, d
     if history:
         fitting = sum(1 for n in notifications if history_fits(n, history))
         if fitting:
-            items = len(json.loads(history).get('items', []))
+            parsed = json.loads(history)
             logging.info(
-                f"[PUSH_PAYLOAD] room={db_id} user={user_id} carried items={items} "
+                f"[PUSH_PAYLOAD] room={db_id} user={user_id} carried items={len(parsed.get('items', []))} "
+                f"hints={len(parsed.get('hints', []))} "
                 f"bytes={len(history.encode('utf-8'))} messages={fitting}/{len(notifications)} {devices}"
             )
             return history
@@ -1618,6 +1618,9 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         )
 
         # --- LOGIC STEP 3: Process Hints ---
+        # The room's hints as they stand before this poll changes any (it updates found hints in
+        # place): where a push's hint payload starts when it has no cursor yet (#416).
+        hint_snapshot = [(h.item_owner_id, h.location_owner_id, h.updated_at) for h in existing_hints_map.values()]
         hints_to_add, new_hints_notif, hint_cache_keys, just_found_hints = _process_hints(
             tracker_data, room_uuid, db_id, existing_hints_map, game_map, game_checksums, has_hint_history
         )
@@ -1704,40 +1707,43 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
         merge_notifs(finish_notifs, notifications_to_send)
         merge_notifs(data_notifs, notifications_to_send)
 
-        # Users whose push can carry its items, so their phones need not sync (#416). Not when
-        # the room's hints changed: the sync carries those too, so it still has to run.
+        # Users whose push can carry its items and hint changes, so their phones need not sync
+        # (#416). See push_history for what the payload proves and where it starts.
         #
         # Its queries run in savepoints. On Postgres a failed statement aborts the whole
         # transaction, so without one an error here would lose the poll's items and its pushes,
         # not just the payload. The flush first keeps a failure of the poll's own writes out of
         # the guard, where it fails the poll as it always has.
-        history_users = set()
-        prior_max_by_slot = {}
-        hints_through = None
-        # Why a user's item push went without its items, for the coverage log line below.
-        payload_withheld = 'hints_changed' if (hints_to_add or just_found_hints) else None
-        if items_to_add and has_item_history and not payload_withheld:
-            history_users = history_push_users(notifications_to_send)
+        history_users = history_push_users(notifications_to_send)
         eligible_users = set(history_users)
-        if history_users:
-            receiving = {item.receiving_slot_id for item in items_to_add}
-            payload_slots = receiving & set().union(*(tracked_slots_by_user.get(u, set()) for u in history_users))
+        # Why a user's push went without its payload, for the coverage log line below.
+        payload_withheld = None
+        receiving = {item.receiving_slot_id for item in items_to_add}
+        prior_max_by_slot = {}
+        subs_by_user = {}
+        if notifications_to_send:
+            subs_by_user = {
+                sub.user_id: sub for sub in session.query(UserRoomSubscription).filter(
+                    UserRoomSubscription.room_id == db_id,
+                    UserRoomSubscription.user_id.in_(notifications_to_send.keys())
+                )
+            }
+        # A slot with no cursor starts from the poll before this one, so read where it stood
+        # before the insert.
+        uncursored = {
+            slot.slot_id for u in history_users for slot in prefs_by_user_slot.get(u, {}).values()
+            if slot.push_item_cursor is None and slot.slot_id in receiving
+        }
+        if uncursored:
             session.flush()
             try:
                 with session.begin_nested():
-                    # Read before the insert: the app stores the items only when its newest
-                    # id for the slot is this one, which proves nothing between them is missing.
                     prior_max_by_slot = dict(session.query(
                         NotifiedItem.receiving_slot_id, func.max(NotifiedItem.id)
                     ).filter(
                         NotifiedItem.room_id == room_uuid,
-                        NotifiedItem.receiving_slot_id.in_(payload_slots)
+                        NotifiedItem.receiving_slot_id.in_(uncursored)
                     ).group_by(NotifiedItem.receiving_slot_id).all())
-                    # The same proof for hints. This poll changed none, but an earlier poll's
-                    # change may never have reached the phone; its cursor shows that.
-                    hints_through = session.query(func.max(NotifiedHint.updated_at)).filter(
-                        NotifiedHint.room_id == room_uuid
-                    ).scalar()
             except Exception:
                 logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not read the cursors for the push's item payload.", exc_info=True)
                 history_users = set()
@@ -1776,29 +1782,36 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
                 slot.needs_backfill = False
 
         history_by_user = {}
+        cursors_by_user = {}
         if history_users:
             session.flush()
             try:
-                # Read back rather than taken from items_to_add: the ids are assigned by the
-                # insert, and the stored timestamp is what /history/sync will send.
-                keys = [(item.receiving_slot_id, item.item_index) for item in items_to_add
-                        if item.receiving_slot_id in payload_slots]
-                stored_items = []
                 with session.begin_nested():
-                    for chunk in chunked_iterable(keys, 500):
-                        stored_items.extend(session.query(NotifiedItem).filter(
-                            NotifiedItem.room_id == room_uuid,
-                            tuple_(NotifiedItem.receiving_slot_id, NotifiedItem.item_index).in_(chunk)
-                        ).all())
-                history_by_user = build_history_payloads(
-                    history_users, stored_items, tracked_slots_by_user, prior_max_by_slot, room,
-                    players, checks_known, game_checksums, lookups.get('names', {}),
-                    count_updates, users_by_id, lookups.get('groups', {}), icons_by_user,
-                    hints_through
-                )
+                    for user_id in history_users:
+                        sub = subs_by_user.get(user_id)
+                        if sub is None:
+                            continue
+                        item_after = {}
+                        for slot_id, slot in prefs_by_user_slot.get(user_id, {}).items():
+                            if slot.push_item_cursor is not None:
+                                item_after[slot_id] = slot.push_item_cursor
+                            elif slot_id in receiving:
+                                item_after[slot_id] = prior_max_by_slot.get(slot_id)
+                        hint_after = sub.push_hint_cursor
+                        if hint_after is None:
+                            hint_after = newest_relevant_hint(hint_snapshot, tracked_slots_by_user.get(user_id, set()))
+                        payload, item_cursors, hint_cursor = build_history_payload(
+                            session, user_id, room, sub, tracked_slots_by_user.get(user_id, set()),
+                            item_after, hint_after, players, checks_known
+                        )
+                        if payload:
+                            history_by_user[user_id] = payload
+                            cursors_by_user[user_id] = (item_cursors, hint_cursor)
             except Exception:
                 # Never at the cost of the push itself: without the field the app syncs.
                 logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not build the push's item payload.", exc_info=True)
+                history_by_user = {}
+                cursors_by_user = {}
                 payload_withheld = 'build_error'
 
         final_payloads = {}
@@ -1831,18 +1844,29 @@ def db_process_poll_data(db_id, room_uuid, tracker_data, room_data, remote_activ
 
                     history = history_by_user.get(user_id)
                     # The raw types: combining relabels a bundle of milestones item_progression.
-                    if any(n.get('type', '').startswith('item_') and n.get('type') != 'item_milestone'
+                    if any(n.get('type', '') in ('item_progression', 'item_useful', 'item_trap', 'item_filler', 'hint')
                            for n in raw_notifs):
                         try:
                             history = _log_payload_coverage(
                                 db_id, user_id, history, processed_notifications, user_tokens,
                                 data_only_by_user.get(user_id, set()),
-                                payload_withheld or ('mixed_batch' if user_id not in eligible_users else 'no_items')
+                                payload_withheld or ('mixed_batch' if user_id not in eligible_users else 'too_large')
                             )
                         except Exception:
                             # A log line, never at the cost of the poll's commit. The sender still
                             # checks the payload fits each message.
                             logging.error(f"[POLLER_ERROR][RoomDBID:{db_id}] Could not log the push's payload coverage.", exc_info=True)
+
+                    # Where this user's next payload starts. Carried: after what it carried.
+                    # Not carried: the phone syncs instead, so the next one starts from the poll
+                    # before it, as a payload with no cursor does.
+                    if user_tokens.get('android'):
+                        item_cursors, hint_cursor = cursors_by_user.get(user_id, ({}, None)) if history else ({}, None)
+                        for slot_id, slot in prefs_by_user_slot.get(user_id, {}).items():
+                            slot.push_item_cursor = item_cursors.get(slot_id) if history else None
+                        sub = subs_by_user.get(user_id)
+                        if sub is not None:
+                            sub.push_hint_cursor = hint_cursor if history else None
 
                     final_payloads[user_id] = {
                         'notifications': processed_notifications,
