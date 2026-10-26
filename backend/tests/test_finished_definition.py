@@ -634,14 +634,13 @@ class TestHistoryUnknownChecksContract(unittest.TestCase):
             self.assertTrue(evaluate_finished(True, None, definition))
 
     def test_all_three_history_sites_use_checks_known(self):
-        # Three derivation sites; a new one added without the guard would regress.
-        source = io.open(
-            os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                'app', 'routes', 'history_routes.py',
-            ),
-            encoding='utf-8',
-        ).read()
+        # Three derivation sites; a new one added without the guard would regress. The sync
+        # route's moved to services/history_rows.py, which the push payload shares (#416).
+        app_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app')
+        source = "".join(
+            io.open(os.path.join(app_dir, *parts), encoding='utf-8').read()
+            for parts in (('routes', 'history_routes.py'), ('services', 'history_rows.py'))
+        )
 
         self.assertEqual(3, source.count("has_all_checks = (receiver_obj.get("))
         self.assertNotIn("has_all_checks = receiver_obj.get('has_all_checks', False)", source)
