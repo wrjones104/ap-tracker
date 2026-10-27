@@ -1146,6 +1146,34 @@
   ],
   "server_releases": [
     {
+      "version": "1.18.0",
+      "component": "server",
+      "component_label": "Server",
+      "release_date": "2026-10-27",
+      "title": "Notifications Bring Their Hints",
+      "highlights": [
+        {
+          "title": "Notifications Bring Their Hints",
+          "description": "Notifications now carry new hints and quieter items too, so the next app update can keep History and widgets current without asking the server."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Notifications Bring Their Hints",
+            "description": "Notifications carry new hints and items that arrived without a notification, ready for the next app update. PR #504."
+          }
+        ],
+        "improvements": [],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "",
+        "play_store": "",
+        "github": "### Added\n- Push payload v2: item and hint pushes carry the room's hint changes plus every item since the user's last carried push, including items from polls that sent no push (#416). PR #504.\n- Per-user cursors `user_tracked_slots.push_item_cursor` and `user_room_subscriptions.push_hint_cursor` (migration `e4b9c2d7f8a1`) mark where each user's next payload starts. PR #504.\n\n### Changed\n- `/history/sync` rows are built in `services/history_rows.py`, shared with the push payload so both send identical rows. PR #504.\n- `[PUSH_PAYLOAD]` withheld reasons are now `mixed_batch`, `too_large`, `no_subscription`, `cursor_error` and `build_error`; `hints_changed` is gone because hints now ride along. PR #504.\n\n### Internal\n- Backend tests can no longer bind to a developer's real database: `backend/tests/__init__.py` forces SQLite, and a test checks every module. PR #504.\n\n### Compatibility\n- Additive migration (runs on boot); no API removed. Installed apps ignore the payload; the next app release reads it. The payload is now `v: 2`, and no released app reads v1."
+      }
+    },
+    {
       "version": "1.17.0",
       "component": "server",
       "component_label": "Server",
