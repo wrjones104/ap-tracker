@@ -157,6 +157,37 @@ class PushPayloadTest {
         assertEquals("Player 9", asSender.senderName)
     }
 
+    // --- Pushes that arrive late ---
+
+    @Test
+    fun onlyItemsTheSlotHasNotReachedAreStored() {
+        // A sync already stored 4411; a push arriving afterwards must not put back its older values.
+        val stored = itemsToStore(payload().toItemEntities(), mapOf(1 to 4411L, 2 to null))
+        assertEquals(listOf(4412L), stored.map { it.id })
+    }
+
+    @Test
+    fun aFoundHintIsNeverMarkedUnfoundAgain() {
+        val unfoundCopy = payload().toHintEntities()[0].copy(isFound = false)
+        val newHint = payload().toHintEntities()[1]
+
+        assertEquals(listOf(newHint), hintsToStore(listOf(unfoundCopy, newHint), storedFoundIds = listOf(77)))
+        // A found copy always goes in, and an unfound one goes in when nothing found is stored.
+        assertEquals(2, hintsToStore(listOf(unfoundCopy.copy(isFound = true), newHint), listOf(77)).size)
+        assertEquals(2, hintsToStore(listOf(unfoundCopy, newHint), emptyList()).size)
+    }
+
+    @Test
+    fun pushCoverageCountsOnlyForTheSlotsItWasEarnedFor() {
+        val p = payload()
+        assertEquals("2026-10-21T00:00:00Z", pushCoverageStillCounts("2026-10-21T00:00:00Z", "1,2", p))
+        // A slot tracked since: its hints were never carried, so the coverage says nothing about them.
+        assertNull(pushCoverageStillCounts("2026-10-21T00:00:00Z", "1", p))
+        assertNull(pushCoverageStillCounts("2026-10-21T00:00:00Z", null, p))
+        assertNull(pushCoverageStillCounts(null, "1,2", p))
+        assertEquals("1,2,10", trackedKey(setOf(10, 2, 1)))
+    }
+
     @Test
     fun hintsAreTypedByTheTrackedSlots() {
         val (forYou, byYou) = payload().toHintEntities()

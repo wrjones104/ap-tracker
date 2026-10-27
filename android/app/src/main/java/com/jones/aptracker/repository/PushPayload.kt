@@ -149,6 +149,39 @@ fun pushPayloadApplies(
     return hintCoverage != null && !hintCoverage.isBefore(hintsAfter)
 }
 
+/**
+ * The rows of [items] the phone does not hold yet. Pushes can arrive in any order, and one that
+ * arrives after a sync would otherwise put back that row's older values (received count,
+ * finished state). The phone holds every item of a slot up to its newest stored id, because the
+ * sync fetches each slot's items in order.
+ */
+fun itemsToStore(items: List<HistoryItemEntity>, localMaxIdBySlot: Map<Int, Long?>): List<HistoryItemEntity> =
+    items.filter { item ->
+        val local = localMaxIdBySlot[item.slot_id] ?: return@filter true
+        item.id > local
+    }
+
+/**
+ * The hints worth writing: all but an unfound copy of one already stored as found. A hint only
+ * ever goes from unfound to found, so the found row is the newer one, whatever order pushes and
+ * syncs arrived in.
+ */
+fun hintsToStore(hints: List<HintEntity>, storedFoundIds: Collection<Int>): List<HintEntity> {
+    val found = storedFoundIds.toSet()
+    return hints.filter { it.isFound || it.hint_db_id !in found }
+}
+
+/**
+ * The hint coverage pushes earned, if it still counts. Pushes carry only the hints touching the
+ * tracked slots, so coverage earned under one set of tracked slots says nothing about the hints
+ * of a slot tracked since: it counts only while the payload names the same set.
+ */
+fun pushCoverageStillCounts(coverage: String?, earnedFor: String?, payload: PushPayload): String? =
+    coverage?.takeIf { earnedFor == trackedKey(payload.trackedSlots) }
+
+/** A set of tracked slots as it is stored beside the coverage it earned. */
+fun trackedKey(slots: Set<Int>): String = slots.sorted().joinToString(",")
+
 /** The later of two hint cursors, either of which may be missing or unreadable. */
 fun laterCursor(a: String?, b: String?): Instant? {
     val first = a?.let(::parseInstantOrNull)

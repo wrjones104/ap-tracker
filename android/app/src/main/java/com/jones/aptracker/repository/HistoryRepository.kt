@@ -315,24 +315,32 @@ class HistoryRepository(
             historyDao.getMaxIdForSlot(payload.roomId, slotId)?.toLong()
         }
         val coverageKey = hintPushCoverageKey(payload.roomId)
-        val hintCoverage = laterCursor(
-            prefs.getString("hint_watermark_${payload.roomId}", null),
-            prefs.getString(coverageKey, null)
+        val trackedKeyKey = hintPushCoverageTrackedKey(payload.roomId)
+        val pushCoverage = pushCoverageStillCounts(
+            prefs.getString(coverageKey, null), prefs.getString(trackedKeyKey, null), payload
         )
+        val hintCoverage = laterCursor(prefs.getString("hint_watermark_${payload.roomId}", null), pushCoverage)
         if (!pushPayloadApplies(payload, localMaxIdBySlot, hintCoverage)) return@withLock false
 
-        val items = payload.toItemEntities()
+        // Only what is new to the phone: a push that arrives after a sync must not put back older
+        // values (itemsToStore, hintsToStore).
+        val items = itemsToStore(payload.toItemEntities(), localMaxIdBySlot)
         if (items.isNotEmpty()) historyDao.insertHistoryItems(items)
-        val hints = payload.toHintEntities()
+        val allHints = payload.toHintEntities()
+        val hints = if (allHints.isEmpty()) allHints
+            else hintsToStore(allHints, hintDao.getFoundHintIds(allHints.map { it.hint_db_id }))
         if (hints.isNotEmpty()) hintDao.insertHints(hints)
 
         // The sync's own hint cursor is left alone: the next sync re-sends these hints, which
-        // replaces them with the same values. Coverage only moves forward, so a push that
-        // arrives late cannot move it back.
+        // replaces them with the same values. Coverage only moves forward while the tracked slots
+        // stay the same, so a push that arrives late cannot move it back; it starts over when they
+        // change (pushCoverageStillCounts).
         newestHintChange(payload)?.let { newest ->
-            val current = prefs.getString(coverageKey, null)
-            if (current == null || laterCursor(current, newest) != parseInstantOrNull(current)) {
-                prefs.edit { putString(coverageKey, newest) }
+            if (pushCoverage == null || laterCursor(pushCoverage, newest) != parseInstantOrNull(pushCoverage)) {
+                prefs.edit {
+                    putString(coverageKey, newest)
+                    putString(trackedKeyKey, trackedKey(payload.trackedSlots))
+                }
             }
         }
         true
@@ -525,6 +533,9 @@ internal fun hintCursorsToStore(
 
 /** Where a room's hint coverage from stored pushes is kept, beside its sync cursors. */
 internal fun hintPushCoverageKey(roomId: Int) = "hint_push_coverage_$roomId"
+
+/** The tracked slots that coverage was earned for (see pushCoverageStillCounts). */
+internal fun hintPushCoverageTrackedKey(roomId: Int) = "hint_push_coverage_tracked_$roomId"
 
 internal fun normalizeTimestamp(rawTime: String): String {
     var cleanString = rawTime.trim()
