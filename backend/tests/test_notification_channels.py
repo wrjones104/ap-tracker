@@ -1,3 +1,10 @@
+import os
+
+# Before `app` is imported, which binds its engine once per process: whichever way these tests
+# are loaded, they never reach the database backend/.env names (see backend/tests/__init__.py).
+os.environ['DATABASE_URL'] = 'sqlite:///' + os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'test_notification_channels.db'))
+
 import unittest
 from unittest.mock import patch
 from app.services.notification_service import map_notification_to_channel_id, send_fcm_notifications

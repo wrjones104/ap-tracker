@@ -159,6 +159,10 @@ class UserRoomSubscription(Base):
     # dashboard, cleared when it comes back. Purely a flag for the app to show:
     # nothing is ever removed on the strength of it.
     cheese_unlisted_at = Column(DateTime, nullable=True)
+    # The newest hint change (updated_at) the last item payload sent this user carried, for
+    # the hints touching their tracked slots here (#416). The next payload carries every such
+    # change after it. Null: unknown, so the next payload starts from the poll before it.
+    push_hint_cursor = Column(DateTime, nullable=True)
     user = relationship("User", back_populates="subscriptions")
     room = relationship("TrackedRoom", back_populates="subscriptions")
     tracked_slots = relationship("UserTrackedSlot", back_populates="subscription", cascade="all, delete-orphan")
@@ -198,6 +202,11 @@ class UserTrackedSlot(Base):
     finished_definition = Column(String(16), nullable=True, default=None)
     snooze_until = Column(DateTime, nullable=True)
     snooze_wake_on_slot_id = Column(Integer, nullable=True)
+    # The newest item id the last item payload sent this user carried for this slot (#416).
+    # The next payload carries every item after it, including ones that arrived without a
+    # notification of their own. Null: unknown, so the next payload starts from the poll
+    # before it.
+    push_item_cursor = Column(Integer, nullable=True)
     # Set only when a slot is newly tracked in 'play' mode, and cleared by the first poll
     # that resolves the slot's game and datapackage checksum. Existing rows default to
     # False so turning auto-apply on never reaches backwards into a library of old slots:

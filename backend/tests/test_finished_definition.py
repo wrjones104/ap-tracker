@@ -1,5 +1,13 @@
+import os
+
+# Before `app` is imported, which binds its engine once per process: whichever way these tests
+# are loaded, they never reach the database backend/.env names (see backend/tests/__init__.py).
+os.environ['DATABASE_URL'] = 'sqlite:///' + os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'test_finished_definition.db'))
+
 import importlib.util
 import io
+import pathlib
 import json
 import os
 import unittest
@@ -634,14 +642,13 @@ class TestHistoryUnknownChecksContract(unittest.TestCase):
             self.assertTrue(evaluate_finished(True, None, definition))
 
     def test_all_three_history_sites_use_checks_known(self):
-        # Three derivation sites; a new one added without the guard would regress.
-        source = io.open(
-            os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                'app', 'routes', 'history_routes.py',
-            ),
-            encoding='utf-8',
-        ).read()
+        # Three derivation sites; a new one added without the guard would regress. The sync
+        # route's moved to services/history_rows.py, which the push payload shares (#416).
+        app_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app')
+        source = "".join(
+            pathlib.Path(app_dir, *parts).read_text(encoding='utf-8')
+            for parts in (('routes', 'history_routes.py'), ('services', 'history_rows.py'))
+        )
 
         self.assertEqual(3, source.count("has_all_checks = (receiver_obj.get("))
         self.assertNotIn("has_all_checks = receiver_obj.get('has_all_checks', False)", source)
