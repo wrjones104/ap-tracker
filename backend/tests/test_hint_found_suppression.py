@@ -1,3 +1,10 @@
+import os
+
+# Before `app` is imported, which binds its engine once per process: whichever way these tests
+# are loaded, they never reach the database backend/.env names (see backend/tests/__init__.py).
+os.environ['DATABASE_URL'] = 'sqlite:///' + os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'test_hint_found_suppression.db'))
+
 import unittest
 from types import SimpleNamespace
 

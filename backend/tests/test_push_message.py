@@ -6,6 +6,13 @@ message for devices whose app draws it itself. Plus the size rules: a combined p
 list is trimmed to fit FCM's limit instead of getting the whole push refused (#499), and the
 item payload (#416) rides only on what is left.
 """
+import os
+
+# Before `app` is imported, which binds its engine once per process: whichever way these tests
+# are loaded, they never reach the database backend/.env names (see backend/tests/__init__.py).
+os.environ['DATABASE_URL'] = 'sqlite:///' + os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'test_push_message.db'))
+
 import json
 import os
 import unittest

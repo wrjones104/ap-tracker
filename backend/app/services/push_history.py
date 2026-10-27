@@ -26,6 +26,11 @@ nothing. Without that, those would sit between the phone and the next push, and 
 would sync anyway. A null cursor (new slot, first payload since deploy, or reset) starts from
 the poll before this one, which proves as much as a payload can on its own.
 
+Every tracked slot is in the proof, not only those with new items: a slot left out could hide
+items that arrived with no push. A carried payload that found a slot's whole history empty
+stores 0 as its cursor (and `HINT_CURSOR_EPOCH` when no hint touched the user's slots), so the
+next payload carries the slot's first items whole instead of starting after them.
+
 **When it is withheld** the cursors are reset to null, because the phone will sync instead:
 - the user's batch holds a finish or a milestone (`mixed_batch`);
 - more items or hints than fit (`too_large`, here or when the message is assembled).
@@ -33,6 +38,7 @@ the poll before this one, which proves as much as a payload can on its own.
 Older apps ignore the field. Server first, additive.
 """
 import json
+from datetime import datetime
 
 from sqlalchemy import or_
 
@@ -57,6 +63,28 @@ _PAYLOAD_PUSH_TYPES = {'item_progression', 'item_useful', 'item_trap', 'item_fil
 
 FILTER_IGNORED = 1
 FILTER_WHITELISTED = 2
+
+# Stored as push_hint_cursor when a carried payload found no hint touching the user's slots:
+# the next payload carries those hints from the start. Null would mean "unknown" instead, and
+# start after them.
+HINT_CURSOR_EPOCH = datetime(1970, 1, 1)
+
+
+def item_start(cursor, prior_max):
+    """
+    Where a slot's block starts: after `cursor` when there is one (0: the slot's whole history,
+    sent as null), else after `prior_max`, the slot's newest item before this poll.
+    """
+    if cursor is None:
+        return prior_max
+    return cursor or None
+
+
+def hint_start(cursor, snapshot_newest):
+    """Where the hints start: after `cursor` (the epoch: from the start), else after `snapshot_newest`."""
+    if cursor is None:
+        return snapshot_newest
+    return None if cursor <= HINT_CURSOR_EPOCH else cursor
 
 
 def history_push_users(notifications_by_user):
@@ -104,7 +132,8 @@ def build_history_payload(session, user_id, room, sub, tracked_slots, item_after
     One user's payload for one room, and the cursors it advances to.
 
     `item_after` is {slot_id: id the slot's block starts after, or None for its whole history},
-    for the slots worth checking; a slot left out is not in the payload. `hint_after` is the
+    for every tracked slot (see item_start). A slot with a null start and nothing to carry has
+    nothing to check, so it is left out of the payload. `hint_after` is the
     `updated_at` the hints start after, or None. `players` is the room's player list as stored
     (with this poll's finished flags), and `checks_known` whether it has check counts.
 
@@ -137,6 +166,9 @@ def build_history_payload(session, user_id, room, sub, tracked_slots, item_after
     item_dicts, hint_dicts = serialize_history_rows(
         session, user_id, items, hints, {room.room_id: room}, {room.room_id: sub}
     )
+    carried_by_slot = {}
+    for item in items:
+        carried_by_slot.setdefault(item.receiving_slot_id, []).append(item.id)
     item_dict_by_id = {d['id']: d for d in item_dicts}
     hint_dict_by_id = {d['id']: d for d in hint_dicts}
 
@@ -166,7 +198,8 @@ def build_history_payload(session, user_id, room, sub, tracked_slots, item_after
         # The user's tracked slots here: the app files each hint "for you" or "by you" by them,
         # as the sync does, and has no roster to hand when it stores a push.
         'tracked': sorted(tracked),
-        'slots': [[slot_id, after] for slot_id, after in sorted(item_after.items())],
+        'slots': [[slot_id, after] for slot_id, after in sorted(item_after.items())
+                  if after is not None or slot_id in carried_by_slot],
         'hints_after': format_iso_z(hint_after),
         'players': {
             str(slot_id): _player_row(player_map.get(slot_id), slot_id, checks_known)
@@ -176,11 +209,12 @@ def build_history_payload(session, user_id, room, sub, tracked_slots, item_after
         'hints': hint_rows,
     }
 
-    new_item_cursors = {}
-    for slot_id, after in item_after.items():
-        carried = [i.id for i in items if i.receiving_slot_id == slot_id]
-        new_item_cursors[slot_id] = max(carried) if carried else after
-    new_hint_cursor = max((h.updated_at for h in hints), default=hint_after)
+    # A whole history that was empty is still known: 0, not null (see the module docstring).
+    new_item_cursors = {
+        slot_id: max(carried_by_slot[slot_id]) if slot_id in carried_by_slot else (after or 0)
+        for slot_id, after in item_after.items()
+    }
+    new_hint_cursor = max((h.updated_at for h in hints), default=hint_after or HINT_CURSOR_EPOCH)
 
     return json.dumps(payload, separators=(',', ':'), ensure_ascii=False), new_item_cursors, new_hint_cursor
 
