@@ -31,7 +31,8 @@ from app.models import (
 )
 from app.poller import db_process_poll_data, send_push_notifications
 from app.services.push_history import (
-    FCM_MESSAGE_BUDGET_BYTES, FILTER_IGNORED, fits_in_push, history_push_users
+    FCM_MESSAGE_BUDGET_BYTES, FILTER_IGNORED, HINT_CURSOR_EPOCH, fits_in_push, hint_start,
+    history_push_users, item_start
 )
 
 ROOM_UUID = 'room-uuid-push-history'
@@ -337,6 +338,36 @@ class TestPushCarriesItems(PushHistoryTestCase):
         self.assertEqual([i[3] for i in third['items']], ['Rupee', 'Master Sword'])
         self.assertEqual(self._cursors()[0][1], third['items'][-1][0])
 
+    def _newest_id(self, slot):
+        session = Session()
+        try:
+            return session.query(NotifiedItem.id).filter_by(receiving_slot_id=slot).order_by(NotifiedItem.id.desc()).first()[0]
+        finally:
+            Session.remove()
+
+    def test_a_quiet_item_on_a_slot_with_no_cursor_makes_the_phone_check(self):
+        # Review of #504: a slot left out of the payload hid items that arrived with no push.
+        filler = [(201, 9001, 3, FILLER)]
+        self.assertNotIn(self.user_id, self._poll(slot2=filler))
+        newest = self._newest_id(2)
+
+        history = self._history(self._poll(slot1_new=[SWORD], slot2=filler))
+
+        self.assertIn([2, newest], history['slots'])
+
+    def test_a_slot_known_empty_carries_its_first_items_whole(self):
+        # After a payload found slot 2 empty, its cursor is 0, not null, so the filler that
+        # lands there later rides the next push instead of making the phone sync for it.
+        self._history(self._poll(slot1_new=[SWORD]))
+        self.assertEqual(self._cursors()[0][2], 0)
+
+        filler = [(201, 9001, 3, FILLER)]
+        self.assertNotIn(self.user_id, self._poll(slot1_new=[SWORD], slot2=filler))
+
+        history = self._history(self._poll(slot1_new=[SWORD, SWORD], slot2=filler))
+        self.assertIn([2, None], history['slots'])
+        self.assertIn('Missile', [i[3] for i in history['items'] if i[1] == 2])
+
     def test_each_user_gets_only_their_own_slots(self):
         # Slot 3 is tracked, by someone else, so its item is stored and reaches the builder.
         other_id = self._add_user('user_b', slots=[3])
@@ -412,6 +443,20 @@ class TestPushCarriesHints(PushHistoryTestCase):
         self.assertEqual(third['hints_after'], first['hints_after'])
         self.assertEqual([h[5] for h in third['hints']], [True])
 
+    def test_hints_after_a_payload_that_found_none_ride_from_the_start(self):
+        # The hint cursor is the epoch, not null, once a payload found no hints: a hint that
+        # arrives quietly afterwards (here the room's first, a backfill that announces nothing)
+        # rides the next push instead of being skipped over.
+        first = self._history(self._poll(slot1_new=[SWORD]))
+        self.assertEqual(first['hints'], [])
+        self.assertEqual(self._cursors()[1], HINT_CURSOR_EPOCH)
+
+        self.assertNotIn(self.user_id, self._poll(slot1_new=[SWORD], hints=[HINT_FOR_LINK]))
+
+        third = self._history(self._poll(slot1_new=[SWORD, SWORD], hints=[HINT_FOR_LINK]))
+        self.assertIsNone(third['hints_after'])
+        self.assertEqual([h[3] for h in third['hints']], ['Heart Container'])
+
     def test_hints_that_touch_none_of_your_slots_stay_out(self):
         # Ridley hinting his own item: slot 3 is not tracked here.
         history = self._history(self._poll(slot1_new=[SWORD], hints=[(3, 3, 9001, 201, False, '', PROGRESSION)]))
@@ -426,7 +471,8 @@ class TestPushCarriesHints(PushHistoryTestCase):
 
         self.assertEqual([n['type'] for n in payloads[self.user_id]['notifications']], ['hint'])
         history = self._history(payloads)
-        self.assertEqual((history['slots'], history['items']), ([], []))
+        # Slot 1's items are still checked, though none came: a hint push proves them too.
+        self.assertEqual((history['slots'], history['items']), ([[1, self.slot1_prior_max]], []))
         self.assertEqual(history['hints_after'], '2026-10-20T09:30:00Z')
         self.assertEqual([h[3] for h in history['hints']], ['Master Sword'])
 
@@ -461,6 +507,35 @@ class TestPushWithholdsItems(PushHistoryTestCase):
             Session.remove()
         nxt = self._history(self._poll(slot1_new=flood + [SWORD]))
         self.assertEqual(nxt['slots'], [[1, newest]])
+
+    def test_a_slot_removed_mid_poll_does_not_cost_the_poll(self):
+        # Review of #504: cursors are written with plain UPDATEs, which a row deleted while the
+        # poll ran simply misses. A flush of the loaded row would raise StaleDataError.
+        from app.poller import _store_push_cursors
+        session = Session()
+        try:
+            slots = {s.slot_id: s for s in session.query(UserTrackedSlot).filter_by(user_id=self.user_id)}
+            sub = session.query(UserRoomSubscription).filter_by(user_id=self.user_id).one()
+            other = engine.connect()
+            other.execute(UserTrackedSlot.__table__.delete().where(UserTrackedSlot.slot_id == 2))
+            other.commit()
+            other.close()
+
+            _store_push_cursors(session, self.room_db_id, self.user_id, slots, sub, {1: 7, 2: 8}, None)
+            session.commit()
+        finally:
+            Session.remove()
+        self.assertEqual(self._cursors()[0], {1: 7})
+
+    def test_where_payloads_start(self):
+        self.assertEqual(item_start(None, 12), 12)
+        self.assertIsNone(item_start(None, None))
+        self.assertEqual(item_start(30, 12), 30)
+        self.assertIsNone(item_start(0, 12))
+        later = datetime(2026, 10, 27, 9, 0)
+        self.assertEqual(hint_start(None, later), later)
+        self.assertIsNone(hint_start(HINT_CURSOR_EPOCH, later))
+        self.assertEqual(hint_start(later, None), later)
 
     def test_no_push_no_payload(self):
         # Filler only: nothing is announced, so there is no push to carry anything.
