@@ -81,3 +81,15 @@ fun workerCanStandDown(
  */
 fun itemFlagRepairDue(userInitiated: Boolean, repairedOnce: Boolean): Boolean =
     userInitiated || !repairedOnce
+
+/**
+ * Whether the rows a push carries may be stored, given when the user last changed an ignore or
+ * whitelist rule ([lastRuleChange], 0 for never).
+ *
+ * The server flags a push's rows with the rules in force when it built the push. One built
+ * before a rule change and stored after the repair that follows it would keep the old flags,
+ * and the delta sync never sends those rows again (as #481 was for paging). Within [windowMs] of
+ * a change the phone syncs instead, which flags rows with the rules in force now.
+ */
+fun filterRulesSettled(now: Long, lastRuleChange: Long, windowMs: Long): Boolean =
+    now - lastRuleChange >= windowMs

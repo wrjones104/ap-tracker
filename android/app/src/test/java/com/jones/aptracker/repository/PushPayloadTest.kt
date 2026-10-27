@@ -189,6 +189,20 @@ class PushPayloadTest {
     }
 
     @Test
+    fun pushCoverageOnlyMovesForward() {
+        val p = payload()  // newest hint change: 2026-10-23T12:34:56.5Z
+        assertEquals("2026-10-23T12:34:56.5Z", pushCoverageToStore(null, p))
+        assertEquals("2026-10-23T12:34:56.5Z", pushCoverageToStore("2026-10-23T12:34:56Z", p))
+        // A push that arrives late, or one carrying the same change, leaves it where it is.
+        assertNull(pushCoverageToStore("2026-10-24T00:00:00Z", p))
+        assertNull(pushCoverageToStore("2026-10-23T12:34:56.500Z", p))
+        // Stored coverage that cannot be read is replaced.
+        assertEquals("2026-10-23T12:34:56.5Z", pushCoverageToStore("garbage", p))
+        // No hints carried: nothing to store.
+        assertNull(pushCoverageToStore(null, p.copy(hints = emptyList())))
+    }
+
+    @Test
     fun hintsAreTypedByTheTrackedSlots() {
         val (forYou, byYou) = payload().toHintEntities()
 

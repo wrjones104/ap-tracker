@@ -179,6 +179,17 @@ fun hintsToStore(hints: List<HintEntity>, storedFoundIds: Collection<Int>): List
 fun pushCoverageStillCounts(coverage: String?, earnedFor: String?, payload: PushPayload): String? =
     coverage?.takeIf { earnedFor == trackedKey(payload.trackedSlots) }
 
+/**
+ * The push coverage to store once [payload] is stored, or null to keep the stored one.
+ * [stillCounts] is the stored coverage that still counts ([pushCoverageStillCounts]): coverage
+ * only moves forward, so a push that arrives late cannot move it back.
+ */
+fun pushCoverageToStore(stillCounts: String?, payload: PushPayload): String? {
+    val newest = newestHintChange(payload) ?: return null
+    val current = stillCounts?.let(::parseInstantOrNull) ?: return newest
+    return newest.takeIf { parseInstantOrNull(it)?.isAfter(current) == true }
+}
+
 /** A set of tracked slots as it is stored beside the coverage it earned. */
 fun trackedKey(slots: Set<Int>): String = slots.sorted().joinToString(",")
 

@@ -14,6 +14,7 @@ import androidx.core.content.edit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 class HistoryRepository(
     private val apiService: ApiService,
@@ -82,6 +83,10 @@ class HistoryRepository(
                     prefsEdit.putString(newHintKey, ts)
                     prefsEdit.remove(oldHintKey)
                 }
+                // And the hint coverage stored pushes earned, with the slots it was earned for
+                migratePushCoverage(prefs, oldId, serverRoomId) { key, value ->
+                    prefsEdit.putString(key, value)
+                }.forEach { prefsEdit.remove(it) }
                 
                 // Save migration record for ViewModels to align their in-memory state
                 prefsEdit.putInt("room_id_migration_${oldId}", serverRoomId)
@@ -308,9 +313,23 @@ class HistoryRepository(
      * what the phone already has ([pushPayloadApplies]). Returns false when it could not, and
      * the caller syncs instead.
      *
-     * Holds the sync mutex, so the check and the writes cannot interleave with a sync's.
+     * Holds the sync mutex, so the check and the writes cannot interleave with a sync's. Waits
+     * for it only briefly: Firebase hands pushes over one at a time, so every push queued behind
+     * this one would wait out a long sync too. Syncing instead costs one rerun of that sync.
+     *
+     * The writes are not one transaction, and need not be: coverage is written last, so a store
+     * cut short leaves rows that the next sync replaces and coverage that never claimed them.
      */
-    suspend fun applyPushPayload(payload: PushPayload): Boolean = syncMutex.withLock {
+    suspend fun applyPushPayload(payload: PushPayload): Boolean {
+        withTimeoutOrNull(PUSH_LOCK_WAIT_MS) { syncMutex.lock() } ?: return false
+        return try {
+            storePushPayload(payload)
+        } finally {
+            syncMutex.unlock()
+        }
+    }
+
+    private suspend fun storePushPayload(payload: PushPayload): Boolean {
         val localMaxIdBySlot = payload.slots.keys.associateWith { slotId ->
             historyDao.getMaxIdForSlot(payload.roomId, slotId)?.toLong()
         }
@@ -320,7 +339,7 @@ class HistoryRepository(
             prefs.getString(coverageKey, null), prefs.getString(trackedKeyKey, null), payload
         )
         val hintCoverage = laterCursor(prefs.getString("hint_watermark_${payload.roomId}", null), pushCoverage)
-        if (!pushPayloadApplies(payload, localMaxIdBySlot, hintCoverage)) return@withLock false
+        if (!pushPayloadApplies(payload, localMaxIdBySlot, hintCoverage)) return false
 
         // Only what is new to the phone: a push that arrives after a sync must not put back older
         // values (itemsToStore, hintsToStore).
@@ -335,15 +354,13 @@ class HistoryRepository(
         // replaces them with the same values. Coverage only moves forward while the tracked slots
         // stay the same, so a push that arrives late cannot move it back; it starts over when they
         // change (pushCoverageStillCounts).
-        newestHintChange(payload)?.let { newest ->
-            if (pushCoverage == null || laterCursor(pushCoverage, newest) != parseInstantOrNull(pushCoverage)) {
-                prefs.edit {
-                    putString(coverageKey, newest)
-                    putString(trackedKeyKey, trackedKey(payload.trackedSlots))
-                }
+        pushCoverageToStore(pushCoverage, payload)?.let { newest ->
+            prefs.edit {
+                putString(coverageKey, newest)
+                putString(trackedKeyKey, trackedKey(payload.trackedSlots))
             }
         }
-        true
+        return true
     }
 
     // --- HINT FLOWS ---
@@ -497,6 +514,9 @@ class HistoryRepository(
     }
 
     companion object {
+        // How long a push waits for a running sync before syncing instead (applyPushPayload).
+        private const val PUSH_LOCK_WAIT_MS = 1_000L
+
         @Volatile
         private var INSTANCE: HistoryRepository? = null
 
@@ -536,6 +556,23 @@ internal fun hintPushCoverageKey(roomId: Int) = "hint_push_coverage_$roomId"
 
 /** The tracked slots that coverage was earned for (see pushCoverageStillCounts). */
 internal fun hintPushCoverageTrackedKey(roomId: Int) = "hint_push_coverage_tracked_$roomId"
+
+/**
+ * Copies a room's push coverage keys to its new db id through [put], for the two places that
+ * realign a room's id. Returns the old keys, for the caller to remove in the same edit.
+ */
+internal fun migratePushCoverage(
+    prefs: android.content.SharedPreferences,
+    oldId: Int,
+    newId: Int,
+    put: (String, String?) -> Unit
+): List<String> = listOf(
+    hintPushCoverageKey(oldId) to hintPushCoverageKey(newId),
+    hintPushCoverageTrackedKey(oldId) to hintPushCoverageTrackedKey(newId)
+).filter { (old, _) -> prefs.contains(old) }.map { (old, new) ->
+    put(new, prefs.getString(old, null))
+    old
+}
 
 internal fun normalizeTimestamp(rawTime: String): String {
     var cleanString = rawTime.trim()

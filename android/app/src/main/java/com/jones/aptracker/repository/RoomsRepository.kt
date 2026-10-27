@@ -70,6 +70,10 @@ class RoomsRepository(
                             putString(newHintKey, ts)
                             remove(oldHintKey)
                         }
+                        // And the hint coverage stored pushes earned, with the slots it was earned for
+                        migratePushCoverage(prefs, oldId, newId) { key, value ->
+                            putString(key, value)
+                        }.forEach { remove(it) }
                     }
                     Log.d("ALIGNMENT_DEBUG", "  Re-alignment from refreshRooms completed successfully.")
                 }

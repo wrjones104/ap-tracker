@@ -14,6 +14,15 @@ import org.junit.Test
  */
 class SyncCoordinationTest {
 
+    // --- filterRulesSettled ---
+
+    @Test
+    fun aPushJustAfterARuleChangeSyncsInstead() {
+        assertTrue(filterRulesSettled(now = 1_000_000, lastRuleChange = 0, windowMs = 120_000))
+        assertFalse(filterRulesSettled(now = 1_000_000, lastRuleChange = 990_000, windowMs = 120_000))
+        assertTrue(filterRulesSettled(now = 1_000_000, lastRuleChange = 880_000, windowMs = 120_000))
+    }
+
     // --- workerCanStandDown ---
 
     @Test

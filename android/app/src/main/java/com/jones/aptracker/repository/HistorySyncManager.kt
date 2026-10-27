@@ -31,6 +31,8 @@ object HistorySyncManager {
     private const val ACTIVE_SYNC_WAIT_MS = 60_000L
     private const val ACTIVE_SYNC_POLL_MS = 500L
     private const val FILTER_REPAIR_DEBOUNCE_MS = 1_000L
+    // Far longer than a push takes to arrive while the app is open, which it is during a rule change.
+    private const val FILTER_CHANGE_SYNC_WINDOW_MS = 120_000L
 
     // Its own file, not the sync watermarks: clearing local history resets those, and the
     // re-downloaded items then carry current flags anyway.
@@ -49,6 +51,9 @@ object HistorySyncManager {
 
     @Volatile
     private var pushSyncContext: Context? = null
+
+    @Volatile
+    private var lastFilterRuleChange: Long = 0L
 
     // The push-driven sync. Kept apart from _syncProgress so a push never drives the History
     // screen's progress banner, while the worker can still see that a sync is under way.
@@ -129,7 +134,10 @@ object HistorySyncManager {
     suspend fun handlePush(context: Context, historyJson: String?) {
         val appContext = context.applicationContext
         val payload = parsePushPayload(historyJson)
-        if (payload != null) {
+        val rulesSettled = filterRulesSettled(System.currentTimeMillis(), lastFilterRuleChange, FILTER_CHANGE_SYNC_WINDOW_MS)
+        if (payload != null && !rulesSettled) {
+            Log.d("HistorySyncManager", "An ignore or whitelist rule changed just now; syncing instead of storing the push's items.")
+        } else if (payload != null) {
             val applied = try {
                 HistoryRepository.getInstance(appContext).applyPushPayload(payload)
             } catch (e: CancellationException) {
@@ -140,11 +148,13 @@ object HistorySyncManager {
             }
             if (applied) {
                 Log.d("HistorySyncManager", "Stored ${payload.items.size} items and ${payload.hints.size} hints from the push; no sync needed.")
-                com.jones.aptracker.widget.RecentItemsWidgetUpdater.updateAsync(appContext)
+                // Awaited: it is local and quick, and the caller holds the process for it. The
+                // Milestones refresh is not, as it may call the server.
+                com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(appContext)
                 com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdateAsync(appContext)
                 return
             }
-            Log.d("HistorySyncManager", "The push's items do not follow on from local history; syncing.")
+            Log.d("HistorySyncManager", "The push's items do not follow on from local history, or a sync holds it; syncing.")
         }
         syncForPush(appContext)
     }
@@ -170,6 +180,7 @@ object HistorySyncManager {
     @Synchronized
     fun requestFilterRepair(context: Context) {
         val appContext = context.applicationContext
+        lastFilterRuleChange = System.currentTimeMillis()
         filterRepairJob?.cancel()
         filterRepairJob = applicationScope.launch {
             delay(FILTER_REPAIR_DEBOUNCE_MS)
