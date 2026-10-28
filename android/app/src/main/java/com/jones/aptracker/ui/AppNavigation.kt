@@ -313,9 +313,27 @@ fun MainNavHost(
                     historyViewModel.loadHistoryFor(roomId, query, player)
                     navController.navigate("slot_history")
                 },
+                onNavigateToItemSummary = {
+                    navController.navigate("item_summary/$roomDbId/$slotId")
+                },
                 onNavigateToMilestoneTemplates = {
                     navController.navigate("milestone_templates")
                 }
+            )
+        }
+
+        composable(
+            route = "item_summary/{roomDbId}/{slotId}",
+            arguments = listOf(
+                navArgument("roomDbId") { type = NavType.IntType },
+                navArgument("slotId") { type = NavType.IntType }
+            )
+        ) { backStackEntry ->
+            ItemSummaryScreen(
+                roomDbId = backStackEntry.arguments?.getInt("roomDbId")!!,
+                slotId = backStackEntry.arguments?.getInt("slotId")!!,
+                onBackClick = { navController.popBackStack() },
+                userViewModel = userViewModel
             )
         }
 

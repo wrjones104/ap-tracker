@@ -89,6 +89,22 @@ interface HistoryDao {
         GROUP BY slot_id, playerName, playerAlias, itemName
     """)
     suspend fun getItemCountsForRoom(roomId: Int): List<RoomItemCount>
+
+    /**
+     * One row per item name a slot has received, for the item summary (#465). A Flow, so the
+     * summary updates as syncs and pushes store new items.
+     *
+     * MAX(id) is the only min/max aggregate, so SQLite fills the bare columns (timestamp,
+     * itemFlags, receivedCount) from the latest copy of each item.
+     */
+    @Query("""
+        SELECT itemName, COUNT(*) AS cachedCount, MAX(id) AS latestId,
+               timestamp AS latestTimestamp, itemFlags, receivedCount AS latestReceivedCount
+        FROM history_items
+        WHERE roomId = :roomId AND slot_id = :slotId
+        GROUP BY itemName
+    """)
+    fun observeItemSummaryForSlot(roomId: Int, slotId: Int): Flow<List<SlotItemSummaryRow>>
 }
 
 /** Aggregated row returned by [HistoryDao.getItemCountsForRoom]. */
@@ -98,4 +114,16 @@ data class RoomItemCount(
     val playerAlias: String?,
     val itemName: String,
     val itemCount: Int
+)
+
+/** Aggregated row returned by [HistoryDao.observeItemSummaryForSlot]. */
+data class SlotItemSummaryRow(
+    val itemName: String,
+    /** Copies cached on this device. Short of the real total when history predates retention. */
+    val cachedCount: Int,
+    val latestId: Long,
+    val latestTimestamp: String,
+    val itemFlags: Int,
+    /** The server's running total as of the latest copy; null on rows cached before it existed. */
+    val latestReceivedCount: Int?
 )

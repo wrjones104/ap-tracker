@@ -84,6 +84,7 @@ fun SlotDetailScreen(
     /** After [UserViewModel.stopTrackingSlot] succeeds. The caller decides whether to leave. */
     onStoppedTracking: () -> Unit,
     onNavigateToHistory: (Int, String, String?, String?) -> Unit,
+    onNavigateToItemSummary: () -> Unit = {},
     onNavigateToMilestoneTemplates: () -> Unit = {},
     userViewModel: UserViewModel = viewModel(),
     textClientViewModel: TextClientViewModel = viewModel()
@@ -303,6 +304,12 @@ fun SlotDetailScreen(
                         title = "View History",
                         subtitle = "See all items received by this slot",
                         onClick = { onNavigateToHistory(currentRoom.room_db_id, currentRoom.room_alias, null, slot?.player_name) }
+                    )
+                    ActionCard(
+                        icon = Icons.Default.Inventory2,
+                        title = "Items Received",
+                        subtitle = "Every item this slot has, with counts",
+                        onClick = onNavigateToItemSummary
                     )
                     ActionCard(
                         icon = Icons.Outlined.Notifications,
