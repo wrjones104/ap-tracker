@@ -10,6 +10,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.14.0] - 2026-10-28
+
+_Snooze From Anywhere_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> # **Archipelago Alerts 1.14.0**
+>
+> • **Snooze from any notification.** The Snooze buttons now show up even when the app is closed, not just while it's open.
+> • **Widgets keep up.** The Recent Items widget and History update as soon as a notification arrives.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> • Snooze buttons now show on every notification, even when the app is closed.
+> • The Recent Items widget and History update as soon as a notification arrives.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - The app asks for data-only pushes and draws every notification itself, so Snooze actions show in the background too (#501, PR #505).
+> - A push that carries its items and hint changes is stored directly when it follows on from local history; otherwise the app syncs as before (#416, PR #505).
+>
+> ### Changed
+> - The Recent Items widget redraws after every stored push.
+> - A logged-out device stays silent instead of showing pushes meant for its old account.
+>
+> ### Compatibility
+> - Needs server 1.18.0 (live) for pushes to carry their items; with no payload the app syncs as 1.13.4 does. `DATA_ONLY_PUSH=0` on the server turns data-only pushes off.
+> ```
+
+### Added
+- **Snooze From Any Notification**: The app draws every notification itself, so Snooze buttons show in the background too. PR #505.
+
+### Changed
+- **Widgets Keep Up**: A notification brings its new items and hints, and the app stores them at once when nothing is missing. PR #505.
+
+---
+
 ## [1.13.4] - 2026-10-22
 
 _Slots Right Away, Safer Saves_

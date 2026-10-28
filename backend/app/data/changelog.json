@@ -1,6 +1,43 @@
 {
   "app_releases": [
     {
+      "version": "1.14.0",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-10-28",
+      "title": "Snooze From Anywhere",
+      "highlights": [
+        {
+          "title": "Snooze From Any Notification",
+          "description": "Snooze buttons now show on every notification, even when the app is closed."
+        },
+        {
+          "title": "Widgets Keep Up",
+          "description": "The Recent Items widget and History update as soon as a notification arrives, without waiting on the server."
+        }
+      ],
+      "categories": {
+        "features": [
+          {
+            "title": "Snooze From Any Notification",
+            "description": "The app draws every notification itself, so Snooze buttons show in the background too. PR #505."
+          }
+        ],
+        "improvements": [
+          {
+            "title": "Widgets Keep Up",
+            "description": "A notification brings its new items and hints, and the app stores them at once when nothing is missing. PR #505."
+          }
+        ],
+        "fixes": []
+      },
+      "release_notes": {
+        "discord": "# **Archipelago Alerts 1.14.0**\n\n• **Snooze from any notification.** The Snooze buttons now show up even when the app is closed, not just while it's open.\n• **Widgets keep up.** The Recent Items widget and History update as soon as a notification arrives.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "• Snooze buttons now show on every notification, even when the app is closed.\n• The Recent Items widget and History update as soon as a notification arrives.",
+        "github": "### Added\n- The app asks for data-only pushes and draws every notification itself, so Snooze actions show in the background too (#501, PR #505).\n- A push that carries its items and hint changes is stored directly when it follows on from local history; otherwise the app syncs as before (#416, PR #505).\n\n### Changed\n- The Recent Items widget redraws after every stored push.\n- A logged-out device stays silent instead of showing pushes meant for its old account.\n\n### Compatibility\n- Needs server 1.18.0 (live) for pushes to carry their items; with no payload the app syncs as 1.13.4 does. `DATA_ONLY_PUSH=0` on the server turns data-only pushes off."
+      }
+    },
+    {
       "version": "1.13.4",
       "component": "app",
       "component_label": "App",
