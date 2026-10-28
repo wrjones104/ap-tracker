@@ -27,6 +27,10 @@ interface HintDao {
     @Query("DELETE FROM hints")
     suspend fun deleteAllHints()
 
+    /** Of [ids], those stored as found. A push that arrives late must not mark them unfound again. */
+    @Query("SELECT hint_db_id FROM hints WHERE hint_db_id IN (:ids) AND isFound = 1")
+    suspend fun getFoundHintIds(ids: List<Int>): List<Int>
+
     @Query("SELECT COUNT(*) FROM hints WHERE roomDbId = :roomId AND isFound = 1")
     suspend fun countFoundHints(roomId: Int): Int
 

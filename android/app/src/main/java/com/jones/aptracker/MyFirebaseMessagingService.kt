@@ -12,6 +12,8 @@ import com.google.firebase.messaging.RemoteMessage
 import com.jones.aptracker.network.DeviceRegistrationWorker
 import com.jones.aptracker.network.TokenManager
 import com.jones.aptracker.repository.HistorySyncManager
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MyFirebaseMessagingService : FirebaseMessagingService() {
 
@@ -26,23 +28,48 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         val notificationType = remoteMessage.data["notification_type"] ?: remoteMessage.data["type"]
         val channelId = NotificationHelper.getChannelId(payloadChannelId, notificationType)
 
-        remoteMessage.notification?.let { notification ->
-            Log.d("FCM", "Notification Received: ${notification.title} - ${notification.body} (Channel: $channelId)")
-            // Pass the bundled items, bundle type, and resolved channel ID to the generator
-            sendSystemNotification(notification.title, notification.body, bundledItems, bundleType, channelId)
-        }
-
-        // The sync below calls authenticated endpoints. A logged-out device keeps
-        // receiving pushes until the server prunes its registration, so without this guard
-        // every push fired five requests that could only ever 401. See #308.
-        if (TokenManager(applicationContext).getToken() == null) {
-            Log.w("FCM", "Push received while logged out; skipping history sync.")
+        // A logged-out device keeps receiving pushes until the server prunes its registration
+        // (logging out removes it, but that call can fail). Android draws a notification block
+        // in the background whatever happens here, but not a data-only push, so that stays
+        // silent. A guest signing in with Discord has their token set aside meanwhile
+        // (hasStashedToken) and still gets their notifications.
+        val tokenManager = TokenManager(applicationContext)
+        if (tokenManager.getToken() == null && !tokenManager.hasStashedToken()) {
+            Log.w("FCM", "Push received while logged out; skipping notification and history sync.")
             return
         }
 
-        // One in-process sync, with a WorkManager job behind it in case the process dies. These
-        // used to run as two independent syncs, each with a full hint download (#411).
-        HistorySyncManager.syncForPush(applicationContext)
+        // A data-only push carries its title and body in the data, and reaches this method in the
+        // background too: this app registers for them (#501). Older servers, and devices the
+        // kill switch covers, still send a notification block, which only reaches here in the
+        // foreground.
+        val title = remoteMessage.notification?.title ?: remoteMessage.data["title"]
+        val body = remoteMessage.notification?.body ?: remoteMessage.data["body"]
+        if (title != null || body != null) {
+            Log.d("FCM", "Notification Received: $title - $body (Channel: $channelId)")
+            // Pass the bundled items, bundle type, and resolved channel ID to the generator
+            sendSystemNotification(title, body, bundledItems, bundleType, channelId)
+        }
+
+        // The sync below calls authenticated endpoints. Without this guard, a push during a guest
+        // upgrade fired five requests that could only ever 401. See #308.
+        if (tokenManager.getToken() == null) {
+            Log.w("FCM", "Push received during a guest upgrade; skipping history sync.")
+            return
+        }
+
+        // Store what the push carried, or sync: one in-process sync with a WorkManager job behind
+        // it in case the process dies (#411). Waited for here, on the service's own thread, so
+        // the process is not let go mid-write. The store waits for a running sync only briefly
+        // (applyPushPayload), as every push queued behind this one waits too; the timeout below
+        // is a backstop. No WorkManager job stands behind the store itself: if the process dies
+        // mid-store, the next push finds the gap and syncs.
+        val handled = runBlocking {
+            withTimeoutOrNull(PUSH_STORE_TIMEOUT_MS) {
+                HistorySyncManager.handlePush(applicationContext, remoteMessage.data["history"])
+            }
+        }
+        if (handled == null) HistorySyncManager.syncForPush(applicationContext)
     }
 
     override fun onNewToken(token: String) {
@@ -115,6 +142,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     companion object {
+        // Firebase gives this method about 20 seconds before it may stop the process.
+        private const val PUSH_STORE_TIMEOUT_MS = 8_000L
+
         fun sendLocalNotification(
             context: Context,
             title: String,

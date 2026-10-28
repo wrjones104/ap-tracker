@@ -9,6 +9,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.jones.aptracker.network.RetrofitClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +31,8 @@ object HistorySyncManager {
     private const val ACTIVE_SYNC_WAIT_MS = 60_000L
     private const val ACTIVE_SYNC_POLL_MS = 500L
     private const val FILTER_REPAIR_DEBOUNCE_MS = 1_000L
+    // Far longer than a push takes to arrive while the app is open, which it is during a rule change.
+    private const val FILTER_CHANGE_SYNC_WINDOW_MS = 120_000L
 
     // Its own file, not the sync watermarks: clearing local history resets those, and the
     // re-downloaded items then carry current flags anyway.
@@ -48,6 +51,9 @@ object HistorySyncManager {
 
     @Volatile
     private var pushSyncContext: Context? = null
+
+    @Volatile
+    private var lastFilterRuleChange: Long = 0L
 
     // The push-driven sync. Kept apart from _syncProgress so a push never drives the History
     // screen's progress banner, while the worker can still see that a sync is under way.
@@ -117,6 +123,42 @@ object HistorySyncManager {
         }
     }
 
+    /**
+     * After a push: store the items and hint changes it carried when they follow on from what the
+     * phone has, else sync as before ([syncForPush]). Either way the widgets catch up.
+     *
+     * Storing what the push carried makes no request at all (#416), which matters now that the
+     * app handles every push, in the background too (#501). The Milestones widget still refreshes
+     * its own cache when that is stale, as it does after a sync.
+     */
+    suspend fun handlePush(context: Context, historyJson: String?) {
+        val appContext = context.applicationContext
+        val payload = parsePushPayload(historyJson)
+        val rulesSettled = filterRulesSettled(System.currentTimeMillis(), lastFilterRuleChange, FILTER_CHANGE_SYNC_WINDOW_MS)
+        if (payload != null && !rulesSettled) {
+            Log.d("HistorySyncManager", "An ignore or whitelist rule changed just now; syncing instead of storing the push's items.")
+        } else if (payload != null) {
+            val applied = try {
+                HistoryRepository.getInstance(appContext).applyPushPayload(payload)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("HistorySyncManager", "Could not store the push's items; syncing instead.", e)
+                false
+            }
+            if (applied) {
+                Log.d("HistorySyncManager", "Stored ${payload.items.size} items and ${payload.hints.size} hints from the push; no sync needed.")
+                // Awaited: it is local and quick, and the caller holds the process for it. The
+                // Milestones refresh is not, as it may call the server.
+                com.jones.aptracker.widget.RecentItemsWidgetUpdater.update(appContext)
+                com.jones.aptracker.widget.MilestonesWidgetUpdater.refreshDataAndUpdateAsync(appContext)
+                return
+            }
+            Log.d("HistorySyncManager", "The push's items do not follow on from local history, or a sync holds it; syncing.")
+        }
+        syncForPush(appContext)
+    }
+
     private val _filterFlagsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     /**
@@ -138,6 +180,7 @@ object HistorySyncManager {
     @Synchronized
     fun requestFilterRepair(context: Context) {
         val appContext = context.applicationContext
+        lastFilterRuleChange = System.currentTimeMillis()
         filterRepairJob?.cancel()
         filterRepairJob = applicationScope.launch {
             delay(FILTER_REPAIR_DEBOUNCE_MS)
