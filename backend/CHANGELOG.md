@@ -10,6 +10,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.18.0] - 2026-10-27
+
+_Notifications Bring Their Hints_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - Push payload v2: item and hint pushes carry the room's hint changes plus every item since the user's last carried push, including items from polls that sent no push (#416). PR #504.
+> - Per-user cursors `user_tracked_slots.push_item_cursor` and `user_room_subscriptions.push_hint_cursor` (migration `e4b9c2d7f8a1`) mark where each user's next payload starts. PR #504.
+>
+> ### Changed
+> - `/history/sync` rows are built in `services/history_rows.py`, shared with the push payload so both send identical rows. PR #504.
+> - `[PUSH_PAYLOAD]` withheld reasons are now `mixed_batch`, `too_large`, `no_subscription`, `cursor_error` and `build_error`; `hints_changed` is gone because hints now ride along. PR #504.
+>
+> ### Internal
+> - Backend tests can no longer bind to a developer's real database: `backend/tests/__init__.py` forces SQLite, and a test checks every module. PR #504.
+>
+> ### Compatibility
+> - Additive migration (runs on boot); no API removed. Installed apps ignore the payload; the next app release reads it. The payload is now `v: 2`, and no released app reads v1.
+> ```
+
+### Added
+- **Notifications Bring Their Hints**: Notifications carry new hints and items that arrived without a notification, ready for the next app update. PR #504.
+
+---
+
 ## [1.17.0] - 2026-10-25
 
 _Big Releases Get Through_
