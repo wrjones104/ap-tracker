@@ -10,6 +10,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.15.0] - 2026-10-29
+
+_Inventory_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> # **Archipelago Alerts 1.15.0**
+>
+> • **Inventory.** Open a slot and tap Inventory to see everything it has received, one line per item with how many: "Clamshell ×30" instead of 30 separate lines. Sort by most recent, by count, or A–Z.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> • New Inventory screen: open a slot to see each item it has received once, with how many. Sort by most recent, by count, or A–Z.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - Slot Details → Inventory: each item a tracked slot has received, once, with its count. Sorts by Recent, Count or A–Z, uses the Activity colours, and updates live (#465, PR #509).
+>
+> ### Changed
+> - The View History card now reads "Every item as it arrived, newest first", so the two cards are told apart.
+>
+> ### Notes
+> - Counts use the server's per-item total, so they survive the 90-day history purge for any item with a copy still in the window. Items wholly past it are missing on a rebuilt cache (#510).
+> - App-only; works with server 1.18.0 (live).
+> ```
+
+### Added
+- **Inventory**: Slot Details has an Inventory screen: each item a slot has received, once, with its count, sorted by most recent, by count or A–Z. PR #509.
+
+---
+
 ## [1.14.0] - 2026-10-28
 
 _Snooze From Anywhere_
