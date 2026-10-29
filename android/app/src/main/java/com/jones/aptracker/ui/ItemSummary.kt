@@ -20,9 +20,11 @@ enum class ItemSummarySort(val label: String) {
 
 /**
  * The server deletes item history after its retention window (90 days) but keeps each slot's
- * per-item totals, and every row carries that total as of when it was sent. So the cached rows
- * alone undercount a long game; the latest copy's total does not. The larger of the two wins,
- * which also covers rows cached before the server sent totals.
+ * per-item totals, and every row carries that total as of when it was sent. So for an item with
+ * at least one cached copy, the larger of the cached count and the latest copy's total is right
+ * even when older copies were purged; it also covers rows cached before the server sent totals.
+ * An item with no copy left inside the window is not on this device at all, so a cache rebuilt
+ * after the purge (new install, re-track, clear history) leaves it out (#510).
  */
 fun toItemSummary(rows: List<SlotItemSummaryRow>): List<ItemSummaryEntry> = rows.map {
     ItemSummaryEntry(

@@ -95,11 +95,19 @@ interface HistoryDao {
      * summary updates as syncs and pushes store new items.
      *
      * MAX(id) is the only min/max aggregate, so SQLite fills the bare columns (timestamp,
-     * itemFlags, receivedCount) from the latest copy of each item.
+     * receivedCount) from the latest copy of each item. A second MIN or MAX would break that.
+     *
+     * itemFlags is ORed across every copy instead, through SUM: Archipelago sets flags on each
+     * copy, not on the item, so a filler copy received last must not take the progression
+     * colour off an item that also came as progression.
      */
     @Query("""
         SELECT itemName, COUNT(*) AS cachedCount, MAX(id) AS latestId,
-               timestamp AS latestTimestamp, itemFlags, receivedCount AS latestReceivedCount
+               timestamp AS latestTimestamp,
+               (CASE WHEN SUM(itemFlags & 1) > 0 THEN 1 ELSE 0 END)
+                 | (CASE WHEN SUM(itemFlags & 2) > 0 THEN 2 ELSE 0 END)
+                 | (CASE WHEN SUM(itemFlags & 4) > 0 THEN 4 ELSE 0 END) AS itemFlags,
+               receivedCount AS latestReceivedCount
         FROM history_items
         WHERE roomId = :roomId AND slot_id = :slotId
         GROUP BY itemName

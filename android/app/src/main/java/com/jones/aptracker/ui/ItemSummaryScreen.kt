@@ -34,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -42,12 +43,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jones.aptracker.database.AppDatabase
+import com.jones.aptracker.repository.HistorySyncManager
 import com.jones.aptracker.ui.theme.APTheme
 
 /**
  * Every item a tracked slot has received, one line per item name with its count (#465).
- * Read from the items cached on this device, so it needs no network and only exists for
- * tracked slots, the same as Slot Details.
+ * Read from the items cached on this device, so it only exists for tracked slots, the same as
+ * Slot Details. It goes to the network only to catch up a cache that is behind.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,10 +72,45 @@ fun ItemSummaryScreen(
     val entries = remember(rows) { rows?.let(::toItemSummary) }
     val sorted = remember(entries, sort) { entries?.let { sortItemSummary(it, sort) } }
 
+    // This screen only reads the cache, so catch it up when it holds fewer items than the
+    // server has for the slot: a new install, a cleared history, or a slot tracked moments ago.
+    // Once per visit, and not over a sync that is already running.
+    val syncProgress by HistorySyncManager.syncProgress.collectAsState()
+    var syncRequested by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(rows != null, slot) {
+        val cached = rows?.sumOf { it.cachedCount } ?: return@LaunchedEffect
+        if (slot == null || syncRequested) return@LaunchedEffect
+        if ((cached < slot.item_count || slot.needs_backfill) && !HistorySyncManager.isSyncActive()) {
+            syncRequested = true
+            HistorySyncManager.triggerSync(context, roomDbId)
+        }
+    }
+
     // A keyed list keeps the row that was on top in view when the order changes, which would
-    // leave the new sort's first rows scrolled off above it.
+    // leave the new first rows scrolled off above it. So go to the top on a new sort (but not
+    // on rotation, which restores the sort), and follow new items there unless the user has
+    // scrolled away. That is judged when a scroll ends, because a sync batch can push the
+    // anchored row far down without the user touching the list.
     val listState = rememberLazyListState()
-    LaunchedEffect(sort) { listState.scrollToItem(0) }
+    var scrolledForSort by rememberSaveable { mutableStateOf(sort) }
+    LaunchedEffect(sort) {
+        if (sort != scrolledForSort) {
+            scrolledForSort = sort
+            listState.scrollToItem(0)
+        }
+    }
+    var followTop by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling) {
+                followTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+            }
+        }
+    }
+    val topItem = sorted?.firstOrNull()?.itemName
+    LaunchedEffect(topItem) {
+        if (topItem != null && followTop) listState.scrollToItem(0)
+    }
 
     Scaffold(
         topBar = {
@@ -125,7 +162,7 @@ fun ItemSummaryScreen(
             }
 
             when {
-                sorted == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                sorted == null || (sorted.isEmpty() && syncProgress.isSyncing) -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
                 sorted.isEmpty() -> Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -176,11 +213,14 @@ private fun ItemSummaryRow(entry: ItemSummaryEntry) {
                 style = MaterialTheme.typography.bodyLarge,
                 color = itemColor
             )
-            Text(
-                "Last ${formatRelativeTime(entry.latestTimestamp)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            val received = formatRelativeTime(entry.latestTimestamp)
+            if (received != "Unknown") {
+                Text(
+                    "Last received $received",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         Spacer(Modifier.width(16.dp))
         Text(
