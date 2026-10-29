@@ -302,13 +302,13 @@ fun SlotDetailScreen(
                     ActionCard(
                         icon = Icons.Default.History,
                         title = "View History",
-                        subtitle = "See all items received by this slot",
+                        subtitle = "Every item as it arrived, newest first",
                         onClick = { onNavigateToHistory(currentRoom.room_db_id, currentRoom.room_alias, null, slot?.player_name) }
                     )
                     ActionCard(
                         icon = Icons.Default.Inventory2,
-                        title = "Items Received",
-                        subtitle = "Every item this slot has, with counts",
+                        title = "Inventory",
+                        subtitle = "Each item once, with how many received",
                         onClick = onNavigateToItemSummary
                     )
                     ActionCard(

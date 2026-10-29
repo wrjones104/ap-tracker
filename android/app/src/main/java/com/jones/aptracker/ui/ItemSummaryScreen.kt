@@ -80,7 +80,7 @@ fun ItemSummaryScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Items Received", style = MaterialTheme.typography.titleMedium)
+                        Text("Inventory", style = MaterialTheme.typography.titleMedium)
                         if (slotName != null) {
                             Text(
                                 slotName,
