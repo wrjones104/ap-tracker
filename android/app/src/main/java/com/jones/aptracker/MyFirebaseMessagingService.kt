@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.jones.aptracker.network.DeviceRegistrationWorker
@@ -128,8 +129,11 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             )
         }
 
+        // The same icon and colour the manifest gives Firebase for the pushes it draws itself.
+        // Since data-only pushes (#501) every push is drawn here (#513).
         val notificationBuilder = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_name)
+            .setColor(ContextCompat.getColor(this, R.color.teal_200))
             .setContentTitle(title)
             .setContentText(body)
             .setAutoCancel(true)
@@ -167,7 +171,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             )
 
             val notificationBuilder = NotificationCompat.Builder(context, channelId)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_name)
+                .setColor(ContextCompat.getColor(context, R.color.teal_200))
                 .setContentTitle(title)
                 .setContentText(body)
                 .setAutoCancel(true)
