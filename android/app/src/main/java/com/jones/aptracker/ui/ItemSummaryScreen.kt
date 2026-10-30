@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -25,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -69,8 +72,11 @@ fun ItemSummaryScreen(
     }
     val rows by summaryFlow.collectAsState(initial = null)
     var sort by rememberSaveable { mutableStateOf(ItemSummarySort.RECENT) }
+    var query by rememberSaveable { mutableStateOf("") }
     val entries = remember(rows) { rows?.let(::toItemSummary) }
-    val sorted = remember(entries, sort) { entries?.let { sortItemSummary(it, sort) } }
+    val sorted = remember(entries, sort, query) {
+        entries?.let { sortItemSummary(filterItemSummary(it, query), sort) }
+    }
 
     // This screen only reads the cache, so catch it up when it holds fewer items than the
     // server has for the slot: a new install, a cleared history, or a slot tracked moments ago.
@@ -87,19 +93,22 @@ fun ItemSummaryScreen(
     }
 
     // A keyed list keeps the row that was on top in view when the order changes, which would
-    // leave the new first rows scrolled off above it. So go to the top on a new sort (but not
-    // on rotation, which restores the sort), and follow new items there unless the user has
-    // scrolled away. That is judged when a scroll ends, because a sync batch can push the
+    // leave the new first rows scrolled off above it. So go to the top on a new sort or search
+    // (but not on rotation, which restores both), and follow new items there unless the user
+    // has scrolled away. That is judged when a scroll ends, because a sync batch can push the
     // anchored row far down without the user touching the list.
     val listState = rememberLazyListState()
+    var followTop by remember { mutableStateOf(true) }
     var scrolledForSort by rememberSaveable { mutableStateOf(sort) }
-    LaunchedEffect(sort) {
-        if (sort != scrolledForSort) {
+    var scrolledForQuery by rememberSaveable { mutableStateOf(query) }
+    LaunchedEffect(sort, query) {
+        if (sort != scrolledForSort || query != scrolledForQuery) {
             scrolledForSort = sort
+            scrolledForQuery = query
+            followTop = true
             listState.scrollToItem(0)
         }
     }
-    var followTop by remember { mutableStateOf(true) }
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
             if (!scrolling) {
@@ -139,6 +148,23 @@ fun ItemSummaryScreen(
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            TextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                label = { Text("Search items") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                        }
+                    }
+                },
+                singleLine = true
+            )
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -162,12 +188,12 @@ fun ItemSummaryScreen(
             }
 
             when {
-                sorted == null || (sorted.isEmpty() && syncProgress.isSyncing) -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                sorted == null || (entries.isNullOrEmpty() && syncProgress.isSyncing) -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
                 sorted.isEmpty() -> Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                     Text(
-                        "No items received yet.",
+                        if (entries.isNullOrEmpty()) "No items received yet." else "No items match \"${query.trim()}\".",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

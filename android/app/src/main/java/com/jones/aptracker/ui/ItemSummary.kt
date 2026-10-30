@@ -49,3 +49,10 @@ fun sortItemSummary(entries: List<ItemSummaryEntry>, sort: ItemSummarySort): Lis
         ItemSummarySort.NAME -> entries.sortedWith(byName)
     }
 }
+
+/** Items whose name contains [query], ignoring case. A blank query keeps everything. */
+fun filterItemSummary(entries: List<ItemSummaryEntry>, query: String): List<ItemSummaryEntry> {
+    val needle = query.trim()
+    if (needle.isEmpty()) return entries
+    return entries.filter { it.itemName.contains(needle, ignoreCase = true) }
+}

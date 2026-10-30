@@ -82,4 +82,14 @@ class ItemSummaryTest {
             sortItemSummary(entries, ItemSummarySort.NAME).map { it.itemName }
         )
     }
+
+    @Test
+    fun `search matches part of a name and ignores case`() {
+        val entries = toItemSummary(
+            listOf(row("Small Key", 1, 1), row("Big Key", 1, 2), row("Bomb", 1, 3))
+        )
+        assertEquals(listOf("Small Key", "Big Key"), filterItemSummary(entries, "  KEY ").map { it.itemName })
+        assertEquals(entries, filterItemSummary(entries, " "))
+        assertEquals(emptyList<ItemSummaryEntry>(), filterItemSummary(entries, "Hookshot"))
+    }
 }

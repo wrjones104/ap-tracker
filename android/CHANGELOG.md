@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
-## [1.15.0] - 2026-10-29
+## [1.15.0] - 2026-10-30
 
 _Inventory_
 
@@ -18,7 +18,7 @@ _Inventory_
 > ```markdown
 > # **Archipelago Alerts 1.15.0**
 >
-> • **Inventory.** Open a slot and tap Inventory to see everything it has received, one line per item with how many: "Clamshell ×30" instead of 30 separate lines. Sort by most recent, by count, or A–Z.
+> • **Inventory.** Open a slot and tap Inventory to see everything it has received, one line per item with how many: "Clamshell ×30" instead of 30 separate lines. Sort by most recent, by count, or A–Z, or search for an item by name.
 >
 > GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
 > Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
@@ -26,13 +26,13 @@ _Inventory_
 
 > **Play Console — What's New Copy-Paste:**
 > ```markdown
-> • New Inventory screen: open a slot to see each item it has received once, with how many. Sort by most recent, by count, or A–Z.
+> • New Inventory screen: open a slot to see each item it has received once, with how many. Sort by most recent, by count, or A–Z, or search by name.
 > ```
 
 > **GitHub Release Copy-Paste:**
 > ```markdown
 > ### Added
-> - Slot Details → Inventory: each item a tracked slot has received, once, with its count. Sorts by Recent, Count or A–Z, uses the Activity colours, and updates live (#465, PR #509).
+> - Slot Details → Inventory: each item a tracked slot has received, once, with its count. Sorts by Recent, Count or A–Z, searches by item name, uses the Activity colours, and updates live (#465, PRs #509, #512).
 >
 > ### Changed
 > - The View History card now reads "Every item as it arrived, newest first", so the two cards are told apart.
@@ -43,7 +43,7 @@ _Inventory_
 > ```
 
 ### Added
-- **Inventory**: Slot Details has an Inventory screen: each item a slot has received, once, with its count, sorted by most recent, by count or A–Z. PR #509.
+- **Inventory**: Slot Details has an Inventory screen: each item a slot has received, once, with its count, sortable by recent, count or A–Z, and searchable. PRs #509, #512.
 
 ---
 
