@@ -31,6 +31,8 @@ services:
     volumes:
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini
+      # Firebase service-account keys. Point FIREBASE_KEY_FILE_* at /app/.keystore/<file>, not the host path.
+      - ./.keystore:/app/.keystore:ro
     deploy:
       resources:
         limits:
@@ -56,6 +58,9 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      # Same keys as the api container: the poller sends the real pushes.
+      - ./.keystore:/app/.keystore:ro
     deploy:
       resources:
         limits:

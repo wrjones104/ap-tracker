@@ -115,7 +115,7 @@ pip install -r backend/requirements.txt
 
 #### 2. Firebase credentials
 
-Generate a service account private key in your Firebase project settings and save the JSON as `service-account-key.json` in `backend/`. Override the path with `FIREBASE_KEY_FILE_ANDROID` if you keep it elsewhere. An iOS key (`service-account-key-ios.json`, or `FIREBASE_KEY_FILE_IOS`) is optional — the backend initializes a second Firebase app only if the file exists.
+Generate a service account private key in your Firebase project settings and save the JSON as `service-account-key.json` in `backend/`. Override the path with `FIREBASE_KEY_FILE_ANDROID` if you keep it elsewhere. An iOS key (`service-account-key-ios.json`, or `FIREBASE_KEY_FILE_IOS`) is optional — the backend initializes a second Firebase app only if the file exists. Under Docker Compose, put keys in the repo-root `.keystore/` folder (mounted at `/app/.keystore`) and set the variable to the container path, for example `FIREBASE_KEY_FILE_IOS=/app/.keystore/<file>.json`.
 
 #### 3. Configure environment variables
 
