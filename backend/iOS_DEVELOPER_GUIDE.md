@@ -63,7 +63,7 @@ curl -X PUT https://archipelagoalerts.com/rooms/<subscription_id>/slots \
 curl -X POST https://archipelagoalerts.com/users/me/test-notification \
   -H "Authorization: Bearer <JWT>"
 ```
-The response reports `sent`, `failed` and `removed` counts. `sent ≥ 1` plus an alert on the phone means the whole chain works.
+The response reports `sent`, `failed` and `removed` counts. `failed: 0` plus an alert on the iPhone means the whole chain works. (On an account that also has an Android device, `sent: 1` can mean only the Android one got it.)
 
 ---
 
@@ -102,7 +102,7 @@ Discord sign-in uses OAuth 2 with PKCE. Your app gets the authorization code fro
 - **Client ID**: ask the backend administrator. It is not a secret.
 - **Scope**: `identify`
 - **PKCE**: `S256`
-- **Redirect URI**: `com.jones.aptracker:/oauth2redirect`, exactly. The backend accepts only this one value and answers `400 Redirect URI mismatch.` for anything else. Register the URL scheme `com.jones.aptracker` in your app (`ASWebAuthenticationSession` with `callbackURLScheme: "com.jones.aptracker"` works).
+- **Redirect URI**: `com.jones.aptracker:/oauth2redirect`, exactly. The backend accepts only one value, its `DISCORD_REDIRECT_URI` setting (confirm it with the administrator), and answers `400 Redirect URI mismatch.` for anything else. Register the URL scheme `com.jones.aptracker` in your app (`ASWebAuthenticationSession` with `callbackURLScheme: "com.jones.aptracker"` works).
 - **Request Body**:
   ```json
   {
@@ -112,10 +112,15 @@ Discord sign-in uses OAuth 2 with PKCE. Your app gets the authorization code fro
   }
   ```
 - **Response (200 OK)**: `{ "message": "Login successful!", "token": "<JWT>", "is_unlimited_pin": false }`
-- **Guest upgrade**: to turn a guest account into a Discord account and keep its rooms, send the guest's JWT as the `Authorization: Bearer` header on this call. Without it, the server creates or signs in to a separate Discord account and the guest's rooms stay behind. A guest token that has been logged out (revoked) is ignored, and the call becomes an ordinary sign-in.
+- **Token lifetime**: a Discord JWT lasts **90 days** (guest tokens last 730) and cannot be refreshed. On a `401` from a protected call, send the user through Discord sign-in again.
+- **Guest upgrade**: to turn a guest account into a Discord account and keep its rooms, send the guest's JWT as the `Authorization: Bearer` header on this call. Keep the guest token in the Keychain until a `200` replaces it. Without the header, the server creates or signs in to a separate Discord account and the guest's rooms stay behind. A guest token that has been logged out (revoked) is ignored, and the call becomes an ordinary sign-in.
+- **Response (409 Conflict)**: `{ "error": "account_conflict", "message": "..." }` when a guest upgrade targets a Discord account that already belongs to another user. The guest account is not changed. This is the usual case for someone who reinstalls, starts as a guest, then signs in. The server has already spent Discord's single-use `code` by then, so **do not retry with the same `code`**. To sign in to the existing account instead, log out of the guest (`POST /logout`) and start a fresh Discord flow with **no** `Authorization` header. The guest's rooms stay on the guest account.
 
-### Endpoint: `POST /auth/logout`
-Revokes the JWT in the `Authorization` header. It does not unregister the device; call `DELETE /devices` first if the phone should stop getting pushes.
+### Endpoint: `POST /logout`
+Revokes the JWT in the `Authorization` header (`200`, `{ "message": "Successfully logged out." }`). Note the path: unlike `/auth/guest` and `/auth/callback`, it has **no** `/auth` prefix, and `POST /auth/logout` answers `404`. It does not unregister the device; call `DELETE /devices` first, while the token is still valid, if the phone should stop getting pushes.
+
+### Endpoint: `DELETE /users/me`
+Deletes the account and everything it owns (devices, rooms, slots, milestones, templates) and revokes the JWT (`200`). The App Store requires in-app account deletion for apps that let users create an account (Guideline 5.1.1(v)).
 
 ---
 
@@ -181,7 +186,7 @@ Once your iOS app retrieves the FCM token and the IDFV, send them to the backend
     "message": "Device registered successfully"
   }
   ```
-- **Response (410 Gone)**: the server dry-runs every token against FCM, and answers this when FCM says the token is retired (for example, a token restored from a device backup):
+- **Response (410 Gone)**: the server dry-runs the token against FCM, and answers this when FCM says the token is retired (for example, a token restored from a device backup):
   ```json
   {
     "error": "fcm_token_unregistered",
@@ -263,6 +268,11 @@ Sends a test push to every device registered on the account, through each device
   - **`cheese_*`**: Cheese Tracker state for this room; see [Section 9](#9-cheese-tracker-integration-optional).
 - A room that every subscriber has archived is not polled. Unarchiving it resumes updates.
 
+### Step 3: Update, Archive, Revive, or Unsubscribe
+- **`PUT /rooms/<subscription_id>`**: send any of `{ "alias": "...", "icon_name": "...", "is_archived": true }`. Answers `200` with `{ "message": "Subscription updated.", "is_archived": true }`; `400` if none of the three is sent, `403` if not subscribed.
+- **`POST /rooms/<subscription_id>/revive`**: wakes a `suspended_error` or `suspended_stale` room and queues an immediate poll (`200`). Answers `400` if the room is completed or not suspended, and `429` within 30 seconds of the last revive of that room.
+- **`DELETE /rooms/<subscription_id>`**: unsubscribes the user (`200`; `404` if not subscribed). A room linked to Cheese Tracker is also hidden on the user's Cheese dashboard, and a room with a Cheese tracker is remembered as dismissed so the suggestions do not offer it back.
+
 ---
 
 ## 6. Slot / Player Tracking
@@ -333,6 +343,8 @@ Sends a test push to every device registered on the account, through each device
 ### Step 3: All Tracked Slots in One Call
 - **Endpoint**: `GET /users/me/tracked-slots`
 - **Response (200 OK)**: one entry per subscribed room, with the room's `room_db_id`, `room_id`, `room_alias`, `icon_name`, `is_archived`, `host`, and a `tracked_slots` list. Each tracked slot carries `slot_id`, `player_name`, `player_alias`, `game`, `is_finished`, `has_all_checks`, `checks_done`, `total_locations`, `last_activity`, `item_count`, `needs_backfill`, `track_mode`, every per-slot preference (including `finished_definition`), `snooze_until`, and `cheese`.
+- Unlike `GET /rooms`, this includes **archived** rooms. Filter on `is_archived` for screens that show active rooms only.
+- It is the only route that returns every per-slot preference override; `GET /rooms/<id>/players` returns just the five `notify_*` category fields.
 - The rooms carry no `players` list any more. Use `GET /rooms/<id>/players` for that.
 - **Caching**: the response has an `ETag` and `Cache-Control: private, no-cache`. Send the ETag back as `If-None-Match` and the server answers `304 Not Modified` with no body when nothing changed. `URLSession` with its default `URLCache` usually revalidates this way on its own.
 
@@ -371,12 +383,13 @@ Users can customize notification settings on a per-slot basis (e.g. disable usef
 - **`notify_useful`** (Boolean, default `true`): Toggles notifications for useful but non-critical items (e.g., heart containers, capacity upgrades).
 - **`notify_filler`** (Boolean, default `false`): Toggles notifications for filler items (minor/common items). Off by default to avoid notification spam.
 - **`notify_trap`** (Boolean, default `false`): Toggles notifications for trap items.
-- **`notify_hints`** (Boolean, default `true`): Toggles notifications when a slot is mentioned in an Archipelago server hint. A hint whose location was already checked when the server first saw it does not notify.
-- **`notify_hints_remote_items`** (Boolean, default `true`): If `true`, you will be notified when a hint reveals an item on someone else's slot that belongs to you.
+- **`notify_hints`** (Boolean, default `true`): Toggles notifications for hints about items **located in this slot's world** (the slot is the hint's `location_owner`).
+- **`notify_hints_remote_items`** (Boolean, default `true`): Toggles notifications for hints about **this slot's own items** located in someone else's world (the slot is the hint's `item_owner`). The two settings are independent; neither switches the other off.
+  - A self-hint (the item is in the slot's own world) never notifies, and neither does a hint whose location was already checked when the server first saw it.
 - **`notify_finished`** (Boolean, default `false`): If `true`, item and hint notifications **keep arriving after the slot is finished**. It does not control the "Player(s) Finished!" announcement itself, which always arrives (only snooze silences it).
 - **`finished_definition`** (String, default `"goal"`): What counts as finished for this slot: `goal` (reached its goal), `all_checks` (no locations left), `both`, or `either`. Any other value answers `400`. It decides when the finish announcement fires and when `notify_finished` takes over.
 - **`use_condensed_messages`** (Boolean, default `false`): If `true`, condenses the notification string length (e.g., `"Sent to HeroLink by SamusAran"` instead of `"SamusAran sent Morph Ball to HeroLink (Brinstar)"`).
-- **`combine_notifications`** (Boolean, default `false`): If `true`, notifications triggered during the same polling cycle are bundled together into a single message payload.
+- **`combine_notifications`** (Boolean, default `false`): If `true`, notifications triggered during the same polling cycle are bundled together into a single message payload. The server currently reads only the **account-level** value; a per-slot override is stored but has no effect. Regardless of the setting, a poll that produces 10 or more item notifications for a user is always bundled.
 - **`suppress_own_events`** (Boolean, default `true`): If `true`, blocks notifications for items sent to you by *other* players. Useful if you are playing online and already seeing items appear in real-time.
 - **`remove_emojis`** (Boolean, default `false`): If `true`, strips category prefix emojis (e.g., 🏆, ✅, 💡) from the push notification title.
 - **`suppress_self_found`** (Boolean, default `true`): If `true`, blocks notifications for items you found for *yourself* in your own world.
@@ -408,7 +421,7 @@ You can register milestone rules to notify only when a certain quantity of one o
   }
   ```
 - **Limit**: a slot holds at most **50** groups. Creating one more answers `400` with `"reason": "slot_group_limit"`.
-- **Already met**: a group whose quantities the slot has already reached is marked met on creation, silently, instead of firing on the next unrelated item.
+- **Initial state**: a group made here always starts with `is_triggered: false`, and item names are not checked against the game data. If the slot has already reached the quantities, the group fires a "milestone reached" push on the slot's next item ([#521](https://github.com/wrjones104/ap-tracker/issues/521)). Use the bulk endpoint below when that should not happen.
 - **Related endpoints**:
   - `GET /rooms/<subscription_id>/slots/<slot_id>/threshold-groups` — list existing groups, ordered by `id`.
   - `PUT /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/<group_id>` — update a group (same body as create). A group that has already fired cannot be edited (`400`).
@@ -420,6 +433,7 @@ You can register milestone rules to notify only when a certain quantity of one o
 - **Endpoint**: `POST /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/bulk`
 - **Request Body**: `{ "groups": [ { "name": "...", "items": [ ... ] }, ... ] }`, at most 50 groups.
 - Item names are checked against the slot's game data on the server. A group is skipped rather than failing the request when none of its items exist in this seed (`no_valid_items`), its name matches a group already on the slot (`duplicate_name`), or the slot is full (`slot_group_limit`).
+- **Already met**: a created group whose quantities the slot has already reached is marked met (`is_triggered: true`) on creation, silently. Only this endpoint and template auto-apply do this; the single `POST` and the `PUT` do not.
 - **Response (201 Created)**: `{ "message": "...", "created": [{ "id": 43, "name": "..." }], "skipped": [{ "name": "...", "reason": "duplicate_name" }] }`. If nothing could be created it answers `400` with the same `skipped` list.
 
 #### Every slot's groups in one call
@@ -476,6 +490,8 @@ Instead of making repetitive requests to separate history pages, use the central
   }
   ```
 - **Persist the watermarks** and replay them on the next sync. Do not derive your cursor from the timestamps of the returned rows — the server re-indexes item ids, and the watermarks account for that. Item watermarks are keyed `"<room_db_id>_<slot_id>"`, hint watermarks by `"<room_db_id>"`.
+- **Stale cursor**: if a sent `last_id` is higher than the server's newest item id for that slot, the server resets the cursor and sends the slot's history again from the start. Upsert rows by `id`, and drop cached rows for that slot whose `id` is above the new watermark.
+- **Scope**: only **non-archived** rooms are synced. `new_items` holds only items your tracked slots received, but **`updated_hints` holds every hint in each room, including hints between players you don't track**. Filter hints on the client against your tracked `(room_db_id, slot_id)` pairs, matching on `item_owner_id` or `location_owner_id`. Never match on `slot_id` alone: slot numbers restart at 1 in every room.
 - One call returns at most 500 items and 100 hints. **A room missing from `hint_watermarks` means "keep the cursor you sent"**: its hints may still be queued behind other rooms' hints in a full batch. Sync again until the deltas are empty.
 - History rows also carry `playerHasAllChecks`, which is `null` when the room's check counts were never fetched (see `has_all_checks` in [Section 6](#6-slot--player-tracking)).
 
@@ -524,9 +540,12 @@ Both take the same body shape:
 ### Game Data (Item and Location Names)
 Push and history payloads name items and locations already. These routes are for screens that need a game's full name tables, such as an item picker. All need the `Authorization` header.
 - **`GET /datapackage/checksum/<checksum>`** — one game's tables, `{ "checksum", "game", "items": {"<id>": "<name>"}, "locations": {"<id>": "<name>"} }`. A checksum is a content hash, so the response never changes: it is served with an `ETag` and `Cache-Control: private, max-age=31536000, immutable`, and you can keep it forever. A game with an empty datapackage answers `200` with empty tables; `404` means the server has not cached that checksum.
-- **`GET /rooms/<subscription_id>/datapackage`** — the whole room's tables in one response, including `slot_to_checksum` and `generic_checksum` (the checksum for Archipelago's own locations, such as `-1` Cheat Console and `-2` Server). It no longer returns `item_flags`.
-- **`GET /games`** — every game name the server knows. Now requires sign-in.
-- **`GET /games/<game>/items`** — a game's item names. The game name must match exactly (case included).
+- **`GET /rooms/<subscription_id>/datapackage`** — the whole room's tables in one response: `{ "players": {"<slot_id>": "<name>", "0": "Archipelago"}, "items": {"<checksum>_<id>": "<name>"}, "locations": {"<checksum>_<id>": "<name>"}, "slot_to_checksum": {"<slot_id>": "<checksum>"}, "generic_checksum": "<checksum or null>" }`.
+  - Unlike the per-checksum route, `items` and `locations` are keyed **`"<checksum>_<id>"`**, not `"<id>"`, and group entries end in `" (Group)"`.
+  - `generic_checksum` is the checksum for Archipelago's own locations (such as `-1` Cheat Console and `-2` Server): look those up under `"<generic_checksum>_<id>"`.
+  - It no longer returns `item_flags`.
+- **`GET /games`** — a JSON array of strings: every game name the server knows. Now requires sign-in.
+- **`GET /games/<game>/items`** — a JSON array of **objects**, `[ { "name": "Hookshot", "is_group": false }, { "name": "Weapons", "is_group": true } ]`, items and item groups together, sorted by `name`. The game name must match exactly, case included (use the spelling `GET /games` returns), and must be percent-encoded as a path component.
 
 ---
 
@@ -537,7 +556,10 @@ The official app can mirror rooms to Cheese Tracker for users who connect it. Yo
 - **Per-room link**: each subscription has `cheese_link` (`none` or `linked`), returned by `GET /rooms`. Set it with `PUT /rooms/<subscription_id>/cheese_link` and body `{ "linked": true }`. Linking a room with no tracker yet creates one, which takes a couple of minutes: `cheese_link` is `linked` while `cheese_tracker_id` is still `null`. Unlinking stops this app writing to the tracker; it does not delete the tracker or release claims.
 - **`cheese_unlisted`**: the linked tracker has dropped off the user's Cheese dashboard. Show it to the user; the server never removes a room because of it.
 - **Play vs. watch**: a slot in `play` mode is claimed on Cheese as the user's; `watch` alerts without claiming. When someone else claims a slot, or the tracker releases it, the server moves it to `watch` and sends a push of type `conflict`.
-- **Suggestions**: `GET /integrations/cheese/available` lists trackers on the user's Cheese dashboard that the app does not have yet, with `POST /integrations/cheese/available/dismiss` and `POST /integrations/cheese/available/import` beside it.
+- **Known gap ([#520](https://github.com/wrjones104/ap-tracker/issues/520))**: when a slot is already claimed at the moment the user tracks it in `play` mode, that `conflict` push currently reaches Android devices only. The slot still moves to `watch`, so re-read `track_mode` after `PUT /rooms/<id>/slots` rather than waiting for the push.
+- **Suggestions**: `GET /integrations/cheese/available` lists trackers on the user's Cheese dashboard that the app does not have yet.
+  - `POST /integrations/cheese/available/dismiss` and `POST /integrations/cheese/available/import` both take `{ "cheese_tracker_ids": ["..."] }`, a non-empty list.
+  - Import handles at most 25 trackers per call and returns the rest in `deferred`; send those in a follow-up call. It also reports `imported`, `relinked`, and `linked_elsewhere` (trackers refused because another tracker already owns their room).
 
 ---
 
@@ -638,7 +660,7 @@ All values arrive as strings, per FCM's data-payload contract.
 | --- | --- | --- |
 | `notification_type` | Yes | The event type: `item_progression`, `item_useful`, `item_filler`, `item_trap`, `item_milestone`, `hint`, `player_finish`, `conflict` (a Cheese Tracker slot moved to Watching), or `test`. A combined push takes the type of its first event, or `item_progression` if any event in it is progression or a milestone. |
 | `channel_id` | Yes | The Android notification channel. Android-specific, but a **useful categorization signal on iOS** — see below. |
-| `bundled_items` | No | Present on **combined** notifications only. A JSON-encoded **string** holding a list of display strings, one per event, e.g. `"[\"Morph Ball [SamusAran]\", \"Boss Key [HeroLink]\"]"`; hint entries are the hint's body text. A very large bundle is trimmed to fit FCM's 4 KB limit and ends with an entry like `"…and 12 more"`. Parse it as JSON after reading it as a string. |
+| `bundled_items` | No | Present on **combined** notifications and on the test push (three dummy entries). A JSON-encoded **string** holding a list of display strings, one per event, e.g. `"[\"Morph Ball [SamusAran]\", \"Boss Key [HeroLink]\"]"`; hint entries are the hint's body text. A very large bundle is trimmed to fit FCM's 4 KB limit and ends with an entry like `"…and 12 more"`. Parse it as JSON after reading it as a string. |
 | `bundle_type` | No | Sent with `bundled_items`: the type of the bundled batch, mirroring `notification_type` for the batch as a whole. |
 
 ### Mapping `channel_id` to iOS
@@ -652,7 +674,7 @@ All values arrive as strings, per FCM's data-payload contract.
 | `channel_hints` | `hint` | `.active` |
 | `channel_general` | `player_finish`, `conflict`, `test`, and any unmapped type | `.passive` |
 
-On Android only `channel_progression` goes out at high priority; on iOS every push is sent with `apns-priority: 10`. Registering matching `UNNotificationCategory` values lets users tune each class of alert separately, which is the iOS equivalent of the per-channel controls Android users get in system settings.
+On iOS every push is sent with `apns-priority: 10`. Registering matching `UNNotificationCategory` values lets users tune each class of alert separately, which is the iOS equivalent of the per-channel controls Android users get in system settings.
 
 Use `bundle_type` and `bundled_items` to show the list of events when the user taps a combined notification.
 
