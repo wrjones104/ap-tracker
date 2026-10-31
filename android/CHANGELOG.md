@@ -10,6 +10,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.15.1] - 2026-10-31
+
+_Notification Icon_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> # **Archipelago Alerts 1.15.1**
+>
+> • **The Archipelago icon is back.** Notifications show the Archipelago logo again instead of the plain Android robot.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> • Notifications show the Archipelago icon again instead of the default Android one.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - Notifications show the Archipelago status-bar icon and colour again. Since 1.14.0 the app draws every notification itself, and it was using the stock launcher drawable (#513, PR #514).
+>
+> ### Notes
+> - App-only; works with server 1.18.0 (live).
+> - Build tooling: Android Gradle Plugin 9.4.0 → 9.5.0.
+> ```
+
+### Fixed
+- **Notification Icon**: Notifications show the Archipelago icon again instead of the default Android one. PR #514.
+
+---
+
 ## [1.15.0] - 2026-10-30
 
 _Inventory_
