@@ -136,7 +136,9 @@ Deployed on a Google Cloud VM via Docker Compose:
 * **`api`**: Flask API container running `run_api_only.py` under Waitress, capped at 1 CPU / 1 GB.
 * **`poller`**: Worker container running `run_poller_only.py`, capped at 1.5 CPU / 3 GB.
 
-PostgreSQL is **not** part of the production stack. It runs outside Compose and is reached over `host.docker.internal` (mapped to the host gateway), so `DATABASE_URL` in `backend/.env` points at the host rather than at a service name. Both containers mount `alembic/` and `alembic.ini` so the startup migration has its scripts.
+PostgreSQL is **not** part of the production stack. It runs outside Compose and is reached over `host.docker.internal` (mapped to the host gateway), so `DATABASE_URL` in `backend/.env` points at the host rather than at a service name. The `api` container mounts `alembic/` and `alembic.ini` so the startup migration has its scripts.
+
+Both containers mount the host's `.keystore/` folder (repo root, git-ignored) read-only at `/app/.keystore`, for the Firebase service-account keys. `FIREBASE_KEY_FILE_ANDROID` and `FIREBASE_KEY_FILE_IOS` in `backend/.env` must give the **container** path (`/app/.keystore/<file>`); a host path such as `/var/www/ap-tracker/.keystore/...` does not exist inside the container, and the iOS app is skipped with `[FIREBASE] Key file for ios not found`. The files must be readable by the container's non-root user. Change a key or its path with `docker compose up -d`, not `restart`.
 
 **nginx** (1.22.1, Debian's package) also runs on the VM outside Compose. It terminates TLS (Certbot-managed certificates) for `archipelagoalerts.com` and the original domain `ap-alerts.seedbot.net`, and proxies both to the API on port 5000. It also gzips JSON responses, which removed most of the internet egress (#410). That setting lives in nginx, not in Flask, so a rebuilt VM needs it back. Copies of `/etc/nginx/nginx.conf` and the site config (`/etc/nginx/sites-enabled/*`) are kept in [`deploy/nginx/`](deploy/nginx/); the VM's files are the source of truth, so update the copies when you change them.
 
