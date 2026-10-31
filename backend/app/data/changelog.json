@@ -1,6 +1,34 @@
 {
   "app_releases": [
     {
+      "version": "1.15.1",
+      "component": "app",
+      "component_label": "App",
+      "release_date": "2026-10-31",
+      "title": "Notification Icon",
+      "highlights": [
+        {
+          "title": "Notification Icon",
+          "description": "Notifications show the Archipelago icon again instead of the plain Android one."
+        }
+      ],
+      "categories": {
+        "features": [],
+        "improvements": [],
+        "fixes": [
+          {
+            "title": "Notification Icon",
+            "description": "Notifications show the Archipelago icon again instead of the default Android one. PR #514."
+          }
+        ]
+      },
+      "release_notes": {
+        "discord": "# **Archipelago Alerts 1.15.1**\n\n• **The Archipelago icon is back.** Notifications show the Archipelago logo again instead of the plain Android robot.\n\nGitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>\nPlay Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>",
+        "play_store": "• Notifications show the Archipelago icon again instead of the default Android one.",
+        "github": "### Fixed\n- Notifications show the Archipelago status-bar icon and colour again. Since 1.14.0 the app draws every notification itself, and it was using the stock launcher drawable (#513, PR #514).\n\n### Notes\n- App-only; works with server 1.18.0 (live).\n- Build tooling: Android Gradle Plugin 9.4.0 → 9.5.0."
+      }
+    },
+    {
       "version": "1.15.0",
       "component": "app",
       "component_label": "App",
