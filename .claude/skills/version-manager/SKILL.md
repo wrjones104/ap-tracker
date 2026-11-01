@@ -83,6 +83,8 @@ Execute automated guardrails to ensure zero drift:
 ### Step 7: Open the PR and Ship in Order
 Before opening the PR, decide which side goes first. **Server first when it adds behaviour, app first when the server withdraws or moves something** an installed app relies on, or raise the floor: set `MIN_APP_VERSION` in the server's `backend/.env`, run `docker compose up -d api` (not `restart`, which keeps the old environment), and confirm `curl https://archipelagoalerts.com/config` serves the new value before deploying. Check every change in the release, including background tasks: a behaviour removed from the poller or a sync does not show up in an API contract diff. See the deploy-order gotcha in `LLM.md`. State the order in the PR.
 
+Then check the third-party iOS app, which no deploy order covers. Give each server change in the release an iOS impact: none, additive, or breaking. A breaking change needs the user's approval and a notice already sent to the iOS developer before this PR opens. If either is missing, stop and ask. Raising `MIN_APP_VERSION` also affects the iOS app. A change to anything `backend/iOS_DEVELOPER_GUIDE.md` documents needs the guide updated in this release. State the iOS impact in the PR. See the "Third-party iOS app" gotcha in `LLM.md`.
+
 Open the release PR. After the user merges it, walk the ship order:
 - **Server release:** the user deploys `main`. The version is read from `changelog.json`, so the label updates on deploy.
 - **App release:** the app fetches What's New from the server (`GET /api/whats_new/latest?version=<versionName>`), so the entry must be **on the prod server before anyone tests the build**:

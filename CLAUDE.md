@@ -4,6 +4,10 @@ Please refer to the primary project documentation files:
 - **[LLM.md](LLM.md):** Project overview, directory structure, gotchas, and guidelines.
 - **[architecture.md](architecture.md):** Detailed system architecture, Mermaid diagrams, Redis Pub/Sub events, database composite indexes, and Docker topology.
 
+## iOS App Impact
+
+An independent developer's native iOS app uses this server, and we cannot update it. Before you write code for any server change that could affect it, tell the user what changes and what iOS users would notice, and wait for their decision. Prefer changes that leave the iOS app alone. When a breaking change is necessary, the user gives its developer notice first. What counts, and the full rule: the "Third-party iOS app" gotcha in [LLM.md](LLM.md).
+
 ## Out-of-Scope Findings
 
 If you find a real problem that is outside the scope of the work you were asked to do, file it as a GitHub issue on `wrjones104/ap-tracker` rather than fixing it inline or only mentioning it in chat. Standing approval is granted for this — no need to ask first.
