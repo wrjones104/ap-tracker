@@ -73,6 +73,11 @@ Two failure modes worth guarding against:
 For anything user-facing, check the release contains at least one thing users
 will actually notice. A release of pure invisible fixes is hard to write notes for.
 
+For every server issue, say whether the fix could affect the third-party iOS app
+(see the "Third-party iOS app" gotcha in `LLM.md`). Put any that could at the top
+of what you need from the user, before work starts, and leave room in the plan for
+the notice period when the change would break it.
+
 ## Step 3 — Merge order from real overlap
 
 `gh pr list` reporting `CLEAN` means each PR is clean **against `main`
