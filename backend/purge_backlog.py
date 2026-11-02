@@ -183,6 +183,14 @@ def main():
     print(f"  guests: {guests.get('purged_guests', 0):,}   "
           f"blocklist: {jwts.get('purged_jwts', 0):,}")
 
+    # After the room cleanup above, not before it: deleting orphaned rooms is
+    # what makes their datapackages unreferenced, so running this first would
+    # leave a run's worth of them behind for tomorrow.
+    print("\n5. Cached datapackages no room references")
+    drain("unreferenced datapackages",
+          retention_service.purge_unreferenced_datapackage_cache,
+          'datapackage_remaining', ['purged_datapackage_rows'], args.pause)
+
     session = Session()
     try:
         show_sizes(session, "\nAfter:")

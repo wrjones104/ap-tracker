@@ -19,7 +19,9 @@ from sqlalchemy.exc import IntegrityError
 from app import Session
 from app.models import (
     NotifiedItem, NotifiedHint, User, JWTBlocklist, TrackedRoom, CheesePendingPush,
+    DatapackageCache,
 )
+from app.utils import room_checksums
 
 # Rows per transaction. Small enough that the poller never waits long on a lock,
 # large enough that the round trips do not dominate.
@@ -34,6 +36,20 @@ PURGE_MAX_ROWS_PER_RUN = 200_000
 # guest delete is not one row: it cascades into subscriptions, tracked slots,
 # devices, ignore lists and more, so the write amplification per item is high.
 GUEST_PURGE_BATCH_SIZE = 200
+
+# Checksums per transaction, not rows. One checksum is every item and location
+# name of one apworld build, which for a large game runs to tens of thousands
+# of rows, so this number times a datapackage is the real batch size.
+DATAPACKAGE_CHECKSUM_BATCH_SIZE = 25
+
+# Ceiling per run, also in checksums. Production held 14,997,948 rows across
+# the table when this was written, an unknown share of it unreferenced, so the
+# first runs work through a backlog a few hundred checksums at a time.
+DATAPACKAGE_MAX_CHECKSUMS_PER_RUN = 500
+
+# Share of rooms whose game_checksums_json may be unreadable before the sweep
+# refuses to run. See purge_unreferenced_datapackage_cache for why.
+DATAPACKAGE_UNREADABLE_ABORT_RATIO = 0.10
 
 
 def get_retention_days():
@@ -367,6 +383,141 @@ def purge_stale_cheese_pending_pushes():
         Session.remove()
 
 
+def purge_unreferenced_datapackage_cache():
+    """Delete cached datapackages that no tracked room references any more.
+
+    datapackage_cache keys on (checksum, entity_type, entity_id): one row per
+    item or location name of one apworld build. The checksum identifies that
+    build, so every release the community plays brings a full set of rows and
+    the previous set stays. Nothing removed them. Both existing deletes in the
+    poller exist to force a re-download -- self-healing an incomplete checksum,
+    and clearing a checksum immediately before rewriting that same checksum --
+    so neither reclaims anything. Meanwhile db_run_cleanup deletes orphaned
+    rooms and their history but never the datapackages only those rooms used.
+    Production reached 14,997,948 rows and 4.6 GB this way, 40% of the database
+    and its second-largest table, growing with the rate the community ships
+    apworlds rather than with the user count (#528).
+
+    Evicting is safe by construction. A missing checksum is a state the poller
+    already handles: db_get_missing_checksums reports it and the next poll
+    downloads it again, which is precisely what the self-healing path arranges
+    on purpose. The worst case for evicting one that turns out to be needed is a
+    single re-download and a room briefly held in the setup retry loop.
+
+    Deleting rows will not shrink the data directory. Postgres returns the pages
+    to the table for reuse, so the files hold their high-water mark until a
+    VACUUM FULL or pg_repack, which is a locking operation and deliberately not
+    attempted here.
+    """
+    session = Session()
+    try:
+        rooms = session.query(
+            TrackedRoom.id, TrackedRoom.game_checksums_json).all()
+
+        referenced = set()
+        unreadable = []
+        for room_db_id, raw in rooms:
+            values = room_checksums(raw)
+            if values is None:
+                unreadable.append(room_db_id)
+                continue
+            referenced.update(values)
+
+        # One unreadable room is not evidence that it needs nothing, but it
+        # costs at most a re-download, so the sweep carries on past it. Refusing
+        # on any single corrupt row would let one room stall the sweep for good,
+        # and quietly. The two guards below are for what is not one bad row.
+        refused = {
+            'purged_datapackage_checksums': 0,
+            'purged_datapackage_rows': 0,
+            'datapackage_remaining': False,
+            'datapackage_sweep_refused': True,
+        }
+
+        if rooms and len(unreadable) > len(rooms) * DATAPACKAGE_UNREADABLE_ABORT_RATIO:
+            logging.error(
+                "[RETENTION] Refusing the datapackage sweep: %s of %s room(s) "
+                "have unreadable game_checksums_json. Sample room ids: %s",
+                len(unreadable), len(rooms), unreadable[:20])
+            return refused
+
+        if not referenced:
+            # Correct answer, cautious action. Nothing referencing anything does
+            # mean the whole cache is unreferenced, but it is also what a failed
+            # read of tracked_rooms looks like, and the two are indistinguishable
+            # from here. A deployment that really has no games yet has nothing
+            # worth reclaiming, so waiting for the first room costs it nothing.
+            # Not an error: an empty or brand new database is a normal state.
+            logging.info(
+                "[RETENTION] Skipping the datapackage sweep: no checksum is "
+                "referenced by any of %s room(s).", len(rooms))
+            return refused
+
+        if unreadable:
+            logging.warning(
+                "[RETENTION] %s room(s) have unreadable game_checksums_json and "
+                "were left out of the datapackage sweep: %s",
+                len(unreadable), unreadable[:20])
+
+        # One pass over the checksum index rather than an anti-join against
+        # tracked_rooms: the reference set lives in a JSON string column, so no
+        # join expresses it, and the index scan is a few seconds once a day.
+        cached = {row[0] for row in
+                  session.query(DatapackageCache.checksum).distinct().all()}
+        unreferenced = sorted(cached - referenced)
+        if not unreferenced:
+            return {
+                'purged_datapackage_checksums': 0,
+                'purged_datapackage_rows': 0,
+                'datapackage_remaining': False,
+                'datapackage_sweep_refused': False,
+            }
+
+        capped = unreferenced[:DATAPACKAGE_MAX_CHECKSUMS_PER_RUN]
+        more_remaining = len(unreferenced) > len(capped)
+
+        # Not _purge_in_batches: that batches on model.id, and this table has no
+        # id column -- it was dropped in b7f4e2c9a1d3 because its index cost
+        # 268 MB and had been scanned twice. Batching on the checksum is also the
+        # better unit here, since a checksum is what a re-download restores.
+        deleted_rows = 0
+        deleted_checksums = 0
+        for start in range(0, len(capped), DATAPACKAGE_CHECKSUM_BATCH_SIZE):
+            batch = capped[start:start + DATAPACKAGE_CHECKSUM_BATCH_SIZE]
+            deleted_rows += session.query(DatapackageCache).filter(
+                DatapackageCache.checksum.in_(batch)
+            ).delete(synchronize_session=False)
+            session.commit()
+            deleted_checksums += len(batch)
+
+        if deleted_checksums:
+            logging.info(
+                "[RETENTION] Purged %s unreferenced datapackage checksum(s), "
+                "%s row(s).%s",
+                deleted_checksums, deleted_rows,
+                " More remain for the next run." if more_remaining else "",
+            )
+        return {
+            'purged_datapackage_checksums': deleted_checksums,
+            'purged_datapackage_rows': deleted_rows,
+            'datapackage_remaining': more_remaining,
+            'datapackage_sweep_refused': False,
+        }
+    except Exception as e:
+        session.rollback()
+        logging.error(
+            f"[RETENTION_ERROR] Failed to purge unreferenced datapackages: {e}",
+            exc_info=True)
+        return {
+            'purged_datapackage_checksums': 0,
+            'purged_datapackage_rows': 0,
+            'datapackage_remaining': False,
+            'datapackage_sweep_refused': False,
+        }
+    finally:
+        Session.remove()
+
+
 def run_all_retention_tasks(retention_days=None):
     """Runs all retention cleanup operations.
 
@@ -393,6 +544,10 @@ def run_all_retention_tasks(retention_days=None):
         ('inactive guest accounts', purge_inactive_guest_accounts),
         ('expired JWT blocklist', purge_expired_jwt_blocklist),
         ('stale pending Cheese pushes', purge_stale_cheese_pending_pushes),
+        # Last: it reads every room and the whole checksum index, and it is
+        # the only step whose work is reclaimable disk rather than
+        # correctness, so it yields to the others on a run that fails.
+        ('unreferenced datapackages', purge_unreferenced_datapackage_cache),
     )
 
     results = {}

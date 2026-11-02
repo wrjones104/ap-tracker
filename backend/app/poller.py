@@ -26,7 +26,7 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
-from .utils import get_user_agent_string, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks, parse_cached_checks, serialize_index_watermarks, parse_index_watermarks
+from .utils import get_user_agent_string, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks, parse_cached_checks, serialize_index_watermarks, parse_index_watermarks, room_checksums
 # Single source of truth for Cheese sync. This module used to carry its own
 # copy, which silently went stale; re-exported here because run_cheese_poll
 # and api_cheese.refresh_tracker_cache both reach for app.poller.
@@ -2637,28 +2637,6 @@ async def run_room_setup(room_info, loop):
 
     finally:
         Session.remove()
-
-def room_checksums(raw):
-    """The checksum values in a room's game_checksums_json, or None if unreadable.
-
-    None rather than an empty list, so a caller can tell a room with no games yet
-    from one whose data is broken. The column is written from Archipelago's
-    datapackage_checksums, a map of game name to checksum string, so anything
-    else counts as broken. A null or empty value is the dangerous case: it can
-    never match a cached datapackage, so it would hold its room in the setup
-    retry loop forever without looking like bad data.
-    """
-    try:
-        parsed = json.loads(raw or '{}')
-    except (ValueError, TypeError, RecursionError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    values = list(parsed.values())
-    if not all(isinstance(value, str) and value.strip() for value in values):
-        return None
-    return values
-
 
 def collect_required_checksums(rooms):
     """Every checksum the given rooms need, naming any room whose data is unreadable.

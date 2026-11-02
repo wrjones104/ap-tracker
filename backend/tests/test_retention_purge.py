@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from app import create_app, Session, engine
 from app.models import (
     Base, NotifiedItem, NotifiedHint, SlotItemCount, TrackedRoom, User,
-    UserRoomSubscription, JWTBlocklist,
+    UserRoomSubscription, JWTBlocklist, DatapackageCache,
 )
 from app.services import retention_service
 
@@ -365,6 +365,148 @@ class TestJanitorRoomCleanup(RetentionTestBase):
         self.assertNotIn("g-stale", remaining, "stale guest survived the retention purge")
         self.assertIn("g-fresh", remaining)
         self.assertIn("42", remaining, "a Discord account was pruned")
+
+
+class TestDatapackageCacheSweep(RetentionTestBase):
+    """The sweep that reclaims cached apworld builds no room references (#528).
+
+    Nothing had ever deleted these. A checksum is one apworld build, and both
+    existing deletes in the poller are re-download triggers rather than
+    eviction, so production reached 15M rows across versions nobody plays.
+    """
+
+    def _room_with_games(self, uuid, checksums_json):
+        room = TrackedRoom(room_id=uuid, tracker_id="t", hostname="archipelago.gg",
+                           game_checksums_json=checksums_json)
+        self.session.add(room)
+        self.session.flush()
+        return room
+
+    def _cache(self, checksum, rows=3, game="AGame"):
+        for i in range(rows):
+            self.session.add(DatapackageCache(
+                game=game, checksum=checksum, entity_type="item",
+                entity_id=i, entity_name=f"{game}-item-{i}",
+            ))
+
+    def test_evicts_only_what_no_room_references(self):
+        self._room_with_games("room-a", '{"AGame": "live-1"}')
+        self._room_with_games("room-b", '{"BGame": "live-2"}')
+        self._cache("live-1", rows=3)
+        self._cache("live-2", rows=2)
+        self._cache("dead-1", rows=4)
+        self._cache("dead-2", rows=5)
+        self.session.commit()
+
+        result = retention_service.purge_unreferenced_datapackage_cache()
+
+        self.assertEqual(result['purged_datapackage_checksums'], 2)
+        self.assertEqual(result['purged_datapackage_rows'], 9)
+        self.assertFalse(result['datapackage_remaining'])
+        self.assertFalse(result['datapackage_sweep_refused'])
+
+        surviving = {c for (c,) in self.session.query(DatapackageCache.checksum).distinct()}
+        self.assertEqual(surviving, {"live-1", "live-2"})
+
+    def test_a_suspended_or_complete_room_still_protects_its_checksum(self):
+        """Those rooms are not polled, but they are not gone either."""
+        room = self._room_with_games("room-idle", '{"AGame": "idle-1"}')
+        room.is_suspended = True
+        room.is_complete = True
+        self._cache("idle-1", rows=2)
+        self.session.commit()
+
+        result = retention_service.purge_unreferenced_datapackage_cache()
+
+        self.assertEqual(result['purged_datapackage_checksums'], 0)
+        self.assertEqual(self.session.query(DatapackageCache).count(), 2)
+
+    def test_one_unreadable_room_does_not_stop_the_sweep(self):
+        """A single corrupt row must not stall the sweep for good.
+
+        It is left out of the reference set, which risks evicting a checksum
+        only that room needed. The cost of being wrong is one re-download, and
+        the alternative is a sweep that never runs again and says nothing.
+        """
+        for i in range(19):
+            self._room_with_games(f"room-{i}", '{"AGame": "live-1"}')
+        self._room_with_games("room-broken", 'not json at all')
+        self._cache("live-1", rows=2)
+        self._cache("dead-1", rows=2)
+        self.session.commit()
+
+        with self.assertLogs(level='WARNING') as logs:
+            result = retention_service.purge_unreferenced_datapackage_cache()
+
+        self.assertEqual(result['purged_datapackage_checksums'], 1)
+        self.assertFalse(result['datapackage_sweep_refused'])
+        self.assertTrue(any("unreadable game_checksums_json" in line for line in logs.output))
+
+    def test_refuses_when_too_many_rooms_are_unreadable(self):
+        """Mass corruption would otherwise read as 'evict everything'."""
+        for i in range(8):
+            self._room_with_games(f"room-{i}", '{"AGame": "live-1"}')
+        for i in range(2):
+            self._room_with_games(f"room-bad-{i}", '[]')
+        self._cache("live-1", rows=2)
+        self._cache("dead-1", rows=2)
+        self.session.commit()
+
+        with self.assertLogs(level='ERROR') as logs:
+            result = retention_service.purge_unreferenced_datapackage_cache()
+
+        self.assertTrue(result['datapackage_sweep_refused'])
+        self.assertEqual(result['purged_datapackage_checksums'], 0)
+        self.assertEqual(self.session.query(DatapackageCache).count(), 4)
+        self.assertTrue(any("Refusing the datapackage sweep" in line for line in logs.output))
+
+    def test_refuses_when_nothing_is_referenced_at_all(self):
+        """Also what a failed read of tracked_rooms looks like, so it waits."""
+        self._room_with_games("room-empty", '{}')
+        self._cache("dead-1", rows=3)
+        self.session.commit()
+
+        result = retention_service.purge_unreferenced_datapackage_cache()
+
+        self.assertTrue(result['datapackage_sweep_refused'])
+        self.assertEqual(self.session.query(DatapackageCache).count(), 3)
+
+    def test_stops_at_the_per_run_cap_and_reports_more(self):
+        self._room_with_games("room-a", '{"AGame": "live-1"}')
+        self._cache("live-1", rows=1)
+        for i in range(5):
+            self._cache(f"dead-{i}", rows=2)
+        self.session.commit()
+
+        original_cap = retention_service.DATAPACKAGE_MAX_CHECKSUMS_PER_RUN
+        original_batch = retention_service.DATAPACKAGE_CHECKSUM_BATCH_SIZE
+        retention_service.DATAPACKAGE_MAX_CHECKSUMS_PER_RUN = 3
+        retention_service.DATAPACKAGE_CHECKSUM_BATCH_SIZE = 2
+        try:
+            first = retention_service.purge_unreferenced_datapackage_cache()
+            second = retention_service.purge_unreferenced_datapackage_cache()
+        finally:
+            retention_service.DATAPACKAGE_MAX_CHECKSUMS_PER_RUN = original_cap
+            retention_service.DATAPACKAGE_CHECKSUM_BATCH_SIZE = original_batch
+
+        self.assertEqual(first['purged_datapackage_checksums'], 3)
+        self.assertTrue(first['datapackage_remaining'])
+        self.assertEqual(second['purged_datapackage_checksums'], 2)
+        self.assertFalse(second['datapackage_remaining'])
+        # The referenced one is still there after both runs.
+        surviving = {c for (c,) in self.session.query(DatapackageCache.checksum).distinct()}
+        self.assertEqual(surviving, {"live-1"})
+
+    def test_run_all_includes_the_sweep(self):
+        self._room_with_games("room-a", '{"AGame": "live-1"}')
+        self._cache("live-1", rows=1)
+        self._cache("dead-1", rows=2)
+        self.session.commit()
+
+        results = retention_service.run_all_retention_tasks()
+
+        self.assertEqual(results.get('purged_datapackage_checksums'), 1)
+        self.assertEqual(results.get('purged_datapackage_rows'), 2)
 
 
 if __name__ == '__main__':
