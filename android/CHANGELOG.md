@@ -10,6 +10,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.15.2] - 2026-11-02
+
+_Full Notification Text_
+
+> **Discord Copy-Paste:**
+> ```markdown
+> # **Archipelago Alerts 1.15.2**
+>
+> • **Notifications show the whole message.** Pull one down and you see all of it — the longer ones were getting cut off after the first line.
+>
+> GitHub: <https://github.com/wrjones104/ap-tracker/releases/latest>
+> Play Store: <https://play.google.com/store/apps/details?id=com.jones.aptracker>
+> ```
+
+> **Play Console — What's New Copy-Paste:**
+> ```markdown
+> • Pull down a notification and you see the whole message. The longer ones were getting cut off after the first line.
+> ```
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Fixed
+> - Long notification bodies expand in the shade again. Since 1.14.0 the app draws every notification itself and set no style, so the standard template held the body to one line even when expanded; Cheese demotion, single hint and combined item pushes were all clipped (#515, PR #525).
+>
+> ### Notes
+> - App-only; works with server 1.18.0 (live).
+> ```
+
+### Fixed
+- **Full Notification Text**: Long notification text expands in full again instead of staying cut off after one line. PR #525.
+
+---
+
 ## [1.15.1] - 2026-10-31
 
 _Notification Icon_
