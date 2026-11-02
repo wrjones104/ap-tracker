@@ -142,6 +142,13 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             .addAction(android.R.drawable.ic_lock_idle_alarm, "Snooze 8h", createSnoozeIntent(480))
             .addAction(android.R.drawable.ic_lock_idle_alarm, "Snooze 24h", createSnoozeIntent(1440))
 
+        // Without a style the standard template keeps the body to one line, clipped even
+        // when the notification is expanded. Firebase's own builder set this for the pushes
+        // it drew; since data-only pushes (#501) every push is drawn here (#515).
+        if (!body.isNullOrEmpty()) {
+            notificationBuilder.setStyle(NotificationCompat.BigTextStyle().bigText(body))
+        }
+
         notificationManager.notify(notificationId, notificationBuilder.build())
     }
 
@@ -177,6 +184,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 .setContentText(body)
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent)
+
+            if (body.isNotEmpty()) {
+                notificationBuilder.setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            }
 
             notificationManager.notify(notificationId, notificationBuilder.build())
         }
