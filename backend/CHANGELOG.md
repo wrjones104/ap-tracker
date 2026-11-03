@@ -10,6 +10,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 > This file is generated from `backend/app/data/changelog.json`.
 
+## [1.19.0] - 2026-11-03
+
+_Old Game Data Clears Out_
+
+> **GitHub Release Copy-Paste:**
+> ```markdown
+> ### Added
+> - The retention janitor now evicts cached datapackages no tracked room references, the last step of its daily run (#528). `datapackage_cache` had no bound at all: both existing deletes in the poller are re-download triggers, and the orphaned-room cleanup never removed the datapackages only those rooms used. Production reached 15M rows and 4.6 GB, 40% of the database. PR #529.
+> - `purge_backlog.py` gained a step 5 for the same sweep, after the orphaned-room cleanup, and its dry run reports the counts. Run it to clear the existing backlog rather than waiting out the 500-checksum nightly cap. PR #529.
+>
+> ### Changed
+> - `run_room_setup` records a room's checksums before it reads the cache, so a sweep running alongside it cannot delete a datapackage that setup found already cached and will therefore never download. PR #529.
+> - Setup verifies its datapackages are still cached before marking a room `is_setup`. That check previously ran only after a download error. PR #529.
+>
+> ### Fixed
+> - A room whose `game_checksums_json` is partly unreadable keeps its valid checksums. They were being evicted with nothing able to restore them, because every repair path reads the same column and skips the room. PR #529.
+> - An interrupted sweep reports the batches that committed instead of zero, so the operator drain no longer reads a lock timeout as “nothing left to do”. PR #529.
+>
+> ### Internal
+> - `room_checksums` moved from `poller.py` to `utils.py`; the poller re-exports it.
+> - Listing cached checksums uses a loose index scan rather than `SELECT DISTINCT` over 15M index entries (the pattern #439 added for game names).
+> - Test teardown disposes the engine before unlinking its SQLite file, which only corrupted on Linux (#530).
+>
+> ### Compatibility
+> - No migration, no route or response-shape change. One build of every game is kept even when no room plays it, so `GET /games`, `GET /games/<game>/items` and the roomless item-group fallback return exactly what they did before: no impact on the Android app or the third-party iOS client.
+> - Deleting rows does not return disk to the operating system. After deploying, drain the backlog with `docker compose exec api python purge_backlog.py`, then `pg_repack -t datapackage_cache` in a quiet window.
+> ```
+
+### Added
+- **Old Game Data Clears Out**: Cached game data no room needs is removed daily. One copy of every game is kept, so game and item lists are unchanged. PR #529.
+
+### Fixed
+- **Room Setup Checks Its Game Data**: Setup now confirms a room's game data is there before it finishes, instead of leaving item names as numbers. PR #529.
+
+---
+
 ## [1.18.0] - 2026-10-27
 
 _Notifications Bring Their Hints_
