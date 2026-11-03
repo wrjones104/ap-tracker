@@ -16,6 +16,11 @@ system, they only make it reusable.
 
     python backend/purge_backlog.py --dry-run
     python backend/purge_backlog.py --batch-size 2000
+
+In production the backend is the image root, not a backend/ subdirectory, so
+inside the container the path is just the filename:
+
+    docker compose exec api python purge_backlog.py --dry-run
 """
 import argparse
 import os
