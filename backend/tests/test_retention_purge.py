@@ -44,11 +44,22 @@ class RetentionTestBase(unittest.TestCase):
     def tearDown(self):
         self.session.close()
         Session.remove()
-        if os.path.exists(TEST_DB_PATH):
-            try:
-                os.remove(TEST_DB_PATH)
-            except Exception:
-                pass
+        # Dispose before unlinking, and take the WAL sidecars with the database.
+        # Session.remove() only returns the connection to the pool, so the file
+        # is still open: on Linux the unlink then succeeds while -wal and -shm
+        # stay behind, and the next connection opens a fresh empty database
+        # beside a WAL belonging to the old one, which SQLite reads as
+        # corruption. Windows refuses the unlink instead, which is why this only
+        # ever failed in CI, and only once the file grew enough tests to make
+        # the pool open a second connection.
+        engine.dispose()
+        for suffix in ('', '-wal', '-shm'):
+            path = TEST_DB_PATH + suffix
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def _room(self, uuid, last_poll=None):
         room = TrackedRoom(room_id=uuid, tracker_id="t", hostname="archipelago.gg",
