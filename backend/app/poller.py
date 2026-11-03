@@ -26,7 +26,7 @@ from .models import (
     User, Device, TrackedRoom, UserRoomSubscription, UserTrackedSlot,
     DatapackageCache, NotifiedItem, NotifiedHint, ThresholdGroup, ThresholdGroupItem, SlotItemCount
 )
-from .utils import get_user_agent_string, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks, parse_cached_checks, serialize_index_watermarks, parse_index_watermarks
+from .utils import get_user_agent_string, extract_ap_room_id, fetch_json_with_status, db_suspend_room, is_snoozed, SSRFProtectedTCPConnector, generate_negative_id, evaluate_finished, resolve_finished_definition, serialize_cached_checks, parse_cached_checks, serialize_index_watermarks, parse_index_watermarks, room_checksums
 # Single source of truth for Cheese sync. This module used to carry its own
 # copy, which silently went stale; re-exported here because run_cheese_poll
 # and api_cheese.refresh_tracker_cache both reach for app.poller.
@@ -2416,6 +2416,13 @@ async def run_room_setup(room_info, loop):
                                 if base_domain and (uri.startswith(f"wss://{base_domain}") or uri.startswith(f"ws://{base_domain}")):
                                     setup_data['cached_full_address'] = f"{base_domain}:{port}"
                                 if checksums:
+                                    # Before the cache check, not after it: the
+                                    # checksums it reports as already cached are
+                                    # ones this setup will never download, so
+                                    # nothing else would keep the sweep off them.
+                                    if not await loop.run_in_executor(
+                                            None, db_record_room_checksums, db_id, json.dumps(checksums)):
+                                        return
                                     missing_checksums = await loop.run_in_executor(None, db_get_missing_checksums, list(checksums.values()))
                                     missing_games = [game for game, chk in checksums.items() if chk in missing_checksums]
                                     
@@ -2610,16 +2617,20 @@ async def run_room_setup(room_info, loop):
         new_checksums_json_str = json.dumps(checksums)
         setup_data['game_checksums_json'] = new_checksums_json_str
 
-        if any_datapackage_failed:
-            # Re-check: some games may have been saved before the failure
-            still_missing_chks = await loop.run_in_executor(None, db_get_missing_checksums, list(checksums.values()))
-            if still_missing_chks:
-                still_missing_names = [g for g, c in checksums.items() if c in still_missing_chks]
-                logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Setup incomplete. Still missing datapackages for: {still_missing_names}")
-                await loop.run_in_executor(None, db_handle_setup_failure, db_id, last_activity_dt)
-                return
-            else:
-                logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] All datapackages now cached despite earlier errors. Proceeding with setup.")
+        # Unconditional, where this used to run only after a download error.
+        # A clean run can still reach here with a datapackage missing: one the
+        # cache check found present and the retention sweep removed while the
+        # rest were downloading. Marking is_setup on that leaves the room
+        # polling against names it cannot resolve until the supervisor's next
+        # 15 minute cache check notices (#528). One indexed query per setup.
+        still_missing_chks = await loop.run_in_executor(None, db_get_missing_checksums, list(checksums.values()))
+        if still_missing_chks:
+            still_missing_names = [g for g, c in checksums.items() if c in still_missing_chks]
+            logging.warning(f"[POLLER_SETUP_WARN][RoomDBID:{db_id}] Setup incomplete. Still missing datapackages for: {still_missing_names}")
+            await loop.run_in_executor(None, db_handle_setup_failure, db_id, last_activity_dt)
+            return
+        elif any_datapackage_failed:
+            logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] All datapackages now cached despite earlier errors. Proceeding with setup.")
 
         setup_data['is_setup'] = True 
         logging.info(f"[POLLER_SETUP][RoomDBID:{db_id}] Setup complete.")
@@ -2637,28 +2648,6 @@ async def run_room_setup(room_info, loop):
 
     finally:
         Session.remove()
-
-def room_checksums(raw):
-    """The checksum values in a room's game_checksums_json, or None if unreadable.
-
-    None rather than an empty list, so a caller can tell a room with no games yet
-    from one whose data is broken. The column is written from Archipelago's
-    datapackage_checksums, a map of game name to checksum string, so anything
-    else counts as broken. A null or empty value is the dangerous case: it can
-    never match a cached datapackage, so it would hold its room in the setup
-    retry loop forever without looking like bad data.
-    """
-    try:
-        parsed = json.loads(raw or '{}')
-    except (ValueError, TypeError, RecursionError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    values = list(parsed.values())
-    if not all(isinstance(value, str) and value.strip() for value in values):
-        return None
-    return values
-
 
 def collect_required_checksums(rooms):
     """Every checksum the given rooms need, naming any room whose data is unreadable.
@@ -2811,6 +2800,37 @@ def db_cache_datapackage(entries):
     except Exception as e:
         session.rollback()
         logging.error(f"[POLLER_DB_ERROR] Failed to save datapackage: {e}", exc_info=True)
+        raise e
+    finally:
+        Session.remove()
+
+def db_record_room_checksums(db_id, game_checksums_json_str):
+    """Claim a room's checksums before setup starts relying on their datapackages.
+
+    The retention sweep evicts any cached checksum no room references (#528),
+    and game_checksums_json is written once, by db_commit_setup_data, at the
+    very end of setup. Until then this room references nothing, so a sweep
+    running alongside it -- the janitor is a background task and fires on the
+    first supervisor pass after every restart, which is exactly when the setup
+    burst happens -- can delete a datapackage this setup either just downloaded
+    or found already cached and therefore skipped.
+
+    Deliberately not db_commit_setup_data, which also resets failed_poll_count
+    and would flatten the setup backoff. is_setup is untouched, so a room whose
+    setup then fails is retried as before; it now also counts in
+    log_unresolved_checksums, which is accurate.
+    """
+    session = Session()
+    try:
+        updated = session.query(TrackedRoom).filter_by(id=db_id).update(
+            {'game_checksums_json': game_checksums_json_str},
+            synchronize_session=False)
+        session.commit()
+        if not updated:
+            logging.warning(f"[POLLER_DB_ERROR][RoomDBID:{db_id}] Room vanished before recording checksums.")
+        return bool(updated)
+    except Exception as e:
+        session.rollback()
         raise e
     finally:
         Session.remove()

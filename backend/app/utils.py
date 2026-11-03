@@ -483,6 +483,32 @@ def parse_index_watermarks(item_index_watermark_json):
     return parse_cached_checks(item_index_watermark_json)
 
 
+def room_checksums(raw):
+    """The checksum values in a room's game_checksums_json, or None if unreadable.
+
+    None rather than an empty list, so a caller can tell a room with no games yet
+    from one whose data is broken. The column is written from Archipelago's
+    datapackage_checksums, a map of game name to checksum string, so anything
+    else counts as broken. A null or empty value is the dangerous case: it can
+    never match a cached datapackage, so it would hold its room in the setup
+    retry loop forever without looking like bad data.
+
+    Lives here rather than in the poller because retention_service needs it too,
+    to decide which cached datapackages no room references any more (#528), and
+    the poller already imports retention_service.
+    """
+    try:
+        parsed = json.loads(raw or '{}')
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    values = list(parsed.values())
+    if not all(isinstance(value, str) and value.strip() for value in values):
+        return None
+    return values
+
+
 # --- Slot track modes -------------------------------------------------------
 #
 # A tracked slot answers two independent questions: "should this slot send me

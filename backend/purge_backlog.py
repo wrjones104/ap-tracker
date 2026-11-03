@@ -16,6 +16,11 @@ system, they only make it reusable.
 
     python backend/purge_backlog.py --dry-run
     python backend/purge_backlog.py --batch-size 2000
+
+In production the backend is the image root, not a backend/ subdirectory, so
+inside the container the path is just the filename:
+
+    docker compose exec api python purge_backlog.py --dry-run
 """
 import argparse
 import os
@@ -28,7 +33,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from sqlalchemy import text, exists
     from app import Session
-    from app.models import NotifiedItem, NotifiedHint, TrackedRoom, User, SlotItemCount
+    from app.models import (NotifiedItem, NotifiedHint, TrackedRoom, User,
+                            SlotItemCount, DatapackageCache)
     from app.services import retention_service
 except ImportError as e:
     print("Error: Could not import app modules. Please run this script from the repository root.")
@@ -42,7 +48,8 @@ except ImportError as e:
 SIZE_QUERY = text("""
     SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS total
     FROM pg_stat_user_tables
-    WHERE relname IN ('notified_items','notified_hints','slot_item_counts','tracked_rooms')
+    WHERE relname IN ('notified_items','notified_hints','slot_item_counts',
+                      'tracked_rooms','datapackage_cache')
     ORDER BY pg_total_relation_size(relid) DESC
 """)
 
@@ -51,6 +58,7 @@ COUNTED_TABLES = {
     'notified_hints': NotifiedHint,
     'slot_item_counts': SlotItemCount,
     'tracked_rooms': TrackedRoom,
+    'datapackage_cache': DatapackageCache,
 }
 
 
@@ -90,6 +98,15 @@ def survey(session, retention_days):
             (TrackedRoom.last_successful_poll < thirty_days_ago)
         ).count(),
     }
+
+    # Delegated to the sweep's own planning rather than counted here, so the
+    # dry run cannot drift from the run it previews -- the keep-one-build rule
+    # in particular, which an independent count would miss.
+    checksums, rows, unreadable = retention_service.survey_unreferenced_datapackage_cache(session)
+    counts['unreferenced datapackages'] = checksums
+    counts['  ...rows behind them'] = rows
+    if unreadable:
+        counts['rooms with unreadable games'] = unreadable
     return counts
 
 
@@ -182,6 +199,14 @@ def main():
     jwts = retention_service.purge_expired_jwt_blocklist()
     print(f"  guests: {guests.get('purged_guests', 0):,}   "
           f"blocklist: {jwts.get('purged_jwts', 0):,}")
+
+    # After the room cleanup above, not before it: deleting orphaned rooms is
+    # what makes their datapackages unreferenced, so running this first would
+    # leave a run's worth of them behind for tomorrow.
+    print("\n5. Cached datapackages no room references")
+    drain("unreferenced datapackages",
+          retention_service.purge_unreferenced_datapackage_cache,
+          'datapackage_remaining', ['purged_datapackage_rows'], args.pause)
 
     session = Session()
     try:
