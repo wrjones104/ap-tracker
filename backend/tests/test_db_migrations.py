@@ -12,6 +12,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from app.db_migrations import _find_alembic_ini, _reconcile_overlapping_heads
+from app.models import DatapackageCache, NotifiedHint, NotifiedItem
 
 
 class TestDbMigrationsReconciliation(unittest.TestCase):
@@ -104,6 +105,49 @@ class TestDbMigrationsReconciliation(unittest.TestCase):
                 _reconcile_overlapping_heads(conn, self.config)
 
             self.assertTrue(any("No alembic_version table to reconcile" in msg for msg in log.output))
+
+
+class TestIndexInvariants(unittest.TestCase):
+    """Schema facts the index migrations rest on.
+
+    c7a2e5b48f16 dropped ix_datapackage_cache_checksum because the covering
+    index leads with checksum, so a lookup on checksum alone is served without
+    it. That is a property of column order, not of the drop, and nothing else
+    would notice if a later change broke it -- the index would simply stop being
+    used and every checksum lookup would fall back to a sequential scan of a
+    2 GB table.
+
+    The room_id assertions guard the opposite decision: both are redundant in
+    the same structural sense and both were deliberately kept, because the
+    janitor reads SELECT DISTINCT room_id off each of them every run. See #534.
+    """
+
+    def test_checksum_leads_the_covering_index(self):
+        pk = [c.name for c in DatapackageCache.__table__.primary_key.columns]
+        self.assertEqual(
+            pk[0], 'checksum',
+            "c7a2e5b48f16 dropped the standalone checksum index on the strength "
+            "of checksum leading the composite identity; reordering these "
+            "columns silently un-indexes every checksum lookup"
+        )
+
+    def test_checksum_has_no_standalone_index(self):
+        names = {i.name for i in DatapackageCache.__table__.indexes}
+        self.assertNotIn('ix_datapackage_cache_checksum', names)
+        # game keeps its own: nothing else leads with game.
+        self.assertIn('ix_datapackage_cache_game', names)
+
+    def test_history_tables_keep_their_room_id_index(self):
+        for model, table in ((NotifiedItem, 'notified_items'),
+                             (NotifiedHint, 'notified_hints')):
+            with self.subTest(table=table):
+                self.assertIn(
+                    'ix_%s_room_id' % table,
+                    {i.name for i in model.__table__.indexes},
+                    "purge_orphaned_room_events scans this narrow index for "
+                    "DISTINCT room_id; the wider indexes that also lead with "
+                    "room_id answer it for twice the pages (#534)"
+                )
 
 
 if __name__ == '__main__':

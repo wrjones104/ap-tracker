@@ -375,8 +375,14 @@ class DatapackageCache(Base):
     # gets a composite primary key instead. The two are equivalent for every
     # purpose this table has: both reject a duplicate triple, and ON CONFLICT
     # resolves its arbiter by column list either way.
+    #
+    # checksum has no index of its own. Whichever of the two covers the triple
+    # leads with it, so a standalone btree over 13.45 million checksums was a
+    # second copy of one the table already had, for 58% of this database being
+    # index. game does keep one: nothing else leads with game.
+    # See c7a2e5b48f16 and #534.
     game = Column(String, nullable=False, index=True)
-    checksum = Column(String, nullable=False, primary_key=True, index=True)
+    checksum = Column(String, nullable=False, primary_key=True)
     entity_type = Column(String, nullable=False, primary_key=True)
     entity_id = Column(BigInteger, nullable=False, primary_key=True)
     entity_name = Column(String, nullable=False)
@@ -384,6 +390,12 @@ class DatapackageCache(Base):
 class NotifiedItem(Base):
     __tablename__ = 'notified_items'
     id = Column(Integer, primary_key=True)
+    # Keeps its own index even though _item_event_index_uc and
+    # ix_notifieditem_room_receiving_time both lead with room_id. The janitor
+    # reads SELECT DISTINCT room_id off this narrow btree once per run, which is
+    # what stopped purge_orphaned_room_events re-scanning the heap per batch,
+    # and it had served 22 million lifetime scans by b7f4e2c9a1d3. A wider index
+    # answers the same question for twice the pages. See #534.
     room_id = Column(String, nullable=False, index=True) 
     receiving_slot_id = Column(Integer, nullable=False)
     sending_slot_id = Column(Integer, nullable=True) 
@@ -411,6 +423,8 @@ class NotifiedItem(Base):
 class NotifiedHint(Base):
     __tablename__ = 'notified_hints'
     id = Column(Integer, primary_key=True)
+    # Kept for the same reason as NotifiedItem.room_id above: the janitor's
+    # SELECT DISTINCT scans it, and _hint_event_uc is five columns wide.
     room_id = Column(String, nullable=False, index=True) 
     item_owner_id = Column(Integer, nullable=False)
     location_owner_id = Column(Integer, nullable=False)
