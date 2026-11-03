@@ -36,7 +36,6 @@ try:
     from app.models import (NotifiedItem, NotifiedHint, TrackedRoom, User,
                             SlotItemCount, DatapackageCache)
     from app.services import retention_service
-    from app.utils import room_checksums
 except ImportError as e:
     print("Error: Could not import app modules. Please run this script from the repository root.")
     print(f"Details: {e}")
@@ -79,33 +78,6 @@ def show_sizes(session, label):
     print("  (total size does not fall until the table is repacked)")
 
 
-def datapackage_survey(session):
-    """Unreferenced checksums and the rows behind them.
-
-    Repeats the sweep's set subtraction instead of calling it, because the sweep
-    deletes. It does not repeat the sweep's guards: a dry run is allowed to
-    answer "all of them", and the unreadable count printed beside it is what
-    tells the operator whether to believe the number.
-    """
-    referenced = set()
-    unreadable = 0
-    for (raw,) in session.query(TrackedRoom.game_checksums_json):
-        values = room_checksums(raw)
-        if values is None:
-            unreadable += 1
-            continue
-        referenced.update(values)
-
-    cached = {c for (c,) in session.query(DatapackageCache.checksum).distinct()}
-    unreferenced = cached - referenced
-    # Filtered on the reference set rather than on `unreferenced`: the first is
-    # a few hundred checksums, the second can be every build ever cached.
-    rows = (session.query(DatapackageCache)
-            .filter(DatapackageCache.checksum.notin_(referenced)).count()
-            if referenced else session.query(DatapackageCache).count())
-    return len(unreferenced), rows, unreadable
-
-
 def survey(session, retention_days):
     """What the purge would remove, without removing it."""
     cutoff = datetime.utcnow() - timedelta(days=retention_days)
@@ -127,7 +99,10 @@ def survey(session, retention_days):
         ).count(),
     }
 
-    checksums, rows, unreadable = datapackage_survey(session)
+    # Delegated to the sweep's own planning rather than counted here, so the
+    # dry run cannot drift from the run it previews -- the keep-one-build rule
+    # in particular, which an independent count would miss.
+    checksums, rows, unreadable = retention_service.survey_unreferenced_datapackage_cache(session)
     counts['unreferenced datapackages'] = checksums
     counts['  ...rows behind them'] = rows
     if unreadable:

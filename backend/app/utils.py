@@ -483,17 +483,6 @@ def parse_index_watermarks(item_index_watermark_json):
     return parse_cached_checks(item_index_watermark_json)
 
 
-# --- Slot track modes -------------------------------------------------------
-#
-# A tracked slot answers two independent questions: "should this slot send me
-# alerts?" (the row existing at all) and "is this slot mine on Cheese Tracker?"
-# (track_mode). Splitting them lets a user watch a slot someone else owns --
-# shared slots, async hosts, and auto-released slots in a ghosted async.
-#
-# TRACK_MODE_PLAY is the default and reproduces the historical behavior: the
-# slot is claimed on Cheese and kept in sync with it. TRACK_MODE_WATCH is
-# alerts-only: never pushed to Cheese, and never unclaimed by the poller.
-
 def room_checksums(raw):
     """The checksum values in a room's game_checksums_json, or None if unreadable.
 
@@ -519,6 +508,17 @@ def room_checksums(raw):
         return None
     return values
 
+
+# --- Slot track modes -------------------------------------------------------
+#
+# A tracked slot answers two independent questions: "should this slot send me
+# alerts?" (the row existing at all) and "is this slot mine on Cheese Tracker?"
+# (track_mode). Splitting them lets a user watch a slot someone else owns --
+# shared slots, async hosts, and auto-released slots in a ghosted async.
+#
+# TRACK_MODE_PLAY is the default and reproduces the historical behavior: the
+# slot is claimed on Cheese and kept in sync with it. TRACK_MODE_WATCH is
+# alerts-only: never pushed to Cheese, and never unclaimed by the poller.
 
 TRACK_MODE_PLAY = 'play'
 TRACK_MODE_WATCH = 'watch'
