@@ -28,8 +28,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from sqlalchemy import text, exists
     from app import Session
-    from app.models import NotifiedItem, NotifiedHint, TrackedRoom, User, SlotItemCount
+    from app.models import (NotifiedItem, NotifiedHint, TrackedRoom, User,
+                            SlotItemCount, DatapackageCache)
     from app.services import retention_service
+    from app.utils import room_checksums
 except ImportError as e:
     print("Error: Could not import app modules. Please run this script from the repository root.")
     print(f"Details: {e}")
@@ -42,7 +44,8 @@ except ImportError as e:
 SIZE_QUERY = text("""
     SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS total
     FROM pg_stat_user_tables
-    WHERE relname IN ('notified_items','notified_hints','slot_item_counts','tracked_rooms')
+    WHERE relname IN ('notified_items','notified_hints','slot_item_counts',
+                      'tracked_rooms','datapackage_cache')
     ORDER BY pg_total_relation_size(relid) DESC
 """)
 
@@ -51,6 +54,7 @@ COUNTED_TABLES = {
     'notified_hints': NotifiedHint,
     'slot_item_counts': SlotItemCount,
     'tracked_rooms': TrackedRoom,
+    'datapackage_cache': DatapackageCache,
 }
 
 
@@ -68,6 +72,33 @@ def show_sizes(session, label):
         rows = session.query(model).count() if model is not None else 0
         print(f"  {relname:<20} {total:>12} {rows:>14,}")
     print("  (total size does not fall until the table is repacked)")
+
+
+def datapackage_survey(session):
+    """Unreferenced checksums and the rows behind them.
+
+    Repeats the sweep's set subtraction instead of calling it, because the sweep
+    deletes. It does not repeat the sweep's guards: a dry run is allowed to
+    answer "all of them", and the unreadable count printed beside it is what
+    tells the operator whether to believe the number.
+    """
+    referenced = set()
+    unreadable = 0
+    for (raw,) in session.query(TrackedRoom.game_checksums_json):
+        values = room_checksums(raw)
+        if values is None:
+            unreadable += 1
+            continue
+        referenced.update(values)
+
+    cached = {c for (c,) in session.query(DatapackageCache.checksum).distinct()}
+    unreferenced = cached - referenced
+    # Filtered on the reference set rather than on `unreferenced`: the first is
+    # a few hundred checksums, the second can be every build ever cached.
+    rows = (session.query(DatapackageCache)
+            .filter(DatapackageCache.checksum.notin_(referenced)).count()
+            if referenced else session.query(DatapackageCache).count())
+    return len(unreferenced), rows, unreadable
 
 
 def survey(session, retention_days):
@@ -90,6 +121,12 @@ def survey(session, retention_days):
             (TrackedRoom.last_successful_poll < thirty_days_ago)
         ).count(),
     }
+
+    checksums, rows, unreadable = datapackage_survey(session)
+    counts['unreferenced datapackages'] = checksums
+    counts['  ...rows behind them'] = rows
+    if unreadable:
+        counts['rooms with unreadable games'] = unreadable
     return counts
 
 
