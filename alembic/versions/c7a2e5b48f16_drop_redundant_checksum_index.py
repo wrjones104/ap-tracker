@@ -2,8 +2,8 @@
 
 ix_datapackage_cache_checksum indexes (checksum). The triple is already indexed
 by _checksum_entity_uc on (checksum, entity_type, entity_id), and a btree
-answers a lookup on the leading column of a composite key, so the narrow index
-is a second copy of information the table already carries.
+answers a lookup on the leading column or columns of a composite key, so the
+narrow index is a second copy of information the table already carries.
 
 Figures from production on 2026-11-03, with the retention backlog freshly
 drained:
@@ -15,6 +15,25 @@ operating system at once, unlike a delete, which only returns pages to the
 table for reuse -- so this is the one reclaim here that needs no VACUUM FULL,
 no pg_repack and no free disk to work in.
 
+Every reader of this column filters on checksum first, and most of them filter
+on entity_type straight after, which uses two leading columns of
+_checksum_entity_uc rather than one:
+
+    routes/game_routes.py       checksum == x AND entity_type IN (...)
+                                (item groups, items, locations, the bundle)
+    routes/rooms_routes.py      checksum IN (...)
+    poller.py                   checksum IN (...) AND entity_id IN (...)
+    services/retention_service  checksum IN (...), and the eviction sweep's
+                                loose index scan: MIN(checksum), then
+                                checksum > previous
+
+None of those is a scan of the narrow index; they are btree descents that the
+composite serves for the cost of a wider key. _checksum_entity_uc had served
+674 million scans by 2026-09-11, so it is resident in cache in a way a second
+copy of it never needs to be. The one query on this table that does not lead
+with checksum, game_routes.py's game -> checksum lookup, reads
+ix_datapackage_cache_game, which stays.
+
 Only this index is dropped, although ix_notified_items_room_id and
 ix_notified_hints_room_id are redundant in exactly the same structural sense.
 Those two are load-bearing. purge_orphaned_room_events in
@@ -25,13 +44,6 @@ ix_notified_items_room_id had served 22 million lifetime scans by the time
 b7f4e2c9a1d3 was written. Moving those reads onto a three- and a five-column
 index roughly doubles the pages they touch, to save a few hundred megabytes.
 Not worth it. See #534.
-
-checksum carries no equivalent load. Its readers are db_get_missing_checksums
-(checksum IN (...)) and the eviction sweep's loose index scan (MIN(checksum),
-then checksum > previous), which are short btree descents rather than scans.
-_checksum_entity_uc serves both for the cost of a wider key, and it had served
-674 million scans by 2026-09-11, so it is resident in cache in a way a second
-copy of it never needs to be.
 
 Revision ID: c7a2e5b48f16
 Revises: e4b9c2d7f8a1
@@ -54,41 +66,85 @@ depends_on: Union[str, Sequence[str], None] = None
 
 INDEX = 'ix_datapackage_cache_checksum'
 
-# An index that leads with checksum and enforces uniqueness: _checksum_entity_uc
-# on production, or datapackage_cache_pkey in a schema built from models.py.
-# Either one answers every lookup INDEX answers. b7f4e2c9a1d3 explains why the
-# two differ.
+# How long either direction waits on the transactions a CONCURRENTLY statement
+# has to outlast before it gives up. This migration runs from create_app() while
+# holding the migration advisory lock, so an unbounded wait here is a boot that
+# never finishes, for the poller as well as the api: one session left idle in
+# transaction on datapackage_cache would be enough. Giving up instead hands the
+# job to the restart loop and a quieter moment, which is how b7f4e2c9a1d3 treats
+# the same risk. lock_timeout covers these waits because they are taken as locks
+# on the lockers' virtual transaction ids.
+LOCK_TIMEOUT = '30s'
+
+# An index that can answer every lookup INDEX answers: unique, not partial,
+# btree (so MIN(checksum) and checksum > previous stay ordered scans), and
+# leading with checksum. On production that is _checksum_entity_uc; in a schema
+# built from models.py it is datapackage_cache_pkey. b7f4e2c9a1d3 explains why
+# the two differ.
 _COVERING_INDEX_SQL = sa.text("""
     SELECT c.relname
     FROM pg_index i
     JOIN pg_class c ON c.oid = i.indexrelid
-    JOIN pg_class t ON t.oid = i.indrelid
-    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attname = 'checksum'
-    WHERE t.relname = 'datapackage_cache'
+    JOIN pg_am am ON am.oid = c.relam AND am.amname = 'btree'
+    JOIN pg_attribute a ON a.attrelid = i.indrelid
+                       AND a.attname = 'checksum'
+                       AND NOT a.attisdropped
+    WHERE i.indrelid = to_regclass('datapackage_cache')
       AND c.relname <> :dropping
       AND i.indisvalid
+      AND i.indpred IS NULL
       AND (i.indisunique OR i.indisprimary)
       AND i.indkey[0] = a.attnum
     LIMIT 1
 """)
 
 
-def _index_is_valid(bind, name):
-    """True only for an index that exists and is usable.
+def _index_state(bind, name):
+    """None if absent, True if valid, False if present but invalid.
 
-    A CONCURRENTLY build that failed partway leaves the index present but marked
-    invalid. Reflection still reports it, so a plain name check would read a
-    dead index as a live one.
+    The three cases are not interchangeable here, and conflating two of them is
+    how this migration first shipped. DROP INDEX CONCURRENTLY runs in phases
+    that commit separately: the first clears indisvalid, and only the last
+    unlinks the file. An interrupted drop -- a cancelled statement, a container
+    killed mid-deploy -- therefore leaves the index present, invalid, holding
+    all of its disk, and still maintained by writes until the phase that marks
+    it dead. Alembic has not stamped the revision at that point, so the retry
+    comes back here: reading that as "already gone" would stamp the revision
+    over an index nothing will ever clean up.
+
+    b7f4e2c9a1d3 only needed valid-or-not because it was guarding a build, where
+    an invalid index is work to redo rather than work half done.
     """
     row = bind.execute(
         sa.text(
-            "SELECT 1 FROM pg_class c "
-            "JOIN pg_index i ON i.indexrelid = c.oid "
-            "WHERE c.relname = :name AND i.indisvalid"
+            "SELECT i.indisvalid FROM pg_index i "
+            "JOIN pg_class c ON c.oid = i.indexrelid "
+            "WHERE i.indrelid = to_regclass('datapackage_cache') "
+            "AND c.relname = :name"
         ),
         {'name': name},
     ).first()
-    return row is not None
+    return None if row is None else bool(row[0])
+
+
+def _drop_concurrently(name):
+    """DROP INDEX CONCURRENTLY, outside the transaction and under a timeout.
+
+    CONCURRENTLY cannot run inside a transaction, so this steps outside the one
+    alembic/env.py wraps around the migration. It is worth the awkwardness: a
+    plain DROP INDEX takes ACCESS EXCLUSIVE on datapackage_cache, which the
+    poller upserts into throughout every room setup, and Postgres queues every
+    later reader behind that pending request. CONCURRENTLY takes SHARE UPDATE
+    EXCLUSIVE and blocks neither readers nor writers.
+
+    SET, not SET LOCAL: there is no transaction here for LOCAL to scope to.
+    """
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '%s'" % LOCK_TIMEOUT)
+        try:
+            op.execute('DROP INDEX CONCURRENTLY IF EXISTS %s' % name)
+        finally:
+            op.execute('RESET lock_timeout')
 
 
 def upgrade() -> None:
@@ -99,37 +155,31 @@ def upgrade() -> None:
         logging.info("[MIGRATION] Skipping %s drop on %s dialect.", INDEX, bind.dialect.name)
         return
 
-    if not _index_is_valid(bind, INDEX):
+    state = _index_state(bind, INDEX)
+    if state is None:
         logging.info("[MIGRATION] %s already absent; nothing to drop.", INDEX)
         return
 
-    covering = bind.execute(_COVERING_INDEX_SQL, {'dropping': INDEX}).scalar()
-    if covering is None:
-        # Refuse rather than leave checksum lookups to a sequential scan of a
-        # 2 GB heap. One of the two covering indexes is always present; if
-        # neither is, the schema is not the one this migration was written
-        # against and a human should look at it.
-        logging.warning(
-            "[MIGRATION] No unique index leads with datapackage_cache.checksum; "
-            "leaving %s in place.", INDEX
-        )
-        return
+    if state:
+        covering = bind.execute(_COVERING_INDEX_SQL, {'dropping': INDEX}).scalar()
+        if covering is None:
+            # Refuse rather than leave checksum lookups to a sequential scan of
+            # a 2 GB heap. One of the two covering indexes is always present; if
+            # neither is, the schema is not the one this migration was written
+            # against and a human should look at it.
+            logging.warning(
+                "[MIGRATION] No unique index leads with datapackage_cache.checksum; "
+                "leaving %s in place.", INDEX
+            )
+            return
+        logging.info("[MIGRATION] %s covers checksum lookups; dropping %s.", covering, INDEX)
+    else:
+        # No covering check in this branch: an invalid index answers nothing
+        # already, so finishing its drop cannot take an index away from the
+        # planner, and refusing would strand the file instead.
+        logging.info("[MIGRATION] %s is present but invalid; finishing its drop.", INDEX)
 
-    logging.info("[MIGRATION] %s covers checksum lookups; dropping %s.", covering, INDEX)
-
-    # CONCURRENTLY, which cannot run inside a transaction, so this steps outside
-    # the one alembic/env.py wraps around the upgrade.
-    #
-    # A plain DROP INDEX takes ACCESS EXCLUSIVE on datapackage_cache, and the
-    # poller upserts into that table throughout every room setup. Uncontended
-    # the drop is a catalog flip, but behind an open poller transaction it waits
-    # with no upper bound while Postgres queues every later reader behind the
-    # pending request. CONCURRENTLY takes SHARE UPDATE EXCLUSIVE instead and
-    # blocks neither readers nor writers, which is worth more here than the
-    # lock_timeout escape b7f4e2c9a1d3 used for its in-transaction statements.
-    with op.get_context().autocommit_block():
-        op.execute(f'DROP INDEX CONCURRENTLY IF EXISTS {INDEX}')
-
+    _drop_concurrently(INDEX)
     logging.info("[MIGRATION] Dropped %s.", INDEX)
 
 
@@ -146,14 +196,22 @@ def downgrade() -> None:
         )
         return
 
-    if _index_is_valid(bind, INDEX):
+    state = _index_state(bind, INDEX)
+    if state:
         logging.info("[MIGRATION] %s already present; nothing to rebuild.", INDEX)
         return
 
+    if state is False:
+        # The name is taken by an invalid index from a build or drop that failed
+        # partway. Clear it CONCURRENTLY: a plain DROP INDEX here would take the
+        # ACCESS EXCLUSIVE lock the rest of this migration goes out of its way
+        # to avoid.
+        _drop_concurrently(INDEX)
+
     with op.get_context().autocommit_block():
-        # Clear the name first: a failed CONCURRENTLY build leaves an invalid
-        # index that Postgres never uses but whose name stays taken.
-        op.execute(f'DROP INDEX IF EXISTS {INDEX}')
-        op.execute(f'CREATE INDEX CONCURRENTLY {INDEX} ON datapackage_cache (checksum)')
+        # No timeout on the build. Waiting out the open transactions is how
+        # CONCURRENTLY produces a valid index; giving up would leave an invalid
+        # one, which is the state this function exists to get out of.
+        op.execute('CREATE INDEX CONCURRENTLY %s ON datapackage_cache (checksum)' % INDEX)
 
     logging.info("[MIGRATION] Rebuilt %s.", INDEX)
