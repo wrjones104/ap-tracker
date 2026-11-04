@@ -189,6 +189,69 @@ class TestAFailedPushIsRemembered(PendingPushTestBase):
         self.assertEqual(by_token['old-app'].android.notification.channel_id, 'channel_general')
         self.assertEqual(self.mode(1), 'watch')
 
+    @patch('app.get_firebase_app')
+    @patch('firebase_admin.messaging.send_each')
+    def test_the_conflict_push_reaches_ios_on_the_ios_firebase_project(
+            self, send_each, firebase_app, mock_get, mock_put):
+        # #520: every device's message used to be built in the Android shape and sent
+        # with no app=, so all of it went through the Android project. An iOS token
+        # belongs to the iOS project, FCM refuses it for sender mismatch, and the
+        # message carried no APNs block either -- so iOS devices got nothing at all.
+        from app.models import Device
+        firebase_app.side_effect = lambda platform='android': f'{platform}-app'
+        self.slot(1, 'play')
+        self.session.add_all([
+            Device(user_id=1, fcm_token='droid', android_id='p1', platform='android'),
+            Device(user_id=1, fcm_token='iphone', android_id='p2', platform='ios'),
+        ])
+        self.session.commit()
+        mock_get.return_value = response(200, tracker(game(1, owner=OTHER_CT_ID)))
+
+        push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
+
+        sent = {}
+        for call in send_each.call_args_list:
+            for message in call.args[0]:
+                sent[message.token] = (call.kwargs.get('app'), message)
+        self.assertEqual(set(sent), {'droid', 'iphone'})
+
+        droid_app, droid = sent['droid']
+        iphone_app, iphone = sent['iphone']
+        self.assertEqual(droid_app, 'android-app')
+        self.assertEqual(iphone_app, 'ios-app',
+                         "sent on the Android project, FCM refuses the token")
+        self.assertIsNotNone(droid.android)
+        self.assertIsNone(droid.apns)
+        # Without an APNs block there is nothing for iOS to draw, whichever project
+        # the message goes out on.
+        self.assertIsNotNone(iphone.apns)
+        self.assertEqual(iphone.apns.payload.aps.alert.title, 'Slot Already Claimed')
+        self.assertIsNone(iphone.android)
+        self.assertEqual(self.mode(1), 'watch')
+
+    @patch('app.get_firebase_app')
+    @patch('firebase_admin.messaging.send_each')
+    def test_a_platform_with_no_firebase_app_is_skipped(
+            self, send_each, firebase_app, mock_get, mock_put):
+        # get_firebase_app answers None when that project's key file is absent, the
+        # normal state for iOS on a server never given one. The Android push still goes.
+        from app.models import Device
+        firebase_app.side_effect = \
+            lambda platform='android': None if platform == 'ios' else 'android-app'
+        self.slot(1, 'play')
+        self.session.add_all([
+            Device(user_id=1, fcm_token='droid', android_id='p1', platform='android'),
+            Device(user_id=1, fcm_token='iphone', android_id='p2', platform='ios'),
+        ])
+        self.session.commit()
+        mock_get.return_value = response(200, tracker(game(1, owner=OTHER_CT_ID)))
+
+        push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
+
+        tokens = [m.token for call in send_each.call_args_list for m in call.args[0]]
+        self.assertEqual(tokens, ['droid'])
+        self.assertEqual(self.mode(1), 'watch')
+
     def test_a_push_that_lands_clears_the_slot(self, mock_get, mock_put):
         self.pend(1, attempts=2)
         mock_get.return_value = response(200, tracker(game(1)))

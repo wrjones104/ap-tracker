@@ -195,23 +195,39 @@ def create_threshold_group(current_user, room_db_id, slot_id):
             if not item_name or quantity < 1:
                 continue
                 
-            group_item = ThresholdGroupItem(
-                group_id=group.id,
+            # Appended to the relationship rather than session.add()ed: the
+            # already-met check below reads group.items, and a collection on an object
+            # created in this session counts as loaded, so rows inserted around it
+            # would leave it empty and the check would quietly find nothing to do.
+            group.items.append(ThresholdGroupItem(
                 item_name=item_name,
                 quantity=quantity,
                 is_group=is_group
-            )
-            session.add(group_item)
+            ))
             valid_items_count += 1
             
         if valid_items_count == 0:
             session.rollback()
             return jsonify({'error': 'No valid items provided'}), 400
-            
+
+        # A group for a milestone this slot is already past is marked met on the spot,
+        # for the reason mark_already_satisfied documents: left untriggered it fires a
+        # "milestone reached" push on the next unrelated item, for something the user
+        # finished before the group existed. The bulk endpoint and template auto-apply
+        # have always done this. This path did not, so the one case where the user can
+        # see it coming -- making a milestone by hand for items they already hold --
+        # was the one case that announced itself. See #521.
+        session.flush()
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+        mark_already_satisfied(session, room, slot_id, [group])
+
         session.commit()
         return jsonify({
             'message': 'Threshold group created',
-            'id': group.id
+            'id': group.id,
+            # So a client can tell an already-met group from a fresh one without
+            # refetching: a triggered group cannot be edited, the PUT answers 400.
+            'is_triggered': bool(group.is_triggered)
         }), 201
     except Exception as e:
         session.rollback()
@@ -424,10 +440,18 @@ def update_threshold_group(current_user, room_db_id, slot_id, group_id):
                 is_group=is_group
             ))
 
+        # Same reason as the create: an edit down to quantities the slot has already
+        # reached must not leave the group waiting to announce itself on the next
+        # unrelated item. See #521.
+        session.flush()
+        room = session.query(TrackedRoom).filter_by(id=room_db_id).first()
+        mark_already_satisfied(session, room, slot_id, [group])
+
         session.commit()
         return jsonify({
             'message': 'Threshold group updated',
-            'id': group.id
+            'id': group.id,
+            'is_triggered': bool(group.is_triggered)
         }), 200
     except Exception as e:
         session.rollback()
