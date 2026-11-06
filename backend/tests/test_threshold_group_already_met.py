@@ -19,6 +19,7 @@ import sys
 import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 TEST_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test_threshold_already_met.db'))
 os.environ['DATABASE_URL'] = f'sqlite:///{TEST_DB_PATH}'
@@ -28,6 +29,7 @@ os.environ['ENCRYPTION_KEY'] = 'gL1S6v-5D0_l3ZtIox0zVwXyZ3-4VbCdeFghIjklMno='
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app import create_app, Session, engine
+from app.services import milestone_template_service
 from app.models import (
     Base, DatapackageCache, SlotItemCount, ThresholdGroup, ThresholdGroupItem, TrackedRoom,
     User, UserRoomSubscription, UserTrackedSlot,
@@ -262,6 +264,77 @@ class TestThresholdGroupAlreadyMet(unittest.TestCase):
         response = self._put(group_id, [('Fire Essence', 2, False), ('Water Essence', 1, False)])
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.get_json()['is_triggered'])
+
+    # ------------------------------------------------------------------
+    # The check must never cost the caller its write
+    # ------------------------------------------------------------------
+
+    def test_the_progress_check_runs_inside_a_savepoint(self):
+        """mark_already_satisfied swallows its own errors, which is only safe inside one.
+
+        On Postgres a failed statement aborts the whole transaction, and COMMIT on an
+        aborted transaction is a silent ROLLBACK: the route would answer 201 with an id
+        for a group the database had just thrown away. SQLite commits happily after a
+        failed statement, so it cannot show that here -- what this pins is the savepoint
+        itself, measured from inside the call.
+        """
+        seen = {}
+
+        def explode(session, room, slot_id, requirements, datapackage_cache=None):
+            seen['nested'] = session.in_nested_transaction()
+            raise RuntimeError('progress lookup failed')
+
+        with patch.object(milestone_template_service,
+                          'compute_requirement_progress', explode):
+            response = self._post([('Fire Essence', 2, False)])
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            seen.get('nested'),
+            "without a savepoint the caller's commit() is a silent rollback on Postgres"
+        )
+
+    def test_a_failed_progress_check_still_saves_the_group(self):
+        # The contract mark_already_satisfied states: an unmarked group is the
+        # pre-existing behaviour, never a lost one.
+        def explode(session, room, slot_id, requirements, datapackage_cache=None):
+            raise RuntimeError('progress lookup failed')
+
+        with patch.object(milestone_template_service,
+                          'compute_requirement_progress', explode):
+            response = self._post([('Fire Essence', 2, False)])
+
+        self.assertEqual(response.status_code, 201)
+        self.assertFalse(response.get_json()['is_triggered'])
+        group = self._fetch(response.get_json()['id'])
+        self.assertEqual([i['item_name'] for i in group['items']], ['Fire Essence'])
+
+    def test_an_edit_whose_progress_check_fails_is_still_saved(self):
+        group_id = self._seed_group([('Fire Essence', 9, False)])
+
+        def explode(session, room, slot_id, requirements, datapackage_cache=None):
+            raise RuntimeError('progress lookup failed')
+
+        with patch.object(milestone_template_service,
+                          'compute_requirement_progress', explode):
+            response = self._put(group_id, [('Fire Essence', 4, False)])
+
+        self.assertEqual(response.status_code, 200)
+        group = self._fetch(group_id)
+        self.assertFalse(group['is_triggered'])
+        self.assertEqual([(i['item_name'], i['quantity']) for i in group['items']],
+                         [('Fire Essence', 4)])
+
+    def test_a_request_with_no_valid_items_inserts_nothing(self):
+        # The group used to be flushed before its items were known, so a request that
+        # turned out to have none inserted a row and rolled it back.
+        response = self._post([('', 0, False)])
+        self.assertEqual(response.status_code, 400)
+        session = Session()
+        try:
+            self.assertEqual(session.query(ThresholdGroup).count(), 0)
+        finally:
+            Session.remove()
 
     def test_a_group_already_met_still_cannot_be_edited(self):
         # Unchanged: the 400 guard runs before any of this.

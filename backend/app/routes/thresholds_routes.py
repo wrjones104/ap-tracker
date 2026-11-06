@@ -184,8 +184,7 @@ def create_threshold_group(current_user, room_db_id, slot_id):
             is_triggered=False
         )
         session.add(group)
-        session.flush()
-        
+
         valid_items_count = 0
         for item_data in items_data:
             item_name = item_data.get('item_name', '').strip()
@@ -195,10 +194,11 @@ def create_threshold_group(current_user, room_db_id, slot_id):
             if not item_name or quantity < 1:
                 continue
                 
-            # Appended to the relationship rather than session.add()ed: the
-            # already-met check below reads group.items, and a collection on an object
-            # created in this session counts as loaded, so rows inserted around it
-            # would leave it empty and the check would quietly find nothing to do.
+            # Appended to the relationship rather than session.add()ed against
+            # group.id. Nothing here needs the id any more, so the group no longer has
+            # to be flushed before the loop -- a request whose items are all invalid now
+            # inserts nothing to roll back. The already-met check below also reads
+            # group.items straight from the collection rather than loading it back.
             group.items.append(ThresholdGroupItem(
                 item_name=item_name,
                 quantity=quantity,

@@ -252,6 +252,62 @@ class TestAFailedPushIsRemembered(PendingPushTestBase):
         self.assertEqual(tokens, ['droid'])
         self.assertEqual(self.mode(1), 'watch')
 
+    @patch('app.get_firebase_app')
+    @patch('firebase_admin.messaging.send_each')
+    def test_one_firebase_project_failing_does_not_stop_the_other(
+            self, send_each, firebase_app, mock_get, mock_put):
+        # Per-token refusals come back inside the BatchResponse, but a project-level
+        # failure -- a revoked key, an unusable APNs config, a timeout -- raises out of
+        # send_each. The two platforms authenticate with different service-account keys,
+        # so one being broken must not take the other's push with it. Both raise here, so
+        # the assertion does not depend on which platform the loop reaches first.
+        from app.models import Device
+        firebase_app.side_effect = lambda platform='android': f'{platform}-app'
+        send_each.side_effect = RuntimeError('service account key revoked')
+        self.slot(1, 'play')
+        self.session.add_all([
+            Device(user_id=1, fcm_token='droid', android_id='p1', platform='android'),
+            Device(user_id=1, fcm_token='iphone', android_id='p2', platform='ios'),
+        ])
+        self.session.commit()
+        mock_get.return_value = response(200, tracker(game(1, owner=OTHER_CT_ID)))
+
+        push_slot_changes_to_cheese(self.app, 1, 10, {1}, set())
+
+        attempted = {call.kwargs.get('app') for call in send_each.call_args_list}
+        self.assertEqual(
+            attempted, {'android-app', 'ios-app'},
+            "a failure on one project stopped the other platform's push"
+        )
+        # The demotion itself is committed before any of this runs.
+        self.assertEqual(self.mode(1), 'watch')
+
+    @patch('app.get_firebase_app')
+    @patch('firebase_admin.messaging.send_each')
+    def test_send_state_sends_per_platform_without_an_outbox(
+            self, send_each, firebase_app, mock_get, mock_put):
+        # send_state's immediate-send branch, which both production callers bypass by
+        # passing an outbox. It is the fallback for any caller that does not, and the
+        # per-platform routing has to hold there too.
+        from app.models import Device
+        firebase_app.side_effect = lambda platform='android': f'{platform}-app'
+        send_each.return_value = MagicMock(responses=[])
+        self.slot(1, 'play')
+        self.session.add_all([
+            Device(user_id=1, fcm_token='droid', android_id='p1', platform='android'),
+            Device(user_id=1, fcm_token='iphone', android_id='p2', platform='ios'),
+        ])
+        self.session.commit()
+
+        send_state(self.session, self.app, 1, True, 1, MY_CT_ID, TRACKER, {},
+                   tracker(game(1, owner=OTHER_CT_ID)))
+
+        sent = {}
+        for call in send_each.call_args_list:
+            for message in call.args[0]:
+                sent[message.token] = call.kwargs.get('app')
+        self.assertEqual(sent, {'droid': 'android-app', 'iphone': 'ios-app'})
+
     def test_a_push_that_lands_clears_the_slot(self, mock_get, mock_put):
         self.pend(1, attempts=2)
         mock_get.return_value = response(200, tracker(game(1)))
