@@ -1169,10 +1169,38 @@ def _background_push_worker(app, user_id, tracker_id, added_slots, removed_slots
             if notifications_outbox:
                 try:
                     from firebase_admin import messaging
+                    from app import get_firebase_app
                     from app.services.push_message import log_failed_sends
-                    for tokens, messages in notifications_outbox:
-                        log_failed_sends(messaging.send_each(messages).responses, "Cheese conflict push")
-                        logging.info(f"[CHEESE_DEBUG] Sent collision push notification after commit to user {user_id}")
+                    # One entry per slot and platform, each sent on its own Firebase
+                    # project: an iOS token sent through the Android project is a sender
+                    # mismatch FCM refuses. See #520.
+                    #
+                    # Each entry is isolated. Per-token refusals come back inside the
+                    # BatchResponse, but a project-level failure -- a revoked key, an
+                    # unusable APNs config, a timeout -- raises out of send_each, and the
+                    # two platforms authenticate with different service-account keys. One
+                    # broken key must not take the other platform's push, or the next
+                    # slot's, down with it. _send_demotion_pushes isolates per platform
+                    # for the same reason.
+                    for messages, platform in notifications_outbox:
+                        try:
+                            firebase_app = get_firebase_app(platform=platform)
+                            if firebase_app is None:
+                                logging.warning(
+                                    f"[CHEESE_DEBUG] No {platform} Firebase app; skipping "
+                                    f"{len(messages)} collision push(es)."
+                                )
+                                continue
+                            log_failed_sends(
+                                messaging.send_each(messages, app=firebase_app).responses,
+                                f"Cheese conflict push, {platform}"
+                            )
+                            logging.info(f"[CHEESE_DEBUG] Sent collision push notification after commit to user {user_id} ({platform})")
+                        except Exception as p_err:
+                            logging.error(
+                                f"[CHEESE_DEBUG] Failed to send the {platform} collision "
+                                f"push after commit: {p_err}"
+                            )
                 except Exception as p_err:
                     logging.error(f"[CHEESE_DEBUG] Failed to send collision push after commit: {p_err}")
         except Exception as e:
@@ -1595,27 +1623,66 @@ def send_state(session, app, ap_position, is_tracked, current_user_id_for_thread
                             from . import get_firebase_app
                             from app.services.push_message import build_message, log_failed_sends
 
-                            get_firebase_app()
                             devices = session.query(Device).filter_by(user_id=current_user_id_for_thread).all()
                             if devices:
-                                tokens = [d.fcm_token for d in devices]
                                 content = {
                                     'title': "Slot Already Claimed",
                                     'body': f"'{player_name}' in '{room_alias}' is claimed by someone else on Cheese Tracker. Switched to Watching — you'll still get alerts.",
                                     'type': 'conflict',
                                 }
-                                # Android shape for every device, as before: this goes through
-                                # the default Firebase app.
-                                messages = [
-                                    build_message(content, d.fcm_token, 'android', data_only=d.data_only_push,
-                                                  channel_id='channel_general', priority='high')
-                                    for d in devices
-                                ]
-                                if notifications_outbox is not None:
-                                    notifications_outbox.append((tokens, messages))
-                                else:
-                                    log_failed_sends(messaging.send_each(messages).responses, "Cheese conflict push")
-                                    logging.info(f"[CHEESE_DEBUG] Sent collision push notification immediately to user {current_user_id_for_thread}")
+                                # Grouped by platform, each group sent through its own
+                                # Firebase project. This used to build every device's message
+                                # in the Android shape and send with no app=, so everything
+                                # went through the Android project: an iOS token belongs to
+                                # the iOS project, FCM refuses it for sender mismatch, and
+                                # the message carried no APNs block either -- so iOS devices
+                                # never got this push at all. The sync's demotion path
+                                # (cheese_service._build_demotion_payload) already groups
+                                # this way. See #520.
+                                by_platform = {}
+                                for d in devices:
+                                    platform = (d.platform or 'android').lower().strip()
+                                    if platform not in ['android', 'ios']:
+                                        platform = 'android'
+                                    by_platform.setdefault(platform, []).append(d)
+
+                                # One platform's failure is its own, as in the
+                                # post-commit flush above.
+                                for platform, platform_devices in by_platform.items():
+                                    try:
+                                        # None when that project's key file is absent, the
+                                        # normal state for iOS on a server never given one.
+                                        # Skipping is what the poller does; sending anyway
+                                        # would go out on the wrong project or raise on an
+                                        # uninitialised app.
+                                        firebase_app = get_firebase_app(platform=platform)
+                                        if firebase_app is None:
+                                            logging.warning(
+                                                f"[CHEESE_DEBUG] No {platform} Firebase app; skipping "
+                                                f"the collision push for {len(platform_devices)} device(s)."
+                                            )
+                                            continue
+                                        prepared = {}
+                                        messages = [
+                                            build_message(content, d.fcm_token, platform,
+                                                          data_only=d.data_only_push,
+                                                          channel_id='channel_general', priority='high',
+                                                          prepared=prepared)
+                                            for d in platform_devices
+                                        ]
+                                        if notifications_outbox is not None:
+                                            notifications_outbox.append((messages, platform))
+                                        else:
+                                            log_failed_sends(
+                                                messaging.send_each(messages, app=firebase_app).responses,
+                                                f"Cheese conflict push, {platform}"
+                                            )
+                                            logging.info(f"[CHEESE_DEBUG] Sent collision push notification immediately to user {current_user_id_for_thread} ({platform})")
+                                    except Exception as p_err:
+                                        logging.error(
+                                            f"[CHEESE_DEBUG] Failed to queue the {platform} "
+                                            f"collision push: {p_err}"
+                                        )
                         except Exception as p_err:
                             logging.error(f"[CHEESE_DEBUG] Failed to queue collision push: {p_err}")
             return PUSH_FINAL

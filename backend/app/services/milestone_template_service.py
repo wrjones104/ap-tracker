@@ -177,7 +177,18 @@ def mark_already_satisfied(session, room, slot_id, groups):
         return 0
 
     try:
-        progress = compute_requirement_progress(session, room, slot_id, requirements)
+        # Savepoint, because this function swallows its own errors. On Postgres a failed
+        # statement aborts the whole transaction, and COMMIT on an aborted transaction is
+        # a silent ROLLBACK that raises nothing -- so without this, swallowing the error
+        # would let the caller's commit() discard the group it had just created while the
+        # route answered 201 with its id. Measured on the dev database: the row survives
+        # with the savepoint and is gone without it. _progress_for_slot in
+        # routes/thresholds_routes.py wraps the same call for the same reason. The
+        # savepoint auto_apply_pending_templates already holds does not help, because
+        # the error is swallowed inside it rather than rolled back to it; this one is
+        # rolled back on the way out, which is what leaves the outer one usable.
+        with session.begin_nested():
+            progress = compute_requirement_progress(session, room, slot_id, requirements)
     except Exception as e:
         # Never worth failing an apply over: an unmarked group is the pre-existing behavior.
         logging.error(

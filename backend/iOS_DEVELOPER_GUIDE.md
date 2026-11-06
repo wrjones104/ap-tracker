@@ -2,7 +2,7 @@
 
 This guide describes how to connect your iOS client application to the Archipelago Alerts backend server for authentication, device registration, and push notification delivery.
 
-*Last checked against the backend at server 1.18.0 (2026-10-31).*
+*Last checked against the backend at server 1.19.0 (2026-11-04). Includes the [#519](https://github.com/wrjones104/ap-tracker/issues/519), [#521](https://github.com/wrjones104/ap-tracker/issues/521) and [#520](https://github.com/wrjones104/ap-tracker/issues/520) fixes, which reach production on the next server deploy.*
 
 ---
 
@@ -117,7 +117,7 @@ Discord sign-in uses OAuth 2 with PKCE. Your app gets the authorization code fro
 - **Response (409 Conflict)**: `{ "error": "account_conflict", "message": "..." }` when a guest upgrade targets a Discord account that already belongs to another user. The guest account is not changed. This is the usual case for someone who reinstalls, starts as a guest, then signs in. The server has already spent Discord's single-use `code` by then, so **do not retry with the same `code`**. To sign in to the existing account instead, log out of the guest (`POST /logout`) and start a fresh Discord flow with **no** `Authorization` header. The guest's rooms stay on the guest account.
 
 ### Endpoint: `POST /logout`
-Revokes the JWT in the `Authorization` header (`200`, `{ "message": "Successfully logged out." }`). Note the path: unlike `/auth/guest` and `/auth/callback`, it has **no** `/auth` prefix, and `POST /auth/logout` answers `404`. It does not unregister the device; call `DELETE /devices` first, while the token is still valid, if the phone should stop getting pushes.
+Revokes the JWT in the `Authorization` header (`200`, `{ "message": "Successfully logged out." }`). Served at **both** `POST /logout` and `POST /auth/logout`; either path revokes the token. The prefixed path used to answer `404`, so a client calling it logged out locally without the token ever being revoked ([#519](https://github.com/wrjones104/ap-tracker/issues/519)). It does not unregister the device; call `DELETE /devices` first, while the token is still valid, if the phone should stop getting pushes.
 
 ### Endpoint: `DELETE /users/me`
 Deletes the account and everything it owns (devices, rooms, slots, milestones, templates) and revokes the JWT (`200`). The App Store requires in-app account deletion for apps that let users create an account (Guideline 5.1.1(v)).
@@ -417,14 +417,15 @@ You can register milestone rules to notify only when a certain quantity of one o
   ```json
   {
     "message": "Threshold group created",
-    "id": 42
+    "id": 42,
+    "is_triggered": false
   }
   ```
 - **Limit**: a slot holds at most **50** groups. Creating one more answers `400` with `"reason": "slot_group_limit"`.
-- **Initial state**: a group made here always starts with `is_triggered: false`, and item names are not checked against the game data. If the slot has already reached the quantities, the group fires a "milestone reached" push on the slot's next item ([#521](https://github.com/wrjones104/ap-tracker/issues/521)). Use the bulk endpoint below when that should not happen.
+- **Already met**: item names are not checked against the game data here, but the quantities are checked against the slot's current counts. A group the slot has already reached comes back `"is_triggered": true`, marked met silently and with no "milestone reached" push; anything else starts `false`. It used to start `false` either way and then announce itself on the slot's next item ([#521](https://github.com/wrjones104/ap-tracker/issues/521)). A triggered group cannot be edited, so read this field before offering an edit on a group you have just created.
 - **Related endpoints**:
   - `GET /rooms/<subscription_id>/slots/<slot_id>/threshold-groups` — list existing groups, ordered by `id`.
-  - `PUT /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/<group_id>` — update a group (same body as create). A group that has already fired cannot be edited (`400`).
+  - `PUT /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/<group_id>` — update a group (same body as create). A group that has already fired cannot be edited (`400`). The reply carries `is_triggered`, which is `true` when the edit brought the quantities down to ones the slot has already reached ([#521](https://github.com/wrjones104/ap-tracker/issues/521)).
   - `DELETE /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/<group_id>` — remove a group.
   - `POST /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/bulk` — create several groups at once (see below).
   - `GET /users/me/threshold-groups` — every tracked slot's groups in one call (see below).
@@ -433,7 +434,7 @@ You can register milestone rules to notify only when a certain quantity of one o
 - **Endpoint**: `POST /rooms/<subscription_id>/slots/<slot_id>/threshold-groups/bulk`
 - **Request Body**: `{ "groups": [ { "name": "...", "items": [ ... ] }, ... ] }`, at most 50 groups.
 - Item names are checked against the slot's game data on the server. A group is skipped rather than failing the request when none of its items exist in this seed (`no_valid_items`), its name matches a group already on the slot (`duplicate_name`), or the slot is full (`slot_group_limit`).
-- **Already met**: a created group whose quantities the slot has already reached is marked met (`is_triggered: true`) on creation, silently. Only this endpoint and template auto-apply do this; the single `POST` and the `PUT` do not.
+- **Already met**: a created group whose quantities the slot has already reached is marked met (`is_triggered: true`) on creation, silently. The single `POST` and the `PUT` do this too, as of [#521](https://github.com/wrjones104/ap-tracker/issues/521).
 - **Response (201 Created)**: `{ "message": "...", "created": [{ "id": 43, "name": "..." }], "skipped": [{ "name": "...", "reason": "duplicate_name" }] }`. If nothing could be created it answers `400` with the same `skipped` list.
 
 #### Every slot's groups in one call
@@ -556,7 +557,7 @@ The official app can mirror rooms to Cheese Tracker for users who connect it. Yo
 - **Per-room link**: each subscription has `cheese_link` (`none` or `linked`), returned by `GET /rooms`. Set it with `PUT /rooms/<subscription_id>/cheese_link` and body `{ "linked": true }`. Linking a room with no tracker yet creates one, which takes a couple of minutes: `cheese_link` is `linked` while `cheese_tracker_id` is still `null`. Unlinking stops this app writing to the tracker; it does not delete the tracker or release claims.
 - **`cheese_unlisted`**: the linked tracker has dropped off the user's Cheese dashboard. Show it to the user; the server never removes a room because of it.
 - **Play vs. watch**: a slot in `play` mode is claimed on Cheese as the user's; `watch` alerts without claiming. When someone else claims a slot, or the tracker releases it, the server moves it to `watch` and sends a push of type `conflict`.
-- **Known gap ([#520](https://github.com/wrjones104/ap-tracker/issues/520))**: when a slot is already claimed at the moment the user tracks it in `play` mode, that `conflict` push currently reaches Android devices only. The slot still moves to `watch`, so re-read `track_mode` after `PUT /rooms/<id>/slots` rather than waiting for the push.
+- **Already claimed when tracked**: when a slot is already claimed at the moment the user tracks it in `play` mode, the server moves it to `watch` and sends the same `conflict` push to iOS devices as to Android, through the iOS Firebase project ([#520](https://github.com/wrjones104/ap-tracker/issues/520)). It used to go out on the Android project in the Android shape, so iOS devices never received it; it is now skipped only on a server with no iOS service-account key. Re-read `track_mode` after `PUT /rooms/<id>/slots` rather than relying on the push.
 - **Suggestions**: `GET /integrations/cheese/available` lists trackers on the user's Cheese dashboard that the app does not have yet.
   - `POST /integrations/cheese/available/dismiss` and `POST /integrations/cheese/available/import` both take `{ "cheese_tracker_ids": ["..."] }`, a non-empty list.
   - Import handles at most 25 trackers per call and returns the rest in `deferred`; send those in a follow-up call. It also reports `imported`, `relinked`, and `linked_elsewhere` (trackers refused because another tracker already owns their room).

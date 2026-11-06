@@ -63,7 +63,7 @@ Both containers build from the same image and both call `create_app()`, so they 
 
 ### A. Modular API Server (`backend/app/routes/`)
 The authenticated REST API is decomposed into 9 domain-driven Flask blueprints, registered through `api.register_api_routes(app)`:
-* **[auth_routes.py](backend/app/routes/auth_routes.py):** Session invalidation, JWT token blocklisting, public server config (`/logout`, `/config`).
+* **[auth_routes.py](backend/app/routes/auth_routes.py):** Session invalidation, JWT token blocklisting, public server config (`/logout` and its `/auth/logout` alias, `/config`).
 * **[user_routes.py](backend/app/routes/user_routes.py):** User profiles, FCM device registration, global notification preferences, account deletion.
 * **[rooms_routes.py](backend/app/routes/rooms_routes.py):** Room tracking CRUD, room revival, player list resolution, datapackage endpoints.
 * **[slots_routes.py](backend/app/routes/slots_routes.py):** Tracked slot preferences, ignore/whitelist lists, snooze timers.

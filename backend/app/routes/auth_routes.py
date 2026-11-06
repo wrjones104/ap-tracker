@@ -49,7 +49,15 @@ def _parse_min_app_version(raw):
     logging.info(f"[CONFIG] min_app_version is {value} (MIN_APP_VERSION).")
     return value
 
+# Served at both paths. The route has always been /logout, with no prefix, but the
+# Android app (ApiService.kt) and the iOS developer guide both call it /auth/logout,
+# which answered 404 -- so a user-requested logout never blocklisted the jti. The
+# token stayed valid for its full 90 days (Discord) or 730 (guest) while the app
+# cleared its local session and showed no error, which made a copied token outlive
+# "Log out". The alias fixes installed apps with no release of their own, and the
+# unprefixed path stays for clients already using it. See #519.
 @auth_bp.route('/logout', methods=['POST'])
+@auth_bp.route('/auth/logout', methods=['POST'])
 @handle_db_errors
 @log_api_call
 @token_required
